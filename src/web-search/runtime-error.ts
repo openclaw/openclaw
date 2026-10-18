@@ -20,7 +20,7 @@ export function formatWebSearchNotConfiguredMessage(provider: string): string {
   return (
     `web_search is not set up: provider "${provider}" has no credentials on this Gateway. ` +
     "Searching again or rewording the query fails the same way until the operator configures it. " +
-    "Use web_fetch for a known URL or the browser tool instead, and tell the user if search was needed."
+    "Use another available route instead, such as fetching a known URL or a browser, if this session has one, and tell the user if search was needed."
   );
 }
 

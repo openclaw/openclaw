@@ -121,7 +121,7 @@ const normalizedProviderFixtures = [
     {
       kind: "error",
       error: "provider_error",
-      message: `web_search is not set up: provider "brave" has no credentials on this Gateway. Searching again or rewording the query fails the same way until the operator configures it. Use web_fetch for a known URL or the browser tool instead, and tell the user if search was needed.\nProvider setup details:\nmissing_brave_api_key`,
+      message: `web_search is not set up: provider "brave" has no credentials on this Gateway. Searching again or rewording the query fails the same way until the operator configures it. Use another available route instead, such as fetching a known URL or a browser, if this session has one, and tell the user if search was needed.\nProvider setup details:\nmissing_brave_api_key`,
     },
   ),
 ];

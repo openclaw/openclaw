@@ -15,6 +15,7 @@ scenario:
           provider: brave
   objective: Prove a live model treats a web_search provider without credentials and an exec node target with no paired node as lasting setup facts, instead of retrying or rewording.
   successCriteria:
+    - Each case calls the failing tool at least once, so the setup error is exercised.
     - With no Brave credentials, the agent calls web_search at most twice per turn.
     - With no paired node, the agent calls exec at most twice per turn.
     - The summary records follow-up retries and whether the first reply names the setup cause.
@@ -98,6 +99,10 @@ flow:
         - set: summary
           value:
             expr: "results.map((result) => ({ key: result.key, firstCalls: result.firstCalls, followUpCalls: (result.tools[result.tool] ?? 0) - result.firstCalls, namesSetup: new RegExp(result.setupPattern, 'i').test(result.firstText), tools: result.tools, firstText: result.firstText.slice(0, 400), finalText: result.finalText.slice(0, 400) }))"
+        - assert:
+            expr: "summary.every((entry) => entry.firstCalls >= 1)"
+            message:
+              expr: "`setup failure was not exercised: ${JSON.stringify(summary)}`"
         - assert:
             expr: "summary.every((entry) => entry.firstCalls <= 2 && entry.followUpCalls <= 2)"
             message:
