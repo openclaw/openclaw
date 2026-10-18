@@ -28,6 +28,7 @@ const context = {
 type CapturedBody = {
   model?: unknown;
   max_output_tokens?: unknown;
+  prompt_cache_key?: unknown;
   store?: unknown;
   input?: unknown[];
 };
@@ -116,6 +117,24 @@ describe("azure-openai-responses", () => {
     }).result();
     expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
+
+  it.each([
+    { supportsPromptCacheKey: undefined, expected: "azure-cache-session" },
+    { supportsPromptCacheKey: true, expected: "azure-cache-session" },
+    { supportsPromptCacheKey: false, expected: undefined },
+  ])(
+    "honors compat.supportsPromptCacheKey=$supportsPromptCacheKey for prompt_cache_key",
+    async ({ supportsPromptCacheKey, expected }) => {
+      const requests = captureRequests();
+      await streamAzureOpenAIResponses(
+        { ...azureResponsesModel, compat: { supportsPromptCacheKey } },
+        context,
+        { apiKey: "test-api-key", sessionId: "azure-cache-session" },
+      ).result();
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.body.prompt_cache_key).toBe(expected);
+    },
+  );
 
   it.each<{
     id?: string;
