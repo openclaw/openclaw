@@ -13,9 +13,13 @@ vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: mocks.command,
 }));
-vi.mock("../daemon/systemd-cgroup.js", () => ({ isSystemdControlGroupEmpty: async () => true }));
+vi.mock("../daemon/systemd-cgroup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-cgroup.js")>()),
+  isSystemdControlGroupEmpty: async () => true,
+}));
 
-vi.mock("./update-immutable-service.js", () => ({
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
   readImmutableService: async () => ({
     command: { environment: { PATH: "/home/fixture/bin:/usr/bin:/bin" } },
   }),

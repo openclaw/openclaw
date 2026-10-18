@@ -24,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   seal: vi.fn<typeof import("./update-immutable-generation.js").sealImmutableGeneration>(),
   copy: vi.fn<typeof import("./update-immutable-generation.js").copyImmutableGeneration>(),
 }));
-vi.mock("./update-immutable-owner.js", () => ({
+vi.mock("./update-immutable-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-owner.js")>()),
   withImmutableUpdateOwner: async (_root: string, run: (assertCurrent: () => void) => unknown) => {
     mocks.owner();
     return run(() => {});
@@ -41,7 +42,8 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
   copyImmutableGeneration: mocks.copy,
   installImmutableLauncher: vi.fn(),
 }));
-vi.mock("./update-immutable-service.js", () => ({
+vi.mock("./update-immutable-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
   verifyImmutableService: async () => {},
   readImmutableService: async () => ({ command: { environment: { PATH: "/usr/bin:/bin" } } }),
 }));
