@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { CUSTOM_LOCAL_AUTH_MARKER, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,14 +84,12 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBe("template-lmstudio-key");
   });
 
-  it("accepts synthesized lmstudio-local for explicit api-key mode", async () => {
-    mockRuntimeKey(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
-    await expect(runtimeKey({ auth: "api-key" })).resolves.toBe(LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER);
-  });
-
-  it("accepts shared synthetic local marker for keyless runtime auth", async () => {
-    mockRuntimeKey(CUSTOM_LOCAL_AUTH_MARKER);
-    await expect(runtimeKey()).resolves.toBe(CUSTOM_LOCAL_AUTH_MARKER);
+  it.each([
+    [LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER, { auth: "api-key" as const }],
+    [CUSTOM_LOCAL_AUTH_MARKER, undefined],
+  ] as const)("accepts synthetic runtime key %s", async (key, config) => {
+    mockRuntimeKey(key);
+    await expect(runtimeKey(config)).resolves.toBe(key);
   });
 
   it("allows header-only runtime auth when an api key env template is unset", async () => {
@@ -123,26 +120,16 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
-  it.each([
-    {
-      name: "a configured env marker resolves its concrete credential",
-      apiKey: "GOOGLE_API_KEY",
-      env: { GOOGLE_API_KEY: "direct-env-key" },
-      expected: "direct-env-key",
-    },
-    {
-      name: "a SecretRef resolving to an env marker is not dereferenced again",
-      apiKey: { source: "env", provider: "default", id: "LM_API_TOKEN" },
-      env: { LM_API_TOKEN: "GOOGLE_API_KEY", GOOGLE_API_KEY: "nested-env-key" },
-      expected: undefined,
-    },
-    {
-      name: "a configured synthetic auth marker is suppressed",
-      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-      env: {},
-      expected: undefined,
-    },
-  ])("preserves configured auth semantics when $name", async ({ apiKey, env, expected }) => {
+  it.each<[string, unknown, NodeJS.ProcessEnv, string | undefined]>([
+    ["direct env marker", "GOOGLE_API_KEY", { GOOGLE_API_KEY: "direct-env-key" }, "direct-env-key"],
+    [
+      "no recursive SecretRef resolution",
+      { source: "env", provider: "default", id: "LM_API_TOKEN" },
+      { LM_API_TOKEN: "GOOGLE_API_KEY", GOOGLE_API_KEY: "nested-env-key" },
+      undefined,
+    ],
+    ["synthetic marker suppressed", CUSTOM_LOCAL_AUTH_MARKER, {}, undefined],
+  ])("preserves configured auth semantics: %s", async (_name, apiKey, env, expected) => {
     await expect(configuredKey(apiKey, env)).resolves.toBe(expected);
   });
 
@@ -171,11 +158,7 @@ describe("lmstudio-runtime", () => {
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {
     const headerRef = {
-      "X-Proxy-Auth": {
-        source: "env" as const,
-        provider: "default" as const,
-        id: "LMSTUDIO_PROXY_TOKEN",
-      },
+      "X-Proxy-Auth": { source: "env", provider: "default", id: "LMSTUDIO_PROXY_TOKEN" },
     };
     await expect(
       resolveLmstudioProviderHeaders({
