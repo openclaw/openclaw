@@ -1,7 +1,7 @@
-// Signal tests cover durable redelivery after dispatch failures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -9,7 +9,7 @@ import {
 import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startSignalIngressMonitor } from "../signal-ingress.js";
 
 const [
@@ -33,10 +33,8 @@ vi.mock("../send-reactions.js", () => ({
   removeReactionSignal: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
-    "openclaw/plugin-sdk/channel-inbound",
-  );
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
   return {
     ...actual,
@@ -56,10 +54,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
     recordInboundSession: recordInboundSessionMock,
@@ -74,10 +70,10 @@ const CONFLICT_ERROR = new Error(
 
 describe("signal durable dispatch failure recovery", () => {
   beforeEach(() => {
-    vi.useRealTimers();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockReset();
   });
+  afterEach(() => vi.useRealTimers());
 
   it("preserves durable abandon accounting through backoff, threshold, and restart", async () => {
     vi.useFakeTimers();
@@ -124,16 +120,16 @@ describe("signal durable dispatch failure recovery", () => {
       });
       return { monitor, tasks, dispatched };
     };
-    const finishOuterAttempt = async ({
-      tasks,
-      dispatched,
-    }: Awaited<ReturnType<typeof createIntegratedMonitor>>) => {
+    const retryAt = async (time: number, attempts: number, dispatches: number, initial = false) => {
+      vi.setSystemTime(time);
+      const { monitor, tasks, dispatched } = await createIntegratedMonitor();
+      if (initial) {
+        await monitor.receive(event);
+      }
       await dispatched.promise;
       await vi.advanceTimersByTimeAsync(10);
       expect(tasks).toHaveLength(1);
       await Promise.all(tasks);
-    };
-    const pendingAttempt = async (attempts: number) => {
       const pending = await queue.listPending({ limit: "all" });
       expect(pending).toEqual([
         expect.objectContaining({
@@ -143,21 +139,9 @@ describe("signal durable dispatch failure recovery", () => {
           lastError: CONFLICT_ERROR.message,
         }),
       ]);
-      const record = pending[0];
-      const lastAttemptAt = record?.lastAttemptAt;
-      if (lastAttemptAt === undefined) {
-        throw new Error(`Missing Signal retry timestamp for attempt ${attempts}`);
-      }
-      return { ...record, lastAttemptAt };
-    };
-    const retryAt = async (time: number, attempts: number, dispatches: number) => {
-      vi.setSystemTime(time);
-      const attempt = await createIntegratedMonitor();
-      await finishOuterAttempt(attempt);
-      const pending = await pendingAttempt(attempts);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
-      await attempt.monitor.stop();
-      return pending;
+      await monitor.stop();
+      return expectDefined(pending[0]?.lastAttemptAt, "Signal retry timestamp");
     };
     const blockedAt = async (time: number, dispatches: number) => {
       vi.setSystemTime(time);
@@ -170,35 +154,26 @@ describe("signal durable dispatch failure recovery", () => {
     };
 
     try {
-      const first = await createIntegratedMonitor();
-      await first.monitor.receive(event);
-      await finishOuterAttempt(first);
-      const firstAttempt = await pendingAttempt(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      await first.monitor.stop();
+      const firstAttemptAt = await retryAt(now, 1, 1, true);
 
-      await blockedAt(firstAttempt.lastAttemptAt + 999, 1);
-      const secondAttempt = await retryAt(firstAttempt.lastAttemptAt + 1_001, 2, 2);
+      await blockedAt(firstAttemptAt + 999, 1);
+      const secondAttemptAt = await retryAt(firstAttemptAt + 1_001, 2, 2);
 
       for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        const claim = await queue.claim(eventId, { ownerId: `seed-${attempt}` });
-        if (!claim) {
-          throw new Error(`Expected Signal seed claim ${attempt}`);
-        }
+        const claim = expectDefined(
+          await queue.claim(eventId, { ownerId: `seed-${attempt}` }),
+          "Signal seed claim",
+        );
         await queue.release(claim, {
           lastError: CONFLICT_ERROR.message,
-          releasedAt: secondAttempt.lastAttemptAt,
+          releasedAt: secondAttemptAt,
         });
       }
 
       const threshold = DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
-      const thresholdAttempt = await retryAt(secondAttempt.lastAttemptAt + 64_001, threshold, 3);
-      const beyondAttempt = await retryAt(
-        thresholdAttempt.lastAttemptAt + 128_001,
-        threshold + 1,
-        4,
-      );
-      await blockedAt(beyondAttempt.lastAttemptAt + 1_000, 4);
+      const thresholdAttemptAt = await retryAt(secondAttemptAt + 64_001, threshold, 3);
+      const beyondAttemptAt = await retryAt(thresholdAttemptAt + 128_001, threshold + 1, 4);
+      await blockedAt(beyondAttemptAt + 1_000, 4);
     } finally {
       vi.useRealTimers();
       await closeOpenClawStateDatabaseAsync();
@@ -213,22 +188,9 @@ describe("signal durable dispatch failure recovery", () => {
     const handler = createSignalEventHandler(createBaseSignalEventHandlerDeps());
 
     vi.useFakeTimers();
-    try {
-      await handler(
-        createSignalReceiveEvent({
-          dataMessage: {
-            message: "hello",
-            attachments: [],
-          },
-        }),
-      );
-
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    await handler(createSignalReceiveEvent({ dataMessage: { message: "hello", attachments: [] } }));
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
   });
 });

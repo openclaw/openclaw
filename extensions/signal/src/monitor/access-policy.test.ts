@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Signal tests cover access policy plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { AccessGroupsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -13,11 +12,7 @@ beforeEach(() => {
 
 const SIGNAL_GROUP_ID = "signal-group-id";
 const OTHER_SIGNAL_GROUP_ID = "other-signal-group-id";
-const SIGNAL_SENDER = {
-  kind: "phone" as const,
-  e164: "+15551230000",
-  raw: "+15551230000",
-};
+const SIGNAL_SENDER = { kind: "phone" as const, e164: "+15551230000", raw: "+15551230000" };
 const SIGNAL_UUID = "f4d0fe67-3b38-446d-828e-317c285ffa75";
 const accessGroups: AccessGroupsConfig = {
   operators: { type: "message.senders", members: { signal: [SIGNAL_SENDER.e164] } },
@@ -30,20 +25,15 @@ function resolveAliasedSignalSender() {
   );
 }
 
-async function resolveGroupAccess(params: {
-  allowFrom?: string[];
-  groupAllowFrom?: string[];
-  groupId?: string;
-  accessGroups?: AccessGroupsConfig;
-  storeAllowFrom?: string[];
-}) {
-  const access = await resolveAccess({
-    ...params,
-    isGroup: true,
-    cfg: params.accessGroups ? { accessGroups: params.accessGroups } : undefined,
-    readStoreAllowFrom: async () => params.storeAllowFrom ?? [],
-  });
-  return { ...access, groupDecision: access.senderAccess };
+async function resolveGroupAccess(params: Partial<Parameters<typeof resolveSignalAccessState>[0]>) {
+  return (
+    await resolveAccess({
+      groupId: SIGNAL_GROUP_ID,
+      readStoreAllowFrom: async () => [],
+      ...params,
+      isGroup: true,
+    })
+  ).senderAccess;
 }
 
 function resolveAccess(params: Partial<Parameters<typeof resolveSignalAccessState>[0]>) {
@@ -63,22 +53,17 @@ describe("resolveSignalAccessState", () => {
   it("allows Signal group target forms in groupAllowFrom", async () => {
     const groupTargetDecision = await resolveGroupAccess({
       groupAllowFrom: [`group:${SIGNAL_GROUP_ID}`],
-      groupId: SIGNAL_GROUP_ID,
     });
     const signalGroupTargetDecision = await resolveGroupAccess({
       groupAllowFrom: [`signal:group:${SIGNAL_GROUP_ID}`],
-      groupId: SIGNAL_GROUP_ID,
     });
 
-    expect(groupTargetDecision.groupDecision.decision).toBe("allow");
-    expect(signalGroupTargetDecision.groupDecision.decision).toBe("allow");
+    expect(groupTargetDecision.decision).toBe("allow");
+    expect(signalGroupTargetDecision.decision).toBe("allow");
   });
 
   it("falls back to allowFrom for group sender access when groupAllowFrom is unset", async () => {
-    const { groupDecision } = await resolveGroupAccess({
-      allowFrom: [SIGNAL_SENDER.e164],
-      groupId: SIGNAL_GROUP_ID,
-    });
+    const groupDecision = await resolveGroupAccess({ allowFrom: [SIGNAL_SENDER.e164] });
 
     expect(groupDecision.decision).toBe("allow");
   });
@@ -102,10 +87,9 @@ describe("resolveSignalAccessState", () => {
   });
 
   it("preserves matched Signal senders in effective group allowlists", async () => {
-    const { groupDecision } = await resolveGroupAccess({
+    const groupDecision = await resolveGroupAccess({
       groupAllowFrom: ["accessGroup:operators"],
-      groupId: SIGNAL_GROUP_ID,
-      accessGroups,
+      cfg: { accessGroups },
     });
 
     expect(groupDecision.decision).toBe("allow");
@@ -143,20 +127,18 @@ describe("resolveSignalAccessState", () => {
   });
 
   it("does not let pairing-store senders satisfy group access", async () => {
-    const { groupDecision } = await resolveGroupAccess({
+    const groupDecision = await resolveGroupAccess({
       groupAllowFrom: [],
-      groupId: SIGNAL_GROUP_ID,
-      storeAllowFrom: [SIGNAL_SENDER.e164],
+      readStoreAllowFrom: async () => [SIGNAL_SENDER.e164],
     });
 
     expect(groupDecision.decision).toBe("block");
   });
 
   it("does not let group ids in allowFrom satisfy an explicit groupAllowFrom mismatch", async () => {
-    const { groupDecision } = await resolveGroupAccess({
+    const groupDecision = await resolveGroupAccess({
       allowFrom: [SIGNAL_GROUP_ID],
       groupAllowFrom: [OTHER_SIGNAL_GROUP_ID],
-      groupId: SIGNAL_GROUP_ID,
     });
 
     expect(groupDecision.decision).toBe("block");

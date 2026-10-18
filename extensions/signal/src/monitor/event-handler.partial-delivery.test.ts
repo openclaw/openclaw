@@ -1,4 +1,3 @@
-// Signal integration coverage for durable ingress after a partially visible final reply.
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -18,7 +17,6 @@ import {
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "../approval-reactions.js";
 import { signalPlugin } from "../channel.js";
-import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const { getReplyFromConfigMock, sendMessageSignalMock } = vi.hoisted(() => ({
@@ -72,6 +70,22 @@ const [{ deliverReplies }, { startSignalIngressMonitor }, eventHandlerModule, ha
 type SignalIngressQueue = ReturnType<typeof createChannelIngressQueueForTests<unknown>>;
 type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 
+function registerPlugin(
+  plugin = signalPlugin,
+  durableText = true,
+  registry = { createTestRegistry, setActivePluginRegistry },
+) {
+  const registered = durableText
+    ? plugin
+    : {
+        ...plugin,
+        message: { ...plugin.message!, durableFinal: { capabilities: { text: false } } },
+      };
+  registry.setActivePluginRegistry(
+    registry.createTestRegistry([{ pluginId: "signal", plugin: registered, source: "test" }]),
+  );
+}
+
 describe("Signal partial final delivery ingress boundary", () => {
   let state: OpenClawTestState;
   let queue: ReturnType<typeof createChannelIngressQueueForTests<SignalIngressPayload>>;
@@ -85,20 +99,28 @@ describe("Signal partial final delivery ingress boundary", () => {
       timestamp,
       dataMessage: { timestamp, message, attachments: [] },
     });
-  const createHandler = (cfg: OpenClawConfig, overrides: Partial<SignalEventHandlerDeps> = {}) =>
-    eventHandlerModule.createSignalEventHandler(
-      harnessModule.createBaseSignalEventHandlerDeps({
+  const createHandler = (
+    cfg: OpenClawConfig,
+    overrides: Partial<SignalEventHandlerDeps> = {},
+    create = eventHandlerModule.createSignalEventHandler,
+    deps = harnessModule.createBaseSignalEventHandlerDeps,
+  ) =>
+    create(
+      deps({
         cfg,
         deliverReplies: async (params) =>
           await deliverReplies({ ...params, cfg, chunkMode: "length" }),
         ...overrides,
       }),
     );
-  const monitorFor = (handler: ReturnType<typeof createHandler>) =>
-    startSignalIngressMonitor({
+  const monitorFor = (
+    handler: ReturnType<typeof createHandler>,
+    start = startSignalIngressMonitor,
+  ) =>
+    start({
       accountId: "default",
       queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-      dispatch: async (event, lifecycle: SignalIngressLifecycle) => await handler(event, lifecycle),
+      dispatch: handler,
       runtime: { error: vi.fn(), log: vi.fn() },
     });
   const receive = async (
@@ -119,9 +141,7 @@ describe("Signal partial final delivery ingress boundary", () => {
       accountId: "default",
       stateDir: state.stateDir,
     });
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "signal", plugin: signalPlugin, source: "test" }]),
-    );
+    registerPlugin();
     clearSignalApprovalReactionTargetsForTest();
     getReplyFromConfigMock.mockReset();
     sendMessageSignalMock.mockReset();
@@ -172,14 +192,7 @@ describe("Signal partial final delivery ingress boundary", () => {
       .mockResolvedValueOnce({ messageId: "1700000005999" })
       .mockRejectedValueOnce(new Error("second Signal send failed"));
 
-    const monitor = await monitorFor(
-      createHandler(cfg, {
-        baseUrl: "http://signal.test:8080",
-        account: "+15550009999",
-        accountId: "default",
-        mediaMaxBytes: 8 * 1024 * 1024,
-      }),
-    );
+    const monitor = await monitorFor(createHandler(cfg, { account: "+15550009999" }));
     const event = eventAt(timestamp, "please run it");
 
     try {
@@ -202,10 +215,7 @@ describe("Signal partial final delivery ingress boundary", () => {
           reactionKey: "👍",
           targetAuthor: "+15550009999",
         }),
-      ).resolves.toMatchObject({
-        approvalId: "exec-partial",
-        decision: "allow-once",
-      });
+      ).resolves.toMatchObject({ approvalId: "exec-partial", decision: "allow-once" });
 
       await receive(monitor, event);
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
@@ -299,21 +309,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     getReplyFromConfigMock.mockResolvedValue({ text: "retry me" });
     sendMessageSignalMock.mockRejectedValueOnce(error);
     const cfg = config();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "signal",
-          plugin: {
-            ...signalPlugin,
-            message: {
-              ...signalPlugin.message!,
-              durableFinal: { capabilities: { text: false } },
-            },
-          },
-          source: "test-direct-delivery",
-        },
-      ]),
-    );
+    registerPlugin(signalPlugin, false);
     const createMonitor = () => monitorFor(createHandler(cfg));
     const event = eventAt(timestamp, "please retry");
 
@@ -356,34 +352,14 @@ describe("Signal partial final delivery ingress boundary", () => {
       import("openclaw/plugin-sdk/reply-runtime"),
     ]);
     freshReplyRuntime.resetInboundDedupe();
-    freshPluginRuntime.setActivePluginRegistry(
-      freshPluginRuntime.createTestRegistry([
-        {
-          pluginId: "signal",
-          plugin: {
-            ...freshChannel.signalPlugin,
-            message: {
-              ...freshChannel.signalPlugin.message!,
-              durableFinal: { capabilities: { text: false } },
-            },
-          },
-          source: "test-restart",
-        },
-      ]),
+    registerPlugin(freshChannel.signalPlugin, false, freshPluginRuntime);
+    const retryHandler = createHandler(
+      cfg,
+      {},
+      freshHandlerModule.createSignalEventHandler,
+      freshHarness.createBaseSignalEventHandlerDeps,
     );
-    const retryHandler = freshHandlerModule.createSignalEventHandler(
-      freshHarness.createBaseSignalEventHandlerDeps({
-        cfg,
-        deliverReplies: async (params) =>
-          await deliverReplies({ ...params, cfg, chunkMode: "length" }),
-      }),
-    );
-    const retryMonitor = await freshIngress.startSignalIngressMonitor({
-      accountId: "default",
-      queue: queue as Parameters<typeof freshIngress.startSignalIngressMonitor>[0]["queue"],
-      dispatch: async (retryEvent, lifecycle) => await retryHandler(retryEvent, lifecycle),
-      runtime: { error: vi.fn(), log: vi.fn() },
-    });
+    const retryMonitor = await monitorFor(retryHandler, freshIngress.startSignalIngressMonitor);
 
     try {
       await receive(retryMonitor, event);
