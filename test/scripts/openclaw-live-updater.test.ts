@@ -890,13 +890,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
             invocationPrefix,
             executable:
               layout === "direct" ? process.execPath : layout === "shell" ? "/bin/sh" : wrapper,
-            envFilePath: layout === "direct" ? null : envFile,
+            ...(layout === "direct"
+              ? { envFilePath: null, wrapperPath: null }
+              : { envFilePath: envFile, wrapperPath: wrapper }),
             port: 19001,
             serviceEnvironment: {
               OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
               OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
             },
-            wrapperPath: layout === "direct" ? null : wrapper,
           },
         ),
       );
