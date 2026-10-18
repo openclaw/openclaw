@@ -1,0 +1,540 @@
+.chat-details:not([hidden]):has(> .chat-details-desktop-body) {
+  --details-surface: var(--card);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.chat-details.chat-details--docked:has(> .chat-details-desktop-body) {
+  --details-surface: var(--panel-strong);
+}
+
+.chat-details-desktop-body {
+  --details-row-font-size: calc(13px * var(--control-ui-text-scale));
+  --details-row-line-height: 24px;
+  --details-meta-font-size: var(--control-ui-text-sm);
+  --details-meta-line-height: 20px;
+  --details-row-padding: 4px;
+  --details-row-height: 32px;
+  --details-row-padding-block: 4px;
+  --details-row-icon-size: 15px;
+  --details-row-icon-slot: 16px;
+  --details-row-gap: 8px;
+  --details-row-list-gap: 0px;
+  --details-section-padding: 10px;
+  --scrollbar-size: 8px;
+  --scrollbar-thumb-inset: 2px;
+  --details-scrollbar-thumb: transparent;
+  --details-fade-top: 0px;
+  --details-fade-bottom: 0px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-color: var(--details-scrollbar-thumb) transparent;
+}
+
+.chat-details-desktop-body:hover {
+  --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+}
+
+.chat-details-desktop-body[data-fade-top] {
+  --details-fade-top: 24px;
+}
+
+.chat-details-desktop-body[data-fade-bottom] {
+  --details-fade-bottom: 24px;
+}
+
+.chat-details-desktop-body:is([data-fade-top], [data-fade-bottom]) {
+  mask:
+    linear-gradient(
+      to bottom,
+      transparent,
+      black var(--details-fade-top),
+      black calc(100% - var(--details-fade-bottom)),
+      transparent
+    ),
+    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+}
+
+.chat-details-desktop-body__content {
+  padding-block: 4px;
+  padding-inline: calc(16px - var(--details-scrollbar-reserve, 0px));
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .chat-details-desktop-body {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .chat-details-desktop-body::-webkit-scrollbar {
+    width: var(--scrollbar-size);
+  }
+
+  .chat-details-desktop-body::-webkit-scrollbar-track {
+    margin-block: 16px;
+  }
+
+  .chat-details-desktop-body::-webkit-scrollbar-thumb {
+    border: var(--scrollbar-thumb-inset) solid transparent;
+    border-radius: 4px;
+    background: var(--details-scrollbar-thumb);
+    background-clip: content-box;
+  }
+}
+
+.chat-details-desktop-section {
+  margin: 0;
+  padding-block: var(--details-section-padding, 10px);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  line-height: 24px;
+}
+
+.chat-details-desktop-section + .chat-details-desktop-section {
+  border-top: 1px solid var(--details-separator);
+}
+
+.chat-details-desktop-section__heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 24px;
+  cursor: pointer;
+}
+
+.chat-details-desktop-section__heading::-webkit-details-marker {
+  display: none;
+}
+
+.chat-details-desktop-section__title {
+  font-weight: 500;
+}
+
+.chat-details-desktop-section__heading:is(:hover, :focus-visible) {
+  color: var(--muted);
+  background: transparent;
+}
+
+.chat-details-desktop-section__heading:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+
+.chat-details-desktop-section__heading > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  transform: rotate(-90deg);
+}
+
+.chat-details-desktop-section[data-expanded] > .chat-details-desktop-section__heading > svg {
+  opacity: 0;
+  transform: none;
+}
+
+.chat-details-desktop-section[data-expanded]
+  > .chat-details-desktop-section__heading:is(:hover, :focus-visible)
+  > svg {
+  opacity: 1;
+}
+
+.chat-details-desktop-section__metadata {
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Count metadata belongs beside the title; other summaries keep their trailing slot. */
+.chat-details-desktop-section__heading:has(.chat-details-desktop-section__count)
+  > .chat-details-desktop-section__metadata {
+  margin-inline-start: 0;
+}
+
+.chat-details-desktop-section__heading:has(.chat-details-desktop-section__count) > svg {
+  order: 1;
+}
+
+.chat-details-desktop-section__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--details-meta-font-size);
+  line-height: var(--details-meta-line-height);
+}
+
+.chat-details-desktop-section__count-separator {
+  opacity: 0.5;
+}
+
+.chat-details-desktop-section__body > div {
+  display: flow-root;
+}
+
+.chat-details-session[data-details-desktop] > .chat-details__group,
+.chat-details-session[data-details-desktop] > .chat-details-desktop-section,
+.chat-details-session[data-details-desktop]
+  > openclaw-chat-summary-automations
+  > :is(.chat-details__group, .chat-details-desktop-section) {
+  margin: 0;
+  padding: var(--details-section-padding) 0;
+  border-top: 1px solid var(--details-separator);
+}
+
+.chat-details-session[data-details-desktop]
+  > :is(.chat-details__group, .chat-details-desktop-section):first-child {
+  border-top: 0;
+}
+
+.chat-details-session[data-details-desktop] > .chat-details__group > .chat-details__caption {
+  min-height: 28px;
+  margin-inline: 0;
+  padding: 0;
+  line-height: 24px;
+}
+
+.chat-details-session[data-details-desktop]
+  > .chat-details-desktop-section[data-details-group="outputs"]
+  > .chat-details-desktop-section__body
+  > div {
+  padding-top: 4px;
+}
+
+.chat-details-session[data-details-desktop]
+  > .chat-details__changes
+  > .chat-details-desktop-section {
+  padding: 0;
+}
+
+.chat-details-desktop-context-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Composition tokens apply only under the native desktop body, never mobile leaves. */
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-people__row,
+    .chat-details-people__name,
+    .chat-details__row,
+    .chat-details__value,
+    .chat-environment__action,
+    .chat-summary__automation,
+    .chat-summary__automation-title,
+    .chat-details-subagents__row,
+    .chat-details-subagents__name,
+    .chat-outputs__row,
+    .chat-outputs__name,
+    .chat-pr.chat-pr--summary .chat-pr__link,
+    .chat-pr.chat-pr--summary .chat-pr__title,
+    .chat-pr__branch,
+    .chat-pr__repo,
+    .session-progress-card__step,
+    .session-progress-card__step-text,
+    .chat-context__row,
+    .chat-context__label,
+    .chat-context__entry,
+    .chat-context__entry > span:first-child,
+    .chat-context__compact
+  ) {
+  font-family: var(--font-body);
+  font-size: var(--details-row-font-size);
+  font-weight: 400;
+  line-height: var(--details-row-line-height);
+  letter-spacing: normal;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-desktop-section__metadata,
+    .chat-details-people__role,
+    .chat-details-people__remaining,
+    .chat-details-people__count,
+    .chat-details__badge,
+    .chat-environment__counts,
+    .chat-environment__counts > span,
+    .chat-summary__automation-state,
+    .chat-summary__automation-metadata,
+    .chat-details-subagents__status,
+    .chat-details-subagents__counts,
+    .chat-details-subagents__count,
+    .chat-pr__number,
+    .chat-pr__state,
+    .chat-pr__stale,
+    .chat-details__context-budget,
+    .chat-details__context-budget strong,
+    .chat-details__stats,
+    .chat-context__tokens,
+    .chat-context__percent,
+    .chat-context__label small,
+    .chat-context__entry > span:last-child,
+    .chat-context__note,
+    .chat-details__muted,
+    .chat-outputs__status,
+    .task-progress-details__count
+  ) {
+  font-family: var(--font-body);
+  font-size: var(--details-meta-font-size);
+  font-weight: 400;
+  line-height: var(--details-meta-line-height);
+  letter-spacing: normal;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-desktop-section__heading,
+    .chat-details__caption,
+    .chat-environment__heading,
+    .chat-summary__automation-pending,
+    .task-progress-details__heading,
+    .task-progress-details__title
+  ) {
+  color: var(--muted);
+  font-family: var(--font-body);
+  font-size: var(--details-row-font-size);
+  font-weight: 500;
+  line-height: var(--details-row-line-height);
+  letter-spacing: normal;
+}
+
+.chat-details .chat-details-desktop-body .chat-details__caption {
+  min-height: 28px;
+  margin-inline: 0;
+  padding: 0;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(a, button, summary, .chat-pr.chat-pr--summary .chat-pr__link):is(
+    :link,
+    :visited,
+    :hover,
+    :focus,
+    :active
+  ),
+.chat-details .chat-details-desktop-body :is(a, button, summary) {
+  text-decoration: none;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-people__row,
+    .chat-details__row,
+    .chat-summary__automation,
+    .chat-details-subagents__row,
+    .chat-outputs__row,
+    .chat-pr.chat-pr--summary,
+    .session-progress-card__step,
+    .chat-context__row,
+    .chat-context__entry
+  ) {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--details-row-height);
+  margin-inline: 0;
+  padding: var(--details-row-padding-block) var(--details-row-padding);
+  gap: var(--details-row-gap);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-outputs--desktop,
+    .chat-summary__automations,
+    .chat-details-subagents__list,
+    .chat-prs,
+    .session-progress-card__steps
+  ) {
+  row-gap: var(--details-row-list-gap);
+}
+
+.chat-details .chat-details-desktop-body .chat-summary__automation-error,
+.chat-details .chat-details-desktop-body .chat-summary__automation-message {
+  padding-inline: var(--details-row-padding);
+}
+
+.chat-details-desktop-body__content > openclaw-chat-details-progress {
+  padding-block: var(--details-section-padding);
+  border-top: 1px solid var(--details-separator);
+}
+
+.chat-details .chat-details-desktop-body .task-progress-details--desktop {
+  margin-block-start: 0;
+}
+
+.chat-details .chat-details-desktop-body .task-progress-details__heading {
+  padding-block: 0;
+}
+
+.chat-details .chat-details-desktop-body .chat-details-subagents {
+  --details-subagent-surface: var(--details-surface);
+}
+
+.chat-details .chat-details-desktop-body :is(.chat-pr__badge, .chat-summary__automation-paused) {
+  background: var(--details-surface);
+}
+
+.chat-details .chat-details-desktop-body :is(.chat-pr__badge, .chat-summary__automation-attention) {
+  box-shadow: 0 0 0 2px var(--details-surface);
+}
+
+.chat-details .chat-details-desktop-body .chat-details-people__preview .viewer-avatar,
+.chat-details .chat-details-desktop-body .chat-details-people__overflow {
+  border-color: var(--details-surface);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .task-progress-details__count,
+    .chat-details__context-budget strong,
+    .chat-context__tokens,
+    .chat-context__percent
+  ) {
+  color: var(--muted);
+}
+
+/* Keep the checklist's native type and row height while sharing the list gap. */
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details--desktop
+  .task-progress-details__plan {
+  --details-row-list-gap: inherit;
+}
+
+/* The approved task note keeps its prose rhythm; item rows use the shared 24px line. */
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details__plan
+  .session-progress-card__markdown {
+  font-family: var(--font-body);
+  font-size: var(--details-row-font-size);
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: normal;
+}
+
+/* Rows retain their native renderers; only the desktop composition owns their metrics. */
+.chat-details .chat-details-desktop-body :is(.chat-details-people, .chat-outputs--desktop) {
+  --details-row-height: 28px;
+  --details-row-padding-block: 2px;
+  display: grid;
+}
+
+.chat-details .chat-details-desktop-body .chat-details-people__row {
+  grid-template-columns: var(--details-row-icon-slot) minmax(0, 1fr) auto;
+  border-radius: 6px;
+}
+
+.chat-details .chat-details-desktop-body a.chat-details-people__row:hover {
+  background: var(--bg-hover);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-people__avatar,
+    .chat-summary__automation-icon,
+    .chat-outputs__icon,
+    .chat-environment-desktop__machine-icon
+  ) {
+  display: inline-flex;
+  flex: 0 0 var(--details-row-icon-slot);
+  align-items: center;
+  justify-content: center;
+  width: var(--details-row-icon-slot);
+  height: var(--details-row-icon-slot);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(.chat-details__row > svg:first-child, .chat-environment__action > svg:first-child) {
+  flex: 0 0 var(--details-row-icon-slot);
+  width: var(--details-row-icon-slot);
+  height: var(--details-row-icon-size);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-summary__automation-icon > svg,
+    .chat-outputs__icon > svg,
+    .chat-outputs__icon > .chat-attachment-file-icon,
+    .chat-environment-desktop__machine-icon > svg,
+    .chat-details-people__avatar .viewer-avatar
+  ) {
+  flex: none;
+  width: var(--details-row-icon-size);
+  height: var(--details-row-icon-size);
+}
+
+/* Collapsed People matches the native Subagents avatar, not the expanded row icon. */
+.chat-details
+  .chat-details-desktop-body
+  :is(.chat-details-people__preview .viewer-avatar, .chat-details-people__overflow) {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-people__avatar .viewer-avatar,
+    .chat-details-people__preview .viewer-avatar,
+    .chat-details-people__overflow
+  ) {
+  font-size: 8px;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  :is(
+    .chat-details-people__preview-avatar + .chat-details-people__preview-avatar,
+    .chat-details-people__preview-avatar + .chat-details-people__overflow
+  ) {
+  margin-inline-start: -7px;
+}
+
+/* The clickable child fills its row, including the existing hover surface. */
+.chat-details .chat-details-desktop-body .chat-environment__row:has(> .chat-environment__action) {
+  padding: 0;
+}
+
+.chat-details .chat-details-desktop-body .chat-environment__action {
+  box-sizing: border-box;
+  min-height: var(--details-row-height);
+  padding: var(--details-row-padding-block) var(--details-row-padding);
+  gap: var(--details-row-gap);
+}
+
+/* File artwork supplies an inline intrinsic size; constrain it to the row slot. */
+.chat-details .chat-details-desktop-body .chat-outputs__icon > .chat-attachment-file-icon {
+  max-width: var(--details-row-icon-size);
+  max-height: var(--details-row-icon-size);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  .chat-environment__counts
+  > span:is(.chat-environment__added, .chat-environment__removed) {
+  font-weight: 500;
+}

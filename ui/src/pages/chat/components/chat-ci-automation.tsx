@@ -1,5 +1,7 @@
 import { For, Show } from "solid-js";
 import type { CronJob } from "../../../api/types.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { SettingsToggle } from "../../../components/solid/settings-ui.tsx";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type {
@@ -21,6 +23,7 @@ export type ChatCiAutomationProps = {
   disabled?: boolean;
   disabledReason?: string;
   retryDisabled?: boolean;
+  menuPresentation?: boolean;
   onChange: (option: CiAutomationOption, enabled: boolean) => void;
   onRetry: () => void;
 };
@@ -29,6 +32,17 @@ const OPTIONS = [
   ["autoMerge", "chat.pullRequests.automationAutoMerge"],
   ["autoArchive", "chat.pullRequests.automationAutoArchive"],
 ] as const;
+const MENU_OPTIONS = {
+  autoFix: { icon: "wrench", descriptionKey: "chat.pullRequests.automationAutoFixDescription" },
+  autoMerge: {
+    icon: "gitMerge",
+    descriptionKey: "chat.pullRequests.automationAutoMergeDescription",
+  },
+  autoArchive: {
+    icon: "archive",
+    descriptionKey: "chat.pullRequests.automationAutoArchiveDescription",
+  },
+} as const;
 
 function JobError(props: { job?: CronJob }) {
   return (
@@ -65,17 +79,46 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
         <For each={OPTIONS}>
           {(entry) => (
             <div class="chat-ci__automation-row">
-              <label class="chat-ci__automation-option">
-                <input
-                  class="chat-ci__automation-checkbox"
-                  type="checkbox"
-                  name={entry[0]}
-                  checked={props.options[entry[0]]}
-                  disabled={props.pending[entry[0]] !== undefined}
-                  onChange={(event) => props.onChange(entry[0], event.currentTarget.checked)}
-                />
-                <span class="chat-ci__automation-label">{t(entry[1])}</span>
-              </label>
+              <Show
+                when={props.menuPresentation}
+                fallback={
+                  <label class="chat-ci__automation-option">
+                    <input
+                      class="chat-ci__automation-checkbox"
+                      type="checkbox"
+                      name={entry[0]}
+                      checked={props.options[entry[0]]}
+                      disabled={props.pending[entry[0]] !== undefined}
+                      onChange={(event) => props.onChange(entry[0], event.currentTarget.checked)}
+                    />
+                    <span class="chat-ci__automation-label">{t(entry[1])}</span>
+                  </label>
+                }
+              >
+                <label class="chat-ci__automation-option chat-ci__automation-option--menu">
+                  <Icon name={MENU_OPTIONS[entry[0]].icon} />
+                  <span class="chat-ci__automation-label">
+                    {t(
+                      entry[0] === "autoArchive"
+                        ? "chat.pullRequests.automationAutoArchiveSession"
+                        : entry[1],
+                    )}
+                    <span class="chat-ci__automation-description">
+                      {t(MENU_OPTIONS[entry[0]].descriptionKey)}
+                    </span>
+                  </span>
+                  <SettingsToggle
+                    ariaLabel={t(
+                      entry[0] === "autoArchive"
+                        ? "chat.pullRequests.automationAutoArchiveSession"
+                        : entry[1],
+                    )}
+                    checked={props.options[entry[0]]}
+                    disabled={props.disabled || props.pending[entry[0]] !== undefined}
+                    onChange={(enabled) => props.onChange(entry[0], enabled)}
+                  />
+                </label>
+              </Show>
               <JobError job={props.jobs?.[entry[0]]} />
             </div>
           )}
