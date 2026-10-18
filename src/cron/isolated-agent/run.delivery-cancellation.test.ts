@@ -20,7 +20,10 @@ const { hasUnsettledCronDescendants, sendCronAnnouncePayloadStrict } = vi.hoiste
   hasUnsettledCronDescendants: vi.fn(),
   sendCronAnnouncePayloadStrict: vi.fn(),
 }));
-vi.mock("./delivery-subagent-registry.runtime.js", () => ({ hasUnsettledCronDescendants }));
+vi.mock("./delivery-subagent-registry.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delivery-subagent-registry.runtime.js")>()),
+  hasUnsettledCronDescendants,
+}));
 vi.mock("../delivery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../delivery.js")>()),
   sendCronAnnouncePayloadStrict,
