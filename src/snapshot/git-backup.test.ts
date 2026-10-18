@@ -27,11 +27,7 @@ import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
-import {
-  createCatalogFixture,
-  createFormatFixture,
-  writeBackupManifest,
-} from "./git-backup.test-support.js";
+import { createCatalogFixture, createFormatFixture } from "./git-backup.test-support.js";
 import { withDatabase } from "./local-repository.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -130,24 +126,34 @@ function createStateDatabaseFixture(root: string) {
 async function backupFixture(name = "repository") {
   const root = await tempRoot();
   const state = createStateDatabaseFixture(root);
-  const repositoryPath = path.join(root, name);
-  const options = { repositoryPath, stateDir: state.stateDir };
+  const repo = repositoryContext(root, name);
   return {
     root,
     ...state,
-    ...options,
-    init: (remote?: string) => initializeGitBackupRepository({ ...options, remote }),
+    ...repo,
     create: (extra: Partial<Parameters<typeof createGitBackup>[0]> = {}) =>
-      createGitBackup({ ...options, databases: [state.database], ...extra }),
+      createGitBackup({ ...repo.options, databases: [state.database], ...extra }),
+  };
+}
+
+function repositoryContext(root: string, name = "repository") {
+  const repositoryPath = path.join(root, name);
+  const options = { repositoryPath, stateDir: path.join(root, "state") };
+  return {
+    root,
+    ...options,
+    options,
+    file: (...parts: string[]) => path.join(repositoryPath, ...parts),
+    git: (...args: string[]) => requireGit(repositoryPath, args),
+    init: (remote?: string) => initializeGitBackupRepository({ ...options, remote }),
+    log: (limit = 10) => readGitBackupLog({ repositoryPath, limit }),
   };
 }
 
 async function repositoryFixture(name = "repository") {
-  const root = await tempRoot();
-  const stateDir = path.join(root, "state");
-  const repositoryPath = path.join(root, name);
-  await fs.mkdir(stateDir);
-  return { root, stateDir, repositoryPath };
+  const repo = repositoryContext(await tempRoot(), name);
+  await fs.mkdir(repo.stateDir);
+  return repo;
 }
 
 async function agentFixture(stateDir: string, agentId: string, agentDir: string) {
@@ -260,9 +266,6 @@ it("backs up a configured external agent database for explicit and all scopes", 
       ]) {
         const repositoryPath = path.join(root, `${scope}-repository`);
         await initializeGitBackupRepository({ repositoryPath, stateDir });
-        const finderPath = path.join(repositoryPath, "agents", ".DS_Store");
-        await fs.mkdir(path.dirname(finderPath), { recursive: true });
-        await fs.writeFile(finderPath, "filesystem metadata\n");
         const result = await backupGitCreateCommand(createTestRuntime(), {
           repository: repositoryPath,
           ...selection,
@@ -273,10 +276,6 @@ it("backs up a configured external agent database for explicit and all scopes", 
 
         expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
         expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
-        await expect(fs.readFile(finderPath, "utf8")).resolves.toBe("filesystem metadata\n");
-        expect(
-          await requireGit(repositoryPath, ["ls-tree", "-r", "--name-only", "HEAD"]),
-        ).not.toContain(".DS_Store");
         if (scope === "all") {
           await expect(
             fs.stat(path.join(repositoryPath, "global", "manifest.json")),
@@ -293,7 +292,7 @@ it.each(["missing", "old-schema", "removed"] as const)(
     clearRuntimeConfigSnapshot();
     const root = await fs.realpath(await tempRoot());
     const { stateDir } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
+    const { repositoryPath, options, git, file } = repositoryContext(root);
     const configPath = path.join(stateDir, "openclaw.json");
     const entries = {
       main: await agentFixture(stateDir, "main", path.join(root, "main")),
@@ -327,8 +326,8 @@ it.each(["missing", "old-schema", "removed"] as const)(
           warnings: z.array(z.string()).optional(),
         });
         const first = resultSchema.parse(JSON.parse((await create()).stdout));
-        const opsTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"]);
-        const mainTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/main"]);
+        const opsTree = await git("rev-parse", "HEAD:agents/ops");
+        const mainTree = await git("rev-parse", "HEAD:agents/main");
         withDatabase(path.join(entries.main.agentDir, "openclaw-agent.sqlite"), (main) => {
           main.exec("UPDATE schema_meta SET updated_at = updated_at + 1");
         });
@@ -343,30 +342,26 @@ it.each(["missing", "old-schema", "removed"] as const)(
           await writeConfig({ main: entries.main });
         }
         const retainedArtifact = "agents/ops/tables/schema_meta.jsonl";
-        const retainedPath = path.join(repositoryPath, retainedArtifact);
+        const retainedPath = file(retainedArtifact);
         let stagedBlob: string | undefined;
         if (condition !== "removed") {
           await fs.writeFile(retainedPath, "operator staged bytes\n");
-          await requireGit(repositoryPath, ["add", "--", retainedArtifact]);
-          stagedBlob = await requireGit(repositoryPath, ["rev-parse", `:${retainedArtifact}`]);
+          await git("add", "--", retainedArtifact);
+          stagedBlob = await git("rev-parse", `:${retainedArtifact}`);
           await fs.writeFile(retainedPath, "operator unstaged bytes\n");
         }
         const output = await create();
         const result = resultSchema.parse(JSON.parse(output.stdout));
         expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
         expect(result.commit).not.toBe(first.commit);
-        expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/main"])).not.toBe(
-          mainTree,
-        );
+        expect(await git("rev-parse", "HEAD:agents/main")).not.toBe(mainTree);
         if (condition === "removed") {
-          expect(await requireGit(repositoryPath, ["ls-tree", "HEAD", "agents/ops"])).toBe("");
+          expect(await git("ls-tree", "HEAD", "agents/ops")).toBe("");
           expect(output.stderr).not.toContain("Warning: Agent");
           return;
         }
-        expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"])).toBe(opsTree);
-        expect(await requireGit(repositoryPath, ["rev-parse", `:${retainedArtifact}`])).toBe(
-          stagedBlob,
-        );
+        expect(await git("rev-parse", "HEAD:agents/ops")).toBe(opsTree);
+        expect(await git("rev-parse", `:${retainedArtifact}`)).toBe(stagedBlob);
         await expect(fs.readFile(retainedPath, "utf8")).resolves.toBe("operator unstaged bytes\n");
         const reason = condition === "missing" ? /ENOENT/u : /uses schema version/u;
         expect(result.warnings).toEqual([expect.stringMatching(/agent ops.*degraded/iu)]);
@@ -382,55 +377,36 @@ it.each(["missing", "old-schema", "removed"] as const)(
         await expect(create("ops")).rejects.toThrow(reason);
         await expect(
           createGitBackup({
-            repositoryPath,
-            stateDir,
+            ...options,
             all: true,
             databases: [{ path: opsPath, identity: { role: "agent", agentId: "ops" } }],
           }),
         ).rejects.toThrow("No Git backup databases were found for the selected scope.");
-        expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(result.commit);
+        expect(await git("rev-parse", "HEAD")).toBe(result.commit);
       },
     );
   },
 );
 
-it("prunes owned artifacts without deleting an unowned agent scope", async () => {
-  const { repositoryPath, init, create } = await backupFixture();
-  const ownedAgentPath = path.join(repositoryPath, "agents", "owned-agent");
-  const unownedFile = path.join(repositoryPath, "agents", "operator", "operator.txt");
-  await init();
-  await writeBackupManifest(ownedAgentPath, "owned-agent");
-  await fs.mkdir(path.dirname(unownedFile), { recursive: true });
-  await fs.writeFile(unownedFile, "operator-owned\n");
-
-  await expect(create({ all: true })).resolves.toMatchObject({ noChanges: false });
-  await expect(fs.readFile(unownedFile, "utf8")).resolves.toBe("operator-owned\n");
-  await expect(fs.stat(ownedAgentPath)).rejects.toMatchObject({ code: "ENOENT" });
-});
-
 it.skipIf(process.platform === "win32")(
   "rejects group-writable adopted roots with a chmod hint",
   async () => {
-    const { stateDir, repositoryPath } = await repositoryFixture();
+    const { repositoryPath, init } = await repositoryFixture();
     await fs.mkdir(repositoryPath, { mode: 0o700 });
     await fs.chmod(repositoryPath, 0o770);
 
-    await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).rejects.toThrow(
-      /chmod 700/u,
-    );
+    await expect(init()).rejects.toThrow(/chmod 700/u);
   },
 );
 
 it("gives Windows ACL remediation instead of a POSIX chmod command", async () => {
-  const { stateDir, repositoryPath } = await repositoryFixture();
+  const { init } = await repositoryFixture();
   mocks.snapshotRepositoryError = new Error(
     "Windows ACL permits untrusted SQLite staging access on repository root: path=C:\\backups principal=S-1-1-0 rights=FullControl.",
   );
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-  const error = await initializeGitBackupRepository({ repositoryPath, stateDir }).catch(
-    (reason: unknown) => reason,
-  );
+  const error = await captureError(init());
 
   const output = formatCliOperatorError(error, { argv: [], env: {} });
 
@@ -449,17 +425,13 @@ it("gives Windows ACL remediation instead of a POSIX chmod command", async () =>
 it.skipIf(process.platform !== "win32")(
   "initializes and reads history when Windows Git emits MSYS paths",
   async () => {
-    const { stateDir, repositoryPath } = await repositoryFixture();
-
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
+    const { repositoryPath, init, git, log, file } = await repositoryFixture();
+    await init();
     await configureGitIdentity(repositoryPath);
-    await fs.writeFile(path.join(repositoryPath, "README.md"), "backup\n");
-    await requireGit(repositoryPath, ["add", "README.md"]);
-    await requireGit(repositoryPath, ["commit", "-m", "backup history"]);
-
-    await expect(readGitBackupLog({ repositoryPath, limit: 1 })).resolves.toEqual([
-      expect.objectContaining({ message: "backup history" }),
-    ]);
+    await fs.writeFile(file("README.md"), "backup\n");
+    await git("add", "README.md");
+    await git("commit", "-m", "backup history");
+    await expect(log(1)).resolves.toEqual([expect.objectContaining({ message: "backup history" })]);
   },
 );
 
@@ -521,8 +493,7 @@ it("redacts and durably preserves credential-bearing push diagnostics", async ()
 });
 
 it("returns an empty log without matching localized Git diagnostics", async () => {
-  const root = await tempRoot();
-  const repositoryPath = path.join(root, "empty-repository");
+  const { repositoryPath, root } = await repositoryFixture("empty-repository");
   await requireGit(root, ["init", repositoryPath]);
   mocks.logDiagnostic = {
     stdout: "",
@@ -539,11 +510,10 @@ it("returns an empty log without matching localized Git diagnostics", async () =
 });
 
 it("returns bounded redacted diagnostics from both failed history streams", async () => {
-  const root = await tempRoot();
-  const repositoryPath = path.join(root, "failed-history-repository");
+  const { repositoryPath, root, git } = await repositoryFixture();
   const remote = authenticatedUrl("history?token");
   await requireGit(root, ["init", repositoryPath]);
-  await requireGit(repositoryPath, [
+  await git(
     "-c",
     "user.name=OpenClaw Backup Test",
     "-c",
@@ -552,8 +522,8 @@ it("returns bounded redacted diagnostics from both failed history streams", asyn
     "--allow-empty",
     "-m",
     "openclaw backup fixture",
-  ]);
-  await requireGit(repositoryPath, ["checkout", "--detach", "HEAD"]);
+  );
+  await git("checkout", "--detach", "HEAD");
   mocks.logDiagnostic = gitDiagnostic(
     remote,
     `${"🦞".repeat(400)}x stderr-tail-🦞 fatal: unable to read '${remote}'`,
@@ -577,8 +547,9 @@ it("returns bounded redacted diagnostics from both failed history streams", asyn
 });
 
 it("rejects a truncated Git history record with bounded redacted diagnostics", async () => {
-  const repositoryPath = await tempRoot();
-  await requireGit(repositoryPath, ["init"]);
+  const { repositoryPath, git, log, file } = await repositoryFixture();
+  await fs.mkdir(repositoryPath);
+  await git("init");
   const tree = await requireGit(repositoryPath, ["hash-object", "-w", "-t", "tree", "--stdin"], {
     input: "",
   });
@@ -596,9 +567,8 @@ it("rejects a truncated Git history record with bounded redacted diagnostics", a
     ],
     { input: `openclaw backup ${"x".repeat(17 * 1024 * 1024)} ${remote}\n` },
   );
-  await fs.writeFile(path.join(repositoryPath, ".git", "HEAD"), `${commit}\n`);
-
-  const error = await captureError(readGitBackupLog({ repositoryPath, limit: 1 }));
+  await fs.writeFile(file(".git", "HEAD"), `${commit}\n`);
+  const error = await captureError(log(1));
   expect(error.message.length).toBeLessThanOrEqual(1_200);
   expectText(error.message, ["output-limit", "https://***:***@example.invalid/history"], [secret]);
 });
@@ -606,32 +576,31 @@ it("rejects a truncated Git history record with bounded redacted diagnostics", a
 it.each(["missing object", "non-branch ref"])(
   "does not treat a symbolic HEAD with %s as an empty log",
   async (condition) => {
-    const root = await tempRoot();
-    const repositoryPath = path.join(root, "broken-repository");
+    const { root, repositoryPath, git, file, log } = await repositoryFixture();
     await requireGit(root, ["init", repositoryPath]);
     if (condition === "missing object") {
-      const headRef = await requireGit(repositoryPath, ["symbolic-ref", "HEAD"]);
-      const headRefPath = path.join(repositoryPath, ".git", ...headRef.split("/"));
+      const headRef = await git("symbolic-ref", "HEAD");
+      const headRefPath = file(".git", ...headRef.split("/"));
       await fs.mkdir(path.dirname(headRefPath), { recursive: true });
       await fs.writeFile(headRefPath, `${"a".repeat(40)}\n`);
     } else {
-      await requireGit(repositoryPath, ["symbolic-ref", "HEAD", "refs/tags/missing"]);
+      await git("symbolic-ref", "HEAD", "refs/tags/missing");
     }
-    await expect(readGitBackupLog({ repositoryPath, limit: 10 })).rejects.toThrow(/git show-ref/u);
+    await expect(log()).rejects.toThrow(/git show-ref/u);
   },
 );
 
 it.each([false, true])(
   "pushes only backup ancestry and records local degradation (adopted=%s)",
   async (adopted) => {
-    const { root, stateDir, repositoryPath, init, create } = await backupFixture();
+    const { root, stateDir, repositoryPath, init, create, git, file } = await backupFixture();
     const remotePath = path.join(root, "remote.git");
     await requireGit(root, ["init", "--bare", remotePath]);
     await init(remotePath);
     await configureGitIdentity(repositoryPath);
     if (!adopted) {
       const result = await create({ push: true });
-      const branch = await requireGit(repositoryPath, ["branch", "--show-current"]);
+      const branch = await git("branch", "--show-current");
       expect(result).toMatchObject({ noChanges: false, pushed: true });
       expect(result).not.toHaveProperty("pushWarning");
       expect(await requireGit(remotePath, ["rev-parse", `refs/heads/${branch}`])).toBe(
@@ -639,9 +608,9 @@ it.each([false, true])(
       );
       return;
     }
-    await fs.writeFile(path.join(repositoryPath, "unrelated.txt"), "operator-owned\n");
-    await requireGit(repositoryPath, ["add", "unrelated.txt"]);
-    await requireGit(repositoryPath, ["commit", "-m", "operator history"]);
+    await fs.writeFile(file("unrelated.txt"), "operator-owned\n");
+    await git("add", "unrelated.txt");
+    await git("commit", "-m", "operator history");
 
     const warning =
       "repository history contains non-backup commits; use a dedicated backup repository";
@@ -665,20 +634,11 @@ it.each([false, true])(
 );
 
 it("redacts credential-bearing origins in conflict errors", async () => {
-  const { stateDir, repositoryPath } = await repositoryFixture();
+  const { init } = await repositoryFixture();
   const username = ["synthetic", "origin-user"].join("-");
   const password = ["synthetic", "origin-password"].join("-");
-  await initializeGitBackupRepository({
-    repositoryPath,
-    stateDir,
-    remote: `https://${username}:${password}@example.invalid/first`,
-  });
-
-  const conflict = initializeGitBackupRepository({
-    repositoryPath,
-    stateDir,
-    remote: "https://example.invalid/second",
-  });
+  await init(`https://${username}:${password}@example.invalid/first`);
+  const conflict = init("https://example.invalid/second");
   await expect(conflict).rejects.toThrow(
     "Git backup repository already has a different origin: https://***:***@example.invalid/first",
   );

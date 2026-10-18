@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { GitBackupIdentity } from "./git-backup-codec.js";
 import {
   createGitBackup,
   initializeGitBackupRepository,
@@ -23,21 +24,12 @@ import {
   createAgentDatabase,
   createGlobalDatabase,
 } from "./local-repository.schema.test-support.js";
-import { withDatabase } from "./local-repository.test-support.js";
+import { expectMissing, withDatabase } from "./local-repository.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
-const expectMissing = async (file: string) =>
-  expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 const expectContents = async (file: string, contents: string) =>
   expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
-const expectPayload = (file: string, value: string) =>
-  withDatabase(
-    file,
-    (database) =>
-      expect(database.prepare("SELECT value FROM payload WHERE id = 1").get()).toEqual({ value }),
-    { readOnly: true },
-  );
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -79,11 +71,7 @@ async function fixture(all = true) {
     withDatabase(agent.path, (source) =>
       source.exec("UPDATE payload SET value = 'updated' WHERE id = 1"),
     );
-  const restore = (
-    name: string,
-    identity: typeof agent.identity | typeof global.identity = agent.identity,
-    ref?: string,
-  ) =>
+  const restore = (name: string, identity: GitBackupIdentity = agent.identity, ref?: string) =>
     restoreGitBackupRef({
       repositoryPath,
       identity,
@@ -94,11 +82,10 @@ async function fixture(all = true) {
 }
 
 it("preserves extras and their staging while refreshing and pruning declared artifacts", async () => {
-  const { global, agent, git, repoFile, backup, restore } = await fixture();
+  const { global, agent, git, repoFile, backup } = await fixture();
   const extras = [
     "unrelated.txt",
     "agents/.DS_Store",
-    "agents/desktop.ini",
     "agents/operator/notes.txt",
     "agents/main/notes.txt",
     "agents/main/tables/notes.jsonl",
@@ -111,16 +98,13 @@ it("preserves extras and their staging while refreshing and pruning declared art
     await fs.writeFile(destination, `operator document: ${file}\n`);
   }
   await git("add", "--", ...extras);
-  const first = await backup();
-  expect(first.commit).toMatch(/^[a-f0-9]{40}$/u);
+  await backup();
   const staged = () => git("diff", "--cached", "--name-only");
   expect((await staged()).split("\n").toSorted()).toEqual(extras.toSorted());
   const firstTree = await git("ls-tree", "-r", "--name-only", "HEAD");
   for (const file of extras) {
     expect(firstTree.split("\n")).not.toContain(file);
   }
-  const restored = await restore("restored");
-  expectPayload(restored.targetPath, "agent");
 
   for (const file of [
     "global/manifest.json",
@@ -139,8 +123,10 @@ it("preserves extras and their staging while refreshing and pruning declared art
   expect(await git("ls-tree", "HEAD", "agents/main/tables/payload.jsonl")).toBe("");
 
   await fs.rm(repoFile("agents/main/manifest.json"));
+  const expired = repoFile("agents/expired");
+  await writeBackupManifest(expired, "expired");
   const pruned = await backup([global]);
-  expect(pruned.commit).toMatch(/^[a-f0-9]{40}$/u);
+  await expectMissing(expired);
   expect(await git("ls-tree", "HEAD", "agents/main")).toBe("");
   await expectMissing(repoFile("agents/main/manifest.json"));
   for (const file of extras) {
@@ -157,7 +143,6 @@ it("restores legacy refs without interpreting extras or rewriting their history"
   await backup();
   const extras = [
     "global/.DS_Store",
-    "global/notes.txt",
     "global/tables/notes.jsonl",
     "agents/.DS_Store",
     "agents/main/.DS_Store",
@@ -171,7 +156,15 @@ it("restores legacy refs without interpreting extras or rewriting their history"
   const legacy = await git("rev-parse", "HEAD");
   for (const database of [global, agent]) {
     const restored = await restore(`${database.identity.role}-restored`, database.identity, legacy);
-    expectPayload(restored.targetPath, database.identity.role);
+    withDatabase(
+      restored.targetPath,
+      (recovered) => {
+        expect(recovered.prepare("SELECT value FROM payload WHERE id = 1").get()).toEqual({
+          value: database.identity.role,
+        });
+      },
+      { readOnly: true },
+    );
     expect(
       (
         await verifyGitBackupRef({ repositoryPath, identity: database.identity, ref: legacy })

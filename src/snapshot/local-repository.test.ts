@@ -107,11 +107,28 @@ function interceptOpen(
 
 // Restore filesystem spies before the fixture tracker removes their directories.
 afterEach(() => vi.restoreAllMocks());
-const {
-  createTempDir,
-  createGenericRepositoryFixture: repositoryFixture,
-  createGenericSnapshotFixture: snapshotFixture,
-} = useLocalRepositoryFixtures(afterEach);
+const { createTempDir, createGenericRepositoryFixture: makeRepository } =
+  useLocalRepositoryFixtures(afterEach);
+
+async function repositoryFixture(options: Parameters<typeof makeRepository>[0] = {}) {
+  const fixture = await makeRepository(options);
+  return {
+    ...fixture,
+    create: (id = "test") => createSnapshot(fixture.provider, fixture.sourcePath, id),
+  };
+}
+
+async function snapshotFixture(options: Parameters<typeof makeRepository>[0] = {}) {
+  const fixture = await repositoryFixture(options);
+  const snapshot = await fixture.create();
+  return {
+    ...fixture,
+    snapshot,
+    file: (name = SNAPSHOT_SQLITE_FILENAME) => path.join(snapshot.ref.path, name),
+    verify: () => fixture.provider.verify(snapshot.ref),
+    restore: (target = fixture.restorePath) => fixture.provider.restoreFresh(snapshot.ref, target),
+  };
+}
 
 afterEach(() => {
   durabilityTestState.beforePin = undefined;
@@ -119,35 +136,23 @@ afterEach(() => {
   durabilityTestState.pinnedSyncOutcome = undefined;
 });
 
-async function rewriteManifest(
-  result: SnapshotResult,
-  mutate: (manifest: SnapshotManifest) => SnapshotManifest,
-): Promise<void> {
-  const manifestPath = path.join(result.ref.path, SNAPSHOT_MANIFEST_FILENAME);
-  const manifest = await readSnapshotManifest(result.ref.path);
-  await fs.writeFile(manifestPath, `${JSON.stringify(mutate(manifest), null, 2)}\n`);
-}
-
 async function refreshArtifactManifest(result: SnapshotResult): Promise<void> {
-  const digest = await hashSnapshotArtifact(result.ref.path);
-  await rewriteManifest(result, (manifest) => ({
-    ...manifest,
-    artifact: {
-      ...manifest.artifact,
-      sha256: digest.sha256,
-      sizeBytes: digest.sizeBytes,
-    },
-  }));
+  const { sha256, sizeBytes } = await hashSnapshotArtifact(result.ref.path);
+  const manifest = await readSnapshotManifest(result.ref.path);
+  await fs.writeFile(
+    path.join(result.ref.path, SNAPSHOT_MANIFEST_FILENAME),
+    `${JSON.stringify({ ...manifest, artifact: { ...manifest.artifact, sha256, sizeBytes } }, null, 2)}\n`,
+  );
 }
 
-async function pendingSnapshot(id: string) {
-  const fixture = await snapshotFixture(id);
+async function pendingSnapshot() {
+  const fixture = await snapshotFixture();
   const pendingPath = path.join(fixture.snapshot.ref.path, ".pending");
   await fs.writeFile(pendingPath, "");
   return { ...fixture, pendingPath };
 }
 
-async function stagingFixture(id: string, mode = 0o700, sharedMode?: number) {
+async function stagingFixture(mode = 0o700, sharedMode?: number) {
   const { tempDir, sourcePath, repositoryPath } = await repositoryFixture();
   const sharedPath = path.join(tempDir, "shared");
   const validationRootPath = path.join(sharedPath, "validation");
@@ -160,7 +165,7 @@ async function stagingFixture(id: string, mode = 0o700, sharedMode?: number) {
     await fs.chmod(sharedPath, sharedMode);
   }
   const provider = createLocalSqliteSnapshotProvider({ repositoryPath, validationRootPath });
-  const snapshot = await createSnapshot(provider, sourcePath, id);
+  const snapshot = await createSnapshot(provider, sourcePath, "test");
   return {
     provider,
     snapshot,
@@ -193,14 +198,12 @@ describe("local SQLite snapshot repository", () => {
   ])(
     "repairs an existing private repository from mode $label before pinning it",
     async (testCase) => {
-      const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+      const { repositoryPath, create } = await repositoryFixture();
       await fs.mkdir(repositoryPath, { mode: testCase.mode });
       await fs.chmod(repositoryPath, testCase.mode);
 
       try {
-        await expect(
-          createSnapshot(provider, sourcePath, "repair-existing-repository"),
-        ).resolves.toBeDefined();
+        await expect(create("repair-existing-repository")).resolves.toBeDefined();
         expect((await fs.stat(repositoryPath)).mode & 0o777).toBe(0o700);
       } finally {
         await fs.chmod(repositoryPath, 0o700).catch(() => undefined);
@@ -209,7 +212,7 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("cleans a pending marker whose file sync fails", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+    const { repositoryPath, create } = await repositoryFixture();
     let syncFailed = false;
     interceptOpen(async (filePath, flags, handle) => {
       if (!syncFailed && flags === "wx+" && path.basename(String(filePath)) === ".pending") {
@@ -220,15 +223,13 @@ describe("local SQLite snapshot repository", () => {
       }
     });
 
-    await expect(createSnapshot(provider, sourcePath, "pending-sync-failure")).rejects.toThrow(
-      /pending sync failed/u,
-    );
+    await expect(create()).rejects.toThrow(/pending sync failed/u);
     expect(syncFailed).toBe(true);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it.runIf(process.platform !== "win32")("durably stages before publishing", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture({
+    const { repositoryPath, create } = await repositoryFixture({
       now: () => new Date("2026-07-24T16:00:00.000Z"),
     });
     await fs.mkdir(repositoryPath, { mode: 0o700 });
@@ -265,7 +266,7 @@ describe("local SQLite snapshot repository", () => {
       originalUnlink(filePath);
     });
 
-    await createSnapshot(provider, sourcePath, "publication-order");
+    await create();
 
     const snapshotSyncs = events
       .map((event, index) => (event === "snapshot-sync" ? index : -1))
@@ -288,11 +289,11 @@ describe("local SQLite snapshot repository", () => {
 
   it("sorts snapshots newest first and ignores incomplete staging directories", async () => {
     const dates = [new Date("2026-07-12T14:00:00.000Z"), new Date("2026-07-12T14:01:00.000Z")];
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture({
+    const { provider, repositoryPath, create } = await repositoryFixture({
       now: () => dates.shift() ?? new Date("invalid"),
     });
-    const first = await createSnapshot(provider, sourcePath, "test-database");
-    const second = await createSnapshot(provider, sourcePath, "test-database");
+    const first = await create();
+    const second = await create();
     await fs.mkdir(path.join(repositoryPath, ".tmp-interrupted"));
     await fs.mkdir(path.join(repositoryPath, "interrupted-final"));
     await fs.writeFile(path.join(repositoryPath, "interrupted-final", ".pending"), "");
@@ -304,7 +305,7 @@ describe("local SQLite snapshot repository", () => {
   it.each(["before content inspection", "after content inspection"] as const)(
     "keeps a snapshot recovered while its creator is paused %s",
     async (phase) => {
-      const { provider, repositoryPath, restorePath, sourcePath } = await repositoryFixture({
+      const { provider, repositoryPath, restorePath, create } = await repositoryFixture({
         database: { values: ["recovered"] },
       });
       await fs.mkdir(repositoryPath, { mode: 0o700 });
@@ -341,7 +342,7 @@ describe("local SQLite snapshot repository", () => {
         paused.resolve();
         await resume.promise;
       };
-      const creating = createSnapshot(provider, sourcePath, "concurrent-create-recovery");
+      const creating = create();
       const creationOutcome = Promise.allSettled([creating]);
       try {
         await Promise.race([
@@ -379,27 +380,23 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("recovers a complete pending snapshot through direct verify and restore", async () => {
-    const { provider, restorePath, snapshot } = await snapshotFixture("direct-pending-recovery", {
+    const { restorePath, snapshot, verify, restore } = await snapshotFixture({
       database: { values: ["durable"] },
     });
     const pendingPath = path.join(snapshot.ref.path, ".pending");
 
     await fs.writeFile(pendingPath, "");
-    await expect(provider.verify(snapshot.ref)).resolves.toEqual(success(snapshot));
+    await expect(verify()).resolves.toEqual(success(snapshot));
     await expectMissing(pendingPath);
 
     await fs.writeFile(pendingPath, "");
-    await expect(provider.restoreFresh(snapshot.ref, restorePath)).resolves.toEqual(
-      success(snapshot),
-    );
+    await expect(restore()).resolves.toEqual(success(snapshot));
     await expectMissing(pendingPath);
     expect(readGenericValues(restorePath)).toEqual([{ value: "durable" }]);
   });
 
   it("allows concurrent callers to recover the same complete pending snapshot", async () => {
-    const { provider, snapshot, pendingPath } = await pendingSnapshot(
-      "concurrent-pending-recovery",
-    );
+    const { provider, snapshot, pendingPath } = await pendingSnapshot();
 
     let syncArrivals = 0;
     const syncBarrier = createDeferred();
@@ -423,7 +420,7 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("accepts a concurrent commit after classifying a complete pending snapshot", async () => {
-    const { provider, snapshot, pendingPath } = await pendingSnapshot("concurrent-pending-commit");
+    const { provider, snapshot, pendingPath, verify } = await pendingSnapshot();
     durabilityTestState.beforePin = async (directoryPath) => {
       if (directoryPath === snapshot.ref.path) {
         durabilityTestState.beforePin = undefined;
@@ -432,13 +429,11 @@ describe("local SQLite snapshot repository", () => {
     };
 
     await expect(provider.list()).resolves.toEqual([snapshot]);
-    await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
+    await expect(verify()).resolves.toMatchObject({ ok: true });
   });
 
   it("preserves the pending marker when recovery cannot guarantee directory durability", async () => {
-    const { provider, snapshot, pendingPath } = await pendingSnapshot(
-      "unsupported-pending-recovery",
-    );
+    const { provider, snapshot, pendingPath } = await pendingSnapshot();
     durabilityTestState.pinnedSyncOutcome = { status: "unsupported", code: "ENOTSUP" };
 
     await expect(provider.list()).rejects.toThrow(/crash-durable directory synchronization/u);
@@ -452,7 +447,7 @@ describe("local SQLite snapshot repository", () => {
     { defect: "hardlinked marker", error: /pending marker is unsafe/u },
     { defect: "corrupt artifact", error: /size mismatch|hash mismatch/u },
   ])("preserves a pending snapshot with a $defect", async ({ defect, error }) => {
-    const { provider, snapshot, tempDir } = await snapshotFixture("invalid-pending");
+    const { provider, snapshot, tempDir, file } = await snapshotFixture();
     const pendingPath = path.join(snapshot.ref.path, ".pending");
     if (defect === "hardlinked marker") {
       const markerSourcePath = path.join(tempDir, "pending-marker");
@@ -460,7 +455,7 @@ describe("local SQLite snapshot repository", () => {
       await fs.link(markerSourcePath, pendingPath);
     } else {
       await fs.writeFile(pendingPath, "");
-      await fs.appendFile(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "corrupt");
+      await fs.appendFile(file(), "corrupt");
     }
 
     await expect(provider.list()).rejects.toThrow(error);
@@ -529,7 +524,6 @@ describe("local SQLite snapshot repository", () => {
     "rejects verification and restore staging with an untrusted $scope",
     async ({ scope, mode, error }) => {
       const { provider, snapshot, restorePath } = await stagingFixture(
-        "replaceable-ancestor",
         mode,
         scope === "ancestor" ? 0o777 : undefined,
       );
@@ -541,11 +535,7 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it.runIf(process.platform !== "win32")("rejects foreign-owned staging ancestors", async () => {
-    const { provider, snapshot, sharedPath } = await stagingFixture(
-      "untrusted-sticky-owner",
-      0o700,
-      0o1777,
-    );
+    const { provider, snapshot, sharedPath } = await stagingFixture(0o700, 0o1777);
     const canonicalSharedPath = await fs.realpath(sharedPath);
     const originalLstat = fs.lstat.bind(fs);
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -579,8 +569,7 @@ describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform === "darwin")(
     "rejects granting macOS ACLs on private roots, ancestors, and staging directories",
     async () => {
-      const { provider, snapshot, sharedPath, validationRootPath } =
-        await stagingFixture("macos-acl");
+      const { provider, snapshot, sharedPath, validationRootPath } = await stagingFixture();
 
       const aclError = /macOS ACL permits untrusted SQLite staging access/u;
       try {
@@ -623,7 +612,7 @@ describe("local SQLite snapshot repository", () => {
   it.each([false, true])(
     "preserves restore state and errors when cleanup fails (publication failed=%s)",
     async (publicationFailed) => {
-      const { provider, restorePath, snapshot } = await snapshotFixture("restore-cleanup-failure", {
+      const { provider, restorePath, snapshot, restore } = await snapshotFixture({
         database: { values: ["published-before-cleanup"] },
       });
       if (publicationFailed) {
@@ -650,7 +639,7 @@ describe("local SQLite snapshot repository", () => {
         ]);
         await expectMissing(restorePath);
       } else {
-        await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+        await expect(restore()).rejects.toThrow(
           /Failed to clean private SQLite staging directory/u,
         );
         expect(readGenericValues(restorePath)).toEqual([{ value: "published-before-cleanup" }]);
@@ -659,7 +648,7 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("fails restore when the final cleanup directory sync fails", async () => {
-    const { provider, restorePath, snapshot } = await snapshotFixture("best-effort-directory-sync");
+    const { restorePath, restore } = await snapshotFixture();
     const restoreParentPath = path.dirname(restorePath);
     durabilityTestState.beforeSync = async (directoryPath) => {
       const canonicalRestoreParent = await fs.realpath(restoreParentPath).catch(() => undefined);
@@ -674,14 +663,12 @@ describe("local SQLite snapshot repository", () => {
       }
     };
 
-    await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-      /directory sync unavailable/u,
-    );
+    await expect(restore()).rejects.toThrow(/directory sync unavailable/u);
     await fs.access(restorePath);
   });
 
   it.runIf(process.platform !== "win32")("preserves directories raced into place", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture({
+    const { repositoryPath, create } = await repositoryFixture({
       now: () => new Date("2026-07-12T14:00:00.000Z"),
     });
     const originalMkdir = fs.mkdir.bind(fs);
@@ -699,15 +686,13 @@ describe("local SQLite snapshot repository", () => {
       return await originalMkdir(directoryPath, options);
     });
 
-    await expect(createSnapshot(provider, sourcePath, "directory-race")).rejects.toThrow(
-      /directory already exists/u,
-    );
+    await expect(create()).rejects.toThrow(/directory already exists/u);
     expect(racedPath).toBeDefined();
     await expect(fs.readFile(path.join(racedPath!, "keep"), "utf8")).resolves.toBe("racer");
   });
 
   it("rejects an artifact changed after entering the final directory", async () => {
-    const { provider, sourcePath } = await repositoryFixture();
+    const { provider, create } = await repositoryFixture();
     interceptPublication(async (options) => {
       if (
         path.basename(options.targetPath) === SNAPSHOT_MANIFEST_FILENAME &&
@@ -720,14 +705,12 @@ describe("local SQLite snapshot repository", () => {
       }
     }, true);
 
-    await expect(createSnapshot(provider, sourcePath, "final-directory-race")).rejects.toThrow(
-      /size mismatch/u,
-    );
+    await expect(create()).rejects.toThrow(/size mismatch/u);
     await expect(provider.list()).resolves.toEqual([]);
   });
 
   it("rejects an artifact changed after removing the commit marker", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+    const { repositoryPath, create } = await repositoryFixture();
     const originalUnlink = fsSync.unlinkSync.bind(fsSync);
     let mutated = false;
     vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
@@ -741,15 +724,13 @@ describe("local SQLite snapshot repository", () => {
       }
     });
 
-    await expect(createSnapshot(provider, sourcePath, "post-commit-artifact-race")).rejects.toThrow(
-      /size mismatch/u,
-    );
+    await expect(create()).rejects.toThrow(/size mismatch/u);
     expect(mutated).toBe(true);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it.runIf(process.platform !== "win32")("rejects directories replaced during commit", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+    const { repositoryPath, create } = await repositoryFixture();
     const originalUnlink = fsSync.unlinkSync.bind(fsSync);
     let raced = false;
     vi.spyOn(fsSync, "unlinkSync").mockImplementation((filePath) => {
@@ -768,9 +749,7 @@ describe("local SQLite snapshot repository", () => {
       raced = true;
     });
 
-    await expect(
-      createSnapshot(provider, sourcePath, "post-commit-directory-race"),
-    ).rejects.toThrow(/unexpected entry/u);
+    await expect(create()).rejects.toThrow(/unexpected entry/u);
     expect(raced).toBe(true);
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
@@ -778,7 +757,7 @@ describe("local SQLite snapshot repository", () => {
   it.each(["before", "after"] as const)(
     "cleans an entry when its staging pathname changes %s publication",
     async (phase) => {
-      const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+      const { provider, repositoryPath, create } = await repositoryFixture();
       const publish = directoryDurability.publishFileExclusive;
       let raced = false;
       vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
@@ -810,9 +789,7 @@ describe("local SQLite snapshot repository", () => {
         return published;
       });
 
-      await expect(createSnapshot(provider, sourcePath, "replaced-entry-staging")).rejects.toThrow(
-        /publication|staging|target/u,
-      );
+      await expect(create()).rejects.toThrow(/publication|staging|target/u);
       expect(raced).toBe(true);
       await expect(provider.list()).resolves.toEqual([]);
       await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
@@ -820,7 +797,7 @@ describe("local SQLite snapshot repository", () => {
   );
 
   it("never overwrites a file raced into the final snapshot directory", async () => {
-    const { provider, repositoryPath, sourcePath } = await repositoryFixture();
+    const { repositoryPath, create } = await repositoryFixture();
     let racedPath: string | undefined;
     interceptPublication(async (options) => {
       const targetPath = path.resolve(options.targetPath);
@@ -834,7 +811,7 @@ describe("local SQLite snapshot repository", () => {
       }
     });
 
-    await expect(createSnapshot(provider, sourcePath, "entry-race")).rejects.toMatchObject({
+    await expect(create()).rejects.toMatchObject({
       code: "EEXIST",
     });
     expect(racedPath).toBeDefined();
@@ -905,20 +882,20 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("detects artifact hash, user_version, and unsafe-index drift after creation", async () => {
-    const { provider, sourcePath } = await repositoryFixture();
+    const { provider, create } = await repositoryFixture();
 
-    const hashSnapshot = await createSnapshot(provider, sourcePath, "hash");
+    const hashSnapshot = await create();
     await fs.appendFile(path.join(hashSnapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), "tamper");
     await expect(provider.verify(hashSnapshot.ref)).rejects.toThrow(/size mismatch/u);
 
-    const versionSnapshot = await createSnapshot(provider, sourcePath, "version");
+    const versionSnapshot = await create();
     withDatabase(path.join(versionSnapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), (database) => {
       database.exec("PRAGMA user_version = 99;");
     });
     await refreshArtifactManifest(versionSnapshot);
     await expect(provider.verify(versionSnapshot.ref)).rejects.toThrow(/user_version mismatch/u);
 
-    const unsafeSnapshot = await createSnapshot(provider, sourcePath, "unsafe");
+    const unsafeSnapshot = await create();
     const unsafePath = path.join(unsafeSnapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
     createUnsafeIndexDrift(unsafePath);
     await refreshArtifactManifest(unsafeSnapshot);
@@ -928,14 +905,12 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it("never overwrites an existing target or orphan SQLite sidecar", async () => {
-    const { provider, restorePath, snapshot, tempDir } = await snapshotFixture("restore");
+    const { restorePath, tempDir, restore } = await snapshotFixture();
     await fs.mkdir(path.dirname(restorePath), { recursive: true });
     for (const suffix of ["", "-wal"]) {
       const existingPath = `${restorePath}${suffix}`;
       await fs.writeFile(existingPath, `keep${suffix}`);
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-        /restore path already exists/u,
-      );
+      await expect(restore()).rejects.toThrow(/restore path already exists/u);
       await expect(fs.readFile(existingPath, "utf8")).resolves.toBe(`keep${suffix}`);
       if (suffix) {
         await expectMissing(restorePath);
@@ -947,16 +922,14 @@ describe("local SQLite snapshot repository", () => {
       const externalPath = path.join(tempDir, "external.sqlite");
       await fs.writeFile(externalPath, "external");
       await fs.symlink(externalPath, restorePath);
-      await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-        /restore path already exists/u,
-      );
+      await expect(restore()).rejects.toThrow(/restore path already exists/u);
       await expect(fs.readFile(externalPath, "utf8")).resolves.toBe("external");
       expect((await fs.lstat(restorePath)).isSymbolicLink()).toBe(true);
     }
   });
 
   it.runIf(process.platform !== "win32")("rejects redirected restore parents", async () => {
-    const { provider, snapshot, tempDir } = await snapshotFixture("restore-parent-race");
+    const { snapshot, tempDir, restore } = await snapshotFixture();
     const restoreParentPath = path.join(tempDir, "redirected");
     const restorePath = path.join(restoreParentPath, "restored.sqlite");
     const canonicalRestoreParentPath = path.join(
@@ -975,7 +948,7 @@ describe("local SQLite snapshot repository", () => {
       return await originalRealpath(...args);
     });
 
-    await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
+    await expect(restore(restorePath)).rejects.toThrow(
       /restore target changed|outside snapshot repository|must be a real directory|not a directory/u,
     );
     expect(redirected).toBe(true);
@@ -983,27 +956,25 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it.runIf(process.platform !== "win32")("restores only manifest-verified bytes", async () => {
-    const { provider, restorePath, snapshot } = await snapshotFixture("verified-bytes");
+    const { restorePath, restore, file } = await snapshotFixture();
     interceptOpen(async (filePath, flags) => {
       if (
         flags === "wx+" &&
         path.basename(String(filePath)) === SNAPSHOT_SQLITE_FILENAME &&
         path.basename(path.dirname(String(filePath))).startsWith(".tmp-restore-")
       ) {
-        withDatabase(path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME), (database) => {
+        withDatabase(file(), (database) => {
           database.prepare("INSERT INTO entries (value) VALUES (?)").run("raced");
         });
       }
     });
 
-    await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-      /hash mismatch|size mismatch/u,
-    );
+    await expect(restore()).rejects.toThrow(/hash mismatch|size mismatch/u);
     await expectMissing(restorePath);
   });
 
   it.runIf(process.platform !== "win32")("never restores replaced staging bytes", async () => {
-    const { provider, restorePath, snapshot } = await snapshotFixture("pinned-staging", {
+    const { restorePath, restore } = await snapshotFixture({
       database: { values: ["original"] },
     });
     const originalOpen = fs.open.bind(fs);
@@ -1029,22 +1000,17 @@ describe("local SQLite snapshot repository", () => {
       return await originalOpen(filePath, flags, mode);
     });
 
-    let restored = false;
-    try {
-      await provider.restoreFresh(snapshot.ref, restorePath);
-      restored = true;
-    } catch (error) {
-      expect(String(error)).toMatch(/file changed while reading/u);
-    }
-    if (!restored) {
-      await expectMissing(restorePath);
-      return;
-    }
-    expect(readGenericValues(restorePath)).toEqual([{ value: "original" }]);
+    await restore().then(
+      () => expect(readGenericValues(restorePath)).toEqual([{ value: "original" }]),
+      async (error: unknown) => {
+        expect(String(error)).toMatch(/file changed while reading/u);
+        await expectMissing(restorePath);
+      },
+    );
   });
 
   it.runIf(process.platform !== "win32")("keeps sidecars raced into publication", async () => {
-    const { provider, restorePath, snapshot, tempDir } = await snapshotFixture("restore-race");
+    const { restorePath, tempDir, restore } = await snapshotFixture();
     const canonicalRestorePath = path.join(await fs.realpath(tempDir), "restore", "source.sqlite");
     interceptPublication(async (options) => {
       if (path.resolve(options.targetPath) === canonicalRestorePath) {
@@ -1052,30 +1018,25 @@ describe("local SQLite snapshot repository", () => {
       }
     }, true);
 
-    await expect(provider.restoreFresh(snapshot.ref, restorePath)).rejects.toThrow(
-      /unexpected sidecar/u,
-    );
+    await expect(restore()).rejects.toThrow(/unexpected sidecar/u);
     await expectMissing(restorePath);
     await expect(fs.readFile(`${restorePath}-wal`, "utf8")).resolves.toBe("racer");
   });
 
   it("rejects snapshots outside the configured repository and unexpected contents", async () => {
-    const { provider, snapshot, tempDir } = await snapshotFixture("boundary");
+    const { provider, snapshot, tempDir, verify } = await snapshotFixture();
 
     await expect(provider.verify({ path: tempDir })).rejects.toThrow(/immediate child/u);
     await fs.writeFile(path.join(snapshot.ref.path, `${SNAPSHOT_SQLITE_FILENAME}-wal`), "orphan");
-    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/unexpected entry/u);
+    await expect(verify()).rejects.toThrow(/unexpected entry/u);
     await expect(provider.list()).rejects.toThrow(/unexpected (?:incomplete )?entry/u);
   });
 
   it("bounds manifest reads before parsing untrusted snapshot metadata", async () => {
-    const { provider, snapshot } = await snapshotFixture("bounded-manifest");
-    await fs.writeFile(
-      path.join(snapshot.ref.path, SNAPSHOT_MANIFEST_FILENAME),
-      Buffer.alloc(1024 * 1024 + 1, 0x20),
-    );
+    const { verify, file } = await snapshotFixture();
+    await fs.writeFile(file(SNAPSHOT_MANIFEST_FILENAME), Buffer.alloc(1024 * 1024 + 1, 0x20));
 
-    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/1048576 bytes/u);
+    await expect(verify()).rejects.toThrow(/1048576 bytes/u);
   });
 
   it.runIf(process.platform !== "win32")("rejects repository and artifact links", async () => {
@@ -1111,8 +1072,7 @@ describe("local SQLite snapshot repository", () => {
   });
 
   it.runIf(process.platform !== "win32")("rejects aliased repository restore targets", async () => {
-    const { provider, repositoryPath, snapshot, tempDir } =
-      await snapshotFixture("canonical-boundary");
+    const { repositoryPath, snapshot, tempDir, verify } = await snapshotFixture();
     const aliasRoot = path.join(tempDir, "alias");
     await fs.symlink(tempDir, aliasRoot);
     const aliasRepositoryPath = path.join(aliasRoot, "snapshots");
@@ -1126,7 +1086,7 @@ describe("local SQLite snapshot repository", () => {
     await expect(
       aliasProvider.restoreFresh(aliasSnapshot, path.join(repositoryPath, "restored.sqlite")),
     ).rejects.toThrow(/outside snapshot repository/u);
-    await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
+    await expect(verify()).resolves.toMatchObject({ ok: true });
   });
 });
 
