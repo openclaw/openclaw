@@ -154,7 +154,10 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
 
       // The command palette opens the same conversation directly.
       await page.locator(".sidebar-brand__search").click();
-      await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
+      await page
+        .locator("openclaw-command-palette")
+        .getByPlaceholder("Search or start a task…")
+        .fill("Ask OpenClaw");
       const paletteItem = page.getByRole("option", { name: "Ask OpenClaw", exact: true });
       await paletteItem.waitFor();
       await page.screenshot({

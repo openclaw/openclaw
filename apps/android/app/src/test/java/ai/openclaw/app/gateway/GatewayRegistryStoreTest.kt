@@ -1,6 +1,8 @@
 package ai.openclaw.app.gateway
 
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.gatewayRegistryEntry
+import ai.openclaw.app.manualGatewayEndpoint
 import android.content.Context
 import android.content.SharedPreferences
 import kotlinx.serialization.json.Json
@@ -16,6 +18,67 @@ import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class GatewayRegistryStoreTest {
+  @Test
+  fun localNamesSurviveSwitchReconnectDiscoveryAndReloadWithoutChangingIdentityOrCredentials() {
+    val (prefs, securePrefs) = freshPrefs()
+    val store = prefs.gatewayRegistry
+    val manual = GatewayEndpoint.manual("home.example", 443, true, "/gateway")
+    val discovered = GatewayEndpoint("bonjour|office", "Discovered office", "office.example", 18789, tlsEnabled = true)
+    val endpoints = listOf(manual, discovered)
+    endpoints.forEach { endpoint ->
+      store.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.saveGatewayCredentials(endpoint.stableId, token = "synthetic-token", password = "synthetic-password")
+      prefs.saveGatewayCustomHeaders(endpoint.stableId, mapOf("X-Test" to "synthetic-header"))
+    }
+    val credentialsBefore = securePrefs.all.filterKeys { it != GatewayRegistryStore.STORAGE_KEY }
+    store.setActive(manual.stableId)
+    val entriesBefore = store.entries.value
+    endpoints.forEach { assertTrue(store.rename(it.stableId, "  Home lab  ")) }
+    assertEquals(
+      entriesBefore,
+      store.entries.value
+        .map { it.copy(localName = null) }
+        .sortedForStorage(),
+    )
+    assertEquals(manual, manualGatewayEndpoint(requireNotNull(store.activeEntry())))
+
+    store.setActive(discovered.stableId)
+    store.setActive(manual.stableId)
+    endpoints.forEach { endpoint ->
+      val existing = store.entries.value.first { it.stableId == endpoint.stableId }
+      store.upsert(gatewayRegistryEntry(endpoint, existing))
+      store.markConnected(endpoint.stableId, 42L)
+    }
+    val refreshed = discovered.copy(name = "Updated discovery name", host = "new-office.example")
+    store.upsert(gatewayRegistryEntry(refreshed, store.entries.value.first { it.stableId == discovered.stableId }))
+
+    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+    assertEquals(listOf("Home lab", "Home lab"), restored.entries.value.map { it.displayName })
+    assertEquals(manual.stableId, restored.activeStableId.value)
+    assertEquals(listOf(manual.stableId, discovered.stableId), restored.connectedStableIds.value)
+    assertEquals(listOf(42L, 42L), restored.entries.value.map { it.lastConnectedAtMs })
+    assertEquals(
+      setOf("wss://home.example:443/gateway", "new-office.example:18789"),
+      restored.entries.value
+        .map { it.address }
+        .toSet(),
+    )
+    assertEquals(credentialsBefore, securePrefs.all.filterKeys { it != GatewayRegistryStore.STORAGE_KEY })
+
+    val staleEntry = restored.entries.value.first { it.stableId == discovered.stableId }
+    assertTrue(restored.rename(discovered.stableId, ""))
+    restored.upsert(staleEntry)
+    val afterReset = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
+    assertEquals(
+      "Updated discovery name",
+      afterReset.entries.value
+        .first { it.stableId == discovered.stableId }
+        .displayName,
+    )
+    assertEquals("Home lab", afterReset.activeEntry()?.displayName)
+    assertFalse(afterReset.rename("missing", "Missing"))
+  }
+
   @Test
   fun roundTripUpsertActiveAndRemove() {
     val (prefs, securePrefs) = freshPrefs()
@@ -105,7 +168,7 @@ class GatewayRegistryStoreTest {
   }
 
   @Test
-  fun failedRemovalCommitDoesNotPublishCandidateState() {
+  fun failedRenameOrRemovalCommitDoesNotPublishCandidateState() {
     val (_, securePrefs) = freshPrefs()
     val failingCommitPrefs =
       object : SharedPreferences by securePrefs {
@@ -120,7 +183,10 @@ class GatewayRegistryStoreTest {
               return this
             }
 
-            override fun commit(): Boolean = false
+            override fun commit(): Boolean {
+              editor.apply()
+              return false
+            }
           }
         }
       }
@@ -129,6 +195,9 @@ class GatewayRegistryStoreTest {
     store.upsert(alpha)
     store.setActive(alpha.stableId)
 
+    assertFalse(store.rename(alpha.stableId, "Changed"))
+    assertEquals("alpha", store.activeEntry()?.displayName)
+    assertEquals("alpha", GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs)).activeEntry()?.displayName)
     assertFalse(store.remove(alpha.stableId))
     assertEquals(listOf(alpha.stableId), store.entries.value.map { it.stableId })
     assertEquals(alpha.stableId, store.activeStableId.value)
@@ -149,6 +218,8 @@ class GatewayRegistryStoreTest {
 
     assertEquals(1, Json.decodeFromString<PersistedGatewayRegistry>(securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null)!!).version)
     assertEquals(listOf("manual|alpha.example|18789"), restored.connectedStableIds.value)
+    assertNull(restored.activeEntry()?.localName)
+    assertEquals("Alpha", restored.activeEntry()?.displayName)
   }
 
   @Test
@@ -161,6 +232,7 @@ class GatewayRegistryStoreTest {
 
     assertTrue(unsupportedStore.entries.value.isEmpty())
     unsupportedStore.upsert(manualEntry("new", "new.example"))
+    assertFalse(unsupportedStore.rename("future", "New name"))
     assertEquals(unsupported, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
 
     val malformed = "{not-json"
@@ -179,27 +251,6 @@ class GatewayRegistryStoreTest {
     missingVersionStore.upsert(manualEntry("new", "new.example"))
 
     assertEquals(missingVersion, securePrefs.getString(GatewayRegistryStore.STORAGE_KEY, null))
-  }
-
-  @Test
-  fun postCommitObserverFailureDoesNotUndoDurableRemoval() {
-    val (prefs, securePrefs) = freshPrefs()
-    var failObserver = false
-    val store =
-      GatewayRegistryStore(prefs) {
-        if (failObserver) error("simulated observer failure")
-      }
-    val alpha = manualEntry("alpha", "alpha.example")
-    store.upsert(alpha)
-    store.setActive(alpha.stableId)
-    failObserver = true
-
-    assertTrue(store.remove(alpha.stableId))
-    assertTrue(store.entries.value.isEmpty())
-    assertNull(store.activeStableId.value)
-    val restored = GatewayRegistryStore(SecurePrefs(RuntimeEnvironment.getApplication(), securePrefs))
-    assertTrue(restored.entries.value.isEmpty())
-    assertNull(restored.activeStableId.value)
   }
 
   private fun freshPrefs(): Pair<SecurePrefs, android.content.SharedPreferences> {

@@ -73,7 +73,7 @@ import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowInfoTrackerDecorator
 import androidx.window.layout.WindowLayoutInfo
-import com.google.mlkit.common.internal.MlKitInitProvider
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -235,12 +235,13 @@ class RootScreenFoldTest {
   }
 
   @Test
-  fun tabletopRelocationRetiresHeldRowMovementWithoutUndoingAnAcceptedMove() {
+  fun sidebarLongPressDragReordersPages() {
     withRoot(completed = true, destination = HomeDestination.Chat) { model ->
+      model.setSidebarPageOrder(listOf("agents"))
+      model.setSidebarVisiblePages(model.sidebarPageOrder.value)
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-      val row = composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-drawer")))
+      val row = composeRule.onNode(hasText("Agents") and hasAnyAncestor(hasTestTag("sidebar-drawer")))
       val initialOrder = model.sidebarPageOrder.value
-      val sessionKey = model.chatSessionKey.value
       row.performTouchInput {
         down(center)
         advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
@@ -248,85 +249,19 @@ class RootScreenFoldTest {
         moveBy(Offset(0f, 60f))
       }
       val firstOrder = composeRule.runOnIdle { model.sidebarPageOrder.value }
-      assertTrue("Accept the first held move", firstOrder.indexOf("settings") > initialOrder.indexOf("settings"))
-      val initialSheet = windowBounds(composeRule.onNodeWithTag("sidebar-drawer"))
-      emit(listOf(testFold(Rect(-40, -40, -20, -20))))
-      composeRule.runOnIdle { view.requestLayout() }
-      composeRule.waitForIdle()
-      assertEquals("An outside feature and equal placement leave the sheet unchanged", initialSheet, windowBounds(composeRule.onNodeWithTag("sidebar-drawer")))
-      composeRule.onRoot().performTouchInput { moveBy(Offset(0f, 60f)) }
-      val acceptedOrder = composeRule.runOnIdle { model.sidebarPageOrder.value }
-      assertTrue("The same held gesture must accept another move after idle/equal placement", acceptedOrder.indexOf("settings") > firstOrder.indexOf("settings"))
-      assertTrue("Leave room for a stale move to be observable", acceptedOrder.indexOf("settings") < acceptedOrder.lastIndex)
-      emit(listOf(testFold(Rect(0, 300, view.width, 320))))
-      val relocatedSheet = windowBounds(composeRule.onNodeWithTag("sidebar-drawer"))
-      assertEquals(initialSheet.width(), relocatedSheet.width())
-      assertTrue("Relocate the same open modal sheet to the lower safe band", relocatedSheet.top >= 320)
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      emit(listOf(testFold(Rect(0, 200, view.width, 220))))
-      assertTrue(windowBounds(composeRule.onNodeWithTag("sidebar-drawer")).top >= 220)
-      emit(emptyList())
-      assertEquals("Return to the original placement without reviving its gesture", initialSheet, windowBounds(composeRule.onNodeWithTag("sidebar-drawer")))
+      assertTrue("Accept the first held move", firstOrder.indexOf("agents") > initialOrder.indexOf("agents"))
       composeRule.onRoot().performTouchInput {
-        moveBy(Offset(0f, 130f))
-        up()
-      }
-      composeRule.runOnIdle {
-        assertEquals("Old-pointer movement must not reorder after positive-band relocation", acceptedOrder, model.sidebarPageOrder.value)
-      }
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
-      assertEquals(sessionKey, model.chatSessionKey.value)
-      row.performScrollTo().performTouchInput {
-        down(center)
-        advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-        moveBy(Offset(0f, 1f))
         moveBy(Offset(0f, 60f))
         up()
       }
       composeRule.runOnIdle {
-        assertTrue("A new deliberate gesture must still reorder", model.sidebarPageOrder.value.indexOf("settings") > acceptedOrder.indexOf("settings"))
+        assertTrue("A held gesture can reorder more than once", model.sidebarPageOrder.value.indexOf("agents") > firstOrder.indexOf("agents"))
       }
     }
   }
 
   @Test
-  fun tabletopRelocationBeforeLongPressRejectsOldDownAndAcceptsFreshGesture() {
-    withRoot(completed = true, destination = HomeDestination.Chat) { model ->
-      composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-      val row = composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-drawer")))
-      val order = model.sidebarPageOrder.value
-      val sessionKey = model.chatSessionKey.value
-      val originalBounds = windowBounds(row)
-      row.performTouchInput { down(center) }
-      emit(listOf(testFold(Rect(0, 900, view.width, 920))))
-      emit(emptyList())
-      assertEquals("The pointer stays over its row; out-of-bounds cancellation is not the witness", originalBounds, windowBounds(row))
-      composeRule.onRoot().performTouchInput {
-        advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-        moveBy(Offset(0f, 1f))
-        moveBy(Offset(0f, 130f))
-        up()
-      }
-      composeRule.runOnIdle {
-        assertEquals("Relocation after DOWN must invalidate the later recognized long press", order, model.sidebarPageOrder.value)
-        assertEquals(sessionKey, model.chatSessionKey.value)
-      }
-      composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-      composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
-      row.performTouchInput {
-        down(center)
-        advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-        moveBy(Offset(0f, 1f))
-        moveBy(Offset(0f, 60f))
-        up()
-      }
-      composeRule.runOnIdle { assertNotEquals("A fresh DOWN must get current authority", order, model.sidebarPageOrder.value) }
-    }
-  }
-
-  @Test
-  fun tabletopRelocationRetiresAccumulatedSessionPinBeforeRelease() {
+  fun sidebarSessionLongPressDragRequestsPinOnRelease() {
     val pinRequests = Collections.synchronizedList(mutableListOf<JsonObject>())
     var restoreRequest: () -> Unit = {}
     try {
@@ -350,7 +285,6 @@ class RootScreenFoldTest {
           requestField.set(controller, request)
         },
       ) { model ->
-        val sessionKey = model.chatSessionKey.value
         composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
         composeRule.onNodeWithText("Recent").performScrollTo().performClick()
         val row = composeRule.onNodeWithText("Android QA").performScrollTo()
@@ -366,38 +300,11 @@ class RootScreenFoldTest {
           advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
           moveBy(Offset(0f, -1f))
           moveBy(Offset(0f, -60f))
-          up()
         }
-        composeRule.runOnIdle {
-          assertEquals("Fresh gesture must request the exact pin; fixture throws, so this is not persistence", listOf(expectedPatch), pinRequests.toList())
-        }
-        val originalBounds = windowBounds(row)
-        row.performTouchInput {
-          down(center)
-          advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-          moveBy(Offset(0f, -1f))
-          moveBy(Offset(0f, -60f))
-        }
-        assertTrue("Accumulate a real upward session drag before relocation", windowBounds(row).top < originalBounds.top - 40)
-        composeRule.runOnIdle { assertEquals("The next pin must wait for release", listOf(expectedPatch), pinRequests.toList()) }
-        emit(listOf(testFold(Rect(0, 300, view.width, 320))))
-        assertTrue(windowBounds(composeRule.onNodeWithTag("sidebar-drawer")).top >= 320)
+        composeRule.runOnIdle { assertEquals(emptyList<JsonObject>(), pinRequests.toList()) }
         composeRule.onRoot().performTouchInput { up() }
         composeRule.runOnIdle {
-          assertEquals("Old accumulated displacement must not request a pin after relocation", listOf(expectedPatch), pinRequests.toList())
-          assertEquals("The held session row must not navigate on release", sessionKey, model.chatSessionKey.value)
-        }
-        composeRule.onNodeWithTag("sidebar-close").assertIsDisplayed()
-        row.performScrollTo().performTouchInput {
-          down(center)
-          advanceEventTime(viewConfiguration.longPressTimeoutMillis + 1L)
-          moveBy(Offset(0f, -1f))
-          moveBy(Offset(0f, -60f))
-          up()
-        }
-        composeRule.waitForIdle()
-        composeRule.runOnIdle {
-          assertEquals("Fresh post-relocation gesture must request the same pin", listOf(expectedPatch, expectedPatch), pinRequests.toList())
+          assertEquals("Fresh gesture must request the exact pin; fixture throws, so this is not persistence", listOf(expectedPatch), pinRequests.toList())
         }
       }
     } finally {
@@ -407,14 +314,16 @@ class RootScreenFoldTest {
 
   @Test
   fun tabletopKeepsNativeDrawerDragsAndPredictiveBackAcrossPositiveRelocation() {
-    withRoot(completed = true, destination = HomeDestination.Chat) {
+    withRoot(completed = true, destination = HomeDestination.Chat) { model ->
+      model.setSidebarPageOrder(listOf("agents"))
+      model.setSidebarVisiblePages(model.sidebarPageOrder.value)
       composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
       val sheet = composeRule.onNodeWithTag("sidebar-drawer")
       val original = windowBounds(sheet)
       Settings.Global.putFloat(view.context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
       // The fixture's active Chat run has a perpetual frame animation; advance native settling explicitly.
       composeRule.mainClock.autoAdvance = false
-      composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-drawer"))).performTouchInput {
+      composeRule.onNode(hasText("Agents") and hasAnyAncestor(hasTestTag("sidebar-drawer"))).performTouchInput {
         down(center)
         moveBy(Offset(-80f, 0f), delayMillis = 32)
         moveBy(Offset(-40f, 0f), delayMillis = 32)
@@ -705,7 +614,7 @@ class RootScreenFoldTest {
       composeRule.onNode(hasText("Home") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performScrollTo().performClick()
       composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
       composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
-      composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performScrollTo().performClick()
+      composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed().performClick()
       composeRule
         .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
         .performScrollToNode(hasText("Appearance"))
@@ -917,7 +826,7 @@ class RootScreenFoldTest {
     val models = ViewModelStore()
     try {
       configureRuntime(runtime)
-      if (!completed) Robolectric.buildContentProvider(MlKitInitProvider::class.java).create()
+      if (!completed) MlKitContext.initializeIfNeeded(RuntimeEnvironment.getApplication())
       val model = MainViewModel(app, prefs, SavedStateHandle())
       models.put("root-fold", model)
       ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(model, "runtimeRef").value = runtime

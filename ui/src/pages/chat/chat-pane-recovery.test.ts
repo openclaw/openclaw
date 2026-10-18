@@ -28,16 +28,19 @@ function sessionsResult(row: GatewaySessionRow): SessionsListResult {
   };
 }
 
-function createQueuedSendRecoveryFixture() {
+function createQueuedSendRecoveryFixture(
+  options: { attempted?: boolean; initialIdle?: boolean } = {},
+) {
   vi.stubGlobal("sessionStorage", createStorageMock());
   const listRefresh = createDeferred<SessionsListResult>();
   const active: GatewaySessionRow = {
     key: "agent:main",
     kind: "direct",
     updatedAt: 10,
-    activeRunIds: ["server-run"],
-    hasActiveRun: true,
-    status: "running",
+    activeRunIds: options.initialIdle ? [] : ["server-run"],
+    hasActiveRun: !options.initialIdle,
+    status: options.initialIdle ? "done" : "running",
+    ...(options.initialIdle ? { lastRunId: "server-run" } : {}),
   };
   const idle: GatewaySessionRow = {
     ...active,
@@ -54,9 +57,9 @@ function createQueuedSendRecoveryFixture() {
         id: "queued-after-server-run",
         text: "send after idle",
         createdAt: 1,
-        sendAttempts: 0,
+        sendAttempts: options.attempted ? 1 : 0,
         sendRunId: "queued-send-run",
-        sendState: "waiting-idle",
+        sendState: options.attempted ? "unconfirmed" : "waiting-idle",
         sessionKey: "agent:main",
       },
     ],
@@ -102,6 +105,16 @@ function advertiseSessionRecovery(pane: TestChatPane) {
     auth: { role: "operator", scopes: ["operator.write"] },
     features: { methods: ["sessions.recover"] },
   } as typeof pane.context.gateway.snapshot.hello;
+  if (pane.state) {
+    pane.state.sessionsResult = sessionsResult({
+      key: pane.state.sessionKey,
+      sessionId: "interrupted-session",
+      kind: "direct",
+      updatedAt: 1,
+      restartRecoveryStatus: "tombstoned",
+      restartRecoveryCycleId: "restart-cycle-1",
+    });
+  }
 }
 
 describe("chat pane session recovery", () => {
@@ -175,7 +188,64 @@ describe("chat pane session recovery", () => {
     }
   });
 
-  it("recovers a tombstoned session into a fresh continuing session", async () => {
+  it("recovers the first canonical idle row and new terminal runs without repeating unchanged reads", async () => {
+    const fixture = createQueuedSendRecoveryFixture({ attempted: true, initialIdle: true });
+    const historyReads = () =>
+      fixture.host.request.mock.calls.filter(([method]) => method === "chat.history").length;
+    try {
+      const initial = fixture.host.sessions.refresh({ force: true });
+      fixture.listRefresh.resolve(sessionsResult(fixture.idle));
+      await initial;
+      await vi.waitFor(() => expect(historyReads()).toBe(1));
+      await fixture.host.sessions.refresh({ force: true });
+      await Promise.resolve();
+      expect(historyReads()).toBe(1);
+      expect(fixture.host.chatQueue).toHaveLength(1);
+
+      fixture.idle.lastRunId = "new-terminal-run";
+      await fixture.host.sessions.refresh({ force: true });
+      await vi.waitFor(() => expect(historyReads()).toBe(2));
+      expect(fixture.host.chatQueue).toHaveLength(1);
+      expect(
+        fixture.host.request.mock.calls.filter(([method]) => method === "chat.send"),
+      ).toHaveLength(0);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("waits for a fresh canonical idle read after a queued pane attaches to an existing cache", async () => {
+    const fixture = createQueuedSendRecoveryFixture({ attempted: true, initialIdle: true });
+    let unsubscribe: (() => void) | undefined;
+    try {
+      const initial = fixture.host.sessions.refresh({ force: true });
+      fixture.listRefresh.resolve(sessionsResult(fixture.idle));
+      await initial;
+      const historyReads = () =>
+        fixture.host.request.mock.calls.filter(([method]) => method === "chat.history").length;
+      await vi.waitFor(() => expect(historyReads()).toBe(1));
+      const { pane, state } = createTestChatPane({
+        client: fixture.host.client!,
+        sessions: fixture.host.sessions,
+      });
+      state.sessionKey = fixture.host.sessionKey;
+      // Both panes must read the queued outbox from the same gateway owner.
+      state.settings.gatewayUrl = fixture.host.settings.gatewayUrl ?? "";
+      state.chatQueue = [...fixture.host.chatQueue];
+      pane.applySessionsState(fixture.host.sessions.state);
+      unsubscribe = fixture.host.sessions.subscribe((next) => pane.applySessionsState(next));
+      expect(historyReads()).toBe(1);
+
+      await fixture.host.sessions.refresh({ force: true });
+      await vi.waitFor(() => expect(historyReads()).toBe(2));
+      expect(state.chatQueue).toHaveLength(1);
+    } finally {
+      unsubscribe?.();
+      fixture.dispose();
+    }
+  });
+
+  it("resumes a tombstoned session without replacing its identity or draft", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
     const sessions = {
       recover: vi.fn(() => created.promise),
@@ -185,13 +255,18 @@ describe("chat pane session recovery", () => {
     const navigate = vi.fn();
     pane.onPaneSessionChange = navigate;
     advertiseSessionRecovery(pane);
+    state.chatMessage = "Keep my follow-up draft";
+    const attachments = [
+      { id: "draft-image", mimeType: "image/png", dataUrl: "data:image/png;base64,AAAA" },
+    ];
+    state.chatAttachments = attachments;
 
     expect(pane.restartRecoveryComposerBanner()).toMatchObject({
-      title: "This session ended during a restart.",
-      text: "Its transcript is safe.",
+      title: "This task was interrupted by a restart.",
+      text: "Your transcript is safe. Resume to continue in this session.",
       tone: "neutral",
       icon: "warning",
-      actionLabel: "Resume in new session",
+      actionLabel: "Resume",
       actionStyle: "primary",
       busy: false,
     });
@@ -199,14 +274,14 @@ describe("chat pane session recovery", () => {
     const pending = pane.recoverSession();
     await vi.waitFor(() => expect(sessions.recover).toHaveBeenCalledOnce());
     expect(pane.restartRecoveryComposerBanner()).toMatchObject({
-      actionLabel: "Resume in new session",
+      actionLabel: "Resume",
       actionStyle: "primary",
       busy: true,
       busyLabel: "Resuming…",
     });
     created.resolve({
       ok: true,
-      key: "agent:main:dashboard:recovered",
+      key: "agent:main:current",
       sessionId: "recovered-session",
       continuation: { status: "started", runId: "recovery-run" },
     });
@@ -216,16 +291,21 @@ describe("chat pane session recovery", () => {
     expect(sessions.recover).toHaveBeenCalledWith({
       agentId: "main",
       key: "agent:main:current",
+      mode: "in-place",
+      sessionId: "interrupted-session",
+      recoveryCycleId: "restart-cycle-1",
     });
-    expect(navigate).toHaveBeenCalledWith(pane.paneId, "agent:main:dashboard:recovered");
+    expect(navigate).not.toHaveBeenCalled();
     expect(state.sessionKey).toBe("agent:main:current");
+    expect(state.chatMessage).toBe("Keep my follow-up draft");
+    expect(state.chatAttachments).toBe(attachments);
   });
 
   it("reuses the recovered session after a same-client reconnect", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
     const recovered = {
       ok: true as const,
-      key: "agent:main:dashboard:recovered",
+      key: "agent:main:current",
       sessionId: "recovered-session",
       continuation: { status: "started" as const, runId: "recovery-run" },
     };
@@ -256,13 +336,13 @@ describe("chat pane session recovery", () => {
 
     await expect(pane.recoverSession()).resolves.toBe(true);
     expect(sessions.recover).toHaveBeenCalledTimes(2);
-    expect(navigate).toHaveBeenCalledWith(pane.paneId, "agent:main:dashboard:recovered");
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("keeps the recovery action available when continuation launch is rejected", async () => {
     const successor = {
       ok: true as const,
-      key: "agent:main:dashboard:recovered",
+      key: "agent:main:current",
       sessionId: "recovered-session",
     };
     const sessions = {
@@ -291,9 +371,64 @@ describe("chat pane session recovery", () => {
     await expect(pane.recoverSession()).resolves.toBe(false);
     expect(state.chatError).toBe("Continuation was not started.");
     expect(navigate).not.toHaveBeenCalled();
+    expect(pane.restartRecoveryComposerBanner()?.actionLabel).toBe("Resume");
 
     await expect(pane.recoverSession()).resolves.toBe(true);
     expect(sessions.recover).toHaveBeenCalledTimes(2);
-    expect(navigate).toHaveBeenCalledWith(pane.paneId, successor.key);
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("offers a new session only after this recovery cycle cannot safely resume tools", async () => {
+    const sessions = {
+      recover: vi
+        .fn<SessionCapability["recover"]>()
+        .mockResolvedValueOnce({
+          ok: true,
+          key: "agent:main:current",
+          sessionId: "interrupted-session",
+          continuation: {
+            status: "rejected",
+            error: {
+              code: "UNAVAILABLE",
+              message: "This provider cannot safely resume tool work in place.",
+              details: { reason: "restart-safe-tools-unavailable" },
+            },
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          key: "agent:main:replacement",
+          sessionId: "replacement-session",
+          continuation: { status: "started", runId: "replacement-run" },
+        }),
+    } as unknown as SessionCapability;
+    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+    const navigate = vi.fn();
+    pane.onPaneSessionChange = navigate;
+    advertiseSessionRecovery(pane);
+
+    await expect(pane.recoverSession()).resolves.toBe(false);
+    expect(pane.restartRecoveryComposerBanner()?.actionLabel).toBe("Resume in new session");
+    const original = state.sessionsResult!.sessions[0]!;
+    for (const changed of [
+      { ...original, restartRecoveryCycleId: "later-cycle" },
+      { ...original, sessionId: "different-session" },
+      { ...original, key: "agent:main:other" },
+    ]) {
+      state.sessionsResult = sessionsResult(changed);
+      expect(pane.restartRecoveryComposerBanner()?.actionLabel).toBe("Resume");
+    }
+    state.sessionsResult = sessionsResult(original);
+    pane.restartRecoveryComposerBanner()?.onAction();
+    await vi.waitFor(() =>
+      expect(navigate).toHaveBeenCalledWith(pane.paneId, "agent:main:replacement"),
+    );
+    expect(sessions.recover).toHaveBeenLastCalledWith({
+      agentId: "main",
+      key: "agent:main:current",
+      sessionId: "interrupted-session",
+      recoveryCycleId: "restart-cycle-1",
+      mode: "new-session",
+    });
   });
 });

@@ -1,8 +1,14 @@
 // Control UI tests cover Automations form select display state.
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { pickerValue as readPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -11,7 +17,225 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
+const gardenMessage = "Summarize the fictional garden inventory.";
+function gardenJob(overrides: Partial<CronJob> = {}): CronJob {
+  return {
+    id: "garden-keyboard",
+    name: "Garden keyboard task",
+    enabled: true,
+    createdAtMs: 0,
+    updatedAtMs: 0,
+    configRevision: "garden-revision",
+    schedule: { kind: "every", everyMs: 1_800_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: gardenMessage },
+    state: {},
+    ...overrides,
+  };
+}
+
+function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true, compact = true) {
+  const pagination = { total: 0, offset: 0, limit: 50, hasMore: false, nextOffset: null };
+  const list = { ...pagination, jobs, total: jobs.length, snapshotRevision };
+  return {
+    "cron.list": compact ? cronListResponseFixture(list) : list,
+    "cron.runs": { ...pagination, entries: [] },
+    "cron.status": { enabled, jobs: jobs.length, nextWakeAtMs: null },
+  };
+}
+
+const scrollPadding = (page: Page) =>
+  page.locator(".content").evaluate((element) => getComputedStyle(element).scrollPaddingBlockEnd);
+
 suite.define(() => {
+  it.each([
+    { mode: "create", enabled: true, keyboardName: true, narrow: false },
+    { mode: "create", enabled: false, keyboardName: false, narrow: false },
+    { mode: "create", enabled: true, keyboardName: true, narrow: true },
+    { mode: "edit", enabled: true, keyboardName: true, narrow: true },
+  ])(
+    "keeps keyboard schedule choices clear of actions ($mode, scheduler $enabled, narrow $narrow)",
+    async ({ mode, enabled, keyboardName, narrow }) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1416, height: 707 } },
+        async ({ page }) => {
+          const job = gardenJob();
+          const gateway = await installMockGateway(page, {
+            methodResponses: cronResponses([job], "focus-clearance", enabled),
+          });
+          await page.goto(`${suite.server.baseUrl}cron`);
+          const scroller = page.locator(".content");
+          const initialPadding = await scrollPadding(page);
+          await page
+            .locator(
+              mode === "edit"
+                ? '[data-test-id="cron-row-garden-keyboard"]'
+                : '[data-test-id="cron-new-task"]',
+            )
+            .click();
+          await page.evaluate(() => document.fonts.ready);
+          if (narrow) {
+            const footer = page.locator(".cron-editor-actions");
+            const originalHeight = await footer.evaluate(
+              (element) => element.getBoundingClientRect().height,
+            );
+            await page.setViewportSize({ width: 390, height: 707 });
+            await expect
+              .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
+              .toBeGreaterThan(originalHeight);
+          }
+          // Keyboard focus uses the scroll padding published by ResizeObserver.
+          // A taller footer alone does not mean that clearance has been applied.
+          await expect
+            .poll(() =>
+              scroller.evaluate((element) => {
+                const footer = document.querySelector(".cron-editor-actions");
+                if (!footer) {
+                  return false;
+                }
+                const style = getComputedStyle(element);
+                const expected =
+                  footer.getBoundingClientRect().height + Number.parseFloat(style.paddingBlockEnd);
+                return Math.abs(Number.parseFloat(style.scrollPaddingBlockEnd) - expected) < 0.01;
+              }),
+            )
+            .toBe(true);
+          await page.locator("#cron-payload-text").fill(gardenMessage);
+          if (keyboardName) {
+            for (let field = 0; field < 4; field++) {
+              await page.keyboard.press("Tab");
+            }
+            expect(
+              await page.locator("#cron-name").evaluate((element) => element.matches(":focus")),
+            ).toBe(true);
+            await page.keyboard.type("Garden keyboard task");
+          } else {
+            await page.locator("#cron-name").fill("Garden keyboard task");
+          }
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Tab");
+          const interval = page.locator('[data-test-id="cron-schedule-kind-every"]');
+          expect(await interval.evaluate((element) => element.matches(":focus-within"))).toBe(true);
+          await page.keyboard.press("ArrowRight");
+          const once = page.locator('[data-test-id="cron-schedule-kind-at"]');
+          await page.locator("#cron-schedule-at").waitFor({ state: "visible" });
+          expect(await once.evaluate((element) => element.matches(":focus-within"))).toBe(true);
+          await page.screenshot({ path: path.join(suite.artifactDir, "keyboard-once.png") });
+          const geometry = await once.evaluate((element) => {
+            const choice = element.getBoundingClientRect();
+            const actions = document.querySelector(".cron-editor-actions");
+            if (!actions) {
+              throw new Error("Automation editor actions are missing");
+            }
+            const footer = actions.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              choice.x + choice.width / 2,
+              choice.y + choice.height / 2,
+            );
+            return {
+              bottom: choice.bottom,
+              top: choice.top,
+              footerTop: footer.top,
+              footerHeight: footer.height,
+              reachable: hit === element || (hit !== null && element.contains(hit)),
+            };
+          });
+          writeFileSync(
+            path.join(suite.artifactDir, "keyboard-geometry.json"),
+            JSON.stringify(geometry, null, 2),
+          );
+          expect(geometry.top).toBeGreaterThanOrEqual(0);
+          expect(geometry.bottom).toBeLessThanOrEqual(geometry.footerTop);
+          expect(geometry.reachable).toBe(true);
+          if (narrow && mode === "create") {
+            const buttonTops = await page
+              .locator(".cron-editor-actions > button")
+              .evaluateAll((buttons) =>
+                buttons.map((button) => button.getBoundingClientRect().top),
+              );
+            expect(new Set(buttonTops).size).toBeGreaterThan(1);
+          }
+          for (const method of ["cron.add", "cron.update", "cron.run"]) {
+            expect(await gateway.getRequests(method)).toHaveLength(0);
+          }
+          await page
+            .locator(".cron-editor-actions")
+            .getByRole("button", { name: "Cancel", exact: true })
+            .click();
+          await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
+          await page.locator('[data-test-id="cron-new-task"]').click();
+          await expect.poll(() => scrollPadding(page)).not.toBe(initialPadding);
+          if (narrow) {
+            await page.setViewportSize({ width: 1416, height: 707 });
+          }
+          const pages = await openSidebarPages(page);
+          await pages.getByRole("link", { name: "Agents", exact: true }).click();
+          await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
+        },
+      );
+    },
+  );
+
+  it("requires an explicit delivery choice before saving an unrepaired job", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },
+      async ({ page }) => {
+        const job = gardenJob({
+          id: "garden-legacy-delivery",
+          name: "Garden summary",
+          configRevision: "garden-legacy-revision",
+          delivery: { mode: "announce", channel: "telegram", to: "garden-room" },
+        });
+        Reflect.deleteProperty(job.delivery!, "mode");
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            ...cronResponses([job], "garden-legacy-list"),
+            "cron.update": {
+              ...job,
+              name: "Renamed garden summary",
+              configRevision: "garden-corrected-revision",
+              delivery: { mode: "none" },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}cron`);
+        await page.locator('[data-test-id="cron-row-garden-legacy-delivery"]').click();
+        await page.locator("#cron-name").fill("Renamed garden summary");
+        const mode = page.locator("#cron-delivery-mode");
+        await mode.scrollIntoViewIfNeeded();
+        await page.evaluate(() => document.fonts.ready);
+        expect(
+          await readPickerValue(page.locator("openclaw-select-picker:has(#cron-delivery-mode)")),
+        ).toBe("");
+        expect(await mode.getAttribute("aria-invalid")).toBe("true");
+        expect(await page.locator("#cron-error-deliveryMode").textContent()).toContain(
+          "openclaw doctor --fix",
+        );
+        expect(await page.locator('[data-test-id="cron-submit"]').isDisabled()).toBe(true);
+        expect(await gateway.getRequests("cron.update")).toHaveLength(0);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, "delivery-repair-required.png"),
+        });
+
+        await mode.click();
+        await page.getByRole("option", { name: "None (internal)", exact: true }).click();
+        await expect
+          .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
+          .toBe(false);
+        await page.locator('[data-test-id="cron-submit"]').click();
+        const request = await gateway.waitForRequest("cron.update");
+        expect(request.params).toMatchObject({
+          id: job.id,
+          expectedConfigRevision: "garden-legacy-revision",
+          patch: { name: "Renamed garden summary", delivery: { mode: "none" } },
+        });
+        expect(await gateway.getRequests("cron.update")).toHaveLength(1);
+      },
+    );
+  });
+
   it("shows the authoritative defaults in the create-form selects", async () => {
     await suite.withPage(
       {
@@ -21,44 +245,27 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installMockGateway(page, {
-          methodResponses: {
-            "cron.list": {
-              jobs: [],
-              snapshotRevision: "cron-select-values-fixture",
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.runs": {
-              entries: [],
-              total: 0,
-              offset: 0,
-              limit: 50,
-              hasMore: false,
-              nextOffset: null,
-            },
-            "cron.status": { enabled: true, jobs: 0, nextWakeAtMs: null },
-          },
+          methodResponses: cronResponses([], "cron-select-values-fixture", true, false),
         });
 
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-        const sortMenu = page.locator("wa-dropdown", { has: page.locator(".cron-run-sort") });
+        const sortMenu = page.locator(".cron-filter-dropdown__details", {
+          has: page.locator(".cron-run-sort"),
+        });
         const sort = page.getByRole("button", { name: "Sort Newest first", exact: true });
         await sort.waitFor({ state: "visible" });
         await sort.click();
-        await sortMenu.locator('wa-dropdown-item[value="asc"]').click();
+        await sortMenu.locator('[data-value="asc"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
         // Switching tabs recreates the dropdown with the persisted non-first value.
         await page.locator('[data-test-id="cron-tab-all"]').click();
         await page.locator('[data-test-id="cron-list-tab-activity"]').click();
         await page.getByRole("button", { name: "Sort Oldest first", exact: true }).waitFor();
-        expect(
-          await sortMenu.locator('wa-dropdown-item[value="asc"]').getAttribute("aria-current"),
-        ).toBe("true");
+        expect(await sortMenu.locator('[data-value="asc"]').getAttribute("aria-current")).toBe(
+          "true",
+        );
         await page.locator('[data-test-id="cron-new-task"]').click();
 
         const pickerValue = (selector: string) =>

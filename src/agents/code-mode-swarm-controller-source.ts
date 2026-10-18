@@ -1,4 +1,4 @@
-/** Guest-side Swarm helpers injected into the isolated QuickJS controller. */
+/** Guest-side Swarm helpers injected into the Code Mode controller. */
 export const CODE_MODE_SWARM_CONTROLLER_SOURCE = String.raw`
   class SwarmAgentError extends Error {
     constructor(runId, status, detail) {

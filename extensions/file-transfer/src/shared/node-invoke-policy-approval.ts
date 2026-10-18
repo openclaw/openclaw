@@ -1,5 +1,6 @@
 import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
-import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import { bindFileTransferAudit } from "./audit-context.js";
+import type { FileTransferAuditOp } from "./audit.js";
 import type { FileTransferNodeInvokeCommand } from "./node-invoke-policy-commands.js";
 import { evaluateFilePolicy, type FilePolicyKind } from "./policy.js";
 
@@ -14,21 +15,18 @@ export type GrantedAuthorization = {
 };
 
 export function commandKind(command: FileTransferNodeInvokeCommand): FilePolicyKind {
-  return command === "file.write" ? "write" : "read";
+  return command === "file.write" || command === "file.create" ? "write" : "read";
 }
 
 export function promptVerb(command: FileTransferNodeInvokeCommand): string {
-  switch (command) {
-    case "dir.fetch":
-      return "Fetch directory";
-    case "dir.list":
-      return "List directory";
-    case "file.write":
-      return "Write file";
-    case "file.fetch":
-      return "Read file";
-  }
-  return command;
+  return {
+    "dir.fetch": "Fetch directory",
+    "dir.list": "List directory",
+    "file.create": "Create file",
+    "file.write": "Write file",
+    "file.fetch": "Read file",
+    "file.stat": "Read file metadata",
+  }[command];
 }
 
 export async function requestApproval(input: {
@@ -39,6 +37,10 @@ export async function requestApproval(input: {
   startedAt: number;
 }): Promise<GrantedAuthorization | { ok: false; message: string; code: string }> {
   const nodeDisplayName = input.ctx.node?.displayName;
+  const audit = bindFileTransferAudit(
+    { op: input.op, nodeId: input.ctx.nodeId, nodeDisplayName, requestedPath: input.path },
+    input.startedAt,
+  );
   const decision = evaluateFilePolicy({
     nodeId: input.ctx.nodeId,
     nodeDisplayName,
@@ -68,37 +70,24 @@ export async function requestApproval(input: {
     };
   }
 
-  const shouldAsk =
-    (decision.ok && decision.reason === "ask-always") || (!decision.ok && decision.askable);
-  if (!shouldAsk) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.path,
-      decision:
-        !decision.ok && decision.code === "NO_POLICY" ? "denied:no_policy" : "denied:policy",
-      errorCode: decision.ok ? undefined : decision.code,
+  if (!decision.ok && !decision.askable) {
+    await audit({
+      decision: decision.code === "NO_POLICY" ? "denied:no_policy" : "denied:policy",
+      errorCode: decision.code,
       reason: decision.reason,
-      durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
-      code: decision.ok ? "POLICY_DENIED" : decision.code,
-      message: `${input.op} ${decision.ok ? "POLICY_DENIED" : decision.code}: ${decision.reason}`,
+      code: decision.code,
+      message: `${input.op} ${decision.code}: ${decision.reason}`,
     };
   }
 
   const approvals = input.ctx.approvals;
   if (!approvals) {
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.path,
+    await audit({
       decision: "denied:approval",
       reason: "plugin approvals unavailable",
-      durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
@@ -129,14 +118,9 @@ export async function requestApproval(input: {
       : unavailable
         ? "no operator available"
         : "invalid approval decision";
-    await appendFileTransferAudit({
-      op: input.op,
-      nodeId: input.ctx.nodeId,
-      nodeDisplayName,
-      requestedPath: input.path,
+    await audit({
       decision: "denied:approval",
       reason,
-      durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
@@ -149,13 +133,8 @@ export async function requestApproval(input: {
     };
   }
 
-  await appendFileTransferAudit({
-    op: input.op,
-    nodeId: input.ctx.nodeId,
-    nodeDisplayName,
-    requestedPath: input.path,
+  await audit({
     decision: approvalDecision === "allow-always" ? "allowed:always" : "allowed:once",
-    durationMs: Date.now() - input.startedAt,
   });
   return {
     ok: true,
@@ -163,6 +142,6 @@ export async function requestApproval(input: {
     persist: approvalDecision === "allow-always",
     followSymlinks: decision.followSymlinks ?? false,
     maxBytes: decision.maxBytes,
-    pendingReapprovalSelector: decision.pendingReapprovalSelector,
+    pendingReapprovalSelector: decision.ok ? undefined : decision.pendingReapprovalSelector,
   };
 }

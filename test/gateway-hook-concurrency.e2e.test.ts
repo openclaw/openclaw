@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -513,43 +513,9 @@ async function delay(ms: number): Promise<void> {
 
 function writeModelResponse(response: ServerResponse, sequence: number, replyText?: string): void {
   const text = replyText ?? `hook concurrency response ${sequence}`;
-  const message = {
-    type: "message",
-    id: `hook-concurrency-message-${sequence}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  const events = [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      delta: text,
-    },
-    {
-      type: "response.output_text.done",
-      item_id: message.id,
-      output_index: 0,
-      content_index: 0,
-      text,
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `hook-concurrency-response-${sequence}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  writeOpenAiResponsesSse(response, events);
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `hook-concurrency-message-${sequence}`,
+    responseId: `hook-concurrency-response-${sequence}`,
+  });
 }

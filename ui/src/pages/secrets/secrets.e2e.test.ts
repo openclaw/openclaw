@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 
@@ -60,6 +61,11 @@ const bulkSecretEntry: SecretStoreEntry = {
   allowedHosts: [],
 };
 
+const longNameSecretEntry: SecretStoreEntry = {
+  ...secretEntry,
+  name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
+};
+
 async function capture(
   page: Page,
   fileName: string,
@@ -109,27 +115,137 @@ async function tableBodyContrast(page: Page): Promise<number> {
 }
 
 async function activeGatewayIdentity(page: Page) {
-  return await page.evaluate(() => {
-    const app = document.querySelector("openclaw-app") as HTMLElement & {
-      runtime?: {
-        context: {
-          gateway: {
-            connection: { gatewayUrl: string };
-            snapshot: { client: { instanceId: string } | null; phase: string };
-          };
-        };
-      };
-    };
-    const gateway = app.runtime?.context.gateway;
+  return await evaluateControlUiContext(page, (context) => {
+    const gateway = context.gateway;
     return {
-      clientInstanceId: gateway?.snapshot.client?.instanceId,
-      gatewayUrl: gateway?.connection.gatewayUrl,
-      phase: gateway?.snapshot.phase,
+      clientInstanceId: gateway.snapshot.client?.instanceId,
+      gatewayUrl: gateway.connection.gatewayUrl,
+      phase: gateway.snapshot.phase,
     };
   });
 }
 
 suite.define(() => {
+  it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
+    await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
+        methodResponses: {
+          "secrets.store.list": { entries: [secretEntry] },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/secrets`);
+      const row = page.getByRole("row", { name: secretEntry.name });
+      const trigger = row.getByRole("button", { name: `Actions: ${secretEntry.name}` });
+      await trigger.waitFor({ state: "visible" });
+      await row.hover();
+      await page.evaluate(() => document.fonts.ready);
+      const [buttonBox, tableBox] = await Promise.all([
+        trigger.boundingBox(),
+        page.locator(".secrets-store__table-wrap").boundingBox(),
+      ]);
+      if (!buttonBox || !tableBox) {
+        throw new Error("Expected row actions and table to have layout boxes");
+      }
+      expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width);
+    });
+  });
+
+  it("keeps long secret names inside the Name column", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["secrets.store.list"],
+          methodResponses: {
+            "secrets.store.list": { entries: [longNameSecretEntry] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/secrets`);
+        const row = page.getByRole("row", { name: longNameSecretEntry.name });
+        const name = row.locator(".secrets-store__name");
+        const access = row.locator(".secrets-store__mode");
+
+        expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
+        const layout = await Promise.all([name.boundingBox(), access.boundingBox()]);
+        const nameBox = layout[0];
+        const accessBox = layout[1];
+        if (!nameBox || !accessBox) {
+          throw new Error("Expected Name and Access cells to have layout boxes");
+        }
+        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
+        const nameStyle = await name.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            overflowX: style.overflowX,
+            textOverflow: style.textOverflow,
+            whiteSpace: style.whiteSpace,
+            overflows: element.scrollWidth > element.clientWidth,
+          };
+        });
+        expect(nameStyle).toEqual({
+          overflowX: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          overflows: true,
+        });
+      },
+    );
+  });
+
+  it("wraps long secret names in the stacked phone layout", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 844, width: 390 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          featureMethods: ["secrets.store.list"],
+          methodResponses: {
+            "secrets.store.list": { entries: [longNameSecretEntry] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/secrets`);
+        const row = page.getByRole("row", { name: longNameSecretEntry.name });
+        const name = row.locator(".secrets-store__name");
+
+        expect(await name.textContent()).toBe(longNameSecretEntry.name);
+        const nameStyle = await name.evaluate((element) => {
+          const style = getComputedStyle(element);
+          const text = document.createRange();
+          text.selectNodeContents(element);
+          return {
+            overflowWrap: style.overflowWrap,
+            whiteSpace: style.whiteSpace,
+            fitsHorizontally: element.scrollWidth <= element.clientWidth,
+            wraps: text.getClientRects().length > 1,
+          };
+        });
+        expect(nameStyle).toEqual({
+          overflowWrap: "anywhere",
+          whiteSpace: "normal",
+          fitsHorizontally: true,
+          wraps: true,
+        });
+        for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
+          const fits = await page.locator(selector).evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return (
+              element.scrollWidth <= element.clientWidth &&
+              box.left >= 0 &&
+              box.right <= window.innerWidth
+            );
+          });
+          expect(fits, `${selector} stays inside the phone viewport`).toBe(true);
+        }
+      },
+    );
+  });
+
   it("blocks empty protected values without rejecting empty environment entries", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -152,11 +268,11 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
       const existingSecretRow = page.getByRole("row", { name: /SERVICE_API_KEY/u });
       await existingSecretRow.getByRole("button", { name: "Actions: SERVICE_API_KEY" }).click();
-      await existingSecretRow.locator('wa-dropdown-item[value="edit"]').click();
+      await existingSecretRow.locator('.oc-menu-item[data-value="edit"]').click();
       const editSecretDialog = page.locator('openclaw-modal-dialog[label="Edit"]');
       await editSecretDialog.getByRole("button", { name: "Save", exact: true }).click();
       await editSecretDialog.getByRole("alert").getByText("Enter a value.").waitFor();
@@ -266,7 +382,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/secrets`);
-        await page.getByRole("heading", { name: "Secrets" }).waitFor();
+        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
         await page.getByRole("button", { name: "Add", exact: true }).click();
         const addDialog = page.locator('openclaw-modal-dialog[label="Add"]');
@@ -337,7 +453,7 @@ suite.define(() => {
 
         const bulkRow = page.getByRole("row", { name: /BULK_URL/u });
         await bulkRow.getByRole("button", { name: "Actions: BULK_URL" }).click();
-        await bulkRow.locator('wa-dropdown-item[value="delete"]').click();
+        await bulkRow.locator('.oc-menu-item[data-value="delete"]').click();
         const confirm = page.locator('openclaw-modal-dialog[label="Delete"]');
         await confirm.getByRole("button", { name: "Delete", exact: true }).click();
         await page.getByRole("status").getByText("Deleted BULK_URL.").waitFor();
@@ -371,27 +487,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 
       const socketCount = await gateway.getSocketCount();
       const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      const originalGateway = await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: {
-            context: {
-              gateway: {
-                connection: { gatewayUrl: string };
-                connect: (options: { token: string }) => void;
-                snapshot: { client: { instanceId: string } | null };
-              };
-            };
-          };
-        };
-        const activeGateway = app.runtime?.context.gateway;
-        const client = activeGateway?.snapshot.client;
-        if (!activeGateway || !client) {
+      const originalGateway = await evaluateControlUiContext(page, (context) => {
+        const activeGateway = context.gateway;
+        const client = activeGateway.snapshot.client;
+        if (!client) {
           throw new Error("Expected a connected Gateway client before confirmation");
         }
         const identity = {
@@ -450,7 +555,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
       const entryRow = page.getByRole("row", { name: /SERVICE_URL/u });
       await entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).click();
-      await entryRow.locator('wa-dropdown-item[value="delete"]').click();
+      await entryRow.locator('.oc-menu-item[data-value="delete"]').click();
       const confirmation = page.locator('openclaw-modal-dialog[label="Delete"]');
       await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
 
@@ -489,7 +594,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}settings/secrets`);
-      await page.getByRole("heading", { name: "Secrets" }).waitFor();
+      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
       await page.getByText(/Gateway\/admin required/u).waitFor();
       expect(await page.getByRole("button", { name: "Add", exact: true }).count()).toBe(0);
       expect(await page.getByRole("button", { name: "Bulk Add", exact: true }).count()).toBe(0);

@@ -30,6 +30,7 @@ type UpdateProgressSources = {
       updateRunning: boolean;
       updateReconciliationPending: boolean;
       updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
+      updateStatusCheckBanner: { text: string } | null;
     };
     subscribe: (listener: () => void) => () => void;
   };
@@ -47,7 +48,8 @@ export function createUpdateProgressWatcher(
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
-        readError: banner?.source === "read" ? banner.text : null,
+        readError:
+          update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),
       });
     };
     const stopOverlays = context.overlays.subscribe(emit);
@@ -64,7 +66,16 @@ export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   existingRun?: UpdateRunRecord;
-  onCheckStatus?: () => Promise<void>;
+  onCheckStatus?: () => Promise<boolean>;
+  /** Refreshes source-owned target details before retry confirmation. */
+  prepareRetry?: () => Promise<{
+    updateAvailable: UpdateAvailable | null;
+    updateSchedule: UpdateScheduleState | null;
+  } | null>;
+  /** Required for native dispatch; reads current application-owned authority at the action. */
+  canStartNativeUpdate?: () => boolean;
+  /** Reconfirm a fresh Gateway target if the native bridge disappears. */
+  prepareGatewayFallback?: ConfirmAndStartUpdateParams["prepareRetry"];
   onReviewUpdate?: () => void;
   onAcknowledge?: () => void;
   /**
@@ -73,6 +84,8 @@ export type ConfirmAndStartUpdateParams = {
    * the Gateway route so a declined handoff cannot end in silence.
    */
   viaNativeApp: boolean;
+  /** Owner-held target captured before loading or showing confirmation. */
+  isCurrentTarget: () => boolean;
   startGatewayUpdate: () => void;
   /**
    * Streams the update lifecycle so the dialog can stay open and report it.
@@ -83,6 +96,6 @@ export type ConfirmAndStartUpdateParams = {
 };
 
 export async function confirmAndStartUpdate(params: ConfirmAndStartUpdateParams): Promise<void> {
-  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.ts");
+  const { confirmAndStartUpdateRuntime } = await import("./update-confirmation.runtime.tsx");
   await confirmAndStartUpdateRuntime(params);
 }

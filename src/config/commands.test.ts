@@ -13,63 +13,25 @@ import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
+    createTestRegistry(
+      [
+        { id: "discord", autoEnabled: true },
+        { id: "telegram", autoEnabled: true },
+        { id: "slack", autoEnabled: false },
+        { id: "whatsapp", autoEnabled: false },
+        { id: "demo-channel", autoEnabled: true },
+      ].map(({ id, autoEnabled }) => ({
+        pluginId: id,
         source: "test",
         plugin: {
-          ...createChannelTestPluginBase({ id: "discord" }),
+          ...createChannelTestPluginBase({ id }),
           commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
+            nativeCommandsAutoEnabled: autoEnabled,
+            nativeSkillsAutoEnabled: autoEnabled,
           },
         },
-      },
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "telegram" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-      {
-        pluginId: "slack",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "slack" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "whatsapp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "whatsapp" }),
-          commands: {
-            nativeCommandsAutoEnabled: false,
-            nativeSkillsAutoEnabled: false,
-          },
-        },
-      },
-      {
-        pluginId: "demo-channel",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "demo-channel" }),
-          commands: {
-            nativeCommandsAutoEnabled: true,
-            nativeSkillsAutoEnabled: true,
-          },
-        },
-      },
-    ]),
+      })),
+    ),
   );
 });
 
@@ -108,27 +70,15 @@ describe("resolveNativeSkillsEnabled", () => {
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
     };
 
+    const discord = { providerId: "discord", globalSetting: "auto", env } as const;
+    const discordConfig = (enabled: boolean) => ({
+      plugins: { entries: { discord: { enabled } } },
+    });
+    expect(resolveNativeSkillsEnabled(discord)).toBe(false);
     expect(
       resolveNativeSkillsEnabled({
-        providerId: "discord",
-        globalSetting: "auto",
-        env,
-      }),
-    ).toBe(false);
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "discord",
-        globalSetting: "auto",
-        env,
-        config: {
-          plugins: {
-            entries: {
-              discord: {
-                enabled: true,
-              },
-            },
-          },
-        },
+        ...discord,
+        config: discordConfig(true),
       }),
     ).toBe(true);
     expect(
@@ -140,18 +90,8 @@ describe("resolveNativeSkillsEnabled", () => {
     ).toBe(false);
     expect(
       resolveNativeCommandsEnabled({
-        providerId: "discord",
-        globalSetting: "auto",
-        env,
-        config: {
-          plugins: {
-            entries: {
-              discord: {
-                enabled: false,
-              },
-            },
-          },
-        },
+        ...discord,
+        config: discordConfig(false),
       }),
     ).toBe(false);
   });
@@ -176,15 +116,13 @@ describe("resolveNativeSkillsEnabled", () => {
 
 describe("resolveNativeCommandsEnabled", () => {
   it("follows the same provider default heuristic", () => {
-    expect(resolveNativeCommandsEnabled({ providerId: "discord", globalSetting: "auto" })).toBe(
+    const resolve = (providerId: string) =>
+      resolveNativeCommandsEnabled({ providerId, globalSetting: "auto" });
+    expect([resolve("discord"), resolve("telegram"), resolve("slack")]).toEqual([
       true,
-    );
-    expect(resolveNativeCommandsEnabled({ providerId: "telegram", globalSetting: "auto" })).toBe(
       true,
-    );
-    expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
       false,
-    );
+    ]);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -195,12 +133,9 @@ describe("resolveNativeCommandsEnabled", () => {
         globalSetting: false,
       }),
     ).toBe(true);
-    expect(
-      resolveNativeCommandsEnabled({
-        providerId: "discord",
-        globalSetting: false,
-      }),
-    ).toBe(false);
+    expect(resolveNativeCommandsEnabled({ providerId: "discord", globalSetting: false })).toBe(
+      false,
+    );
   });
 });
 
@@ -255,9 +190,7 @@ describe("isRestartEnabled", () => {
 
   it("ignores inherited restart flags", () => {
     expect(
-      isRestartEnabled({
-        commands: Object.create({ restart: false }) as Record<string, unknown>,
-      }),
+      isRestartEnabled({ commands: Object.create({ restart: false }) as Record<string, unknown> }),
     ).toBe(true);
   });
 });
@@ -268,9 +201,7 @@ describe("isCommandFlagEnabled", () => {
     expect(isCommandFlagEnabled({ commands: { bash: false } }, "bash")).toBe(false);
     expect(
       isCommandFlagEnabled(
-        {
-          commands: Object.create({ bash: true }) as Record<string, unknown>,
-        },
+        { commands: Object.create({ bash: true }) as Record<string, unknown> },
         "bash",
       ),
     ).toBe(false);

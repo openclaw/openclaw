@@ -54,7 +54,15 @@ export async function resolveSessionDiffBase(params: {
 /** Resolves the repository-format-specific empty tree without writing it. */
 export async function resolveSessionDiffEmptyTree(
   root: string,
+  objectFormat?: string,
 ): Promise<{ base: string; baseRef?: string } | null> {
+  if (objectFormat === "sha1") {
+    return { base: "4b825dc642cb6eb9a060e54bf8d69288fbee4904" };
+  }
+  if (objectFormat === "sha256") {
+    return { base: "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321" };
+  }
+  // Older Git echoes --show-object-format; unknown formats still belong to Git.
   try {
     const result = await runGit(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" });
     const emptyTree = result.code === 0 ? result.stdout.trim() : "";

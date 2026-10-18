@@ -6,9 +6,13 @@ import {
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 
-it("routes ambiguous ownership to an account-independent approval surface", () => {
-  expect(resolveAmbiguousApprovalRouteNoticeText()).toBe(
-    "Approval required, but multiple channel accounts can handle this request. Open the Control UI or terminal UI to approve it.",
+it.each([
+  ["exec", "Control UI"],
+  ["plugin", "Control UI or terminal UI"],
+  ["system-agent", "Control UI"],
+] as const)("routes ambiguous %s ownership to a capable approval surface", (kind, surface) => {
+  expect(resolveAmbiguousApprovalRouteNoticeText(kind)).toBe(
+    `Approval required, but multiple channel accounts can handle this request. Open the ${surface} to approve it.`,
   );
 });
 

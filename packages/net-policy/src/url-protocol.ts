@@ -1,14 +1,7 @@
 const HTTP_URL_PREFIX_RE = /^https?:\/\//i;
 
 function parseUrl(value: string | URL): URL | null {
-  if (value instanceof URL) {
-    return value;
-  }
-  try {
-    return new URL(value);
-  } catch {
-    return null;
-  }
+  return value instanceof URL ? value : URL.parse(value);
 }
 
 export function hasHttpUrlPrefix(value: string): boolean {

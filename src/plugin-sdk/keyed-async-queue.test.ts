@@ -2,7 +2,6 @@
  * Tests keyed async queue serialization and cancellation behavior.
  */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -51,29 +50,6 @@ describe("enqueueKeyedTask", () => {
     expect(tails.size).toBe(0);
   });
 
-  it("keeps queue alive after task failures", async () => {
-    const tails = new Map<string, Promise<void>>();
-    const runs = [
-      () =>
-        enqueueKeyedTask({
-          tails,
-          key: "a",
-          task: async () => {
-            throw new Error("boom");
-          },
-        }),
-      () =>
-        enqueueKeyedTask({
-          tails,
-          key: "a",
-          task: async () => "ok",
-        }),
-    ];
-
-    await expect(expectDefined(runs[0], "runs[0] test invariant")()).rejects.toThrow("boom");
-    await expect(expectDefined(runs[1], "runs[1] test invariant")()).resolves.toBe("ok");
-  });
-
   it("does not leak unhandled rejections when a task failure is already awaited", async () => {
     const tails = new Map<string, Promise<void>>();
     const unhandled: unknown[] = [];
@@ -97,9 +73,57 @@ describe("enqueueKeyedTask", () => {
         setImmediate(resolve);
       });
       expect(unhandled).toStrictEqual([]);
+      await expect(enqueueKeyedTask({ tails, key: "a", task: async () => "ok" })).resolves.toBe(
+        "ok",
+      );
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
+  });
+
+  it("reserves overlapping object keys while their predecessors are still waiting", async () => {
+    const tails = new WeakMap<object, Promise<void>>();
+    const left = {};
+    const shared = {};
+    const right = {};
+    const gate = createDeferred();
+    const order: string[] = [];
+    const first = enqueueKeyedTask({
+      tails,
+      keys: [left, shared],
+      task: async () => {
+        order.push("first");
+        await gate.promise;
+      },
+    });
+    const second = enqueueKeyedTask({
+      tails,
+      keys: [shared, right],
+      task: async () => {
+        order.push("second");
+      },
+    });
+    const third = enqueueKeyedTask({
+      tails,
+      key: right,
+      task: async () => {
+        order.push("third");
+      },
+    });
+    try {
+      await enqueueKeyedTask({
+        tails,
+        key: {},
+        task: async () => {
+          order.push("independent");
+        },
+      });
+      expect(order).toEqual(["first", "independent"]);
+    } finally {
+      gate.resolve();
+      await Promise.all([first, second, third]);
+    }
+    expect(order).toEqual(["first", "independent", "second", "third"]);
   });
 
   it("runs enqueue/settle hooks once per task", async () => {

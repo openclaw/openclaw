@@ -27,6 +27,14 @@
     "accounts.*.agentId": { "label": "Restricted reader agent" },
     "accounts.*.senderAuth.min": { "label": "Minimum sender authentication", "advanced": true }
   },
+  "configGroups": [
+    {
+      "id": "mail-accounts",
+      "title": "Mail accounts",
+      "order": 10,
+      "properties": ["accounts"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

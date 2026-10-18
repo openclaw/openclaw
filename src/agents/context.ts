@@ -1,6 +1,3 @@
-// Load session runtime model metadata so we can infer context windows when the
-// agent reports a model id. This includes custom models.json entries.
-
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
@@ -11,35 +8,19 @@ import {
 } from "./context-cache-projection.js";
 import {
   getContextWindowCaches,
-  lookupCachedContextTokens,
-  lookupCachedContextWindow,
-  minPositiveContextTokens,
   replaceContextWindowCaches,
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
   type ContextTokenResolutionParams,
-  type ModelsConfig,
-  resolveContextTokensForModelFromCache,
+  type ModelContextTokenProjection,
+  resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -53,7 +34,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
   applyConfiguredContextWindows({
     cache: caches.configuredTokenCache,
     windowCache: caches.contextWindowCache,
-    modelsConfig: cfg.models as ModelsConfig | undefined,
+    modelsConfig: cfg.models,
   });
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
@@ -63,7 +44,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
-    return primeConfiguredContextWindowsFromConfig(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig);
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
     return undefined;
@@ -83,11 +64,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
 }
 
 export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
-  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
-  if (
-    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === generation
-  ) {
+  if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
@@ -97,49 +74,32 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   if (!cfg) {
     return Promise.resolve();
   }
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
+  const loadPromise = Promise.resolve()
     .then(async () => {
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-        return;
-      }
       let stagedTokenCache = new Map<string, number>();
       try {
-        const catalogResult = await (async () => {
-          const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
-          return await loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            readOnly: true,
-          }).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (reason: unknown) => ({ status: "rejected" as const, reason }),
-          );
-        })();
-        if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-          return;
-        }
-        if (catalogResult.status === "fulfilled") {
-          stagedTokenCache = await prepareDiscoveredContextTokenCache({
-            modelCatalog: catalogResult.value.modelCatalog,
-            assertCurrent: () => {
-              if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-                throw new Error("context window cache generation was superseded");
-              }
-            },
-          });
-        }
+        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+        const owner = await loadPreparedModelCatalogOwnerSnapshot({
+          config: cfg,
+          readOnly: true,
+        });
+        stagedTokenCache = await prepareDiscoveredContextTokenCache({
+          modelCatalog: owner.modelCatalog,
+        });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
       }
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation === generation) {
+      // A refresh supersedes earlier discovery, including its best-effort failure result.
+      if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === loadPromise) {
         replaceDiscoveredContextTokenCache(stagedTokenCache);
       }
     })
     .catch(() => {
       // Keep lookup best-effort.
     });
-  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
-  return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  return loadPromise;
 }
 
 /**
@@ -153,107 +113,61 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   // Post-ready warmup owns a published-owner generation. Do not reuse a request-time
   // load that may have completed before Gateway catalog publication.
   beginContextWindowCacheRefresh();
-  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
-  const shouldStop = () =>
-    CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation || params.isCancelled?.() === true;
-  if (shouldStop()) {
+  if (params.isCancelled?.()) {
     return;
   }
   let published = false;
-  const loadPromise = (async () => {
-    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-      await loadPreparedModelCatalogRuntime();
-    if (shouldStop()) {
-      return;
-    }
-    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: params.config,
-      allowGatewaySubagentBinding: true,
+  const loadPromise = Promise.resolve()
+    .then(async () => {
+      const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+        await loadPreparedModelCatalogRuntime();
+      const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+        config: params.config,
+        allowGatewaySubagentBinding: true,
+      });
+      if (!owner) {
+        throw new Error("published Gateway model catalog owner is unavailable");
+      }
+      // Gateway publication intentionally exposes configured/static turn facts. Full catalog
+      // inventory is a separate control-plane load and must not run in post-ready warmup.
+      const caches = await prepareContextWindowCaches({
+        config: owner.config,
+        modelCatalog: owner.modelCatalog,
+      });
+      if (params.isCancelled?.()) {
+        return;
+      }
+      replaceContextWindowCaches(caches);
+      CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
+      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
+      CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
+      published = true;
+    })
+    .catch(() => {
+      // Optional Gateway warmup is best-effort; failed publication can retry on demand.
+    })
+    .finally(() => {
+      // Overlapping optional warmups may publish older metadata until the next refresh.
+      if (!published) {
+        CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
+      }
     });
-    if (!owner) {
-      throw new Error("published Gateway model catalog owner is unavailable");
-    }
-    if (shouldStop()) {
-      return;
-    }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
-    const caches = await prepareContextWindowCaches({
-      config: owner.config,
-      modelCatalog: owner.modelCatalog,
-      assertCurrent: () => {
-        if (shouldStop()) {
-          throw new Error("context window cache prewarm cancelled");
-        }
-      },
-    });
-    if (shouldStop()) {
-      return;
-    }
-    replaceContextWindowCaches(caches);
-    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
-    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-    published = true;
-  })();
-  const trackedLoadPromise = loadPromise.catch(() => {});
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = trackedLoadPromise;
-  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
-  try {
-    await loadPromise;
-  } catch {
-    // Optional Gateway warmup is best-effort; request-time loading remains exact.
-  } finally {
-    if (
-      !published &&
-      CONTEXT_WINDOW_RUNTIME_STATE.generation === generation &&
-      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === trackedLoadPromise
-    ) {
-      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
-      CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
-    }
-  }
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  await loadPromise;
 }
 
-export async function waitForContextWindowCacheLoad(options?: {
-  timeoutMs?: number;
-}): Promise<"idle" | "loaded" | "timeout"> {
-  const promise = CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
-  if (
-    !promise ||
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration !== CONTEXT_WINDOW_RUNTIME_STATE.generation
-  ) {
-    return "idle";
-  }
-
-  const timeoutMs = Math.max(0, Math.trunc(options?.timeoutMs ?? 250));
-  if (timeoutMs === 0) {
-    return "timeout";
-  }
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise.then(() => "loaded" as const),
-      new Promise<"timeout">((resolve) => {
-        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-        (timeoutHandle as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-}
-
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 
@@ -274,31 +188,18 @@ function prepareContextWindowCache(options?: {
   }
 }
 
-export function lookupContextTokens(
-  modelId?: string,
-  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
-): number | undefined {
-  if (!modelId) {
-    return undefined;
-  }
-  prepareContextWindowCache(options);
-  return minPositiveContextTokens(
-    lookupCachedContextTokens(modelId),
-    lookupCachedContextWindow(modelId),
-  );
-}
-
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
-  const lookupOptions = {
+  return resolveModelContextTokenProjection(params).contextTokens;
+}
+
+export function resolveModelContextTokenProjection(
+  params: ContextTokenResolutionParams,
+): ModelContextTokenProjection {
+  prepareContextWindowCache({
     allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
-  };
-  prepareContextWindowCache(lookupOptions);
-  return resolveContextTokensForModelFromCache(
-    params,
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
+    skipRuntimeConfigLoad: Boolean(params.cfg) || params.allowCacheLookup === false,
+  });
+  return resolveModelContextTokenProjectionFromCache(params);
 }

@@ -1,19 +1,11 @@
-// Voyage provider module implements model/runtime integration.
 import {
   createRemoteEmbeddingProvider,
   normalizeEmbeddingModelWithPrefixes,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-
-export type VoyageEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
-};
 
 export const DEFAULT_VOYAGE_EMBEDDING_MODEL = "voyage-4-large";
 const DEFAULT_VOYAGE_BASE_URL = "https://api.voyageai.com/v1";
@@ -33,7 +25,7 @@ function normalizeVoyageModel(model: string): string {
 
 export async function createVoyageEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
-): Promise<{ provider: MemoryEmbeddingProvider; client: VoyageEmbeddingClient }> {
+): Promise<{ provider: MemoryEmbeddingProvider; client: RemoteEmbeddingClient }> {
   const client = await resolveRemoteEmbeddingClient({
     provider: "voyage",
     options,

@@ -3,7 +3,10 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
-import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  type ScheduledToolPolicyContext,
+} from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
@@ -32,6 +35,10 @@ export type WebSearchToolPolicyParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   runtimeToolAllowlist?: string[];
+  preparedRequesterPolicy?: Pick<
+    ReturnType<typeof resolveRequesterToolPolicies>,
+    "delegated" | "groupPolicy" | "senderPolicy" | "subagentPolicy" | "inheritedToolPolicy"
+  >;
 };
 
 type WebSearchToolPolicyResolution = {
@@ -68,11 +75,17 @@ export function resolveWebSearchToolPolicy(
     resolveToolProfilePolicy(providerProfile),
     providerProfileAlsoAllow,
   );
+  const callerContext = resolveScheduledToolCallerContext({
+    scheduledToolPolicy: params.scheduledToolPolicy,
+    channel: params.messageProvider,
+  });
   const groupPolicyParams = {
     config: params.config,
     sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
+    messageProvider: callerContext.local
+      ? params.messageProvider
+      : (callerContext.channel ?? undefined),
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
@@ -86,22 +99,24 @@ export function resolveWebSearchToolPolicy(
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
   };
-  const requesterPolicies = resolveRequesterToolPolicies({
-    ...groupPolicyParams,
-    agentId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
-  });
+  const requesterPolicies =
+    params.preparedRequesterPolicy ??
+    resolveRequesterToolPolicies({
+      ...groupPolicyParams,
+      agentId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      sessionId: params.sessionId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+      groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+      requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    });
   const persistentGroupPolicy = requesterPolicies.delegated
     ? undefined
     : resolveGroupToolPolicy(groupPolicyParams);

@@ -5,13 +5,18 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 /** Shared input/output pixel cap for Rastermill-backed image operations. */
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
 
-export function createLocalImageProcessor(execution: ImageExecutionMode) {
+export type ImageProcessorPixelLimits = { inputPixels: number; outputPixels: number };
+
+export function createLocalImageProcessor(
+  execution: ImageExecutionMode,
+  limits: ImageProcessorPixelLimits = {
+    inputPixels: MAX_IMAGE_INPUT_PIXELS,
+    outputPixels: MAX_IMAGE_INPUT_PIXELS,
+  },
+) {
   return createRastermill({
     execution,
-    limits: {
-      inputPixels: MAX_IMAGE_INPUT_PIXELS,
-      outputPixels: MAX_IMAGE_INPUT_PIXELS,
-    },
+    limits,
     temp: {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: "openclaw-img-",

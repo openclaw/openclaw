@@ -34,20 +34,11 @@ let markSecondStart = () => {};
 const secondStarted = new Promise<void>((resolve) => {
   markSecondStart = resolve;
 });
-let markExited = (_code: number) => {};
-const exited = new Promise<number>((resolve) => {
-  markExited = resolve;
-});
 let startCount = 0;
 
-void runGatewayLoop({
+const exited = runGatewayLoop({
   ownsProcessLifecycle: false,
   lockPort: 20_000 + (process.pid % 20_000),
-  runtime: {
-    log: () => {},
-    error: () => {},
-    exit: markExited,
-  },
   start: async () => {
     startCount += 1;
     if (startCount === 1) {
@@ -137,6 +128,7 @@ const idleStartedAt = Date.now();
 await ingress.waitForIdle();
 const idleMs = Date.now() - idleStartedAt;
 const finalActivity = activity.at(-1);
+process.send?.({ type: "ingress-restart-idle" });
 
 await ingress.stop();
 releaseFirstClose();

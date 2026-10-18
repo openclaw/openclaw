@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements reaction level behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveReactionLevel,

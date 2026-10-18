@@ -1,5 +1,6 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
@@ -16,7 +17,20 @@ export type AgentTurnStartOwner = {
   abort: () => boolean;
 };
 
+/** A live frozen settle cohort may identify an already accepted legacy source. */
+export type RequesterSettleWakeReplay = {
+  sourceSessionKeys: readonly string[];
+  assertCurrent: () => void;
+};
+
 export type InternalAgentTurnDispatchOptions = {
+  /** Internal completion delivery owns its hidden input and durable processing receipt. */
+  privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
+  settleWakeReplay?: RequesterSettleWakeReplay;
+  /** Refresh the source before dispatch; accepted turns own their later execution. */
+  prepareDispatchCurrent?: () => Promise<void>;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
   cancelOnDeadline?: boolean;
@@ -43,6 +57,7 @@ export type InternalAgentTurnFacade = {
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ) => Promise<T>;
 };
 

@@ -20,12 +20,6 @@ export class AcceptedWorkspacePublicationIndeterminateError extends Error {
   }
 }
 
-export function isAcceptedWorkspacePublicationIndeterminateError(
-  error: unknown,
-): error is AcceptedWorkspacePublicationIndeterminateError {
-  return error instanceof AcceptedWorkspacePublicationIndeterminateError;
-}
-
 export function parseAcceptedWorkspaceSettlement(
   stdout: string,
 ): AcceptedWorkspaceSettlementOutcome {

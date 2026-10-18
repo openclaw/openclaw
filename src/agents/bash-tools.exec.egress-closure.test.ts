@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   startSecretEgressProxyServer,
@@ -30,15 +29,12 @@ import {
 
 let state: OpenClawTestState | undefined;
 let proxy: SecretEgressProxyHandle | undefined;
-let unsubscribe: (() => void) | undefined;
 const admissions: PreparedAgentRunAdmission[] = [];
 
 afterEach(async () => {
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
-  unsubscribe?.();
-  unsubscribe = undefined;
   vi.restoreAllMocks();
   try {
     if (proxy) {
@@ -64,13 +60,6 @@ beforeEach(async () => {
     onAudit: () => {},
   });
   publishSecretEgressProxy(proxy);
-  const ownedProxy = proxy;
-  // Use the Gateway's full-run closure event; approval-generation closure is separate.
-  unsubscribe = registerAgentRunDelegatedAuthorityClosedHandler((authority, reason) => {
-    if (!reason) {
-      ownedProxy.revokeRun(authority.operationalRunInstance);
-    }
-  });
 });
 
 describe("exec proxy registration after store preparation", () => {
@@ -91,8 +80,7 @@ describe("exec proxy registration after store preparation", () => {
       };
       await state.writeConfig(config);
       const workspaceDir = state.workspaceDir;
-      const registrations = vi.spyOn(proxy, "registerRun");
-      const revocations = vi.spyOn(proxy, "revokeRun");
+      const registrations = vi.spyOn(proxy, "registerProcess");
       const spawns = vi.spyOn(getProcessSupervisor(), "spawn");
 
       const createInvocation = async (runId: string) => {
@@ -197,14 +185,8 @@ describe("exec proxy registration after store preparation", () => {
       expect(later.admitted.operationalRunInstance).not.toEqual(
         retired.admitted.operationalRunInstance,
       );
-      expect(revocations.mock.calls.map(([run]) => run)).toEqual([
-        retired.admitted.operationalRunInstance,
-        later.admitted.operationalRunInstance,
-      ]);
       expect(lateRegistrationCount).toBe(0);
-      expect(registrations.mock.calls.map(([run]) => run)).toEqual([
-        later.admitted.operationalRunInstance,
-      ]);
+      expect(registrations).toHaveBeenCalledOnce();
     },
   );
 });

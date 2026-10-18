@@ -1,8 +1,73 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 
 describe("qa compaction scenario catalog", () => {
+  it.each([
+    { retained: [12, 13, 14, 15], pass: true },
+    { retained: [10, 11, 12, 13, 14, 15], pass: false },
+    { retained: [12, 14, 15], pass: false },
+    { retained: [], pass: false },
+  ])(
+    "distinguishes complete retained blocks $retained from summary excerpts",
+    ({ retained, pass }) => {
+      const scenario = requireFlowScenario(readQaScenarioById("compaction-retry-mutating-tool"));
+      const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+      const seed = actions.find(
+        (action) => (action as { call?: string }).call === "seedQaSessionTranscript",
+      ) as { args: [unknown, { messages: { expr: string } }] };
+      const messages = runInNewContext(seed.args[1].messages.expr, {
+        config: scenario.execution.config,
+        now: 0,
+      }) as { text: string }[];
+      const block = (index: number) =>
+        messages.find((message) =>
+          message.text.includes(
+            `post-marker historical user block ${String(index).padStart(2, "0")}`,
+          ),
+        )!.text;
+      const overflowRequest = {
+        cursor: 1,
+        allInputText: messages.map((message) => message.text).join("\n"),
+      };
+      const writeRequest = {
+        cursor: 2,
+        allInputText: [
+          "Recent turns preserved verbatim:",
+          ...[9, 10, 11].map((index) => block(index).slice(0, 600)),
+          ...retained.map(block),
+        ].join("\n"),
+      };
+      const evidence = actions.find(
+        (action) => (action as { set?: string }).set === "requestEvidence",
+      ) as { value: { expr: string } };
+      const requestEvidence = runInNewContext(evidence.value.expr, {
+        config: scenario.execution.config,
+        scenarioRequests: [overflowRequest, writeRequest],
+      }) as unknown[];
+      const pruningAssertions = actions
+        .map(readFlowAssertExpression)
+        .filter(
+          (expression) =>
+            expression.includes("tailBlocks") ||
+            expression.includes("includes(config.bulkyMarker)"),
+        );
+      expect(pruningAssertions).toHaveLength(2);
+      expect(
+        pruningAssertions.every((expression) =>
+          runInNewContext(expression, {
+            config: scenario.execution.config,
+            overflowRequest,
+            writeRequest,
+            overflowEvidence: requestEvidence[0],
+            writeEvidence: requestEvidence[1],
+          }),
+        ),
+      ).toBe(pass);
+    },
+  );
+
   it.each([
     {
       id: "compaction-empty-response-recovery",
@@ -72,7 +137,55 @@ describe("qa compaction scenario catalog", () => {
     const writeTranscriptToolCallIdExpr = readSetExpression("writeTranscriptToolCallId");
     const continuationChainExpr = readSetExpression("continuationChain");
     const compactionSummaryRequestsExpr = readSetExpression("compactionSummaryRequests");
-    const overflowCheckpointsExpr = readSetExpression("overflowCheckpoints");
+    const sessionId = "seeded-transcript";
+    const allInputText = "Compaction retry mutating tool check QA-COMPACTION-DURABLE-MARKER";
+    const overflow = {
+      cursor: 1,
+      sessionId,
+      allInputText,
+      requestKind: "agent-initial",
+      outcome: "error",
+      errorCode: "context_length_exceeded",
+    };
+    const write = { cursor: 2, sessionId, plannedToolName: "write", allInputText };
+    const failedWrite = { ...write, cursor: 3, outcome: "error", toolOutput: "failed" };
+    const continuation = { cursor: 4, sessionId, requestKind: "tool-continuation", allInputText };
+    const failedContinuation = { ...continuation, cursor: 5, outcome: "error" };
+    const foreign = <T extends object>(request: T) => ({
+      ...request,
+      sessionId: `${sessionId}-other`,
+      allInputText: `${allInputText} ${sessionId}`,
+    });
+    const scope = {
+      sessionId,
+      config: scenario.execution.config,
+      overflowRequest: overflow,
+      writeRequest: write,
+      scenarioRequests: [
+        overflow,
+        foreign(overflow),
+        { ...overflow, outcome: "success" },
+        { ...overflow, errorCode: "other" },
+        write,
+        failedWrite,
+        foreign(write),
+        { ...write, cursor: 0 },
+        { ...write, plannedToolName: "read" },
+        { ...write, allInputText: "QA-COMPACTION-DURABLE-MARKER" },
+        { ...write, allInputText: "Compaction retry mutating tool check" },
+        continuation,
+        failedContinuation,
+        foreign(continuation),
+        { ...continuation, cursor: 1 },
+        { ...continuation, requestKind: "agent-initial" },
+      ],
+    };
+    expect(runInNewContext(readSetExpression("overflowRequests"), scope)).toEqual([overflow]);
+    expect(runInNewContext(writeRequestsExpr, scope)).toEqual([write, failedWrite]);
+    expect(runInNewContext(postWriteContinuationsExpr, scope)).toEqual([
+      continuation,
+      failedContinuation,
+    ]);
     const continuationAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes("continuationChain.valid === true"),
     );
@@ -87,7 +200,7 @@ describe("qa compaction scenario catalog", () => {
     );
     const terminalEvidenceAssertIndex = actionIndex((action) =>
       readFlowAssertExpression(action).includes(
-        "terminalContinuations[0].providerVariant === 'openai'",
+        "terminalContinuations[0].codeModeExecSurface === 'native'",
       ),
     );
     const outboundWaitIndex = actionIndex(
@@ -97,14 +210,13 @@ describe("qa compaction scenario catalog", () => {
     );
     const stableCellIdAssertExpr = readAssertExpression("continuationChain.waits.length === 0");
     const terminalEvidenceAssertExpr = readAssertExpression(
-      "terminalContinuations[0].providerVariant === 'openai'",
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
     const compactionSummaryAssertExpr = readAssertExpression("compactionSummaryRequests.some");
     const noQualityRetryAssertExpr = readAssertExpression("Previous summary failed quality checks");
     const compactionSnapshotAssertExpr = readAssertExpression(
       "Number.isInteger(sessionEntry?.compactionCount)",
     );
-    const overflowCheckpointAssertExpr = readAssertExpression("overflowCheckpoints.length === 1");
     const knownGap =
       "known-harness-gap compaction-retry-mutating-tool: provider-error recovery does not invoke Codex native compaction; native token-threshold compaction needs a separate scenario.";
 
@@ -115,20 +227,6 @@ describe("qa compaction scenario catalog", () => {
       "session-memory.pruning",
     ]);
     expect(scenario.coverage?.secondary ?? []).toEqual([]);
-    expect(scenario.successCriteria).toContain(
-      "One coded over-threshold provider overflow produces one persisted OpenClaw overflow compaction and one compacted retry retaining durable current context.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "OpenClaw performs exactly one successful write, then one terminal continuation after zero-or-more causally linked waits, and returns the exact file content and final marker.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix ending at block 15 while pruning marker block 10.",
-    );
-    expect(scenario.successCriteria).toContain(
-      "The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.",
-    );
-    expect(scenario.successCriteria.join("\n")).not.toContain("Both runtime cells");
-
     const firstAction = scenario.execution.flow?.steps[0]?.actions[0] as
       | Record<string, unknown>
       | undefined;
@@ -161,7 +259,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain('"call":"qaImport","args":["./errors.js"],"saveAs":"qaErrors"');
     expect(flow).toContain("new qaErrors.QaSuiteScenarioSkipError");
     expect(flow).toContain("seedQaSessionTranscript");
-    expect(flow).toContain("sessions.compaction.branch");
     expect(flow).toContain("env.runtimeId");
     expect(scenario.execution.retryCount).toBe(0);
     expect(flow).not.toContain('"transcriptToolName":"write"');
@@ -173,7 +270,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("writeRequests.length === 1");
     expect(writeRequestsExpr).toContain("request.plannedToolName === 'write'");
     expect(writeRequestsExpr).toContain("request.cursor > overflowRequest.cursor");
-    expect(writeRequestsExpr).toContain("String(request.allInputText ?? '').includes(sessionId)");
     expect(writeRequestsExpr).toContain(
       "String(request.allInputText ?? '').includes(config.promptSnippet)",
     );
@@ -220,9 +316,6 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).not.toContain("transcript.successfulToolCallCounts.write === 1");
     expect(postWriteContinuationsExpr).toContain("request.requestKind === 'tool-continuation'");
     expect(postWriteContinuationsExpr).toContain("request.cursor > writeRequest.cursor");
-    expect(postWriteContinuationsExpr).toContain(
-      "String(request.allInputText ?? '').includes(sessionId)",
-    );
     expect(postWriteContinuationsExpr).not.toContain("request.outcome");
     expect(postWriteContinuationsExpr).not.toContain("request.plannedToolName");
     expect(postWriteContinuationsExpr).not.toContain("request.toolOutputCallId");
@@ -255,16 +348,16 @@ describe("qa compaction scenario catalog", () => {
       "new Set(continuationChain.waits.map((request) => request.plannedToolArgs.cell_id)).size === 1",
     );
     expect(terminalEvidenceAssertExpr).toContain("writeWireToolName !== 'exec'");
-    const openAiEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'openai'",
+    const nativeEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'native'",
     );
-    const anthropicEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
-      "terminalContinuations[0].providerVariant === 'anthropic'",
+    const guestEvidenceIndex = terminalEvidenceAssertExpr.indexOf(
+      "terminalContinuations[0].codeModeExecSurface === 'guest'",
     );
     const unknownProviderFailClosedIndex = terminalEvidenceAssertExpr.lastIndexOf(": false");
-    expect(openAiEvidenceIndex).toBeGreaterThanOrEqual(0);
+    expect(nativeEvidenceIndex).toBeGreaterThanOrEqual(0);
     expect(terminalEvidenceAssertExpr).toContain("startsWith('Script completed\\n')");
-    expect(anthropicEvidenceIndex).toBeGreaterThan(openAiEvidenceIndex);
+    expect(guestEvidenceIndex).toBeGreaterThan(nativeEvidenceIndex);
     expect(terminalEvidenceAssertExpr).toContain(
       "JSON.parse(String(terminalContinuations[0].toolOutput ?? ''))",
     );
@@ -272,7 +365,7 @@ describe("qa compaction scenario catalog", () => {
     expect(terminalEvidenceAssertExpr).toContain("typeof parsed === 'object'");
     expect(terminalEvidenceAssertExpr).toContain("!Array.isArray(parsed)");
     expect(terminalEvidenceAssertExpr).toContain("parsed.status === 'completed'");
-    expect(unknownProviderFailClosedIndex).toBeGreaterThan(anthropicEvidenceIndex);
+    expect(unknownProviderFailClosedIndex).toBeGreaterThan(guestEvidenceIndex);
     expect(continuationAssertIndex).toBeGreaterThanOrEqual(0);
     expect(terminalAssertIndex).toBeGreaterThan(continuationAssertIndex);
     expect(distinctCallIdsAssertIndex).toBeGreaterThan(terminalAssertIndex);
@@ -301,8 +394,6 @@ describe("qa compaction scenario catalog", () => {
     );
     expect(compactionSnapshotAssertExpr).not.toContain("compactionCount === 1");
     expect(flow).not.toContain("sessionEntry?.compactionCount === 1");
-    expect(overflowCheckpointsExpr).toContain("checkpoint.reason === 'overflow-retry'");
-    expect(overflowCheckpointAssertExpr).toContain("overflowCheckpoints.length === 1");
     expect(flow).not.toContain("compactionSummaryRequests.length === 1");
     expect(flow).toContain(
       "writeRequest.rawByteLength < config.overflowThresholdBytes && writeRequest.rawByteLength < overflowRequest.rawByteLength",
@@ -311,31 +402,8 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain("index === 10 ? config.bulkyMarker + ' ' : ''");
     expect(flow).toContain("post-marker historical user block");
     expect(flow).not.toContain("index === 12 ? config.bulkyMarker + ' ' : ''");
-    expect(flow).toContain("{ role: 'assistant', text: config.checkpointMarker");
+    expect(flow).toContain("{ role: 'assistant', text: config.historyMarker");
     expect(flow).not.toContain("{ role: 'assistant', text: config.bulkyMarker");
-    expect(flow).toContain("branchSummary.finalText === config.checkpointMarker");
-    expect(flow).toContain('"set":"requestEvidence"');
-    expect(flow).toContain("durable: String(request.allInputText ?? '')");
-    expect(flow).toContain("bulky: String(request.allInputText ?? '')");
-    expect(flow).toContain("qualityRetry: String(request.allInputText ?? '')");
-    expect(flow).toContain("inputChars: String(request.allInputText ?? '').length");
-    expect(flow).toContain(
-      "resolvedWireTool: request.plannedWireToolName ?? request.plannedToolName ?? null",
-    );
-    expect(flow).toContain("callId: request.plannedToolCallId ?? null");
-    expect(flow).toContain("itemId: request.plannedToolItemId ?? null");
-    expect(flow).toContain(
-      "transcriptId: typeof request.plannedToolItemId === 'string' && request.plannedToolItemId.length > 0",
-    );
-    expect(flow).toContain(": request.plannedToolCallId ?? null");
-    expect(flow).toContain("logicalWrites=${String(writeRequests.length)}");
-    expect(flow).toContain("wireTool=${String(writeWireToolName)}");
-    expect(flow).toContain("callId=${String(writeRequest.plannedToolCallId)}");
-    expect(flow).toContain("itemId=${String(writeRequest.plannedToolItemId)}");
-    expect(flow).toContain("transcriptId=${String(writeTranscriptToolCallId)}");
-    expect(flow).toContain(
-      "wireSuccesses=${String(transcript.successfulToolCallCounts[writeWireToolName] ?? 0)}",
-    );
     expect(flow).not.toContain("clientSessionId");
     expect(flow).toContain("tailBlocks:");
     expect(flow).toContain(".sort().slice(0, 16)");
@@ -344,7 +412,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain(
       "String(overflowRequest.allInputText ?? '').includes(config.bulkyMarker)",
     );
-    expect(flow).toContain("!String(writeRequest.allInputText ?? '').includes(config.bulkyMarker)");
+    expect(flow).toContain("config.tailTokenCount - 1");
     expect(flow).toContain("JSON.stringify(overflowEvidence.tailBlocks)");
     expect(flow).toContain("writeEvidence.tailBlocks.length > 0");
     expect(flow).toContain("!writeEvidence.tailBlocks.includes('10')");

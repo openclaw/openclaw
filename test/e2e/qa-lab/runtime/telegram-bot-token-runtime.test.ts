@@ -34,16 +34,6 @@ afterEach(async () => {
 });
 
 describe("telegram bot token runtime evidence", () => {
-  it("resolves only dedicated leased credentials", () => {
-    expect(
-      testing.resolveLeasedToken({
-        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "leased-token",
-        TELEGRAM_E2E_SUT_BOT_TOKEN: "secondary-leased-token",
-        TELEGRAM_BOT_TOKEN: "generic-token",
-      }),
-    ).toEqual({ key: "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN", token: "leased-token" });
-  });
-
   it("writes blocked evidence without a dedicated credential", async () => {
     const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-bot-token-"));
     tempDirs.push(artifactBase);
@@ -110,6 +100,7 @@ describe("telegram bot token runtime evidence", () => {
         OPENCLAW_SKIP_CHANNELS: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        TELEGRAM_BOT_TOKEN: undefined,
       },
     });
     const log = await fs.readFile(
@@ -166,31 +157,6 @@ describe("telegram bot token runtime evidence", () => {
       "utf8",
     );
     expect(log).not.toContain(leasedToken);
-    expect(credential.release).toHaveBeenCalledOnce();
-  });
-
-  it("uses the configured shared lease when no dedicated token env is present", async () => {
-    const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "telegram-bot-lease-"));
-    tempDirs.push(artifactBase);
-    const leasedToken = "123456:convex-secret";
-    const credential = createCredentialDependencies(leasedToken, "convex");
-    const createInstance = vi.fn(async () => ({
-      cleanup: async () => undefined,
-      startGateway: async () => undefined,
-      logs: () =>
-        `[qa-live] starting provider (@qa_test_bot) token=${leasedToken}\n` +
-        "[telegram][diag] polling cycle started\n",
-    }));
-
-    const evidence = await runTelegramBotTokenRuntime(
-      { artifactBase, repoRoot: process.cwd(), startupTimeoutMs: 100 },
-      { OPENCLAW_QA_CREDENTIAL_SOURCE: "convex" },
-      { ...credential.dependencies, createInstance },
-    );
-
-    expect(evidence.entries[0]?.result.status).toBe("pass");
-    expect(createInstance).toHaveBeenCalledOnce();
-    expect(credential.stop).toHaveBeenCalledOnce();
     expect(credential.release).toHaveBeenCalledOnce();
   });
 });

@@ -2,7 +2,6 @@ import path from "node:path";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { buildBootstrapBudgetState, buildBootstrapInjectionStats } from "../../bootstrap-budget.js";
 import {
-  buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
   resolveBootstrapFilesForRun,
@@ -13,6 +12,7 @@ import {
   isPrimaryBootstrapRun,
   resolveWorkspaceBootstrapRouting,
 } from "../../bootstrap-routing.js";
+import { buildBootstrapContextForFiles } from "../../embedded-agent-helpers/bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -23,11 +23,17 @@ import { log } from "../logger.js";
 import { resolveAttemptBootstrapContext } from "./attempt-context-engine-helpers.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt-setup.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import type { EmbeddedRunAttemptBase, EmbeddedRunAttemptParams } from "./types.js";
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
-  attempt: EmbeddedRunAttemptParams;
-  setup: EmbeddedAttemptSetup;
+  attempt: Omit<EmbeddedRunAttemptBase, "workspaceDir" | "prompt" | "timeoutMs" | "runId"> &
+    Pick<EmbeddedRunAttemptParams, "operation">;
+  setup: Pick<
+    EmbeddedAttemptSetup,
+    "effectiveWorkspace" | "resolvedWorkspace" | "sessionAgentId"
+  > & {
+    prepStages?: Pick<EmbeddedAttemptSetup["prepStages"], "mark">;
+  };
   hasReadTool: boolean;
   isRawModelRun: boolean;
 }) {
@@ -52,30 +58,29 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   });
   const resolveWorkspaceBootstrapFiles = (workspaceDir: string) =>
     resolveBootstrapFilesForRun({
-      workspaceDir,
+      bootstrapUserProfileId: attempt.bootstrapUserProfileId,
       config: attempt.config,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
       chatType: attempt.chatType,
+      workspaceDir,
       agentId: params.setup.sessionAgentId,
       warn: bootstrapWarn,
       contextMode: attempt.bootstrapContextMode,
       runKind: attempt.bootstrapContextRunKind,
     });
   let completedBootstrapTurn: boolean | undefined;
-  const hasCompletedBootstrapTurnForAttempt = async () => {
-    completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget);
-    return completedBootstrapTurn;
-  };
+  const hasCompletedBootstrapTurnForAttempt = async () =>
+    (completedBootstrapTurn ??= await hasCompletedBootstrapTurn(attempt.sessionTarget));
   const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
     resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapFiles,
       bootstrapContextRunKind: attempt.bootstrapContextRunKind,
       trigger: attempt.trigger,
       sessionKey: attempt.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
       isCanonicalWorkspace: attempt.isCanonicalWorkspace,
+      isWorkspaceBootstrapPending,
+      bootstrapFiles,
+      isPrimaryRun: isPrimaryBootstrapRun(attempt.sessionKey),
       effectiveWorkspace: params.setup.effectiveWorkspace,
       resolvedWorkspace: bootstrapWorkspaceDir,
       hasBootstrapFileAccess: params.hasReadTool,
@@ -111,6 +116,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
+    deliversCompleteWorkspaceContext: bootstrapRouting.deliversCompleteWorkspaceContext,
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =
@@ -139,7 +145,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       };
     },
   });
-  params.setup.prepStages.mark("bootstrap-context");
+  params.setup.prepStages?.mark("bootstrap-context");
   const injectedContextFiles = bootstrapRouting.includeBootstrapInSystemContext
     ? resolvedContextFiles
     : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));

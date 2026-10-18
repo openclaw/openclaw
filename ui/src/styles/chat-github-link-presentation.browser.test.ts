@@ -16,12 +16,16 @@ const describeGitHubLinkPresentation = canRunPlaywrightChromium(chromiumExecutab
   : describe.skip;
 
 function readChatCss(): string {
-  return ["ui/src/styles/base.css", "ui/src/styles/chat/text.css"]
+  return [
+    "ui/src/styles/base.css",
+    "ui/src/styles/chat/startup-layout.css",
+    "ui/src/styles/chat/text.css",
+  ]
     .map((file) => readStyleSheet(file))
     .join("\n");
 }
 
-// Item chips stay atomic; other GitHub links keep normal label wrapping.
+// Short references stay atomic; qualified labels may wrap within their chip.
 const LINK_FORMS = [
   {
     className: "markdown-bare-url markdown-github-link markdown-github-item",
@@ -77,6 +81,7 @@ type WrapSample = {
   readonly columnWidth: number;
   readonly fragments: number;
   readonly labelFragments: number;
+  readonly overflows: boolean;
   readonly labelStartsMarkLine: boolean;
   readonly markLineTop: number;
 };
@@ -125,6 +130,7 @@ async function probeWrap(
               columnWidth,
               fragments: link.getClientRects().length,
               labelFragments: labelRange.getClientRects().length,
+              overflows: column.scrollWidth > column.clientWidth,
               labelStartsMarkLine: Math.abs(labelStart.top - linkStart.top) < 2,
               markLineTop: Math.round(linkStart.top),
             });
@@ -164,7 +170,7 @@ afterAll(async () => {
 
 describeGitHubLinkPresentation("chat GitHub link presentation", () => {
   it.each(["light", "dark"] as const)(
-    "keeps GitHub icons with their labels and item chips atomic at every column width in %s",
+    "keeps GitHub icons with their labels and reference chips contained at every column width in %s",
     async (themeMode) => {
       const samples = await probeWrap(themeMode);
       for (const { id, kind } of LINK_FORMS) {
@@ -175,10 +181,49 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
         const stranded = collected.filter((sample) => !sample.labelStartsMarkLine);
         expect({ id, stranded }).toEqual({ id, stranded: [] });
         if (kind) {
+          // Qualified labels may exceed the column; short references remain unbroken.
           expect(
-            collected.filter((sample) => sample.fragments !== 1 || sample.labelFragments !== 1),
+            collected.filter(
+              (sample) =>
+                sample.fragments !== 1 ||
+                sample.overflows ||
+                (id !== "repository-ref" && sample.labelFragments !== 1),
+            ),
           ).toEqual([]);
         }
+      }
+    },
+  );
+
+  it.each(["ltr", "rtl"])(
+    "wraps oversized qualified chips without clipping in %s",
+    async (direction) => {
+      const fixtureFile = path.join(fixtureDirectory, "qualified-" + direction + ".html");
+      fs.writeFileSync(fixtureFile, fixtureDocument("dark"), "utf8");
+      const page = await browser.newPage();
+      try {
+        await page.goto("file://" + fixtureFile);
+        const geometry = await page.evaluate((dir) => {
+          const column = document.querySelector<HTMLElement>("#column-repository-ref")!;
+          const chip = document.querySelector<HTMLElement>("#repository-ref")!;
+          column.style.width = "280px";
+          column.style.fontSize = "28px";
+          column.dir = dir;
+          chip.textContent = "organization-with-a-long-name/repository-with-a-long-name#987654";
+          const label = document.createRange();
+          label.selectNodeContents(chip);
+          return {
+            width: column.clientWidth,
+            scrollWidth: column.scrollWidth,
+            chipWidth: chip.getBoundingClientRect().width,
+            fragments: label.getClientRects().length,
+          };
+        }, direction);
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.chipWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.fragments).toBeGreaterThan(1);
+      } finally {
+        await page.close();
       }
     },
   );

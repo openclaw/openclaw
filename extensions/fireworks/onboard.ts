@@ -1,4 +1,4 @@
-import { createDefaultModelsPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
+import { createDefaultModelsConnectionPresetAppliers } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildFireworksCatalogModels,
   buildFireworksProvider,
@@ -6,17 +6,19 @@ import {
   FIREWORKS_DEFAULT_MODEL_REF,
 } from "./provider-catalog.js";
 
-export const { applyConfig: applyFireworksConfig } = createDefaultModelsPresetAppliers<[]>({
+export const { applyConfig: applyFireworksConfig } = createDefaultModelsConnectionPresetAppliers<
+  []
+>({
   primaryModelRef: FIREWORKS_DEFAULT_MODEL_REF,
-  resolveParams: (cfg) => {
+  resolveParams: () => {
     const defaultProvider = buildFireworksProvider();
     return {
       providerId: "fireworks",
       api: defaultProvider.api ?? "openai-completions",
       baseUrl: defaultProvider.baseUrl,
-      defaultModels: cfg.models?.mode === "replace" ? buildFireworksCatalogModels() : [],
+      defaultModels: buildFireworksCatalogModels,
       defaultModelId: FIREWORKS_DEFAULT_MODEL_ID,
-      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.2 Fast" }],
+      aliases: [{ modelRef: FIREWORKS_DEFAULT_MODEL_REF, alias: "GLM 5.3 Fast" }],
     };
   },
 });

@@ -6,8 +6,12 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleSlackHttpRequest } from "../http/registry.js";
+import {
+  createSlackHttpTestDispatcher,
+  installSlackHttpTestRegistry,
+} from "../http/route.test-helpers.js";
 import { getSlackTestState, resetSlackTestState } from "../monitor.test-helpers.js";
 
 const ingressStartMock = vi.hoisted(() => vi.fn());
@@ -26,8 +30,8 @@ vi.mock("./ingress.js", () => ({
 
 const { monitorSlackProvider } = await import("./provider.js");
 
-beforeEach(() => {
-  resetSlackTestState();
+beforeEach(async () => {
+  await resetSlackTestState();
   ingressStartMock.mockReset();
   ingressStopMock.mockReset().mockResolvedValue(undefined);
 });
@@ -39,6 +43,9 @@ afterAll(() => {
 
 describe("Slack ingress startup cleanup", () => {
   it("rejects an oversized body before Bolt's void listener reads asynchronously", async () => {
+    const registry = installSlackHttpTestRegistry();
+    const handleSlackHttpRequest = createSlackHttpTestDispatcher(registry);
+    expect(registry.httpRoutes).toHaveLength(0);
     const state = getSlackTestState();
     state.httpRequestListenerMock.mockImplementation((reqValue, resValue) => {
       const req = reqValue as IncomingMessage;
@@ -68,6 +75,7 @@ describe("Slack ingress startup cleanup", () => {
     };
     const controller = new AbortController();
     const run = monitorSlackProvider({
+      scheduler: createTestPluginServiceScheduler(),
       botToken: "bot-token",
       abortSignal: controller.signal,
       config: state.config,
@@ -77,6 +85,13 @@ describe("Slack ingress startup cleanup", () => {
 
     try {
       await vi.waitFor(() => expect(ingressStartMock).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(registry.httpRoutes).toHaveLength(1));
+      expect(registry.httpRoutes[0]).toMatchObject({
+        path: "/slack/events",
+        auth: "plugin",
+        pluginId: "slack",
+        source: "slack-webhook",
+      });
       let acceptRequest: (() => void) | undefined;
       const accepted = new Promise<void>((resolve) => {
         acceptRequest = resolve;
@@ -138,6 +153,7 @@ describe("Slack ingress startup cleanup", () => {
       });
       controller.abort();
       await run;
+      expect(registry.httpRoutes).toHaveLength(0);
     }
   });
 
@@ -149,6 +165,7 @@ describe("Slack ingress startup cleanup", () => {
 
     await expect(
       monitorSlackProvider({
+        scheduler: createTestPluginServiceScheduler(),
         botToken: "bot-token",
         appToken: "app-token",
         config: getSlackTestState().config,

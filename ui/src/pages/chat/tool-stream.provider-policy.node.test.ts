@@ -63,27 +63,6 @@ describe("provider policy composer notices", () => {
     expect(host.guardianNotices).toEqual([]);
   });
 
-  it("lets an automatic Daybreak escalation supersede the block it followed", () => {
-    const host = createHost({ chatRunId: "run-1" });
-    handleAgentEvent(host, policyEvent("blocked", 1));
-    expect(host.providerPolicyNotice?.state).toBe("blocked");
-    handleAgentEvent(host, policyEvent("escalated", 2));
-    expect(host.providerPolicyNotice).toMatchObject({
-      state: "escalated",
-      fallbackModel: "alternate-model",
-    });
-  });
-
-  it("reports an unauthorized Daybreak target instead of a silent block", () => {
-    const host = createHost({ chatRunId: "run-1" });
-    handleAgentEvent(host, policyEvent("blocked", 1));
-    handleAgentEvent(host, policyEvent("unavailable", 2));
-    expect(host.providerPolicyNotice?.state).toBe("unavailable");
-    // The escalation outcome is terminal for the turn; buffering cannot reopen it.
-    handleAgentEvent(host, policyEvent("buffering", 3));
-    expect(host.providerPolicyNotice?.state).toBe("unavailable");
-  });
-
   it("clears buffering without clearing a provider reroute or terminal policy block", () => {
     const host = createHost({ chatRunId: "run-1" });
     handleAgentEvent(host, policyEvent("buffering", 1));
@@ -103,7 +82,7 @@ describe("provider policy composer notices", () => {
     reconcileChatRunLifecycle(host, {
       clearLocalRun: true,
       clearToolStreamForRun: true,
-      requestUpdate: false,
+      publishRunState: false,
     });
     expect(host.providerPolicyNotice?.state).toBe("blocked");
     resetToolStream(host);
@@ -133,7 +112,7 @@ describe("provider policy composer notices", () => {
     expect(host.providerPolicyNotice?.state).toBe("buffering");
     adoptStartedChatRun(host, "run-2", 2);
     expect(host.providerPolicyNotice).toBeNull();
-    reconcileChatRunLifecycle(host, { clearLocalRun: true, requestUpdate: false });
+    reconcileChatRunLifecycle(host, { clearLocalRun: true, publishRunState: false });
     handleAgentEvent(host, policyEvent("blocked", 10));
     expect(host.providerPolicyNotice).toBeNull();
   });
@@ -151,7 +130,7 @@ describe("provider policy composer notices", () => {
     adoptStartedChatRun(host, "run-1", 1);
     handleAgentEvent(host, policyEvent("blocked", 2));
     expect(host.providerPolicyNotice?.state).toBe("blocked");
-    reconcileChatRunLifecycle(host, { clearLocalRun: true, requestUpdate: false });
+    reconcileChatRunLifecycle(host, { clearLocalRun: true, publishRunState: false });
     reduceChatSessionProjection(host, { type: "sessionReset" });
     expect(host.providerPolicyNotice).toBeNull();
     handleAgentEvent(host, policyEvent("blocked", 3));

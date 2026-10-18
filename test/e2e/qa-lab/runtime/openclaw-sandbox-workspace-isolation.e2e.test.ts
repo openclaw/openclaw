@@ -1,10 +1,17 @@
+import "../../../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { afterEach, expect, test } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
+
+afterEach(clearRuntimeConfigSnapshot);
 
 type WorkspaceAccess = "none" | "ro" | "rw";
 type SandboxContext = NonNullable<
@@ -92,10 +99,12 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
       }
       await fs.writeFile(hostSentinel, `original-${access}`);
 
+      const config = createConfig({ access, image, prefix, workspaceRoot });
+      setRuntimeConfigSnapshot(config);
       let sandbox: SandboxContext | null = null;
       try {
         sandbox = await resolveSandboxContext({
-          config: createConfig({ access, image, prefix, workspaceRoot }),
+          config,
           agentId: `workspace-${access}`,
           sessionKey: `agent:workspace-${access}:qa-${randomUUID()}`,
           workspaceDir: hostWorkspace,
@@ -153,6 +162,160 @@ test("Docker enforces none, read-only, and read-write workspace isolation", asyn
     const { execDocker } = await import("../../../../src/agents/sandbox/docker.js");
     for (const runtimeId of runtimes) {
       await execDocker(["rm", "-f", runtimeId], { allowFailure: true });
+    }
+    env.restore();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}, 120_000);
+
+test("Docker confines subagent attachments to the authorized session", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-isolation-"));
+  const stateDir = path.join(root, "state");
+  const workspaceDir = path.join(root, "workspace");
+  const workspaceRoot = path.join(root, "sandboxes");
+  const image = process.env.OPENCLAW_SANDBOX_TEST_IMAGE ?? "openclaw-sandbox:bookworm-slim";
+  const prefix = `oc-attachment-qa-${process.pid}-`;
+  const attachedSessionKey = `agent:main:subagent:attached-${randomUUID()}`;
+  const siblingSessionKey = `agent:main:subagent:sibling-${randomUUID()}`;
+  const env = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const runtimes: string[] = [];
+  let attachmentId: string | undefined;
+
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.mkdir(workspaceDir, { recursive: true });
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  const config = createConfig({
+    access: "none",
+    image,
+    prefix,
+    workspaceRoot,
+  });
+  config.agents!.defaults!.sandbox!.scope = "agent";
+  config.tools = { sessions_spawn: { attachments: { enabled: true } } };
+  setRuntimeConfigSnapshot(config);
+
+  try {
+    const [
+      { resolveSandboxContext },
+      { removeSandboxContainer },
+      { cleanupMaterializedSubagentAttachments, materializeSubagentAttachments },
+      { resolveSubagentSessionAttachmentRootDir },
+    ] = await Promise.all([
+      import("../../../../src/agents/sandbox/context.js"),
+      import("../../../../src/agents/sandbox/manage.js"),
+      import("../../../../src/agents/subagents/spawn/subagent-attachments.js"),
+      import("../../../../src/agents/subagents/subagent-attachment-paths.js"),
+    ]);
+    let spawnAuthorityActive = true;
+    const materialized = await materializeSubagentAttachments({
+      assertActive: () => {
+        if (!spawnAuthorityActive) {
+          throw new Error("spawn authority closed");
+        }
+      },
+      config,
+      childSessionKey: attachedSessionKey,
+      targetAgentId: "main",
+      sandboxed: true,
+      attachments: [{ name: "proof.txt", content: "authorized" }],
+    });
+    expect(materialized?.status).toBe("ok");
+    if (!materialized || materialized.status !== "ok") {
+      throw new Error("attachment materialization failed");
+    }
+    attachmentId = materialized.attachmentId;
+    // Provisioning and retained reads must not depend on the now-closed parent
+    // spawn authority; the session-owned staged identity is the durable grant.
+    spawnAuthorityActive = false;
+
+    const attached = await resolveSandboxContext({
+      config,
+      sessionKey: attachedSessionKey,
+      workspaceDir,
+      requireCurrentConfig: true,
+    });
+    const sibling = await resolveSandboxContext({
+      config,
+      sessionKey: siblingSessionKey,
+      workspaceDir,
+      requireCurrentConfig: true,
+    });
+    expect(attached?.backend).toBeDefined();
+    expect(sibling?.backend).toBeDefined();
+    if (!attached?.backend || !sibling?.backend) {
+      throw new Error("sandbox backend missing");
+    }
+    runtimes.push(attached.runtimeId, sibling.runtimeId);
+    expect(attached.runtimeId).not.toBe(sibling.runtimeId);
+
+    const exposedPath = `/openclaw/attachments/${attachmentId}/proof.txt`;
+    const firstRead = await attached.backend.runShellCommand({
+      script: 'test "$(cat "$1")" = authorized',
+      args: [exposedPath],
+      allowFailure: false,
+    });
+    expect(firstRead.code, firstRead.stderr.toString()).toBe(0);
+    const retainedRead = await attached.backend.runShellCommand({
+      script: 'test "$(cat "$1")" = authorized',
+      args: [exposedPath],
+      allowFailure: false,
+    });
+    expect(retainedRead.code, retainedRead.stderr.toString()).toBe(0);
+
+    const mutation = await attached.backend.runShellCommand({
+      script: 'printf denied > "$1"',
+      args: [exposedPath],
+      allowFailure: true,
+    });
+    expect(mutation.code).not.toBe(0);
+    await expect(
+      fs.readFile(
+        path.join(
+          resolveSubagentSessionAttachmentRootDir({
+            agentId: "main",
+            childSessionKey: attachedSessionKey,
+          }),
+          attachmentId,
+          "proof.txt",
+        ),
+        "utf8",
+      ),
+    ).resolves.toBe("authorized");
+
+    const siblingProbe = await sibling.backend.runShellCommand({
+      script: 'test ! -e "$1"',
+      args: [exposedPath],
+      allowFailure: false,
+    });
+    expect(siblingProbe.code, siblingProbe.stderr.toString()).toBe(0);
+
+    for (const runtimeId of runtimes.splice(0)) {
+      await removeSandboxContainer(runtimeId);
+    }
+    await cleanupMaterializedSubagentAttachments({
+      childSessionKey: attachedSessionKey,
+      attachmentId,
+    });
+    attachmentId = undefined;
+  } finally {
+    const [{ execDocker }, { removeSandboxContainer }] = await Promise.all([
+      import("../../../../src/agents/sandbox/docker.js"),
+      import("../../../../src/agents/sandbox/manage.js"),
+    ]);
+    for (const runtimeId of runtimes) {
+      try {
+        await removeSandboxContainer(runtimeId);
+      } catch {
+        await execDocker(["rm", "-f", runtimeId], { allowFailure: true });
+      }
+    }
+    if (attachmentId) {
+      const { cleanupMaterializedSubagentAttachments } =
+        await import("../../../../src/agents/subagents/spawn/subagent-attachments.js");
+      await cleanupMaterializedSubagentAttachments({
+        childSessionKey: attachedSessionKey,
+        attachmentId,
+      });
     }
     env.restore();
     await fs.rm(root, { recursive: true, force: true });

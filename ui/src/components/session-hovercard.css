@@ -25,6 +25,18 @@
   padding-block: 12px;
 }
 
+.session-hovercard__automation-link {
+  border-radius: var(--radius-sm);
+  color: inherit;
+  text-decoration: none;
+}
+
+.session-hovercard__automation-link:is(:hover, :focus-visible) {
+  color: var(--text);
+  background: var(--bg-hover);
+  text-decoration: underline;
+}
+
 .session-hovercard__header {
   display: grid;
   width: 100%;
@@ -52,6 +64,42 @@
   white-space: normal;
 }
 
+.session-hovercard__channel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+}
+
+.session-hovercard__channel svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.session-hovercard__conversation {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__section--attribution {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.session-hovercard__attribution-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
 .session-hovercard__attribution {
   display: inline-flex;
   align-items: center;
@@ -77,11 +125,7 @@
   order: -1;
 }
 
-.session-hovercard__attribution-avatars .viewer-facepile {
-  margin-left: var(--session-hovercard-face-gap);
-  transition: margin-left 120ms ease;
-}
-
+.session-hovercard__attribution-avatars .viewer-facepile,
 .session-hovercard__attribution-avatars
   .viewer-facepile
   > openclaw-tooltip:not(:first-child)
@@ -120,7 +164,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--text);
 }
 
-.session-hovercard__no-pr,
 .session-hovercard__more {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -180,19 +223,31 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   border-radius: var(--radius-sm);
 }
 
+.session-hovercard__automation-link,
 .session-hovercard__plan-row,
-.session-hovercard__branch-row,
-.session-hovercard__pr-row {
+.session-hovercard__branch-row {
   grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
 }
 
-.session-hovercard__plan-step {
-  display: block;
+.session-hovercard__plan-step,
+.session-hovercard__branch-action,
+.session-hovercard__branch-label {
   overflow: hidden;
   color: var(--text);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-hovercard__plan-step,
+.session-hovercard__pr-title {
+  display: block;
+}
+
+.session-hovercard__branch-action,
+.session-hovercard__branch-label,
+.session-hovercard__pr-title {
+  min-width: 0;
 }
 
 .session-hovercard__plan-count {
@@ -202,24 +257,34 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   white-space: nowrap;
 }
 
-.session-hovercard__context-icon {
+.session-hovercard__context-icon,
+.session-hovercard__pr-state-icon,
+.session-hovercard__branch-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
+}
+
+.session-hovercard__context-icon {
   align-self: center;
   color: var(--muted);
 }
 
-.session-hovercard__context-icon svg {
-  display: block;
+.session-hovercard__context-icon svg,
+.session-hovercard__pr-state-icon svg,
+.session-hovercard__branch-icon svg {
   width: var(--session-hovercard-context-icon-size);
   height: var(--session-hovercard-context-icon-size);
-  flex: none;
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.session-hovercard__context-icon svg {
+  display: block;
+  flex: none;
 }
 
 .session-hovercard__context-value {
@@ -298,23 +363,15 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   text-decoration: none;
 }
 
-.session-hovercard__branch-action,
-.session-hovercard__branch-label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-hovercard__branch-action {
   text-decoration: none;
 }
 
 .session-hovercard__pr-row {
   margin-inline: calc(-1 * var(--space-2));
-  padding: var(--space-1) var(--space-2);
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
+  align-items: start;
+  padding: var(--space-2);
   border-radius: var(--radius-sm);
   transition: background-color 120ms ease;
 }
@@ -322,24 +379,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 .session-hovercard__pr-row:hover,
 .session-hovercard__pr-row:focus-visible {
   background: var(--bg-hover);
-}
-
-.session-hovercard__pr-state-icon,
-.session-hovercard__branch-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-}
-
-.session-hovercard__pr-state-icon svg,
-.session-hovercard__branch-icon svg {
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-hovercard__diff {
@@ -368,23 +407,13 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   --session-pr-state-color: var(--danger);
 }
 
-.session-hovercard__pr-title {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-hovercard__pr-state-icon {
   color: var(--session-pr-state-color, var(--muted));
 }
 
 .session-hovercard__pr-row .session-hovercard__diff {
   gap: 6px;
-  justify-self: end;
+  margin-left: auto;
   font-size: var(--control-ui-text-xs);
 }
 
@@ -394,18 +423,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__deletions {
   color: var(--danger);
-}
-
-.session-hovercard__no-pr a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
-  text-underline-offset: 2px;
-}
-
-.session-hovercard__branch-row + .session-hovercard__no-pr {
-  margin-top: var(--space-2);
-  padding-left: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
 }
 
 .session-hovercard__excerpt {
@@ -418,6 +435,28 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.session-hovercard__error {
+  display: grid;
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.session-hovercard__error-icon {
+  white-space: normal;
+}
+
+.session-hovercard__error-icon svg {
+  display: block;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
 }
 
 .session-hovercard__notepad {
@@ -450,4 +489,209 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__notepad .session-progress-card__progress progress {
   margin-top: 0;
+}
+
+.session-hovercard__automation-tooltip {
+  --openclaw-tooltip-max-width: min(340px, calc(100dvw - 24px));
+  --openclaw-tooltip-padding: 0;
+}
+
+.session-hovercard__automations {
+  width: min(320px, calc(100dvw - 40px));
+  padding: var(--space-3);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  line-height: 1.5;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.session-hovercard__automation-caption {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-hovercard__automation-detail {
+  margin-top: var(--space-3);
+  min-width: 0;
+}
+
+.session-hovercard__automation-name {
+  margin-bottom: var(--space-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-meta,
+.session-hovercard__automation-message {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-meta[data-running="true"] {
+  color: var(--accent);
+}
+
+.session-hovercard__automation-list {
+  display: grid;
+  gap: var(--space-1);
+  max-height: 140px;
+  margin-top: var(--space-2);
+  overflow: auto;
+}
+
+.session-hovercard__automation-choice {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+
+.session-hovercard__automation-choice small {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__automation-choice:is(:hover, :focus-visible, [aria-pressed="true"]) {
+  background: var(--bg-hover);
+}
+
+.session-hovercard__automation-instructions {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.session-hovercard__automation-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  margin: var(--space-2) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-instructions summary {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__automation-instructions pre {
+  max-height: 180px;
+  margin: var(--space-2) 0;
+  overflow: auto;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__automation-open {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.session-hovercard__automation-open svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-hovercard__automation-error {
+  color: var(--danger);
+  font-size: var(--control-ui-text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* PRs need readable identities without widening ordinary session previews. */
+.session-progress-hovercard:has(.session-hovercard__pr-list) {
+  width: min(380px, calc(100vw - 24px));
+}
+
+.session-hovercard__pr-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block: var(--space-2) var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.session-hovercard__pr-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-hovercard__pr-main {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.session-hovercard__pr-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 550;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__pr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px var(--space-2);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.session-hovercard__pr-number {
+  overflow-wrap: anywhere;
+}
+
+.session-hovercard__pr-state {
+  color: var(--session-pr-state-color);
+}
+
+.session-hovercard__pr-checks {
+  font-size: var(--control-ui-text-xs);
+  color: var(--muted);
+}
+
+.session-hovercard__pr-checks[data-checks="passing"] {
+  color: var(--ok);
+}
+
+.session-hovercard__pr-checks[data-checks="failing"] {
+  color: var(--danger);
+}
+
+.session-hovercard__pr-checks[data-checks="pending"] {
+  color: var(--warn);
 }

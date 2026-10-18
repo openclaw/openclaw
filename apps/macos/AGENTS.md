@@ -1,8 +1,8 @@
 # macOS app
 
-- Native owns device-local capability, the offline Connection window, About, and bridge-opened panels.
-- Dashboard owns all settings UI. Reject new Gateway-data or app-settings UI in Swift.
-- Connection tabs: Connection, Gateways, Debug only while the developer toggle is enabled.
+- Native owns device-local capability, the offline Connection window, its About tab, and bridge-opened panels.
+- Dashboard owns app and Gateway preferences. Keep About native; reject new Gateway-data or app-settings UI in Swift.
+- Connection tabs: Connection, Gateways, About; Debug appears only while the developer toggle is enabled.
 - Device-local settings reach the web only through `openclawDeviceSettings`.
 - Canonical bridge contract: `ui/src/app/native-device-settings.ts`; keep wire keys and types aligned.
 - Native browser tabs reach the web only through `openclawBrowser`; canonical contract: `ui/src/app/native-browser-bridge.ts`; keep wire keys aligned.

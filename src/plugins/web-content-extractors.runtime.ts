@@ -1,9 +1,12 @@
-// Runtime bridge for web content extractors supplied by plugins.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
-import { loadBundledWebContentExtractorEntriesFromDir } from "./web-content-extractor-public-artifacts.js";
-import type { PluginWebContentExtractorEntry } from "./web-content-extractor-types.js";
+import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
+import type {
+  PluginWebContentExtractorEntry,
+  WebContentExtractorPlugin,
+} from "./web-content-extractor-types.js";
 
 export function resolvePluginWebContentExtractors(params?: {
   config?: OpenClawConfig;
@@ -19,9 +22,19 @@ export function resolvePluginWebContentExtractors(params?: {
     onlyPluginIds: params?.onlyPluginIds,
     contract: "webContentExtractors",
   })) {
-    const loaded = loadBundledWebContentExtractorEntriesFromDir({
+    const loaded = loadBundledPublicArtifactEntries({
       dirName: plugin.id,
       pluginId: plugin.id,
+      env: params?.env,
+      owner: plugin,
+      artifactCandidates: ["web-content-extractor.js", "web-content-extractor-api.js"],
+      suffix: "WebContentExtractor",
+      isArtifact: (value): value is WebContentExtractorPlugin =>
+        isRecord(value) &&
+        typeof value.id === "string" &&
+        typeof value.label === "string" &&
+        (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
+        typeof value.extract === "function",
     });
     if (loaded) {
       extractors.push(...loaded);

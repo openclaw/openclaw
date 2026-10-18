@@ -4,6 +4,7 @@ import { INTERNAL_SESSION_PATH_PARAM, pathForRoute, routePageSpec } from "../../
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { preloadSessionMessageSubscriptions } from "../../lib/sessions/session-scoped-operations.ts";
 
 function sessionLoaderDeps(
   face: BoardFace,
@@ -31,25 +32,12 @@ function sessionPage(face: BoardFace) {
     // static face route. Both locations describe the same loader match.
     loaderDeps: (context: ApplicationContext, location: RouteLocation) =>
       sessionLoaderDeps(face, context, location),
-    loader: async (context: ApplicationContext, { location, signal }) => {
-      const { loadChatRoute } = await import("./route-loader.ts");
-      return await loadChatRoute(context, location, face, signal);
+    loader: async (context: ApplicationContext, options) => {
+      // Subscription acquisition owns errors and retries after this speculative load.
+      void preloadSessionMessageSubscriptions().catch(() => undefined);
+      return (await import("./route-loader.ts")).loadSessionPage(context, face, options);
     },
-    component: () =>
-      Promise.all([
-        import("./chat-page.ts"),
-        import("./route-view.ts"),
-        import("../../styles/chat/composer-progress.css"),
-        import("../../styles/chat/composer-queue.css"),
-        import("../../styles/chat/composer-status.css"),
-      ]).then(([, { renderChatRoute, sessionRenderOwnerKey }]) => ({
-        header: true,
-        // ChatPage's bounded inner cache owns per-session teardown, so session
-        // routes share the outer owner while their data and URL keep changing.
-        renderOwnerKey: sessionRenderOwnerKey,
-        retainOnNavigate: true,
-        render: renderChatRoute,
-      })),
+    component: () => import("./route-entry.ts"),
   });
 }
 

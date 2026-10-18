@@ -1,4 +1,3 @@
-// Anthropic Prompt Probe script supports OpenClaw repository automation.
 import { spawn } from "node:child_process";
 // Live prompt probe for Anthropic setup-token and Claude CLI prompt-path debugging.
 // Usage:
@@ -23,70 +22,35 @@ import {
   redactForDevToolLog,
 } from "./lib/dev-tooling-safety.ts";
 import {
+  hasUnjoinedWork,
   inspectManagedProcessGroup,
+  runManagedCommand,
   signalExitCode,
   terminateManagedChild,
 } from "./lib/managed-child-process.mts";
+import { sleep } from "./lib/sleep.mjs";
 
 const TRANSPORT = process.env.OPENCLAW_PROMPT_TRANSPORT?.trim() === "direct" ? "direct" : "gateway";
 const GATEWAY_PROMPT_MODE = "extra";
 const PROMPT_TEXT = process.env.OPENCLAW_PROMPT_TEXT?.trim() ?? "";
 const PROMPT_LIST_JSON = process.env.OPENCLAW_PROMPT_LIST_JSON?.trim() ?? "";
 const USER_PROMPT = process.env.OPENCLAW_USER_PROMPT?.trim() || "is clawd here?";
-const ENABLE_CAPTURE = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_CAPTURE",
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE,
-});
-const INCLUDE_RAW = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_INCLUDE_RAW",
-  raw: process.env.OPENCLAW_PROMPT_INCLUDE_RAW,
-});
-const KEEP_TMP = parseBooleanEnv({
-  fallback: false,
-  name: "OPENCLAW_PROMPT_KEEP_TMP",
-  raw: process.env.OPENCLAW_PROMPT_KEEP_TMP,
-});
+const ENABLE_CAPTURE = readBooleanEnv("OPENCLAW_PROMPT_CAPTURE");
+const INCLUDE_RAW = readBooleanEnv("OPENCLAW_PROMPT_INCLUDE_RAW");
+const KEEP_TMP = readBooleanEnv("OPENCLAW_PROMPT_KEEP_TMP");
 const CLAUDE_BIN = process.env.CLAUDE_BIN?.trim() || "claude";
 const NODE_BIN = process.env.OPENCLAW_NODE_BIN?.trim() || process.execPath;
-const TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 45_000,
-  label: "OPENCLAW_PROMPT_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_TIMEOUT_MS,
-});
-const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
-  fallback: 120_000,
-  label: "OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
-});
-const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
-  fallback: 2 * 1024 * 1024,
-  label: "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
-  min: 1,
-  raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
-});
+const TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_TIMEOUT_MS", 45_000);
+const GATEWAY_TIMEOUT_MS = readPositiveIntegerEnv("OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS", 120_000);
+const CAPTURE_PROXY_MAX_BODY_BYTES = readPositiveIntegerEnv(
+  "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
+  2 * 1024 * 1024,
+);
 const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
 const DIRECT_CLAUDE_ARGS = ["-p", "--append-system-prompt"];
-
-type CaptureSummary = {
-  url?: string;
-  authScheme?: string;
-  xApp?: string;
-  anthropicBeta?: string;
-  systemBlockCount: number;
-  systemBlocks: Array<{ index: number; bytes: number; preview: string }>;
-  containsPromptExact: boolean;
-  bodyContainsPromptExact: boolean;
-  userBytes?: number;
-  userPreview?: string;
-  rawBody?: string;
-};
 
 type PromptResult = {
   prompt: string;
@@ -101,7 +65,7 @@ type PromptResult = {
   stderr?: string;
   error?: string;
   matchedExtraUsage400: boolean;
-  capture?: CaptureSummary;
+  capture?: ReturnType<typeof summarizeCapture>;
   tmpDir?: string;
 };
 
@@ -129,9 +93,16 @@ type StoppableGatewayChild = {
 };
 
 type ClosableLogFile = {
-  appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
+
+function readBooleanEnv(name: string): boolean {
+  return parseBooleanEnv({ fallback: false, name, raw: process.env[name] });
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  return parseStrictIntegerOption({ fallback, label: name, min: 1, raw: process.env[name] });
+}
 
 function toHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value.join(", ") : value;
@@ -145,10 +116,7 @@ function summarizeText(text: string, max = 120): string {
   return `${truncateUtf16Safe(normalized, max - 1)}…`;
 }
 
-function summarizeCapture(
-  capture: ProxyCapture | undefined,
-  prompt: string,
-): CaptureSummary | undefined {
+function summarizeCapture(capture: ProxyCapture | undefined, prompt: string) {
   if (!capture) {
     return undefined;
   }
@@ -273,34 +241,17 @@ async function resolveSetupTokenSource(): Promise<TokenSource> {
     allowKeychainPrompt: false,
   });
   const candidates = listSetupTokenProfiles(store, normalizeProviderId);
-  if (SETUP_TOKEN_PROFILE) {
-    const match = candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE);
-    if (!match) {
-      throw new Error(`setup-token profile not found: ${SETUP_TOKEN_PROFILE}`);
-    }
-    return { profileId: match.id, token: validateSetupToken(match.token) };
-  }
-  const match = pickSetupTokenProfile(candidates);
+  const match = SETUP_TOKEN_PROFILE
+    ? candidates.find((entry) => entry.id === SETUP_TOKEN_PROFILE)
+    : pickSetupTokenProfile(candidates);
   if (!match) {
     throw new Error(
-      "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
+      SETUP_TOKEN_PROFILE
+        ? `setup-token profile not found: ${SETUP_TOKEN_PROFILE}`
+        : "no Anthropics setup-token profile found; set OPENCLAW_LIVE_SETUP_TOKEN_VALUE or OPENCLAW_LIVE_SETUP_TOKEN_PROFILE",
     );
   }
   return { profileId: match.id, token: validateSetupToken(match.token) };
-}
-
-async function sleep(ms: number): Promise<void> {
-  return await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  fallback: () => T,
-): Promise<T> {
-  return await Promise.race([promise, sleep(timeoutMs).then(() => fallback())]);
 }
 
 async function readRequestBody(
@@ -507,13 +458,12 @@ async function startAnthropicProxy(params: {
       for (const socket of sockets) {
         socket.destroy();
       }
-      await withTimeout(
+      await Promise.race([
         new Promise<void>((resolve, reject) => {
           server.close((error) => (error ? reject(error) : resolve()));
         }),
-        1_000,
-        () => undefined,
-      );
+        sleep(1_000),
+      ]);
     },
   };
 }
@@ -535,94 +485,106 @@ async function runDirectPrompt(
   } = {},
 ): Promise<PromptResult> {
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
-  const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
-  const proxy =
-    ENABLE_CAPTURE && proxyPort
-      ? await startAnthropicProxy({
-          port: proxyPort,
-          upstreamBaseUrl: "https://api.anthropic.com",
+  const cancellation = new AbortController();
+  let cleanupConfirmed = true;
+  const parentSignalController = createPromptProbeParentSignalController((exitCode) => {
+    if (cleanupConfirmed) {
+      process.exit(exitCode);
+    } else {
+      process.exitCode = 1;
+    }
+  });
+  const operation = (async (): Promise<PromptResult> => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-probe-"));
+    let proxy: Awaited<ReturnType<typeof startAnthropicProxy>> | undefined;
+    try {
+      cancellation.signal.throwIfAborted();
+      const proxyPort = ENABLE_CAPTURE ? await getFreePort() : undefined;
+      proxy =
+        ENABLE_CAPTURE && proxyPort
+          ? await startAnthropicProxy({
+              port: proxyPort,
+              upstreamBaseUrl: "https://api.anthropic.com",
+              timeoutMs,
+            })
+          : undefined;
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      let exit: { code: number | null; signal: NodeJS.Signals | null } = {
+        code: null,
+        signal: null,
+      };
+      try {
+        await runManagedCommand({
+          bin: options.claudeBin ?? CLAUDE_BIN,
+          args: [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
+            ANTHROPIC_API_KEY: "",
+            ANTHROPIC_API_KEY_OLD: "",
+          },
+          shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
+          requireProcessTreeExit: process.platform !== "win32",
+          signal: cancellation.signal,
           timeoutMs,
-        })
-      : undefined;
-  const parentSignalController = createPromptProbeParentSignalController();
-
+          timeoutKillGraceMs: 0,
+          signalKillGraceMs: 0,
+          abortKillGraceMs: 0,
+          cleanupDrainTimeoutMs: options.shutdownWaitMs ?? 1_500,
+          onReady(child) {
+            child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
+            child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+            child.once("exit", (code, signal) => {
+              exit = { code, signal };
+            });
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof Error) || !("code" in error) || error.code !== "ETIMEDOUT") {
+          throw error;
+        }
+        exit = { code: null, signal: "SIGKILL" };
+      }
+      const joinedStdout = stdout.join("");
+      const joinedStderr = stderr.join("");
+      return {
+        prompt,
+        ok: exit.code === 0 && !matchesExtraUsage400(joinedStdout, joinedStderr),
+        transport: "direct",
+        exitCode: exit.code,
+        signal: exit.signal,
+        stdout: redactForDevToolLog(joinedStdout.trim()) || undefined,
+        stderr: redactForDevToolLog(joinedStderr.trim()) || undefined,
+        matchedExtraUsage400: matchesExtraUsage400(joinedStdout, joinedStderr),
+        capture: summarizeCapture(proxy?.getLastCapture(), prompt),
+        ...promptProbeTmpResult(tmpDir),
+      };
+    } catch (error) {
+      cleanupConfirmed = !hasUnjoinedWork(error);
+      throw error;
+    } finally {
+      await proxy?.stop().catch(() => {});
+      await cleanupPromptProbeTmpDir(tmpDir).catch(() => {});
+    }
+  })();
+  parentSignalController.attach({
+    async stop() {
+      cancellation.abort();
+      await operation;
+    },
+    forceKill() {
+      cancellation.abort();
+    },
+  });
   try {
-    const stdout: string[] = [];
-    const stderr: string[] = [];
-    const child = spawn(
-      options.claudeBin ?? CLAUDE_BIN,
-      [...DIRECT_CLAUDE_ARGS, prompt, USER_PROMPT],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          ...(proxyPort ? { ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}` } : {}),
-          ANTHROPIC_API_KEY: "",
-          ANTHROPIC_API_KEY_OLD: "",
-        },
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
-    child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        child.once("error", reject);
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      },
-    );
-    let stopPromise: Promise<void> | undefined;
-    const stopDirectChild = (signal: NodeJS.Signals = "SIGKILL") => {
-      if (!stopPromise) {
-        terminateManagedChild(child, signal, { useWindowsTaskkill: false });
-        stopPromise = waitForGatewayPromptChildTreeExit(
-          child,
-          options.shutdownWaitMs ?? 1_500,
-        ).then(() => undefined);
-      }
-      return stopPromise;
-    };
-    parentSignalController.attach({
-      stop: stopDirectChild,
-      forceKill: () => {
-        terminateManagedChild(child, "SIGKILL", { useWindowsTaskkill: false });
-      },
-    });
-    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-    const exit = await Promise.race([
-      exitPromise,
-      new Promise<{ code: null; signal: NodeJS.Signals }>((resolve) => {
-        timeoutTimer = setTimeout(() => {
-          void stopDirectChild("SIGKILL").finally(() => {
-            resolve({ code: null, signal: "SIGKILL" });
-          });
-        }, timeoutMs);
-      }),
-    ]).finally(() => {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-      }
-    });
-    const joinedStdout = stdout.join("");
-    const joinedStderr = stderr.join("");
-    return {
-      prompt,
-      ok: exit.code === 0 && !matchesExtraUsage400(joinedStdout, joinedStderr),
-      transport: "direct",
-      exitCode: exit.code,
-      signal: exit.signal,
-      stdout: redactForDevToolLog(joinedStdout.trim()) || undefined,
-      stderr: redactForDevToolLog(joinedStderr.trim()) || undefined,
-      matchedExtraUsage400: matchesExtraUsage400(joinedStdout, joinedStderr),
-      capture: summarizeCapture(proxy?.getLastCapture(), prompt),
-      ...promptProbeTmpResult(tmpDir),
-    };
+    const result = await operation;
+    cancellation.signal.throwIfAborted();
+    return result;
   } finally {
     parentSignalController.dispose();
-    await proxy?.stop().catch(() => {});
-    await cleanupPromptProbeTmpDir(tmpDir).catch(() => {});
   }
 }
 
@@ -699,11 +661,7 @@ async function startGatewayProcess(params: {
       terminateManagedChild(child, "SIGKILL", { useWindowsTaskkill: false });
     },
   });
-  return {
-    async stop(): Promise<boolean> {
-      return await stopOnce();
-    },
-  };
+  return { stop: stopOnce };
 }
 
 async function stopGatewayPromptChild(
@@ -741,7 +699,9 @@ async function stopGatewayPromptChild(
 
 // Arm before spawn so a parent signal is retained until child cleanup can attach.
 // The first signal owns the exit code; later signals only escalate cleanup.
-function createPromptProbeParentSignalController() {
+function createPromptProbeParentSignalController(
+  onComplete: (exitCode: number) => void = (exitCode) => process.exit(exitCode),
+) {
   let attachment: { forceKill(): void; stop(): Promise<unknown> } | undefined;
   let forceKillPending = false;
   let receivedSignal: NodeJS.Signals | undefined;
@@ -773,7 +733,7 @@ function createPromptProbeParentSignalController() {
       .catch(() => undefined)
       .finally(() => {
         dispose();
-        process.exit(exitCode);
+        onComplete(exitCode);
       });
   };
   for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"] satisfies NodeJS.Signals[]) {
@@ -970,7 +930,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
         sessionKey: `agent:main:prompt-probe-${randomUUID()}`,
         idempotencyKey: `idem-${randomUUID()}`,
         message: "Reply with exactly: PROMPT PROBE OK.",
-        ...(GATEWAY_PROMPT_MODE === "extra" ? { extraSystemPrompt: prompt } : {}),
+        extraSystemPrompt: prompt,
         deliver: false,
       },
       timeoutMs: 15_000,

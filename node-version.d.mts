@@ -4,6 +4,8 @@ export type NodeReleaseVersion = {
   patch: number;
 };
 
+export const MINIMUM_BUN_VERSION: NodeReleaseVersion;
+
 export function parseNodeReleaseVersion(value: unknown): NodeReleaseVersion | null;
 export function isNodeVersionAtLeast(
   version: NodeReleaseVersion | null,
@@ -13,6 +15,7 @@ export function isSupportedOpenClawNodeVersion(value: unknown): boolean;
 export const PROCESS_NODE_VERSION_CHECK: string;
 
 export const SUPPORTED_NODE_VERSIONS: string;
+export const SUPPORTED_NODE_VERSION_RANGE: string;
 export function formatUnsupportedNodeVersionMessage(version: string | null): string;
 export function formatUnsupportedNodeDiagnosticWarning(version: string | null): string;
 export function classifyUnsupportedNodeCommand(

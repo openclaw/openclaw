@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createCrablineProviderDelivery } from "./crabline-provider-targets.js";
+import { createCrablineProviderDelivery, resolveDiscordQaId } from "./crabline-provider-targets.js";
 
 describe("Crabline provider target translation", () => {
   it.each([
@@ -31,4 +31,38 @@ describe("Crabline provider target translation", () => {
 
     expect(targets).toEqual([translated]);
   });
+
+  it.each([
+    { source: "thread:/v1/dm/Alice/Topic", kind: "dm", conversation: "Alice", thread: "Topic" },
+    {
+      source: "thread:/v1/group/Room%2FOne/Topic%2FTwo",
+      kind: "group",
+      conversation: "Room/One",
+      thread: "Topic/Two",
+    },
+  ])(
+    "preserves typed Discord target semantics for $source",
+    ({ source, kind, conversation, thread }) => {
+      const targets: string[] = [];
+      const adapter = {
+        channel: "discord",
+        createAgentDelivery: ({ target }: { target: string }) => {
+          targets.push(target);
+          return {
+            channel: "discord",
+            providerTargetKey: "provider-target",
+            replyChannel: "discord",
+            replyTo: "channel:provider-target",
+            to: "channel:provider-target",
+          };
+        },
+      } as const;
+
+      createCrablineProviderDelivery(adapter, source);
+
+      expect(targets).toEqual([
+        `thread:/v1/${kind}/${resolveDiscordQaId(conversation)}/${resolveDiscordQaId(thread)}`,
+      ]);
+    },
+  );
 });

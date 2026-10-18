@@ -1,12 +1,17 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { readSqliteWriterAppVersion } from "../infra/sqlite-schema-header.js";
+import {
+  readSqliteSchemaHeader,
+  readSqliteWriterAppVersion,
+} from "../infra/sqlite-schema-header.js";
+import { readMainTableList } from "../infra/sqlite-strict.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { isValidAgentId } from "../routing/session-key.js";
@@ -17,33 +22,125 @@ import {
   assertCanonicalAgentPersistenceVersion,
   assertOpenClawAgentCurrentRuntimeSchema,
   readExistingAgentSchemaMeta,
+  hasPendingCurrentVersionAgentDatabaseMigration,
+  assertOpenClawAgentSchemaContains,
+  getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
 import type { OpenClawAgentSchemaPreflightResult } from "./openclaw-database-preflight.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 export type AgentSchemaInspectionInput = {
   pathname: string;
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   supportedVersion: number;
   verifyCurrentSchemaShape?: boolean;
   inspectOwnership?: boolean;
   requireStartupMigrationReadiness?: boolean;
+  deferRuntimeIntegrity?: boolean;
+  startupIntegrityVerification?: { verifiedAt: number };
+  inspectEmptyStore?: boolean;
 };
 
 export type AgentSchemaInspection = {
   version: number;
+  integrityGateOutcome?: "cached" | "healthy";
+  preparationPending?: true;
   writerAppVersion?: string;
   reason?: string;
+  failure?: Error;
   agentSchemaMeta?: ExistingAgentSchemaMeta | null;
+  emptyStore?: boolean;
 };
+
+/** Only schema/default index metadata may survive a turn-less first run. */
+function isEmptyAgentStore(
+  database: DatabaseSync,
+  input: AgentSchemaInspectionInput,
+  version: number,
+  metadata: ExistingAgentSchemaMeta | null | undefined,
+): boolean {
+  if (
+    !input.agentId ||
+    metadata?.role !== "agent" ||
+    metadata.agentId !== input.agentId ||
+    metadata.schemaVersion == null ||
+    metadata.schemaVersion !== version ||
+    metadata.schemaVersion < 24 ||
+    metadata.schemaVersion > OPENCLAW_AGENT_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  assertSqliteIntegrity(database, input.pathname);
+  assertOpenClawAgentSchemaContains(
+    database,
+    input.pathname,
+    getOpenClawAgentMigrationSchema(metadata.schemaVersion),
+  );
+  for (const table of readMainTableList(database, { includeInternal: true })) {
+    if (table.type === "shadow" || table.name === "sqlite_schema") {
+      continue;
+    }
+    const name = table.name;
+    if (name.startsWith("sqlite_stat")) {
+      continue;
+    }
+    const allowed =
+      name === "schema_meta"
+        ? "meta_key = 'primary'"
+        : name === "session_key_contract"
+          ? "id = 1 AND updated_at = 0"
+          : name === "memory_index_meta"
+            ? "key = 'memory_index_meta_v1' OR (key = 'memory_vector_rebuild_v1' AND value = 'clean')"
+            : name === "memory_index_state"
+              ? "id = 1 AND revision = 0"
+              : name === "sqlite_sequence"
+                ? "seq = 0"
+                : "0";
+    if (
+      // sqlite-allow-raw -- Catalog-owned identifiers; a bounded existence probe never loads content.
+      database
+        .prepare(
+          `SELECT 1 FROM "${name.replaceAll('"', '""')}" WHERE (${allowed}) IS NOT TRUE LIMIT 1`,
+        )
+        .get()
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /** All facts belong to the caller's single read transaction or private snapshot. */
 export function inspectAgentDatabaseSchema(
   database: DatabaseSync,
   input: AgentSchemaInspectionInput,
 ): AgentSchemaInspection {
+  if (!input.verifyCurrentSchemaShape && !input.requireStartupMigrationReadiness) {
+    try {
+      const { userVersion, ...header } = readSqliteSchemaHeader(
+        database,
+        input.inspectOwnership ? input.supportedVersion : undefined,
+      );
+      return {
+        version: userVersion,
+        ...header,
+        ...(input.inspectEmptyStore
+          ? {
+              emptyStore:
+                userVersion <= input.supportedVersion &&
+                isEmptyAgentStore(database, input, userVersion, header.agentSchemaMeta),
+            }
+          : {}),
+      };
+    } finally {
+      clearNodeSqliteKyselyCacheForDatabase(database);
+    }
+  }
   const version = readSqliteUserVersion(database);
   const inspection: AgentSchemaInspection = { version };
+  let checkingShape = false;
   try {
     if (version > input.supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
@@ -55,7 +152,31 @@ export function inspectAgentDatabaseSchema(
       inspection.agentSchemaMeta = readExistingAgentSchemaMeta(database);
     }
     if (input.requireStartupMigrationReadiness) {
-      assertSqliteIntegrity(database, input.pathname);
+      const migrationPending =
+        version !== input.supportedVersion ||
+        hasPendingCurrentVersionAgentDatabaseMigration(database);
+      if (input.startupIntegrityVerification !== undefined && !migrationPending) {
+        inspection.integrityGateOutcome = "cached";
+      } else if (input.deferRuntimeIntegrity && !migrationPending) {
+        // The pending Gateway owner claims the live lease and validates before writes.
+        inspection.preparationPending = true;
+      } else {
+        assertSqliteIntegrity(
+          database,
+          input.pathname,
+          version < input.supportedVersion
+            ? resolveSchemaMigrationIntegrityCheck({
+                kind: "agent",
+                foundVersion: version,
+                supportedVersion: input.supportedVersion,
+              })
+            : undefined,
+        );
+        inspection.integrityGateOutcome = "healthy";
+      }
+      if (migrationPending && version === input.supportedVersion) {
+        inspection.preparationPending = true;
+      }
       assertCanonicalAgentPersistenceVersion(database, input.pathname, version);
     }
     const agentId =
@@ -68,15 +189,24 @@ export function inspectAgentDatabaseSchema(
       agentId != null &&
       (!input.requireStartupMigrationReadiness || version > 0)
     ) {
-      assertOpenClawAgentDatabaseForMaintenance(database, {
+      checkingShape = true;
+      const needsIndexRepair = assertOpenClawAgentDatabaseForMaintenance(database, {
         agentId,
         pathname: input.pathname,
+        allowStartupIndexRepair: input.requireStartupMigrationReadiness,
       });
+      if (needsIndexRepair) {
+        inspection.preparationPending = true;
+      }
     }
     return inspection;
   } catch (error) {
     if (input.requireStartupMigrationReadiness) {
-      throw error;
+      return {
+        ...inspection,
+        failure: toStringifiedError(error),
+        ...(checkingShape ? { reason: formatErrorMessage(error) } : {}),
+      };
     }
     // Preserve the observed version even when shape validation fails, so Doctor
     // can still report a pending migration alongside the unreadable shape.

@@ -1,0 +1,661 @@
+import { setImmediate } from "node:timers/promises";
+import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import * as recoveryStore from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import * as restartRecovery from "../../agents/main-session-recovery/main-session-restart-recovery.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
+import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  beginSessionWorkAdmission,
+  consumeSessionWorkAdmissionHandoff,
+  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
+  isCompetingSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
+import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { testing } from "./reply-run-registry.test-support.js";
+import { admitTestReplyTurn, createSessionStore } from "./reply-turn-admission.test-support.js";
+
+type Admission = Awaited<ReturnType<typeof admitTestReplyTurn>>;
+const sessionKey = "agent:main:main";
+const sessionId = "interrupted-session";
+const disposals: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const dispose of disposals.splice(0)) {
+    await dispose();
+  }
+  testing.resetReplyRunRegistry();
+  vi.restoreAllMocks();
+});
+function createRecoveryGatewayContext(storePath?: string) {
+  const recoveryRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
+    dispatchSessionMethod: vi.fn(),
+    dispatchAgent: vi.fn(),
+    waitForAgent: vi.fn(),
+    sendRecoveryNotice: vi.fn(),
+  };
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => (storePath ? { session: { store: storePath } } : {});
+  context.recoveryRuntime = recoveryRuntime;
+  context.workerSessionPlacementService = { getMany: () => new Map() };
+  return context;
+}
+function complete(result: Admission | undefined) {
+  if (result?.status === "owned") {
+    result.operation.complete();
+  }
+}
+function owned(result: Admission) {
+  expect(result.status).toBe("owned");
+  if (result.status !== "owned") {
+    throw new Error("Fixture requires an admitted reply operation");
+  }
+  return result;
+}
+function observe(pending: Promise<Admission>) {
+  const outcome: { result?: Admission; failure?: unknown } = {};
+  const settled = pending.then(
+    (result) => {
+      outcome.result = result;
+    },
+    (failure: unknown) => {
+      outcome.failure = failure;
+    },
+  );
+  return Object.assign(outcome, { settled });
+}
+function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
+  const entry: SessionEntry = {
+    sessionId,
+    updatedAt: 100,
+    status: "interrupted",
+    abortedLastRun: true,
+    ...overrides,
+  };
+  const storePath = createSessionStore({ [sessionKey]: entry });
+  const scope = { scope: storePath, identities: [sessionKey, sessionId] };
+  const abort = new AbortController();
+  const pending: Promise<Admission>[] = [];
+  const results: Admission[] = [];
+  const cleanup: (() => void | Promise<void>)[] = [];
+  disposals.push(async () => {
+    abort.abort();
+    for (const release of cleanup) {
+      await release();
+    }
+    results.forEach(complete);
+    for (const admission of pending) {
+      complete(await admission.catch(() => undefined));
+    }
+  });
+  const admit = (request: Partial<Parameters<typeof admitTestReplyTurn>[0]> = {}) => {
+    const admission = admitTestReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      ...request,
+    });
+    pending.push(admission);
+    void admission.then(
+      (result) => results.push(result),
+      () => {},
+    );
+    return admission;
+  };
+  const begin = async (request: Partial<Parameters<typeof beginSessionWorkAdmission>[0]> = {}) => {
+    const lease = await beginSessionWorkAdmission({
+      ...scope,
+      assertAllowed: () => {},
+      ...request,
+    });
+    cleanup.push(async () => {
+      lease.release();
+      await lease.released;
+    });
+    return lease;
+  };
+  return {
+    entry,
+    storePath,
+    scope,
+    abort,
+    cleanup,
+    admit,
+    begin,
+    wait: (request: Parameters<typeof admit>[0]) =>
+      observe(admit({ upstreamAbortSignal: abort.signal, ...request })),
+    read: () => loadSessionEntry({ storePath, sessionKey }),
+    write: (value: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, value),
+  };
+}
+
+it("keeps new input and followups behind a concurrent recovery winner", async () => {
+  const delivery = {
+    restartRecoveryDeliveryRunId: "old-channel-claim",
+    restartRecoveryDeliverySourceRunId: "old-channel-source",
+  };
+  const f = recoveryFixture({
+    ...delivery,
+    restartRecoveryDeliveryContext: { channel: "discord", to: "synthetic-channel" },
+    restartRecoverySourceIngress: "channel",
+  });
+  const context = createRecoveryGatewayContext();
+  const resolveGatewayContext = () => ({ ...context });
+  const root = await f.begin({ resolveGatewayContext });
+  let recoveryLease: SessionWorkAdmissionLease | undefined;
+  const retry = vi
+    .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
+    .mockImplementationOnce(async (request) => {
+      expect(request).toMatchObject({
+        expectedSessionId: sessionId,
+        expectedRecoveryRunId: "old-channel-claim",
+        lane: "main",
+        expectedRecoverySourceRunId: "old-channel-source",
+        gatewayRuntime: context.recoveryRuntime,
+      });
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(root.isActive()).toBe(true);
+      const owner = await f.begin({
+        owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+        resolveGatewayContext,
+      });
+      recoveryLease = consumeSessionWorkAdmissionHandoff({
+        handoffId: owner.createHandoff(),
+        ...f.scope,
+      });
+      expect(recoveryLease).toBe(owner);
+      await owner.run(() => {
+        expect(isCompetingSessionWorkAdmissionActive(f.storePath, [sessionKey, sessionId])).toBe(
+          false,
+        );
+        return runExclusiveSessionLifecycleMutation("recover", {
+          ...f.scope,
+          run: () =>
+            f.write({
+              ...f.entry,
+              abortedLastRun: false,
+              restartRecoveryRuns: [
+                {
+                  runId: "old-channel-claim",
+                  lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                },
+              ],
+            }),
+        });
+      });
+      return { started: 0, settled: 0, failed: 0, skipped: 1 };
+    });
+  const visible = await root.run(() => f.admit({ resolveGatewayContext, waitForActive: false }));
+  expect(visible.status).toBe("owned");
+  expect(retry).toHaveBeenCalledOnce();
+  expect(f.read()).toMatchObject(delivery);
+  expect(f.read()?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+  expect(
+    getSessionWorkAdmissionOwnerRelease({
+      ...f.scope,
+      owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
+    }),
+  ).toBeDefined();
+  complete(visible);
+  root.release();
+  let followupSettled = false;
+  const followup = f.admit({
+    resolveGatewayContext,
+    kind: "queued_followup",
+    upstreamAbortSignal: f.abort.signal,
+  });
+  void followup.then(() => {
+    followupSettled = true;
+  });
+  await setImmediate();
+  expect(followupSettled).toBe(false);
+  await f.write({ sessionId, updatedAt: Date.now(), status: "done" });
+  recoveryLease?.release();
+  expect((await followup).status).toBe("owned");
+  expect(retry).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { kind: "queued_followup", failed: false },
+  { kind: "visible", failed: true },
+] as const)(
+  "settles or defers $kind input according to recovery failure: $failed",
+  async ({ kind, failed }) => {
+    const f = recoveryFixture({
+      restartRecoveryDeliveryRunId: "interrupted-claim",
+      restartRecoveryDeliverySourceRunId: "interrupted-source",
+    });
+    const context = createRecoveryGatewayContext();
+    const retryEntered = createDeferred();
+    const retry = vi
+      .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
+      .mockImplementation(async () => {
+        retryEntered.resolve();
+        return { started: 0, settled: 0, failed: failed ? 1 : 0, skipped: failed ? 0 : 1 };
+      });
+    const outcome = f.wait({ resolveGatewayContext: () => context, kind });
+    await Promise.race([
+      retryEntered.promise,
+      outcome.settled.then(() => {
+        throw new Error("Admission settled before recovery dispatch");
+      }),
+    ]);
+    expect(retry).toHaveBeenCalledOnce();
+    expect(retry.mock.calls[0]?.[0].lane).toBe(kind === "visible" ? "main" : undefined);
+    await setImmediate();
+    expect(f.read()).toMatchObject(f.entry);
+    expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    if (failed) {
+      await outcome.settled;
+      expect(outcome.failure).toMatchObject({
+        message: expect.stringMatching(/restart recovery failed/i),
+      });
+      expect(outcome.result).toBeUndefined();
+    } else {
+      expect(outcome.failure).toBeUndefined();
+      await outcome.settled;
+      expect(outcome.result).toEqual({ status: "skipped", reason: "active-run" });
+    }
+    expect(retry).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["started", "cancelled", "replaced"] as const)(
+  "waits for reserved startup recovery before visible input: %s",
+  async (outcome) => {
+    const f = recoveryFixture({
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    });
+    const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
+    const admission = f.wait({ waitForActive: false });
+    await setImmediate();
+    expect(admission.failure).toBeUndefined();
+    expect(admission.result).toBeUndefined();
+    expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    if (outcome === "cancelled") {
+      f.abort.abort();
+    } else {
+      await f.write({
+        ...f.entry,
+        sessionId: outcome === "replaced" ? "replacement-session" : sessionId,
+        abortedLastRun: false,
+      });
+    }
+    await admission.settled;
+    if (outcome === "replaced") {
+      expect(admission.failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(admission.result).toBeUndefined();
+    } else {
+      expect(admission.failure).toBeUndefined();
+      expect(admission.result).toMatchObject(
+        outcome === "started" ? { status: "owned" } : { status: "skipped", reason: "aborted" },
+      );
+    }
+    // Starting recovery wakes visible input before the recovered turn completes.
+    expect(owner.isActive()).toBe(true);
+  },
+);
+
+it("preserves live recovery authority while monitoring", async () => {
+  const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
+  const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
+  let released = false;
+  void owner.released.then(() => {
+    released = true;
+  });
+  const result = await f.admit({ kind: "heartbeat" });
+  expect(result).toMatchObject({ status: "skipped", reason: "active-run" });
+  expect(released).toBe(false);
+  expect(f.read()?.sessionId).toBe(sessionId);
+  owner.release();
+  await owner.released;
+});
+
+it.each(["settled", "cancelled", "replaced"] as const)(
+  "keeps visible input behind an admitted recovery fence until %s",
+  async (outcome) => {
+    const f = recoveryFixture({
+      status: undefined,
+      abortedLastRun: false,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1 },
+      restartRecoveryRuns: [
+        { runId: "admitted-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+      ],
+    });
+    const predecessor = await f.begin();
+    const stored = f.read();
+    const attempted = createDeferred();
+    const claim = recoveryStore.claimMainSessionRecoveryOwner;
+    vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
+      const result = await claim(params);
+      attempted.resolve();
+      return result;
+    });
+    const context = createRecoveryGatewayContext(f.storePath);
+    const admission = f.wait({ resolveGatewayContext: () => context, waitForActive: false });
+    await attempted.promise;
+    await setImmediate();
+    expect(admission.failure).toBeUndefined();
+    expect(admission.result).toBeUndefined();
+    expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+    expect(f.read()).toEqual(stored);
+    if (outcome === "cancelled") {
+      f.abort.abort();
+    } else {
+      await f.write({
+        sessionId: outcome === "replaced" ? "replacement-session" : sessionId,
+        updatedAt: Date.now(),
+        status: "done",
+      });
+    }
+    predecessor.release();
+    await admission.settled;
+    if (outcome === "replaced") {
+      expect(admission.failure).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+      expect(admission.result).toBeUndefined();
+    } else {
+      expect(admission.failure).toBeUndefined();
+      expect(admission.result).toMatchObject(
+        outcome === "settled" ? { status: "owned" } : { status: "skipped", reason: "aborted" },
+      );
+    }
+  },
+);
+
+it("rejects command adoption without waiting behind a live recovery fence", async () => {
+  const f = recoveryFixture({
+    status: undefined,
+    abortedLastRun: false,
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 0 },
+    restartRecoveryRuns: [
+      { runId: "active-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ],
+  });
+  const context = createRecoveryGatewayContext(f.storePath);
+  await f.begin();
+  const blocker = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  blocker.setPhase("running");
+  const sourceKey = "agent:main:discord:slash:source";
+  const reservation = createReplyOperation({
+    sessionKey: sourceKey,
+    sessionId: "source-session",
+    resetTriggered: false,
+  });
+  bindGatewayContextResolver(reservation, () => context);
+  f.cleanup.push(
+    () => blocker.complete(),
+    () => reservation.complete(),
+  );
+  const before = f.read();
+  const attempted = createDeferred();
+  const claim = recoveryStore.claimMainSessionRecoveryOwner;
+  vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
+    const result = await claim(params);
+    attempted.resolve();
+    return result;
+  });
+  const admission = f.wait({
+    sessionId: reservation.sessionId,
+    waitForActive: false,
+    adoptOperation: reservation,
+  });
+  await attempted.promise;
+  await setImmediate();
+  expect(admission.failure).toMatchObject({
+    code: "SESSION_WORK_START_CHANGED",
+  });
+  expect(admission.result).toBeUndefined();
+  expect(replyRunRegistry.get(sessionKey)).toBe(blocker);
+  expect(replyRunRegistry.get(sourceKey)).toBe(reservation);
+  expect(reservation.key).toBe(sourceKey);
+  expect(reservation.result).toBeNull();
+  expect(f.read()).toEqual(before);
+});
+
+it("reconciles an orphaned recovery fence before admitting channel input", async () => {
+  const f = recoveryFixture({
+    status: undefined,
+    abortedLastRun: false,
+    mainRestartRecovery: { cycleId: "cycle-1", revision: 1, chargedAttempts: 1 },
+    restartRecoveryRuns: [
+      { runId: "admitted-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ],
+    restartRecoveryDeliveryRunId: "old-channel-claim",
+    restartRecoveryDeliverySourceRunId: "old-channel-source",
+  });
+  const context = createRecoveryGatewayContext(f.storePath);
+  const retry = vi
+    .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
+    .mockImplementationOnce(async (request) => {
+      expect(request.expectedRecoverySourceRunId).toBe("old-channel-source");
+      expect(f.read()).toMatchObject({
+        sessionId,
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: "old-channel-source",
+      });
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      await f.write({ sessionId, updatedAt: Date.now(), status: "done" });
+      return { started: 1, settled: 0, failed: 0, skipped: 0 };
+    });
+  owned(await f.admit({ resolveGatewayContext: () => context }));
+  expect(retry).toHaveBeenCalledOnce();
+});
+
+async function busyReply(withRecoveryFence = true) {
+  const fixture = recoveryFixture({ status: undefined, abortedLastRun: false });
+  const reply = owned(await fixture.admit());
+  const replyReleased = getSessionWorkAdmissionRelease(fixture.scope);
+  if (!replyReleased) {
+    throw new Error("Reply admission must retain its lifecycle lease");
+  }
+  const target = {
+    sessionAgentId: "main",
+    isNewSession: false,
+    sessionId,
+    sessionKey,
+    storePath: fixture.storePath,
+  };
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const fence = [{ runId: "busy-reply", lifecycleGeneration }];
+  if (withRecoveryFence) {
+    await fixture.write({
+      ...fixture.entry,
+      restartRecoveryRuns: fence,
+      restartRecoveryDeliveryRunId: "busy-reply",
+    });
+  }
+  const commands: Promise<unknown>[] = [];
+  type Command = Parameters<typeof runWithAgentCommandRecoveryOwner<typeof target, string>>[0];
+  return {
+    target,
+    controller: fixture.abort,
+    fence,
+    read: fixture.read,
+    finish: async (retainFence = false) => {
+      if (!retainFence) {
+        await fixture.write({ ...fixture.entry, status: "done" });
+      }
+      reply.operation.complete();
+      await replyReleased;
+    },
+    gateway: () => fixture.begin(),
+    command: (runId: string, overrides: Partial<Command> = {}) => {
+      const command = runWithAgentCommandRecoveryOwner({
+        lifecycleGeneration,
+        mode: "claim",
+        opts: { message: runId, runId, abortSignal: fixture.abort.signal },
+        prepare: async () => target,
+        run: async () => runId,
+        ...overrides,
+      });
+      commands.push(command);
+      void command.catch(() => {});
+      return command;
+    },
+    cleanup: async () => {
+      fixture.abort.abort();
+      reply.operation.complete();
+      await Promise.allSettled(commands);
+      await replyReleased;
+    },
+  };
+}
+
+function pauseCommandClaim(
+  runId: string,
+  release?: Promise<void>,
+  kind: "invalidated" | "not_required" = "invalidated",
+) {
+  const rejected = createDeferred();
+  const claim = recoveryStore.claimMainSessionRecoveryOwner;
+  vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner").mockImplementation(async (params) => {
+    const result = await claim(params);
+    if (params.runId === runId && result.kind === kind) {
+      rejected.resolve();
+      await release;
+    }
+    return result;
+  });
+  return rejected.promise;
+}
+
+it.for(["recovery fence", "worker-owned input"] as const)(
+  "keeps two accepted commands in FIFO order behind a reply with %s",
+  async (ownership, { signal }) => {
+    const withRecoveryFence = ownership === "recovery fence";
+    const fixture = await busyReply(withRecoveryFence);
+    const refresh = createDeferred();
+    const refreshing = createDeferred();
+    const secondPrepared = createDeferred();
+    const rejected = pauseCommandClaim(
+      "first",
+      undefined,
+      withRecoveryFence ? "invalidated" : "not_required",
+    );
+    const order: string[] = [];
+    let preparations = 0;
+    try {
+      // Both accepted RPCs hold outer admissions; the second command depends on the first.
+      const firstGateway = await fixture.gateway();
+      const secondGateway = await fixture.gateway();
+      const first = firstGateway.run(() =>
+        fixture.command("first", {
+          prepare: async () => {
+            if (++preparations === 2) {
+              refreshing.resolve();
+              await refresh.promise;
+            }
+            return fixture.target;
+          },
+          run: async () => {
+            order.push("first");
+            return "first";
+          },
+        }),
+      );
+      void first.catch(() => {});
+      await withinTest(
+        awaitGateBeforeSettlement(rejected, first, "Command skipped the busy claim"),
+        signal,
+      );
+      const second = secondGateway.run(() =>
+        fixture.command("second", {
+          prepare: async () => {
+            secondPrepared.resolve();
+            return fixture.target;
+          },
+          run: async () => {
+            order.push("second");
+            return "second";
+          },
+        }),
+      );
+      void second.catch(() => {});
+      await withinTest(secondPrepared.promise, signal);
+      expect(order).toEqual([]);
+      await fixture.finish();
+      await withinTest(
+        awaitGateBeforeSettlement(
+          refreshing.promise,
+          first,
+          "Command did not refresh after the reply",
+        ),
+        signal,
+      );
+      expect(order).toEqual([]);
+      refresh.resolve();
+      await expect(withinTest(Promise.all([first, second]), signal)).resolves.toEqual([
+        "first",
+        "second",
+      ]);
+      expect(order).toEqual(["first", "second"]);
+    } finally {
+      refresh.resolve();
+      await fixture.cleanup();
+    }
+  },
+);
+
+it.for(["cancelled", "retained fence"] as const)(
+  "does not execute the waiting command after %s",
+  async (outcome, { signal }) => {
+    const fixture = await busyReply();
+    const rejected = pauseCommandClaim("waiting");
+    const run = vi.fn(async () => "ran");
+    try {
+      const command = fixture.command("waiting", { run });
+      await withinTest(
+        awaitGateBeforeSettlement(rejected, command, "Command skipped the busy claim"),
+        signal,
+      );
+      if (outcome === "cancelled") {
+        fixture.controller.abort();
+      } else {
+        await fixture.finish(true);
+      }
+      await expect(withinTest(command, signal)).rejects.toMatchObject(
+        outcome === "cancelled" ? { name: "AbortError" } : { code: "SESSION_WORK_START_CHANGED" },
+      );
+      expect(run).not.toHaveBeenCalled();
+      expect(fixture.read()?.restartRecoveryRuns).toEqual(fixture.fence);
+    } finally {
+      await fixture.cleanup();
+    }
+  },
+);
+
+it("keeps the reply release captured before its durable claim returns", async ({ signal }) => {
+  const fixture = await busyReply();
+  const returnClaim = createDeferred();
+  const rejected = pauseCommandClaim("racing", returnClaim.promise);
+  const run = vi.fn(async () => "ran");
+  try {
+    const command = fixture.command("racing", { run });
+    await withinTest(
+      awaitGateBeforeSettlement(rejected, command, "Command skipped the busy claim"),
+      signal,
+    );
+    await fixture.finish();
+    returnClaim.resolve();
+    await expect(withinTest(command, signal)).resolves.toBe("ran");
+    expect(run).toHaveBeenCalledOnce();
+  } finally {
+    returnClaim.resolve();
+    await fixture.cleanup();
+  }
+});

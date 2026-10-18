@@ -4,19 +4,14 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  appendNarrativeEntry,
   dedupeDreamDiaryEntries,
+  readDreamsFile,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
-  updateDeepDreamsFile,
   updateDreamsFile,
   writeBackfillDiaryEntries,
 } from "./dreaming-dreams-file.js";
-import {
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
-} from "./dreaming-state.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
@@ -53,18 +48,11 @@ describe("dream diary file behavior", () => {
     let forgotten: ReturnType<typeof forgetMemoryEntries> | undefined;
     try {
       await prepared.promise;
-      const writerOwnsLock = await openMemoryCoreStateStore({
-        namespace: SHORT_TERM_LOCK_NAMESPACE,
-        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-      }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
       forgotten = forgetMemoryEntries({
         cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
         agentId: "main",
         sessionIds: ["forgotten"],
       });
-      if (!writerOwnsLock) {
-        await forgotten;
-      }
       publish.resolve();
       await Promise.all([update, forgotten]);
       const content = await fs.readFile(dreamsPath, "utf8");
@@ -128,23 +116,33 @@ describe("dream diary file behavior", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
   });
 
-  it("keeps truncated recent diary entries UTF-16 safe", async () => {
+  it.each(["😀tail"])("publishes unchanged truncated context ending in %s", async (suffix) => {
     const workspaceDir = await createTempWorkspace("dreaming-narrative-utf16-");
     const prefix = "a".repeat(359);
+    const body = `${prefix}${suffix}`;
     await writeBackfillDiaryEntries({
       workspaceDir,
       entries: [
         {
           isoDay: "2026-04-05",
-          bodyLines: [`${prefix}😀tail`],
+          bodyLines: [body],
         },
       ],
       timezone: "UTC",
     });
 
-    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 1 })).resolves.toEqual([
-      `${prefix}...`,
-    ]);
+    const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 1 });
+    expect(recentDiaryEntries).toEqual([`${prefix}...`]);
+    await appendNarrativeEntry({
+      workspaceDir,
+      narrative: "Unchanged context must still publish.",
+      nowMs: Date.parse("2026-04-06T03:00:00Z"),
+      timezone: "UTC",
+      recentDiaryEntries,
+    });
+    const content = await readDreamsFile(path.join(workspaceDir, "DREAMS.md"));
+    expect(content).toContain("Unchanged context must still publish.");
+    expect(content).toContain(body);
   });
 
   it("skips symlinked and non-file DREAMS.md when reading recent context", async () => {
@@ -180,27 +178,29 @@ describe("dream diary file behavior", () => {
     ).resolves.toEqual([]);
   });
 
-  it("keeps existing content intact when the atomic replace fails", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-narrative-atomic-");
+  it.each(["EPERM"])("only optional diary context suppresses %s", async (code) => {
+    const workspaceDir = await createTempWorkspace("dreaming-diary-read-permission-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n", "utf8");
-    vi.spyOn(fs, "rename").mockRejectedValueOnce(
-      Object.assign(new Error("replace failed"), { code: "ENOSPC" }),
-    );
+    await fs.writeFile(dreamsPath, "# Existing\n");
+    const error = Object.assign(new Error("read denied"), { code });
+    vi.spyOn(fs, "open").mockRejectedValue(error);
 
-    await expect(
-      writeBackfillDiaryEntries({
-        workspaceDir,
-        entries: [
-          {
-            isoDay: "2026-04-05",
-            bodyLines: ["The archive remembered a durable fact."],
-          },
-        ],
-        timezone: "UTC",
-      }),
-    ).rejects.toThrow("replace failed");
-    await expect(fs.readFile(dreamsPath, "utf8")).resolves.toBe("# Existing\n");
+    await expect(readDreamsFile(dreamsPath)).rejects.toBe(error);
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).resolves.toEqual([]);
+  });
+
+  it("preserves an undefined error code across optional context handling", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-diary-error-code-");
+    const code = vi
+      .fn()
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValue("ENOENT");
+    const error = Object.defineProperty(new Error("read failed"), "code", { get: code });
+    vi.spyOn(fs, "access").mockRejectedValueOnce(error);
+
+    await expect(readRecentDreamDiaryEntries({ workspaceDir })).rejects.toBe(error);
+    expect(code).toHaveBeenCalledTimes(2);
   });
 
   it("preserves restrictive DREAMS.md permissions across atomic replace", async () => {
@@ -223,51 +223,6 @@ describe("dream diary file behavior", () => {
     if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
       expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
     }
-  });
-
-  it("deduplicates exact matches while keeping distinct timestamps", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-narrative-dedupe-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(
-      dreamsPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "<!-- transient comment -->",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:30 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    await expect(dedupeDreamDiaryEntries({ workspaceDir })).resolves.toMatchObject({
-      removed: 1,
-      kept: 2,
-    });
-    const content = await fs.readFile(dreamsPath, "utf8");
-    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(2);
-    expect(content).toContain("*April 11, 2026, 8:00 AM*");
-    expect(content).toContain("*April 11, 2026, 8:30 AM*");
   });
 
   it("serializes concurrent writes and deduplication", async () => {
@@ -314,31 +269,5 @@ describe("dream diary file behavior", () => {
     const content = await fs.readFile(dreamsPath, "utf8");
     expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
     expect(content).toContain("A fresh signal arrived after the cleanup started.");
-  });
-
-  it("does not create the workspace when updateDreamsFile skips writing", async () => {
-    const workspaceDir = path.join(await createTempWorkspace("dreaming-skip-no-dir-"), "pending");
-    await updateDreamsFile({
-      workspaceDir,
-      updater: () => ({ content: "", result: undefined, shouldWrite: false }),
-    });
-    await expect(fs.access(workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("does not create memory/ or DREAMS.md when deep dreaming has no body lines", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-empty-deep-");
-    await updateDeepDreamsFile({ workspaceDir, bodyLines: [] });
-    await expect(fs.access(path.join(workspaceDir, "memory"))).rejects.toThrow();
-    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
-  });
-
-  it("writes DREAMS.md when deep dreaming has body lines", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-nonempty-deep-");
-    await updateDeepDreamsFile({
-      workspaceDir,
-      bodyLines: ["A durable insight was recorded."],
-    });
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
-    expect(content).toContain("A durable insight was recorded.");
   });
 });

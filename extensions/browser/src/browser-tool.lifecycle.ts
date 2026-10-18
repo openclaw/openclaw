@@ -1,6 +1,8 @@
-/** Browser tool lifecycle and host-local profile discovery/import actions. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
+import type { BrowserLifecycleAction } from "./browser-tool-action-facts.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";
 import {
   browserDoctor,
@@ -10,9 +12,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
-  jsonResult,
-  normalizeOptionalString,
-} from "./browser-tool.runtime.js";
+} from "./browser/client.js";
 import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 
 const unavailableSystemProfiles = (unavailableReason: string) => ({
@@ -76,7 +76,7 @@ export async function executeBrowserLifecycleAction({
   sandboxBridgeUrl,
   signal,
 }: {
-  action: "doctor" | "status" | "start" | "stop" | "profiles" | "importprofile";
+  action: BrowserLifecycleAction;
   input: Record<string, unknown>;
   baseUrl?: string;
   profile?: string;
@@ -86,42 +86,18 @@ export async function executeBrowserLifecycleAction({
   sandboxBridgeUrl?: string;
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  const readBrowserStatus = async () =>
-    proxyRequest
-      ? await proxyRequest({
-          method: "GET",
-          path: "/",
-          profile,
-          timeoutMs: toolTimeoutMs,
-        })
-      : await browserStatus(baseUrl, {
-          profile,
-          timeoutMs: toolTimeoutMs,
-          signal,
-        });
   switch (action) {
     case "doctor":
-      return jsonResult(
-        proxyRequest
-          ? await proxyRequest({ method: "GET", path: "/doctor", profile })
-          : await browserDoctor(baseUrl, { profile, signal }),
-      );
+      return jsonResult(await browserDoctor(proxyRequest ?? baseUrl, { profile, signal }));
     case "status":
-      return jsonResult(await readBrowserStatus());
     case "start":
     case "stop": {
-      if (proxyRequest) {
-        await proxyRequest({
-          method: "POST",
-          path: `/${action}`,
-          profile,
-          timeoutMs: toolTimeoutMs,
-        });
-      } else {
+      const options = { profile, timeoutMs: toolTimeoutMs, signal };
+      if (action !== "status") {
         const updateBrowser = action === "start" ? browserStart : browserStop;
-        await updateBrowser(baseUrl, { profile, timeoutMs: toolTimeoutMs, signal });
+        await updateBrowser(proxyRequest ?? baseUrl, options);
       }
-      return jsonResult(await readBrowserStatus());
+      return jsonResult(await browserStatus(proxyRequest ?? baseUrl, options));
     }
     case "profiles": {
       // Importable system profiles are host-local (import runs on the host),
@@ -134,23 +110,16 @@ export async function executeBrowserLifecycleAction({
           timeoutMs: toolTimeoutMs,
           signal,
         });
-      if (proxyRequest) {
-        const result = await proxyRequest({
-          method: "GET",
-          path: "/profiles",
-          timeoutMs: toolTimeoutMs,
-        });
-        return jsonResult({
-          ...(result && typeof result === "object" ? result : { profiles: result }),
-          systemProfiles,
-          ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
-        });
-      }
+      const result = proxyRequest
+        ? await proxyRequest({ method: "GET", path: "/profiles", timeoutMs: toolTimeoutMs })
+        : {
+            profiles: await browserProfiles(baseUrl, {
+              timeoutMs: toolTimeoutMs,
+              signal,
+            }),
+          };
       return jsonResult({
-        profiles: await browserProfiles(baseUrl, {
-          timeoutMs: toolTimeoutMs,
-          signal,
-        }),
+        ...(result && typeof result === "object" ? result : { profiles: result }),
         systemProfiles,
         ...(systemProfilesUnavailable ? { systemProfilesUnavailable } : {}),
       });

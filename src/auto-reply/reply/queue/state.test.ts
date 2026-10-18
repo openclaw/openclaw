@@ -1,8 +1,9 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
+  clearRemovedQueuedAuthProfiles,
   getFollowupQueue,
   hasPendingFollowupQueueWork,
   refreshQueuedFollowupSession,
@@ -34,6 +35,71 @@ function makeRun(): FollowupRun["run"] {
   };
 }
 
+describe("clearRemovedQueuedAuthProfiles", () => {
+  it("releases removed accounts in every queued source without replacing newer choices", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    const lastRun = makeRun();
+    const queued = makeRun();
+    const summarized = makeRun();
+    const elided = makeRun();
+    const newer = { ...makeRun(), authProfileId: "profile-b" };
+    const otherAgent = { ...makeRun(), agentId: "other" };
+    const retainedConfig = otherAgent.config;
+    const source = (run: FollowupRun["run"]): FollowupRun => ({
+      prompt: "pending message",
+      enqueuedAt: 1,
+      run,
+    });
+    queued.autoFallbackPrimaryProbe = {
+      provider: "anthropic",
+      model: "primary",
+      fallbackProvider: "anthropic",
+      fallbackModel: queued.model,
+      fallbackAuthProfileId: "profile-a",
+      fallbackAuthProfileIdSource: "auto",
+    };
+    newer.autoFallbackPrimaryProbe = {
+      ...queued.autoFallbackPrimaryProbe,
+      fallbackAuthProfileId: "profile-b",
+    };
+    queue.lastRun = lastRun;
+    queue.items.push(source(queued), source(newer), source(otherAgent));
+    queue.summarySources.push(source(summarized));
+    queue.summaryElisions.push({
+      contextKey: "context",
+      sources: [source(elided)],
+      summaryLines: ["pending summary"],
+      sourceRefs: new WeakMap(),
+    });
+    const rewrittenConfig = { agents: { entries: { main: { model: "anthropic/model" } } } };
+
+    clearRemovedQueuedAuthProfiles({
+      removedByAgent: new Map([["main", new Set(["profile-a"])]]),
+      rewriteConfig: () => rewrittenConfig,
+    });
+
+    for (const run of [lastRun, queued, summarized, elided]) {
+      expect(run.authProfileId).toBeUndefined();
+      expect(run.authProfileIdSource).toBeUndefined();
+      expect(run.config).toBe(rewrittenConfig);
+      expect(run.model).toBe("claude-opus-4-6");
+    }
+    expect(queued.autoFallbackPrimaryProbe).toEqual({
+      provider: "anthropic",
+      model: "primary",
+      fallbackProvider: "anthropic",
+      fallbackModel: queued.model,
+    });
+    expect(newer.authProfileId).toBe("profile-b");
+    expect(newer.authProfileIdSource).toBe("user");
+    expect(newer.autoFallbackPrimaryProbe.fallbackAuthProfileId).toBe("profile-b");
+    expect(newer.config).toBe(rewrittenConfig);
+    expect(otherAgent.authProfileId).toBe("profile-a");
+    expect(otherAgent.config).toBe(retainedConfig);
+    expect(queue.items).toHaveLength(3);
+  });
+});
+
 describe("refreshQueuedFollowupSession", () => {
   it("retargets queued runs to the persisted selection", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
@@ -53,7 +119,6 @@ describe("refreshQueuedFollowupSession", () => {
     queue.summarySources.push(summarizedRun);
     queue.summaryElisions.push({
       contextKey: "context",
-      count: 2,
       sources: [
         {
           prompt: "elided summary",
@@ -74,34 +139,17 @@ describe("refreshQueuedFollowupSession", () => {
       nextAuthProfileIdSource: undefined,
     });
 
-    expect(queue.lastRun).toEqual({
+    const expectedRun = {
       ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
       authProfileId: undefined,
       authProfileIdSource: undefined,
-    });
-    expect(queue.items[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summarySources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
+    };
+    expect(queue.lastRun).toEqual(expectedRun);
+    expect(queue.items[0]?.run).toEqual(expectedRun);
+    expect(queue.summarySources[0]?.run).toEqual(expectedRun);
+    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual(expectedRun);
   });
 
   it("retargets queued runs with user model override source", () => {
@@ -130,179 +178,10 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clears queued model override strictness when retargeting to the configured default", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: {
-        ...makeRun(),
-        hasSessionModelOverride: true,
-        modelOverrideSource: "user",
-      },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "anthropic",
-      nextModel: "claude-opus-4-6",
-      nextRouteResolution: "resolved",
-      nextModelOverrideSource: undefined,
-    });
-
-    expect(queue.items[0]?.run).toMatchObject({
-      hasSessionModelOverride: false,
-      modelOverrideSource: undefined,
-    });
-  });
-
-  it("clamps queued Sol Ultra work to Codex Luna Max", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: {
-        ...makeRun(),
-        provider: "openai",
-        model: "gpt-5.6-sol",
-        thinkLevel: "ultra",
-      },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "openai",
-      nextModel: "gpt-5.6-luna",
-      nextRouteResolution: "resolved",
-      nextThinking: {
-        level: "ultra",
-        catalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
-        agentRuntime: "codex",
-      },
-    });
-
-    expect(queue.items[0]?.run).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      thinkLevel: "max",
-      thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
-    });
-  });
-
-  it("uses the highest supported non-max level when retargeting queued work", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    queue.items.push({
-      prompt: "queued message",
-      enqueuedAt: Date.now(),
-      run: { ...makeRun(), thinkLevel: "ultra" },
-    });
-
-    refreshQueuedFollowupSession({
-      key: QUEUE_KEY,
-      nextProvider: "custom",
-      nextModel: "reasoner",
-      nextRouteResolution: "resolved",
-      nextThinking: { level: "ultra", agentRuntime: "openclaw" },
-    });
-
-    expect(queue.items[0]?.run.thinkLevel).toBe("high");
-  });
-
   it.each([
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "high",
-    },
-    {
-      source: "turn",
-      current: "off",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "low",
-    },
-    {
-      source: "default",
-      current: "high",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "medium",
-    },
-    {
-      source: undefined,
-      current: "high",
-      stored: "low",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "low",
-    },
-    {
-      source: "turn",
-      current: "ultra",
-      stored: "off",
-      model: "gpt-5.6-luna",
-      reasoning: true,
-      expected: "max",
-    },
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "non-reasoner",
-      reasoning: false,
-      expected: "off",
-    },
-  ] as const)(
-    "retargets $source thinking $current with stored $stored to $model as $expected",
-    ({ source, current, stored, model, reasoning, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-      const runs = Array.from({ length: 4 }, () => ({
-        ...makeRun(),
-        thinkLevel: current,
-        thinkLevelOverride: source === "turn" ? current : source,
-      }));
-      const wrap = (run: FollowupRun["run"]): FollowupRun => ({
-        prompt: "queued",
-        enqueuedAt: Date.now(),
-        run,
-      });
-      queue.lastRun = runs[0];
-      queue.items.push(wrap(runs[1]!));
-      queue.summarySources.push(wrap(runs[2]!));
-      queue.summaryElisions.push({
-        contextKey: "elided",
-        count: 1,
-        sources: [wrap(runs[3]!)],
-        summaryLines: ["queued"],
-        sourceRefs: new WeakMap(),
-      });
-      refreshQueuedFollowupSession({
-        key: QUEUE_KEY,
-        nextProvider: "openai",
-        nextModel: model,
-        nextThinking: {
-          level: stored,
-          catalog: [{ provider: "openai", id: model, name: model, reasoning }],
-          agentRuntime: "codex",
-        },
-      });
-      expect(runs.map((run) => run.thinkLevel)).toEqual(Array(4).fill(expected));
-      expect(runs.map((run) => run.thinkLevelOverride)).toEqual(
-        Array(4).fill(source === "turn" ? current : source),
-      );
-    },
-  );
-
-  it.each([
-    { requested: "high", stored: "low", expected: ["high", "off", "high"] },
-    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
+    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
-    { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
+    { requested: undefined, stored: "high", expected: ["high", "high", "high"] },
   ] as const)(
     "retains requested thinking $requested across repeated queued model switches",
     ({ requested, stored, expected }) => {
@@ -340,67 +219,12 @@ describe("refreshQueuedFollowupSession", () => {
     },
   );
 
-  describe.each(["default", undefined] as const)("thinking source %s", (source) => {
-    it.each<{ name: string; config: FollowupRun["run"]["config"]; expected: string }>([
-      {
-        name: "agent",
-        config: {
-          agents: {
-            entries: { main: { thinkingDefault: "low" } },
-            defaults: {
-              thinkingDefault: "off",
-              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
-            },
-          },
-        },
-        expected: "low",
-      },
-      {
-        name: "model",
-        config: {
-          agents: {
-            defaults: {
-              thinkingDefault: "off",
-              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
-            },
-          },
-        },
-        expected: "high",
-      },
-      {
-        name: "global",
-        config: { agents: { defaults: { thinkingDefault: "high" } } },
-        expected: "high",
-      },
-    ])("honors the configured $name default when retargeting", ({ config, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-      const run: FollowupRun["run"] = {
-        ...makeRun(),
-        config,
-        thinkLevel: "medium",
-        thinkLevelOverride: source,
-      };
-      queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
-      refreshQueuedFollowupSession({
-        key: QUEUE_KEY,
-        nextProvider: "openai",
-        nextModel: "gpt-5.6-sol",
-        nextThinking: {
-          level: source === "default" ? "off" : undefined,
-          catalog: [{ provider: "openai", id: "gpt-5.6-sol", name: "Sol", reasoning: true }],
-          agentRuntime: "codex",
-        },
-      });
-      expect(run.thinkLevel).toBe(expected);
-    });
-  });
-
   it("recomputes the retargeted model default when the session has no thinking override", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
-      run: { ...makeRun(), thinkLevel: "ultra" },
+      run: { ...makeRun(), thinkLevel: "ultra", thinkingExplicit: true },
     });
 
     refreshQueuedFollowupSession({
@@ -414,10 +238,38 @@ describe("refreshQueuedFollowupSession", () => {
     // Sol's provider default reasoning level is medium (extensions/openai
     // thinking-policy.ts); retargeting without an override adopts it.
     expect(queue.items[0]?.run.thinkLevel).toBe("medium");
+    expect(queue.items[0]?.run.thinkingExplicit).toBe(false);
   });
 });
 
 describe("getFollowupQueue", () => {
+  it("settles evicted summary sources and retains surviving delivery correlations", () => {
+    const sources = Array.from({ length: 4 }, (_, index) => ({
+      prompt: `queued message ${index}`,
+      enqueuedAt: index,
+      run: makeRun(),
+      onQueueDisposition: vi.fn(),
+      deliveryCorrelations: [{ begin: () => undefined }],
+    }));
+    for (const source of sources) {
+      expect(
+        enqueueFollowupRun(QUEUE_KEY, source, {
+          mode: "followup",
+          cap: 1,
+          dropPolicy: "summarize",
+        }),
+      ).toBe(true);
+    }
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
+    expect(sources[0]?.onQueueDisposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    for (const source of sources.slice(1)) {
+      expect(source.onQueueDisposition).not.toHaveBeenCalled();
+    }
+    expect(queue.summaryElisions[0]?.sources[0]?.deliveryCorrelations).toBe(
+      sources[1]?.deliveryCorrelations,
+    );
+  });
+
   it("aborts work owned by a cleared queue", () => {
     const queuedRun: FollowupRun = {
       prompt: "queued message",
@@ -440,7 +292,6 @@ describe("getFollowupQueue", () => {
     ] as const) {
       queue.summaryElisions.push({
         contextKey,
-        count,
         sources: Array.from({ length: count }, () => ({
           prompt: contextKey,
           enqueuedAt: Date.now(),

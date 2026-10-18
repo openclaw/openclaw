@@ -1,7 +1,8 @@
-import {
-  resolveSessionTranscriptReadTarget,
-  type SessionTranscriptReadScope,
-} from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
+import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 
 export type ResolvedTranscriptReadTarget = {
   agentId?: string;
@@ -11,10 +12,27 @@ export type ResolvedTranscriptReadTarget = {
   storePath?: string;
 };
 
-export function resolveTranscriptReadTarget(
+export async function resolveTranscriptReadTarget(
   scope: SessionTranscriptReadScope,
-): ResolvedTranscriptReadTarget {
-  const target = resolveSessionTranscriptReadTarget(scope);
+): Promise<ResolvedTranscriptReadTarget> {
+  const memory = captureSessionActorTranscriptRead(scope);
+  const target =
+    memory?.target ??
+    (() => {
+      const prepared = prepareSessionTranscriptReadTargetCore(
+        scope,
+        resolveSessionStorePathForScope,
+      );
+      // This descriptor only needs canonical key spelling; the transcript reader owns validation.
+      return {
+        agentId: prepared.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: prepared.entryValidationScope
+          ? resolveSqliteSessionKey(prepared.entryValidationScope.sessionKey, prepared.agentId)
+          : prepared.sessionKey,
+        storePath: prepared.storePath,
+      };
+    })();
   return {
     agentId: target.agentId,
     sessionFile: target.sessionKey ?? target.sessionId,
@@ -25,7 +43,7 @@ export function resolveTranscriptReadTarget(
 }
 
 export function toTranscriptReadScope(
-  target: ResolvedTranscriptReadTarget,
+  target: Pick<ResolvedTranscriptReadTarget, "agentId" | "sessionId" | "sessionKey" | "storePath">,
 ): SessionTranscriptReadScope {
   return {
     ...(target.agentId ? { agentId: target.agentId } : {}),

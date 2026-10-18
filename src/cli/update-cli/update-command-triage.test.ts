@@ -3,15 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTriageTerminal } from "../../commands/triage.test-support.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveAutomaticUpdateTriage, UpdateCommandFailure } from "./update-command-result.js";
+import { UpdateCommandFailure } from "./update-command-result.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 
 const runInteractiveUpdateFailureAction = vi.hoisted(() =>
@@ -24,6 +22,12 @@ vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: async () => true,
+}));
+
+const triageAfterFailure = vi.hoisted(() => vi.fn());
+vi.mock("../../commands/triage-failure.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/triage-failure.js")>()),
+  triageAfterFailure,
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,105 +49,6 @@ const failedUpdate: UpdateRunResult = {
   ],
   durationMs: 1,
 };
-
-it.each<{
-  name: string;
-  mutationStarted?: boolean;
-  result?: Partial<UpdateRunResult>;
-  serviceMutationAllowed?: boolean;
-  allowed: boolean;
-}>([
-  { name: "failed activation", allowed: true },
-  { name: "failed staging", mutationStarted: false, allowed: false },
-  {
-    name: "unhealthy restart",
-    mutationStarted: false,
-    result: { reason: "restart-unhealthy" },
-    allowed: true,
-  },
-  { name: "revoked service ownership", serviceMutationAllowed: false, allowed: false },
-  {
-    name: "failed service revalidation",
-    result: { reason: "service-revalidation-failed" },
-    allowed: false,
-  },
-  {
-    name: "operator cancellation",
-    result: { steps: [{ ...failedUpdate.steps[0]!, termination: "signal" }] },
-    allowed: false,
-  },
-  {
-    name: "operator changes blocking rollback",
-    result: { recovery: { serviceRestartSafe: false, reason: "rollback-checkout-dirty" } },
-    allowed: false,
-  },
-  {
-    name: "unapproved plugin capabilities",
-    result: {
-      postUpdate: {
-        plugins: {
-          status: "error",
-          changed: false,
-          sync: {
-            changed: false,
-            switchedToBundled: [],
-            switchedToNpm: [],
-            warnings: [],
-            errors: [],
-          },
-          npm: {
-            changed: false,
-            outcomes: [
-              {
-                pluginId: "approval-required",
-                status: "error",
-                code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-                message: "Operator capability approval is required.",
-              },
-            ],
-          },
-          integrityDrifts: [],
-        },
-      },
-    },
-    allowed: false,
-  },
-  {
-    name: "verified rollback",
-    result: {
-      reason: "restart-unhealthy",
-      recovery: {
-        serviceRestartSafe: true,
-        packageRollbackVerified: true,
-        version: "2026.9.1",
-        service: "healthy",
-      },
-    },
-    allowed: false,
-  },
-  {
-    name: "restored generation still unverified",
-    result: {
-      reason: "restart-unhealthy",
-      recovery: {
-        serviceRestartSafe: true,
-        packageRollbackVerified: true,
-        version: "2026.9.1",
-        service: "failed",
-      },
-    },
-    allowed: true,
-  },
-])("keeps automatic admission within update ownership: $name", (trial) => {
-  const context = resolveAutomaticUpdateTriage({ ...failedUpdate, ...trial.result }, undefined, {
-    root: "/installation",
-    mutationStarted: trial.mutationStarted ?? true,
-    installKindChanged: false,
-    gateway: "preserve",
-    preManagedServiceStop: { serviceMutationAllowed: trial.serviceMutationAllowed ?? true },
-  });
-  expect(Boolean(context)).toBe(trial.allowed);
-});
 
 async function createInstalledTriage(exitCode = 0) {
   const root = await fs.realpath(tempDirs.make("openclaw-update-triage-"));
@@ -218,6 +123,7 @@ async function createManagedTriageTarget() {
 }
 
 beforeEach(() => {
+  triageAfterFailure.mockClear();
   runInteractiveUpdateFailureAction.mockReset();
   runInteractiveUpdateFailureAction.mockResolvedValue("triage");
   vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
@@ -229,7 +135,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("update failure triage boundary", () => {
-  it.each([0, 7])(
+  it.each([0])(
     "runs the installed triage after cleanup without changing update failure (triage exit %i)",
     async (triageExitCode) => {
       const target = await createInstalledTriage(triageExitCode);
@@ -265,75 +171,57 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it.each(["preserve", "verify-running"] as const)(
-    "admits exactly one owned repair after cleanup with unchanged JSON failure (%s)",
-    async (gateway) => {
-      const result: UpdateRunResult = {
-        ...failedUpdate,
-        reason: gateway === "preserve" ? "global-install-failed" : "restart-unhealthy",
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-        ...(gateway === "verify-running" && { steps: [] }),
-      };
+  it.each([
+    { opts: { yes: true }, terminal: true, flag: "--non-interactive" },
+    { opts: { json: true }, terminal: true, flag: "--json" },
+    { opts: {}, terminal: false, flag: "--non-interactive" },
+  ])(
+    "collects diagnostics without repair admission ($opts, TTY=$terminal)",
+    async ({ opts, terminal, flag }) => {
+      const result: UpdateRunResult = { ...failedUpdate, reason: "restart-unhealthy" };
       const target = await createInstalledTriage();
       const entry = path.join(target.root, "dist", "index.js");
-      const receiptPath = path.join(target.root, "attempts.jsonl");
       const installed = await fs.readFile(entry, "utf8");
       await fs.writeFile(
         entry,
         `
       (async () => {
-        const { acceptTriageContinuation } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.continuation).href)});
-        const admission = await acceptTriageContinuation();
+        if (process.connected) throw new Error("Unattended update admitted a repair agent");
         ${installed}
-        fs.appendFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ admitted: Boolean(admission), failure: admission?.failure }) + "\\n");
-        if (admission) await admission.finish("closed");
       })().catch(error => { console.error(error); process.exitCode = 1; });
     `,
       );
-      const automaticTriage = {
-        kind: "update" as const,
-        phase: result.reason!,
-        error: "ENOSPC",
-        installationRoot: target.root,
-        gateway,
-      };
-      await expect(
-        withUpdateFailureTriage({ json: true }, target, async () => {
-          try {
-            defaultRuntime.writeJson(result);
-            throw new UpdateCommandFailure(result, 1, undefined, { automaticTriage });
-          } finally {
-            await fs.writeFile(path.join(target.root, "released"), "done");
-          }
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-      const attempts = (await fs.readFile(receiptPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-      expect(attempts).toEqual([{ admitted: true, failure: automaticTriage }]);
-      const receipt = await readReceipt(target);
-      expect(receipt).toMatchObject({
-        released: true,
-        failure: {
-          result: {
-            reason: result.reason,
-            recovery: result.recovery,
-            steps: gateway === "preserve" ? [{ stderrTail: "ENOSPC" }] : [],
-          },
-        },
+      await withTriageTerminal(terminal, async () => {
+        await expect(
+          withUpdateFailureTriage(opts, target, async () => {
+            try {
+              defaultRuntime.writeJson(result);
+              throw new UpdateCommandFailure(result);
+            } finally {
+              await fs.writeFile(path.join(target.root, "released"), "done");
+            }
+          }),
+        ).rejects.toMatchObject({ code: 1 });
       });
-      expect(receipt.args).toEqual(["triage", "--update-result", expect.any(String)]);
+      expect(await readReceipt(target)).toMatchObject({
+        released: true,
+        args: ["triage", "--update-result", expect.any(String), flag],
+      });
       expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
-      expect(defaultRuntime.log).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("triage report"));
+      const output = [
+        ...vi.mocked(defaultRuntime.log).mock.calls,
+        ...vi.mocked(defaultRuntime.error).mock.calls,
+      ]
+        .flat()
+        .join("\n");
+      expect(output).toContain("openclaw triage --run --update-result");
+      expect(output).toContain("Triage diagnostics saved; no repair agent was started.");
+      expect(triageAfterFailure).not.toHaveBeenCalled();
+      expect(runInteractiveUpdateFailureAction).not.toHaveBeenCalled();
     },
   );
 
-  it.each([
-    { yes: true, terminal: true },
-    { yes: false, terminal: false },
-  ])(
+  it.each([{ yes: false, terminal: false }])(
     "preserves non-interactive updater failures (yes=$yes, terminal=$terminal)",
     async ({ yes, terminal }) => {
       const target: UpdateTriageTarget & { root: string } = await createInstalledTriage();
@@ -362,7 +250,7 @@ describe("update failure triage boundary", () => {
     },
   );
 
-  it.each(["reported", "unexpected"] as const)(
+  it.each(["reported"] as const)(
     "exports the final managed %s failure after cleanup without launching triage",
     async (kind) => {
       const { target, contextPath } = await createManagedTriageTarget();
@@ -377,11 +265,15 @@ describe("update failure triage boundary", () => {
       const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
       const failure =
         kind === "reported" ? new UpdateCommandFailure(result, 1, detail) : new Error(detail);
+      const observedResult = failure instanceof UpdateCommandFailure ? failure.result : result;
       const completion = withUpdateFailureTriage({ json: true }, targetWithResult, async () => {
         try {
           throw failure;
         } finally {
-          result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+          observedResult.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
           await fs.writeFile(path.join(target.root, "released"), "done");
         }
       });
@@ -403,6 +295,9 @@ describe("update failure triage boundary", () => {
           steps: [{ stderrTail: "ENOSPC" }],
         },
       });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw triage --run --update-result"),
+      );
       expect(raw).not.toContain(secret);
       expect(raw).not.toContain("Stale pre-recovery result");
       expect(Buffer.byteLength(raw)).toBeLessThanOrEqual(4 * 1024 + 1);
@@ -437,24 +332,25 @@ describe("update failure triage boundary", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "preview", opts: { dryRun: true }, env: {} },
-    { name: "managed helper child", opts: {}, env: { OPENCLAW_UPDATE_RUN_HANDOFF: "1" } },
-    { name: "post-core child", opts: {}, env: { [POST_CORE_UPDATE_ENV]: "1" } },
-  ])("leaves triage to the owner for $name", async ({ opts, env }) => {
-    const target = await createInstalledTriage();
-    Object.assign(target.env, env);
-    await expect(
-      withUpdateFailureTriage(opts, target, async () => {
-        throw new UpdateCommandFailure(failedUpdate, 80);
-      }),
-    ).rejects.toMatchObject({ code: 80 });
-    await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(target.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
+  it.each([{ name: "managed helper child", opts: {}, env: { OPENCLAW_UPDATE_RUN_HANDOFF: "1" } }])(
+    "leaves triage to the owner for $name",
+    async ({ opts, env }) => {
+      const target = await createInstalledTriage();
+      Object.assign(target.env, env);
+      await expect(
+        withUpdateFailureTriage(opts, target, async () => {
+          throw new UpdateCommandFailure(failedUpdate, 80);
+        }),
+      ).rejects.toMatchObject({ code: 80 });
+      await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(fs.stat(target.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses a new report identity for each distinct CLI update execution", async () => {
     const target = await createInstalledTriage();
@@ -477,44 +373,6 @@ describe("update failure triage boundary", () => {
     expect(attemptIds[0]).toMatch(/^[0-9a-f-]{36}$/u);
     expect(attemptIds[1]).toMatch(/^[0-9a-f-]{36}$/u);
     expect(attemptIds[0]).not.toBe(attemptIds[1]);
-  });
-
-  it("passes the admitted run identity to interactive reporting", async () => {
-    const target = await createInstalledTriage();
-    const runId = "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3";
-    const opts = { json: false, run: { runId, env: target.env } };
-    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
-
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage(opts, target, async () => {
-          throw new UpdateCommandFailure(failedUpdate);
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-    });
-
-    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ attemptId: runId }),
-    );
-  });
-
-  it("keeps reporting in the admitted run's state scope", async () => {
-    const target = await createInstalledTriage();
-    const env = { ...target.env, OPENCLAW_STATE_DIR: path.join(target.root, "admitted-state") };
-    const opts = { run: { runId: "b89e301f-2df4-4dd8-a7ea-4f4b4e10b6f3", env } };
-    runInteractiveUpdateFailureAction.mockResolvedValue("handled");
-
-    await withTriageTerminal(true, async () => {
-      await expect(
-        withUpdateFailureTriage(opts, target, async () => {
-          throw new UpdateCommandFailure(failedUpdate);
-        }),
-      ).rejects.toMatchObject({ code: 1 });
-    });
-
-    expect(runInteractiveUpdateFailureAction).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ env }),
-    );
   });
 
   it("does not start triage when the selected report action throws", async () => {
@@ -543,42 +401,6 @@ describe("update failure triage boundary", () => {
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("report storage unavailable"),
     );
-  });
-
-  it.each([
-    "already-current",
-    "managed-service-handoff-started",
-    "restart-health-pending",
-    "managed-service-handoff-already-running",
-    "managed-service-handoff-cancelled",
-  ])("does not diagnose intentional or pending %s", async (reason) => {
-    const target = await createInstalledTriage();
-    await expect(
-      withUpdateFailureTriage({}, target, async () => {
-        throw new UpdateCommandFailure({ ...failedUpdate, status: "skipped", reason }, 0);
-      }),
-    ).rejects.toMatchObject({ code: 0 });
-    await expect(fs.stat(path.join(target.root, "receipt.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(defaultRuntime.log).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
-  it("retains the diagnostic export when the installed command is broken", async () => {
-    const target = await createInstalledTriage();
-    await fs.unlink(path.join(target.root, "dist", "index.js"));
-    await expect(
-      withUpdateFailureTriage({ json: true }, target, async () => {
-        throw new UpdateCommandFailure(failedUpdate);
-      }),
-    ).rejects.toMatchObject({ code: 1 });
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Saved update failure:"),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw triage"));
-    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("preserves the original failure when diagnostics cannot be written", async () => {

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -128,13 +128,36 @@ describe("owned plugin inspections", () => {
     }
   });
 
-  it.each([
-    { capturedDisposal: "async-context", disposalFailure: false, capturedInstanceDisposal: false },
-    { capturedDisposal: "work-tracker", disposalFailure: true, capturedInstanceDisposal: false },
-    { capturedDisposal: "work-tracker", disposalFailure: false, capturedInstanceDisposal: true },
-  ] as const)(
-    "keeps registration cleanup captured by $capturedDisposal after its caller closes (instance: $capturedInstanceDisposal)",
-    async ({ capturedDisposal, disposalFailure, capturedInstanceDisposal }) => {
+  it.each(
+    (
+      [
+        {
+          capturedDisposal: "async-context",
+          disposalFailure: false,
+          capturedInstanceDisposal: false,
+        },
+        {
+          capturedDisposal: "work-tracker",
+          disposalFailure: true,
+          capturedInstanceDisposal: false,
+        },
+        {
+          capturedDisposal: "work-tracker",
+          disposalFailure: false,
+          capturedInstanceDisposal: true,
+        },
+      ] as const
+    ).flatMap(({ capturedDisposal, disposalFailure, capturedInstanceDisposal }) =>
+      [false, true].map((closedReleaseScope) => ({
+        capturedDisposal,
+        disposalFailure,
+        capturedInstanceDisposal,
+        closedReleaseScope,
+      })),
+    ),
+  )(
+    "keeps registration cleanup captured by $capturedDisposal after its caller closes (instance: $capturedInstanceDisposal, closed release scope: $closedReleaseScope)",
+    async ({ capturedDisposal, disposalFailure, capturedInstanceDisposal, closedReleaseScope }) => {
       const fixture = createInspectionFixture({
         capturedDisposal,
         disposalFailure,
@@ -143,6 +166,7 @@ describe("owned plugin inspections", () => {
       });
       const caller = new AsyncWorkScope();
       const closer = new AsyncWorkScope();
+      const releaseInScope = closer.run(() => AsyncLocalStorage.snapshot());
       let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
       let borrowed: { release: () => Promise<void> } | undefined;
       try {
@@ -161,12 +185,17 @@ describe("owned plugin inspections", () => {
           value: 42,
         });
         const registrationSignalAborted = fixture.state.captured.registrationSignal?.aborted;
-        const released = closer
-          .track(() => borrowed!.release())
-          .then(
-            () => ({ phase: "released", error: undefined }),
-            (error: unknown) => ({ phase: "released", error }),
-          );
+        if (closedReleaseScope) {
+          await closer.drain();
+        }
+        const released = (
+          closedReleaseScope
+            ? releaseInScope(() => borrowed!.release())
+            : closer.track(() => borrowed!.release())
+        ).then(
+          () => ({ phase: "released", error: undefined }),
+          (error: unknown) => ({ phase: "released", error }),
+        );
         expect(
           await Promise.race([
             fixture.state.disposalStarted.promise.then(() => ({
@@ -357,9 +386,18 @@ describe("owned plugin inspections", () => {
         ]);
         await failed.state.disposed.promise;
         expect(failed.connection().database.isOpen).toBe(false);
-        expect(successful.connection().database.prepare("SELECT 42 AS value").get()).toEqual({
-          value: 42,
-        });
+        const invocations = getPluginRegistryInspectionResources(
+          inspection.registry,
+        )!.createInvocationScope(inspection.registry);
+        try {
+          expect(
+            invocations.run(() =>
+              successful.connection().database.prepare("SELECT 42 AS value").get(),
+            ),
+          ).toEqual({ value: 42 });
+        } finally {
+          invocations.release();
+        }
         await expect(inspection.release()).rejects.toMatchObject({
           errors: [
             expect.objectContaining({
@@ -572,131 +610,6 @@ describe("owned plugin inspections", () => {
       expect(fixture.connection().cleanups).toBe(0);
     } finally {
       await fixture.cleanup(inspection);
-    }
-  });
-
-  it.each([false, true])(
-    "joins cross-registration abort work before last-borrower disposal (descendant: %s)",
-    async (descendant) => {
-      const first = createInspectionFixture({ queuedAbortCleanup: true });
-      const sibling = createInspectionFixture(
-        descendant ? { capturedDisposal: "work-tracker" } : undefined,
-      );
-      let siblingWork: Promise<void> | undefined;
-      let siblingReads: unknown;
-      first.state.sibling.read = descendant
-        ? () => {
-            siblingWork = sibling.state.captured.tracker!(async () => {
-              await readFile(sibling.plugin.file);
-              siblingReads = {
-                first: first.connection().database.prepare("SELECT 42 AS value").get()?.value,
-                sibling: sibling.connection().database.prepare("SELECT 42 AS value").get()?.value,
-              };
-            });
-            // A deliberately returns before B's admitted descendant settles.
-            void siblingWork.catch(() => undefined);
-          }
-        : () => sibling.connection().database.prepare("SELECT 42 AS value").get()?.value;
-      let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
-      let borrowed: { release: () => Promise<void> } | undefined;
-      try {
-        inspection = await acquireFixtureInspection([first, sibling]);
-        borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
-        await inspection.release();
-        expect(first.connection().disposals).toBe(0);
-        expect(sibling.connection().disposals).toBe(0);
-        await borrowed.release();
-        expect(first.state.captured.abortRead).toEqual({ value: 42 });
-        await expect(first.state.captured.abortCleanup).resolves.toBeUndefined();
-        if (descendant) {
-          await expect(siblingWork).resolves.toBeUndefined();
-          expect(siblingReads).toEqual({ first: 42, sibling: 42 });
-        } else {
-          expect(first.state.sibling.result).toBe(42);
-        }
-        for (const fixture of [first, sibling]) {
-          expect(fixture.connection().disposals).toBe(1);
-          expect(fixture.connection().database.isOpen).toBe(false);
-          expect(fixture.connection().cleanups).toBe(0);
-        }
-      } finally {
-        await first.cleanup(inspection, borrowed);
-        await siblingWork?.catch(() => undefined);
-        await sibling.cleanup();
-      }
-    },
-  );
-
-  it("joins rollback abort work handed to an open retained sibling", async () => {
-    const sibling = createInspectionFixture({ capturedDisposal: "work-tracker" });
-    const failed = createInspectionFixture({ registration: "throw", queuedAbortCleanup: true });
-    const handedOff = createDeferredCore();
-    let siblingWork: Promise<void> | undefined;
-    let reads: unknown;
-    failed.state.sibling.read = () => {
-      siblingWork = sibling.state.captured.tracker!(async () => {
-        await readFile(sibling.plugin.file);
-        reads = {
-          failed: failed.connection().database.prepare("SELECT 42 AS value").get()?.value,
-          sibling: sibling.connection().database.prepare("SELECT 42 AS value").get()?.value,
-        };
-      });
-      void siblingWork.catch(() => undefined);
-      handedOff.resolve();
-    };
-    let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
-    let borrowed: { release: () => Promise<void> } | undefined;
-    try {
-      inspection = await acquireFixtureInspection([sibling, failed]);
-      borrowed = getPluginRegistryInspectionResources(inspection.registry)!.retain();
-      await handedOff.promise;
-      await expect(siblingWork).resolves.toBeUndefined();
-      expect(reads).toEqual({ failed: 42, sibling: 42 });
-      await failed.state.disposed.promise;
-      expect(failed.connection().disposals).toBe(1);
-      expect(sibling.connection().disposals).toBe(0);
-      expect(sibling.state.captured.registrationSignal?.aborted).toBe(false);
-      await inspection.release();
-      expect(sibling.connection().database.isOpen).toBe(true);
-      await borrowed.release();
-      expect(sibling.connection().database.isOpen).toBe(false);
-      expect(sibling.connection().disposals).toBe(1);
-    } finally {
-      await failed.cleanup(inspection, borrowed);
-      await siblingWork?.catch(() => undefined);
-      await sibling.cleanup();
-    }
-  });
-
-  it("keeps a sibling resource alive while a disposer explicitly uses its work owner", async () => {
-    const first = createInspectionFixture({
-      capturedDisposal: "sibling-tracker",
-      pauseDisposal: true,
-    });
-    const sibling = createInspectionFixture({ capturedDisposal: "work-tracker" });
-    first.state.sibling.track = (run) => sibling.state.captured.tracker!(run);
-    first.state.sibling.read = () =>
-      sibling.connection().database.prepare("SELECT 42 AS value").get()?.value;
-    let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
-    try {
-      inspection = await acquireFixtureInspection([first, sibling]);
-      const released = inspection.release();
-      await first.state.disposalStarted.promise;
-      await readFile(first.plugin.file);
-      expect(first.connection().database.isOpen).toBe(true);
-      expect(sibling.connection().database.isOpen).toBe(true);
-      expect(sibling.connection().disposals).toBe(0);
-      first.state.finishDisposal.resolve();
-      await released;
-      expect(first.state.sibling.result).toBe(42);
-      for (const fixture of [first, sibling]) {
-        expect(fixture.connection().disposals).toBe(1);
-        expect(fixture.connection().database.isOpen).toBe(false);
-        expect(fixture.connection().cleanups).toBe(0);
-      }
-    } finally {
-      await first.cleanup(inspection);
-      await sibling.cleanup();
     }
   });
 

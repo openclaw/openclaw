@@ -1,5 +1,3 @@
-// Google plugin module implements embedding batch behavior.
-import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
@@ -12,6 +10,7 @@ import {
   withRemoteHttpResponse,
   type EmbeddingBatchExecutionParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   assertOkOrThrowProviderError,
   createProviderOperationDeadline,
@@ -21,15 +20,16 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isValidGeminiEmbeddingValues,
   sanitizeGeminiEmbedding,
   type GeminiEmbeddingClient,
-  type GeminiTextEmbeddingRequest,
+  type GeminiEmbeddingRequest,
 } from "./embedding-provider.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
 
 type GeminiBatchRequest = {
   custom_id: string;
-  request: GeminiTextEmbeddingRequest;
+  request: GeminiEmbeddingRequest;
 };
 
 type GeminiBatchOperation = {
@@ -52,9 +52,9 @@ type GeminiBatchOutputLine = {
   key?: string;
   custom_id?: string;
   request_id?: string;
-  embedding?: { values?: number[] };
+  embedding?: { values?: unknown };
   response?: {
-    embedding?: { values?: number[] };
+    embedding?: { values?: unknown };
     error?: { message?: string };
   };
   error?: { message?: string };
@@ -76,10 +76,6 @@ function bindGeminiBatchAuth(client: GeminiEmbeddingClient): GeminiEmbeddingClie
       ...client.headers,
     },
   };
-}
-
-function hashText(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
 }
 
 function getGeminiBatchFileUrl(
@@ -309,15 +305,14 @@ function applyGeminiBatchOutputLine(params: {
     params.errors.push(`${customId}: ${error}`);
     return;
   }
-  const embedding = sanitizeGeminiEmbedding(
-    params.line.embedding?.values ?? params.line.response?.embedding?.values ?? [],
-    params.expectedDimensions,
-  );
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  const values = params.line.embedding?.values ?? params.line.response?.embedding?.values;
+  if (!isValidGeminiEmbeddingValues(values)) {
+    const reason =
+      values == null || (Array.isArray(values) && values.length === 0) ? "empty" : "invalid";
+    params.errors.push(`${customId}: ${reason} embedding`);
     return;
   }
-  params.byCustomId.set(customId, embedding);
+  params.byCustomId.set(customId, sanitizeGeminiEmbedding(values, params.expectedDimensions));
 }
 
 async function fetchGeminiBatchOutput(params: {

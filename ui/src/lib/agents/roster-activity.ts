@@ -16,7 +16,18 @@ export function agentRosterCards(
   if (!roster) {
     return [];
   }
-  return selectableAgentsList(roster).agents.map((agent) => {
+  const agents = selectableAgentsList(roster).agents;
+  if (agents.length === 0) {
+    return [];
+  }
+  const sessionsByAgent = new Map<string, GatewaySessionRow[]>();
+  rows.forEach((row) => {
+    const agentId = resolveUiSessionRowAgentId(row, roster.defaultId);
+    const sessions = sessionsByAgent.get(agentId) ?? [];
+    sessions.push(row);
+    sessionsByAgent.set(agentId, sessions);
+  });
+  return agents.map((agent) => {
     const identity = identityFor(agent.id);
     const name = normalizeAgentLabel(agent, identity);
     const mainKey = resolveUiConversationIdentity(
@@ -24,11 +35,17 @@ export function agentRosterCards(
       roster.mainKey,
       agent.id,
     ).sessionKey;
-    const sessions = rows.filter(
-      (row) => resolveUiSessionRowAgentId(row, roster.defaultId) === agent.id,
-    );
+    const sessions = sessionsByAgent.get(agent.id) ?? [];
     const recent = sessions.reduce<GatewaySessionRow | undefined>(
       (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
+      undefined,
+    );
+    const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
+      (latest, row) =>
+        row.lastAssistantMessage &&
+        (!latest || row.lastAssistantMessage.timestamp > latest.timestamp)
+          ? row.lastAssistantMessage
+          : latest,
       undefined,
     );
     const main = sessions.find((row) => row.key === mainKey) ?? sessions.find((row) => row.isMain);
@@ -41,9 +58,11 @@ export function agentRosterCards(
       textAvatar: resolveAgentTextAvatar(agent, identity),
       mainKey,
       activeNow: sessions.some(isSessionRunActive),
+      sessionCount: sessions.length,
       unreadCount: sessions.filter((row) => row.unread && !row.archived).length,
       lastActiveAt: recent?.updatedAt ?? 0,
       preview: (main ?? recent)?.lastMessagePreview,
+      assistantPreview: lastAssistantMessage?.text,
     };
   });
 }

@@ -1,45 +1,46 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
-import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "placementStartup">;
-
 export function subscribeChatPaneStartup(
-  context: ChatPaneStartupContext,
+  context: Pick<ApplicationContext, "placementStartup">,
   getState: () => ChatPageHost | undefined,
 ): () => void {
+  // Admit each accepted initial turn before waking followers parked behind recovery.
   return context.placementStartup.subscribe(() => {
     const state = getState();
     if (state) {
-      admitChatSubmission(state);
-      // Project the accepted initial turn before waking followers parked behind recovery.
+      admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
       if (!parseCatalogSessionKey(state.sessionKey)) {
-        void retryReconnectableQueuedChatSends(state);
+        void resumeStoredChatOutboxes(state);
       }
-      state.requestUpdate?.();
     }
   });
 }
 
 export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,
+  onInvalidate?: () => void,
 ): () => void {
-  return subscribeSnapshotInvalidation(({ sessionKey, reason }) => {
+  return subscribeSnapshotInvalidation(({ sessionKey, scopePrefix, reason }) => {
     // Cache eviction must preserve the active transcript and its completed load.
     const state = getState();
     if (
       reason === "cache-eviction" ||
       !state ||
+      (scopePrefix &&
+        !resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }).startsWith(scopePrefix)) ||
       (sessionKey && resolveChatSnapshotKey(state, { sessionKey: state.sessionKey }) !== sessionKey)
     ) {
       return;
     }
+    onInvalidate?.();
     resetChatHistoryProjection(state);
-    state.requestUpdate?.();
   });
 }

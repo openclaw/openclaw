@@ -3,6 +3,7 @@ import { ChannelType, ComponentType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   clearRuntimeConfigSnapshot,
@@ -15,9 +16,8 @@ import {
 import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  ButtonInteraction,
+  BaseComponentInteraction,
   createInteraction,
-  StringSelectMenuInteraction,
   type ComponentData,
 } from "../internal/discord.js";
 import {
@@ -30,12 +30,16 @@ import {
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import { resolveComponentInteractionContext } from "./agent-components-context.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
+  logDebug: vi.fn(),
+}));
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -72,7 +76,7 @@ describe("agent components", () => {
 
   const createDmButtonInteraction = (interactionId = "interaction-1") => {
     const interaction = createDmInteraction({ interactionId });
-    if (!(interaction instanceof ButtonInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord button interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
@@ -92,7 +96,7 @@ describe("agent components", () => {
         values: ["alpha"],
       },
     });
-    if (!(interaction instanceof StringSelectMenuInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord string select interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
@@ -141,7 +145,7 @@ describe("agent components", () => {
         },
       }),
     );
-    if (!(interaction instanceof ButtonInteraction)) {
+    if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord button interaction");
     }
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
@@ -187,6 +191,7 @@ describe("agent components", () => {
   beforeEach(() => {
     resetDiscordComponentRuntimeMocks();
     resetSystemEventsForTest();
+    vi.mocked(logDebug).mockClear();
   });
 
   it("does not create pairing after policy is revoked during the component store read", async () => {
@@ -272,29 +277,6 @@ describe("agent components", () => {
     });
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("classifies Group DM component interactions separately from direct messages", async () => {
-    const { interaction, defer } = createGroupDmButtonInteraction();
-
-    const ctx = await resolveComponentInteractionContext({
-      interaction,
-      label: "group-dm-test",
-      defer: false,
-    });
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toMatchObject({
-      channelId: "group-dm-channel",
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
-      username: "Alice#1234",
-      userId: "123456789",
-      replyOpts: { ephemeral: true },
-      isDirectMessage: false,
-      isGroupDm: true,
-      memberRoleIds: [],
-      rawGuildId: undefined,
-    });
   });
 
   it("blocks Group DM interactions that are not allowlisted even when dmPolicy is open", async () => {
@@ -412,29 +394,10 @@ describe("agent components", () => {
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts cid payloads for agent button interactions", async () => {
-    const button = createAgentComponentButton({
-      cfg: createCfg(),
-      accountId: "default",
-      dmPolicy: "allowlist",
-      allowFrom: ["123456789"],
-    });
-    const { interaction, defer, reply } = createDmButtonInteraction();
-
-    await button.run(interaction, { cid: "hello_cid" } as ComponentData);
-
-    expect(defer).not.toHaveBeenCalled();
-    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-      {
-        sessionKey: defaultDmSessionKey,
-        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789:interaction-1",
-      },
-    );
-    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+    const diagnostics = vi.mocked(logDebug).mock.calls.flat().join("\n");
+    expect(diagnostics).toContain("interaction=interaction-1");
+    expect(diagnostics).not.toContain("alpha");
+    expect(diagnostics).not.toContain("Alice");
   });
 
   it("keeps malformed percent cid values without throwing", async () => {

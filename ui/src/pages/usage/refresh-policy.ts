@@ -1,40 +1,9 @@
-import {
-  IncompleteUsageRetry,
-  isUsageIncomplete,
-  type UsageRetryState,
-} from "../../lib/incomplete-usage-retry.ts";
 import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 
 const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+const INCOMPLETE_USAGE_RETRY_LIMIT = 3;
 
-type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
-type UsageRefreshDecision = "defer" | "fetch" | "skip";
-
-function decideUsageRefresh(params: {
-  reason: UsageRefreshReason;
-  visible: boolean;
-  interrupted: boolean;
-  nowMs: number;
-  lastLoadedAtMs: number | null;
-  ttlMs?: number;
-}): UsageRefreshDecision {
-  if (params.reason === "manual") {
-    return "fetch";
-  }
-  if (!params.visible) {
-    return "defer";
-  }
-  // A disconnect invalidates in-flight work. Once active, retry it even when
-  // the prior payload is still fresh.
-  if (params.interrupted) {
-    return "fetch";
-  }
-  const ttlMs = params.ttlMs ?? USAGE_PAYLOAD_TTL_MS;
-  if (params.lastLoadedAtMs !== null && params.nowMs - params.lastLoadedAtMs < ttlMs) {
-    return "skip";
-  }
-  return "fetch";
-}
+type UsageRefreshReason = "focus" | "manual" | "poll" | "publication" | "reconnect";
 
 type UsageRefreshPolicyOptions = {
   isLoading: () => boolean;
@@ -46,53 +15,90 @@ type UsageRefreshPolicyOptions = {
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
   private pendingAutomaticRefresh = false;
+  private publicationPending = false;
   private reloadPending = false;
-  private readonly incompleteUsageRetry = new IncompleteUsageRetry({
-    retry: () => this.requestAndWait("poll"),
-    onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
-  });
+  private retryTimer: number | null = null;
+  private retryAttempts = 0;
+  private exhaustionReported = false;
+  private connection: unknown;
 
   constructor(private readonly options: UsageRefreshPolicyOptions) {}
 
   get incompleteUsageExhausted(): boolean {
-    return this.incompleteUsageRetry.exhausted;
+    return this.exhaustionReported;
   }
 
   setLastLoadedAtMs(
     value: number | null,
     params?: { incomplete?: boolean; connection?: unknown },
-  ): UsageRetryState {
-    return this.applyLoadState(value, params?.incomplete === true, params?.connection);
+  ): void {
+    this.applyLoadState(value, params?.incomplete === true, params?.connection);
   }
 
   markProviderUsage(
     result: ProviderUsageRequestResult | null,
     value: number | null,
     connection: unknown,
-  ): UsageRetryState {
+  ): void {
     const incomplete =
-      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
-    return this.applyLoadState(value, incomplete, connection);
+      result?.ok === false || (result?.ok === true && result.value.refreshing === true);
+    this.applyLoadState(value, incomplete, connection);
   }
 
   resetPayload(): void {
     this.applyLoadState(null, false);
     this.reloadPending = false;
+    this.publicationPending = false;
   }
 
   dispose(): void {
-    this.incompleteUsageRetry.dispose();
+    this.resetRetryCycle();
   }
 
   private applyLoadState(
     loadedAtMs: number | null,
     incomplete: boolean,
     connection?: unknown,
-  ): UsageRetryState {
-    const state = this.incompleteUsageRetry.observe(incomplete, connection);
+  ): void {
+    if (connection !== this.connection) {
+      this.connection = connection;
+      this.resetRetryCycle();
+    }
+    if (!incomplete) {
+      this.resetRetryCycle();
+    } else if (this.retryTimer === null) {
+      this.armRetry();
+    }
     // Incomplete usage must not start the TTL or focus/reconnect can skip recovery.
-    this.lastLoadedAtMs = state === "complete" ? loadedAtMs : null;
-    return state;
+    this.lastLoadedAtMs = incomplete ? null : loadedAtMs;
+  }
+
+  private armRetry(): void {
+    if (this.retryAttempts >= INCOMPLETE_USAGE_RETRY_LIMIT) {
+      if (!this.exhaustionReported) {
+        this.exhaustionReported = true;
+        this.options.onIncompleteUsageExhausted?.();
+      }
+      return;
+    }
+    this.retryAttempts += 1;
+    // Let the Gateway's 30s aggregate cache expire without increasing request volume.
+    this.retryTimer = window.setTimeout(
+      () => {
+        this.retryTimer = null;
+        void this.requestAndWait("poll").catch(() => undefined);
+      },
+      5_000 * 2 ** (this.retryAttempts - 1),
+    );
+  }
+
+  private resetRetryCycle(): void {
+    this.retryAttempts = 0;
+    this.exhaustionReported = false;
+    if (this.retryTimer !== null) {
+      window.clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
   }
 
   interrupt(): void {
@@ -107,29 +113,35 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  request(reason: UsageRefreshReason): void {
-    void this.requestAndWait(reason);
+  request(reason: UsageRefreshReason): Promise<void> {
+    return this.requestAndWait(reason);
   }
 
   private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
+    if (reason === "publication") {
+      this.publicationPending = true;
+      this.reloadPending = true;
+    }
     if (this.options.isLoading() && reason !== "manual") {
       this.pendingAutomaticRefresh = true;
       return;
     }
     this.pendingAutomaticRefresh = false;
-    const decision = decideUsageRefresh({
-      reason,
-      visible: document.visibilityState === "visible" && document.hasFocus(),
-      interrupted: this.reloadPending,
-      nowMs: Date.now(),
-      lastLoadedAtMs: this.lastLoadedAtMs,
-    });
-    if (decision === "fetch") {
-      if (reason !== "poll") {
-        this.incompleteUsageRetry.startCycle();
-      }
-      await this.options.reload(reason);
+    if (
+      reason !== "manual" &&
+      (document.visibilityState !== "visible" ||
+        !document.hasFocus() ||
+        (!this.reloadPending &&
+          this.lastLoadedAtMs !== null &&
+          Date.now() - this.lastLoadedAtMs < USAGE_PAYLOAD_TTL_MS))
+    ) {
+      return;
     }
+    if (reason === "manual" || (reason !== "poll" && !this.publicationPending)) {
+      this.resetRetryCycle();
+    }
+    this.publicationPending = false;
+    await this.options.reload(reason);
   }
 
   flushPending(): void {
@@ -137,6 +149,6 @@ export class UsageRefreshPolicy {
       return;
     }
     this.pendingAutomaticRefresh = false;
-    this.request("focus");
+    void this.request("focus");
   }
 }

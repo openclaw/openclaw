@@ -1,7 +1,6 @@
 export const EXEC_AUTO_REVIEW_GUIDANCE =
   "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
 
-/** Builds the model-facing exec tool description for the current platform and capabilities. */
 export function describeExecTool(params?: {
   hasCronTool?: boolean;
   hasProcessTool?: boolean;
@@ -12,11 +11,12 @@ export function describeExecTool(params?: {
       ? ["Run shell and wait for completion."]
       : [
           "Run shell now; background continuation supported.",
-          "Use yieldMs/background, then process for logs/status/input/intervention.",
+          "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
           "Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion.",
         ];
   const base = [
     ...continuation,
+    "Omit host/node to use the session's configured host.",
     params?.hasCronTool ? "No sleep loops for reminders/follow-ups; use automations." : undefined,
     "TTY CLI/UI/coding agent: pty=true.",
   ]
@@ -29,7 +29,6 @@ export function describeExecTool(params?: {
   return params?.autoReview ? `${description} ${EXEC_AUTO_REVIEW_GUIDANCE}` : description;
 }
 
-/** Builds the model-facing process-control tool description. */
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",

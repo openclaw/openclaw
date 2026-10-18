@@ -8,11 +8,13 @@ const mocks = vi.hoisted(() => ({
   listNodesMock: vi.fn(),
   callGatewayToolMock: vi.fn(),
   sleepMock: vi.fn(),
+  gatewayComputerStatusMock: vi.fn(),
 }));
 
 export const listNodesMock = mocks.listNodesMock;
 export const callGatewayToolMock = mocks.callGatewayToolMock;
 export const sleepMock = mocks.sleepMock;
+export const gatewayComputerStatusMock = mocks.gatewayComputerStatusMock;
 export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 export const COMPUTER_ACT_COMMAND = "computer.act";
@@ -28,6 +30,10 @@ vi.mock("./gateway.js", async (importOriginal) => {
 });
 
 vi.mock("../../utils/sleep.js", () => ({ sleep: sleepMock }));
+vi.mock("./computer-tool-gateway.js", () => ({
+  loadGatewayComputerStatus: gatewayComputerStatusMock,
+  bindGatewayComputerCleanup: async () => undefined,
+}));
 
 export const { createComputerTool, invalidateComputerFrameIfMissing } =
   await import("./computer-tool.js");
@@ -116,12 +122,14 @@ export function readLastComputerActParams(
 }
 
 export function createVisionComputerTool(options: ComputerToolOptions = {}) {
-  return createComputerTool({ modelHasVision: true, ...options });
+  return createComputerTool(options);
 }
 
 export function resetComputerToolMocks() {
   listNodesMock.mockReset();
   callGatewayToolMock.mockReset();
+  gatewayComputerStatusMock.mockReset();
+  gatewayComputerStatusMock.mockResolvedValue({ configured: false, available: false });
   sleepMock.mockReset();
   sleepMock.mockImplementation((ms: number, signal?: AbortSignal) => {
     if (signal?.aborted) {

@@ -7,6 +7,7 @@ const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway: hoisted.callGateway }));
 
 const recordId = "ask_0123456789abcdef0123456789abcdef";
+const request = { cfg: {}, questionId: recordId, optionValue: "Staging" };
 const pendingRecord = {
   id: recordId,
   status: "pending",
@@ -39,8 +40,7 @@ describe("resolveQuestionOverGateway", () => {
     let methodsSeenWhenChecked: string[] = [];
 
     const result = await resolveQuestionOverGateway({
-      cfg: {} as never,
-      questionId: recordId,
+      ...request,
       optionValue: "Production",
       senderId: "mattermost:42",
       authorize: () => {
@@ -50,9 +50,7 @@ describe("resolveQuestionOverGateway", () => {
     });
 
     expect(result).toEqual({ status: "denied" });
-    // The check runs after the read, which is the window it exists to guard.
     expect(methodsSeenWhenChecked).toEqual(["question.get"]);
-    // The privileged write never happened.
     expect(hoisted.callGateway.mock.calls.map((call) => call[0].method)).toEqual(["question.get"]);
   });
 
@@ -64,8 +62,7 @@ describe("resolveQuestionOverGateway", () => {
 
     await expect(
       resolveQuestionOverGateway({
-        cfg: {} as never,
-        questionId: recordId,
+        ...request,
         optionValue: "Production",
         senderId: "mattermost:42",
         authorize: () => true,
@@ -131,13 +128,10 @@ describe("resolveQuestionOverGateway", () => {
       }
       hoisted.callGateway.mockRejectedValueOnce(terminalError(reason));
 
-      await expect(
-        resolveQuestionOverGateway({
-          cfg: {} as never,
-          questionId: recordId,
-          optionValue: "Staging",
-        }),
-      ).resolves.toEqual({ status: "already-terminal", reason: expectedReason });
+      await expect(resolveQuestionOverGateway(request)).resolves.toEqual({
+        status: "already-terminal",
+        reason: expectedReason,
+      });
     },
   );
 
@@ -146,13 +140,10 @@ describe("resolveQuestionOverGateway", () => {
       question: { ...pendingRecord, status: "expired" },
     });
 
-    await expect(
-      resolveQuestionOverGateway({
-        cfg: {} as never,
-        questionId: recordId,
-        optionValue: "Staging",
-      }),
-    ).resolves.toEqual({ status: "already-terminal", reason: "already-terminal" });
+    await expect(resolveQuestionOverGateway(request)).resolves.toEqual({
+      status: "already-terminal",
+      reason: "already-terminal",
+    });
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });
 
@@ -161,9 +152,9 @@ describe("resolveQuestionOverGateway", () => {
       .mockResolvedValueOnce({ question: pendingRecord })
       .mockRejectedValueOnce(new Error("invalid answer"));
 
-    await expect(
-      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, optionValue: "Other" }),
-    ).rejects.toThrow("invalid answer");
+    await expect(resolveQuestionOverGateway({ ...request, optionValue: "Other" })).rejects.toThrow(
+      "invalid answer",
+    );
     expect(hoisted.callGateway).toHaveBeenCalledTimes(2);
   });
 
@@ -173,23 +164,12 @@ describe("resolveQuestionOverGateway", () => {
         ...pendingRecord,
         questions: [
           ...pendingRecord.questions,
-          {
-            questionId: "region",
-            header: "Region",
-            question: "Which region?",
-            options: [{ label: "EU" }, { label: "US" }],
-          },
+          { ...pendingRecord.questions[0], questionId: "region" },
         ],
       },
     });
 
-    await expect(
-      resolveQuestionOverGateway({
-        cfg: {} as never,
-        questionId: recordId,
-        optionValue: "Staging",
-      }),
-    ).rejects.toThrow("one tappable question");
+    await expect(resolveQuestionOverGateway(request)).rejects.toThrow("one tappable question");
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });
 
@@ -202,7 +182,7 @@ describe("resolveQuestionOverGateway", () => {
     });
 
     await expect(
-      resolveQuestionOverGateway({ cfg: {} as never, questionId: recordId, customInput: true }),
+      resolveQuestionOverGateway({ cfg: request.cfg, questionId: recordId, customInput: true }),
     ).resolves.toEqual({ status: "custom-input", questionId: "deploy_target" });
     expect(hoisted.callGateway).toHaveBeenCalledOnce();
   });

@@ -1,9 +1,19 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+import assert from "node:assert/strict";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
+import {
+  readSessionEntryInWorker,
+  readSessionEntryReadOnlyInWorker,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -13,20 +23,22 @@ import {
   clearPendingFinalDeliveryAfterSuccess,
   suppressPendingFinalDelivery,
 } from "./dispatch-from-config.pending-final.js";
-import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
+
+// Fixture writes must not schedule retention work into the cleanup request census.
+// mock-isolation: Fixture seed writes must not schedule retention requests into this census.
+vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
+  kickSessionEntryMaintenanceAfterWrite() {},
+}));
 
 describe("pending final delivery restart proof", () => {
-  let tmpDir: string;
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-pending-final-");
   let storePath: string;
   const sessionKey = "agent:main:discord:direct:123";
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pending-final-"));
-    storePath = path.join(tmpDir, "sessions.json");
-  });
-
-  afterEach(async () => {
-    await fs.rm(tmpDir, { recursive: true, force: true });
+  beforeEach(() => {
+    storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
   async function writePendingFinal(
@@ -36,7 +48,6 @@ describe("pending final delivery restart proof", () => {
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
-      status: "running",
       startedAt: 10,
       lifecycleRunId: "active-run",
       updatedAt,
@@ -68,96 +79,58 @@ describe("pending final delivery restart proof", () => {
     return payload;
   }
 
-  it.each([undefined, "handled-reply"] as const)(
-    "clears %s provenance only after the exact pending intent succeeds",
-    async (beforeAgentReplyState) => {
-      await writePendingFinal(beforeAgentReplyState);
-      const identity =
-        getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
-
-      await clearPendingFinalDeliveryAfterSuccess(identity);
-
-      const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
-      expect(entry?.pendingFinalDelivery).toBeUndefined();
-      expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-      expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
-      expect(entry?.restartRecoverySourceIngress).toBeUndefined();
-      expect(entry?.status).toBe(beforeAgentReplyState === "handled-reply" ? "done" : "running");
-      expect(entry?.lifecycleRunId).toBe(
-        beforeAgentReplyState === "handled-reply" ? undefined : "active-run",
-      );
-      if (beforeAgentReplyState === "handled-reply") {
-        expect(entry?.endedAt).toBeTypeOf("number");
-        expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
-      }
-    },
-  );
-
-  it.each(["clear", "suppress"] as const)(
-    "preserves user activity when background delivery owners %s an exact intent",
-    async (action) => {
-      const updatedAt = Date.now() - 60_000;
-      await writePendingFinal(undefined, action === "clear" ? "delivered" : "prepared", updatedAt);
-      expect(loadSessionEntry({ sessionKey, storePath })?.updatedAt).toBe(updatedAt);
-      const payload = pendingFinalPayload();
-
-      if (action === "clear") {
-        await clearPendingFinalDeliveryAfterSuccess(
-          getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion,
-          { preserveActivity: true },
-        );
-      } else {
-        await suppressPendingFinalDelivery(payload, { preserveActivity: true });
-      }
-
-      const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
-      expect(entry?.pendingFinalDelivery).toBeUndefined();
-      expect(entry?.updatedAt).toBe(updatedAt);
-    },
-  );
-
-  it("finalizes a media-only hook turn after its exact transport intent succeeds", async () => {
-    const entry: SessionEntry = {
-      sessionId: "session",
-      status: "running",
-      startedAt: 10,
-      lifecycleRunId: "media-run",
-      updatedAt: Date.now(),
-      pendingFinalDelivery: {
-        kind: "transport-only",
-        createdAt: Date.now(),
-        intentId: "intent-media",
-        deliveries: [{ id: "delivery-media", state: "delivered" }],
-      },
-      restartRecoveryBeforeAgentReplyState: "handled-reply",
-      restartRecoverySourceIngress: "channel",
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    const payload: ReplyPayload = { mediaUrl: "https://example.test/image.png" };
-    setReplyPayloadMetadata(payload, {
-      pendingFinalDeliveryCompletion: {
-        deliveryId: "delivery-media",
-        intentId: "intent-media",
-        sessionId: "session",
-        sessionKey,
-        storePath,
+  it("settles hook delivery and clears its provenance without changing user activity", async () => {
+    await writePendingFinal("handled-reply", "prepared", 1);
+    const payload = setReplyPayloadMetadata(pendingFinalPayload(), {
+      pendingFinalDeliveryCleanup: { preserveActivity: true },
+    });
+    const entered = createDeferred();
+    const delivered = createDeferred();
+    const dispatcher = createReplyDispatcher({
+      beforeDeliver: (reply) => ({ ...reply, replyToId: "message-1" }),
+      async deliver() {
+        entered.resolve();
+        await delivered.promise;
       },
     });
-    const identity = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
 
-    await clearPendingFinalDeliveryAfterSuccess(identity);
+    const sql = observeHostDataSql();
+    try {
+      expect(dispatcher.sendFinalReply(payload)).toBe(true);
+      dispatcher.markComplete();
+      await entered.promise;
+      const sending = await readSessionEntryReadOnlyInWorker({ sessionKey, storePath });
+      expect(sending?.pendingFinalDelivery?.deliveries).toEqual([
+        { id: "delivery-1", state: "queued" },
+      ]);
+      delivered.resolve();
+      await dispatcher.waitForIdle();
+      expect(
+        sql.queries.filter((query) =>
+          /session_nodes|session_entry_snapshots|\b(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(query),
+        ),
+      ).toEqual([]);
+    } finally {
+      delivered.resolve();
+      await dispatcher.waitForIdle();
+      sql.restore();
+    }
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-      status: "done",
-      abortedLastRun: false,
-    });
-    expect(
-      (loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined)?.lifecycleRunId,
-    ).toBeUndefined();
+    const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
+    expect(entry?.pendingFinalDelivery).toBeUndefined();
+    expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
+    expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
+    expect(entry?.restartRecoverySourceIngress).toBeUndefined();
+    expect(entry?.status).toBe("done");
+    expect(entry?.lifecycleRunId).toBeUndefined();
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.endedAt).toBeTypeOf("number");
+    expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
+    expect(entry?.updatedAt).toBe(1);
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
-    await writePendingFinal(undefined, "prepared");
+    await writePendingFinal(undefined, "prepared", 1);
     await replaceSessionEntry(
       { storePath, sessionKey },
       {
@@ -175,7 +148,9 @@ describe("pending final delivery restart proof", () => {
       },
     );
 
-    await suppressPendingFinalDelivery(pendingFinalPayload("delivery-1"));
+    await suppressPendingFinalDelivery(pendingFinalPayload("delivery-1"), {
+      preserveActivity: true,
+    });
 
     expect(
       (loadSessionEntry({ sessionKey, storePath }) as SessionEntry).pendingFinalDelivery
@@ -185,11 +160,97 @@ describe("pending final delivery restart proof", () => {
       { id: "delivery-2", state: "prepared" },
     ]);
 
-    await suppressPendingFinalDelivery(pendingFinalPayload("delivery-2"));
+    await suppressPendingFinalDelivery(pendingFinalPayload("delivery-2"), {
+      preserveActivity: true,
+    });
 
-    expect(
-      (loadSessionEntry({ sessionKey, storePath }) as SessionEntry).pendingFinalDelivery,
-    ).toBeUndefined();
+    const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry;
+    expect(entry.pendingFinalDelivery).toBeUndefined();
+    expect(entry.restartRecoverySourceIngress).toBeUndefined();
+    expect(entry.status).toBeUndefined();
+    expect(entry.lifecycleRunId).toBe("active-run");
+    expect(entry.updatedAt).toBe(1);
+  });
+
+  it("cleans only the current completed intent in one worker request after a foreign commit", async () => {
+    await writePendingFinal("handled-reply", "delivered", 1);
+    const scope = { sessionKey, storePath };
+    const original = loadSessionEntry(scope) as SessionEntry;
+    const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
+    const commands: string[] = [];
+    let beforeCommit: (() => void) | undefined;
+    const wrapExecution = (
+      owner: OpenClawAgentDatabaseExecution,
+    ): OpenClawAgentDatabaseExecution => {
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, run, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              run({
+                execute: (command, commandOptions) => {
+                  commands.push(command.type);
+                  if (command.type === "session.entry.patch.commit") {
+                    const change = beforeCommit;
+                    beforeCommit = undefined;
+                    change?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
+    };
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    const observer = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+      .mockImplementation((...args) => wrapExecution(capture(...args)));
+    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    const preparationObserver = vi
+      .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
+      .mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
+    try {
+      for (const change of [
+        { label: "foreign metadata" },
+        { sessionId: "replacement" },
+        { pendingFinalDelivery: { ...original.pendingFinalDelivery!, intentId: "new-intent" } },
+        { restartRecoveryDeliveryRunId: "new-recovery" },
+        {
+          pendingFinalDelivery: {
+            ...original.pendingFinalDelivery!,
+            deliveries: [{ id: "delivery-1", state: "unknown" as const }],
+          },
+        },
+      ]) {
+        replaceSessionEntrySync(scope, original);
+        const foreign = { ...original, ...change };
+        beforeCommit = () => replaceSessionEntrySync(scope, foreign);
+        commands.length = 0;
+        await expect(
+          clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true }),
+        ).resolves.toBeUndefined();
+        expect(commands).toEqual(["session.entry.patch.commit"]);
+        const persisted = loadSessionEntry(scope) as SessionEntry;
+        if ("label" in change) {
+          expect(persisted.label).toBe("foreign metadata");
+          expect(persisted.pendingFinalDelivery).toBeUndefined();
+          expect(persisted.status).toBe("done");
+        } else {
+          expect(persisted).toMatchObject(foreign);
+          expect(persisted.pendingFinalDelivery).toEqual(foreign.pendingFinalDelivery);
+          expect(persisted.status).toBeUndefined();
+        }
+        expect(persisted.updatedAt).toBe(1);
+      }
+    } finally {
+      observer.mockRestore();
+      preparationObserver.mockRestore();
+    }
   });
 
   it("does not retire a source while its terminal provider outcome is unknown", async () => {
@@ -206,12 +267,22 @@ describe("pending final delivery restart proof", () => {
       },
     );
 
+    let target: SessionEntryTargetPatchScope | undefined;
+    await readSessionEntryInWorker(
+      { agentId: "main", storePath, sessionKey },
+      () => {},
+      undefined,
+      (prepared) => {
+        target = prepared;
+      },
+    );
+    assert(target);
     await expect(
       retireTerminalRestartRecoverySourceClaim({
+        target,
+        assertCurrent: () => {},
         sessionId: "session",
-        sessionKey,
         sourceTurnId: "source-1",
-        storePath,
       }),
     ).resolves.toBeUndefined();
 

@@ -1,694 +1,232 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { recordModelFallbackStop } from "../failover-error.js";
 import { resetFallbackSkipCacheForTest } from "../fallback-skip-cache.test-support.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
-import { initialAttemptOptions, type FallbackRunnerParams } from "./run-entry.test-support.js";
+import {
+  createDirectHarness,
+  initialAttemptOptions,
+  makeResult,
+  type FallbackRunnerParams,
+} from "./run-entry.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-const state = vi.hoisted(() => ({
-  runWithModelFallback: vi.fn(),
-}));
+const retryModel = "gpt-5.6-sol";
+const cyberRefusal = { provider: "openai", category: "cyber" } as const;
+const cyberCode = "OPENAI_CYBER_POLICY_REFUSAL";
+const runWithModelFallback = vi.hoisted(() => vi.fn<typeof runFallback>());
 
-vi.mock("../model-fallback-runner.js", () => ({
-  runWithModelFallback: (params: FallbackRunnerParams) => state.runWithModelFallback(params),
-}));
-
+// mock-isolation: Drive fallback outcomes without invoking provider runtimes.
+vi.mock("../model-fallback-runner.js", () => ({ runWithModelFallback }));
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));
-
 vi.mock("../harness/selection.js", () => ({
   selectAgentHarness: vi.fn(() => ({ id: "openclaw", contextEngineHostCapabilities: [] })),
 }));
 
-function makeResult(params: {
-  provider: string;
-  model: string;
-  meta?: Partial<EmbeddedAgentRunResult["meta"]>;
-}): EmbeddedAgentRunResult {
+async function runFallback(params: FallbackRunnerParams) {
+  const candidate = await params.run(params.provider, params.model, initialAttemptOptions(params));
+  const classification = await params.classifyResult?.({
+    result: candidate,
+    provider: params.provider,
+    model: params.model,
+    attempt: 1,
+    total: 1,
+  });
   return {
-    payloads: [{ text: "recovered" }],
-    meta: {
-      durationMs: 10,
-      aborted: false,
-      providerStarted: true,
-      stopReason: "completed",
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-      },
-      ...params.meta,
-    },
+    outcome: classification ? ("exhausted" as const) : ("completed" as const),
+    result: candidate,
+    provider: params.provider,
+    model: params.model,
+    attempts: [],
   };
 }
 
-function createDirectHarness() {
-  return {
-    workspaceDir: "/tmp/workspace",
-    preparation: { kind: "direct" as const },
-    resolveRuntimeOverride: () => undefined,
+function makeRefusalResult(provider: string, model: string): EmbeddedAgentRunResult {
+  const result = makeResult({ provider, model });
+  result.payloads = [{ text: "policy refusal", isError: true }];
+  result.meta.agentMeta = {
+    sessionId: "session-1",
+    provider,
+    model,
+    agentHarnessId: "openclaw",
+    providerRefusal: { ...cyberRefusal },
   };
+  return result;
+}
+
+type EntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
+
+function runEntry(
+  runId: string,
+  runCandidate: EntryParams["runCandidate"] = async (provider, model) =>
+    makeRefusalResult(provider, model),
+  overrides: Partial<Omit<EntryParams, "runCandidate" | "identity">> = {},
+) {
+  return runEmbeddedAgentEntry({
+    selection: {
+      cfg: {
+        agents: {
+          defaults: { embeddedAgent: { cyberFailover: { model: `openai/${retryModel}` } } },
+        },
+      },
+      provider: "openai",
+      model: "gpt-5.6",
+    },
+    identity: { runId, agentId: "main", sessionId: "session-1" },
+    harness: createDirectHarness(),
+    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+    sessionOverride: { kind: "preserve" },
+    ...overrides,
+    runCandidate,
+  });
+}
+
+const searchedModels = () => runWithModelFallback.mock.calls.map(([{ model }]) => model);
+function failRetry(error: Error) {
+  runWithModelFallback.mockImplementation((params) =>
+    params.model === retryModel ? Promise.reject(error) : runFallback(params),
+  );
 }
 
 describe("runEmbeddedAgentEntry cyber failover", () => {
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     resetFallbackSkipCacheForTest();
-    state.runWithModelFallback.mockReset();
+    runWithModelFallback.mockReset().mockImplementation(runFallback);
   });
+  afterEach(clearRuntimeConfigSnapshot);
 
-  it("retries a replay-safe OpenAI cyber refusal once on Daybreak without changing selection", async () => {
-    const candidateCalls: Array<{
-      provider: string;
-      model: string;
-      isFallbackRetry: boolean;
-      routingStage: string;
-    }> = [];
-    const reconciled: Array<{ provider: string; model: string }> = [];
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-      identity: { runId: "run-cyber-escalation", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: {
-        kind: "reconcile-completed",
-        reconcile: async (candidate) => {
-          reconciled.push(candidate);
-        },
-      },
-      runCandidate: async (provider, model, options) => {
-        candidateCalls.push({
-          provider,
-          model,
-          isFallbackRetry: options.isFallbackRetry,
-          routingStage: options.modelRoutingProvenance.stage,
-        });
-        if (model === "gpt-daybreak-blue-latest") {
-          return makeResult({ provider, model });
-        }
-        return {
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "policy refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        };
-      },
-    });
-
-    expect(candidateCalls).toEqual([
-      {
-        provider: "openai",
-        model: "gpt-5.6",
-        isFallbackRetry: false,
-        routingStage: "initial",
-      },
-      {
-        provider: "openai",
-        model: "gpt-daybreak-blue-latest",
-        isFallbackRetry: true,
-        routingStage: "fallback",
-      },
-    ]);
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-daybreak-blue-latest");
-    expect(result.result.payloads).toEqual([{ text: "recovered" }]);
-    expect(result.attempts).toContainEqual(
-      expect.objectContaining({ code: "OPENAI_CYBER_POLICY_REFUSAL" }),
+  it("retries a replay-safe OpenAI cyber refusal once on the configured target without changing selection", async () => {
+    const reconcile = vi.fn(async () => {});
+    const runCandidate = vi.fn<EntryParams["runCandidate"]>(async (provider, model) =>
+      model === retryModel ? makeResult({ provider, model }) : makeRefusalResult(provider, model),
     );
+    const result = await runEntry("run-cyber-escalation", runCandidate, {
+      sessionOverride: { kind: "reconcile-completed", reconcile },
+    });
+
+    expect(
+      runCandidate.mock.calls.map(([provider, model, options]) => [
+        provider,
+        model,
+        options.isFallbackRetry,
+        options.modelRoutingProvenance.stage,
+      ]),
+    ).toEqual([
+      ["openai", "gpt-5.6", false, "initial"],
+      ["openai", retryModel, true, "fallback"],
+    ]);
+    expect(result).toMatchObject({ provider: "openai", model: retryModel });
+    expect(result.result.payloads).toEqual([{ text: "recovered" }]);
+    expect(result.attempts).toContainEqual(expect.objectContaining({ code: cyberCode }));
     expect(result.result.meta.executionTrace?.providerPolicyRetry).toEqual({
       category: "cyber",
       provider: "openai",
-      model: "gpt-daybreak-blue-latest",
+      model: retryModel,
     });
     await result.settleSessionOverride();
-    expect(reconciled).toEqual([]);
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
-  it("preserves the original refusal and cools off an unauthorized Daybreak target", async () => {
-    const searchedModels: string[] = [];
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      searchedModels.push(params.model);
-      if (params.model === "gpt-daybreak-blue-latest") {
-        throw Object.assign(new Error("401 unauthorized"), { status: 401 });
-      }
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: "completed" as const,
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-    const run = () =>
-      runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-        identity: { runId: "run-cyber-cooloff", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-        sessionOverride: { kind: "preserve" },
-        runCandidate: async (provider, model) => ({
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "policy refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        }),
-      });
-
-    const first = await run();
-    const second = await run();
-
-    expect(first.model).toBe("gpt-5.6");
+  it("preserves the original refusal and cools off an unauthorized retry target", async () => {
+    failRetry(Object.assign(new Error("401 unauthorized"), { status: 401 }));
+    const first = await runEntry("run-cyber-cooloff");
+    const second = await runEntry("run-cyber-cooloff");
+    expect([first.model, second.model]).toEqual(["gpt-5.6", "gpt-5.6"]);
     expect(first.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
-    expect(second.model).toBe("gpt-5.6");
-    expect(searchedModels).toEqual(["gpt-5.6", "gpt-daybreak-blue-latest", "gpt-5.6"]);
+    expect(searchedModels()).toEqual(["gpt-5.6", retryModel, "gpt-5.6"]);
   });
 
-  it("keeps a failed Daybreak attempt that already committed work", async () => {
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-      identity: { runId: "run-cyber-committed", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) => {
-        if (model === "gpt-daybreak-blue-latest") {
-          // The retry executed a tool and only then failed, so it is not
-          // interchangeable with the replay-safe refusal it replaced.
-          return {
-            ...makeResult({ provider, model }),
-            payloads: [{ text: "daybreak failed after running a tool", isError: true }],
-            meta: {
-              ...makeResult({ provider, model }).meta,
-              replayInvalid: true,
-              error: { kind: "incomplete_turn", message: "Daybreak failed mid-turn" },
-            },
-          };
-        }
-        return {
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "policy refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        };
-      },
-    });
-
-    expect(result.model).toBe("gpt-daybreak-blue-latest");
-    expect(result.result.meta.replayInvalid).toBe(true);
-    expect(result.result.payloads).toEqual([
-      { text: "daybreak failed after running a tool", isError: true },
-    ]);
-    expect(result.attempts).toContainEqual(
-      expect.objectContaining({ code: "OPENAI_CYBER_POLICY_REFUSAL" }),
+  it.each([true, false])("propagates a retry throw (terminal stop=%s)", async (terminalStop) => {
+    const thrown = new Error(
+      terminalStop ? "recorded terminal stop" : "attempt committed work; cannot fall back",
     );
+    if (terminalStop) {
+      recordModelFallbackStop(thrown);
+    }
+    failRetry(thrown);
+    await expect(runEntry("run-cyber-throw")).rejects.toBe(thrown);
   });
 
+  const incomplete = { kind: "incomplete_turn", message: "retry failed mid-turn" } as const;
   it.each([
-    {
-      name: "a recorded terminal stop",
-      makeError: () => {
-        const error = new Error("recorded terminal stop");
-        recordModelFallbackStop(error);
-        return error;
-      },
-    },
-    {
-      // The fallback runner deliberately throws an unclassified error when the
-      // attempt already committed work and may not be replaced.
-      name: "an unclassified committed-work throw",
-      makeError: () => new Error("attempt committed work; cannot fall back"),
-    },
-  ])("propagates $name thrown by the Daybreak retry", async ({ makeError }) => {
-    const thrown = makeError();
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      if (params.model === "gpt-daybreak-blue-latest") {
-        throw thrown;
+    ["replay-invalid work", { replayInvalid: true, error: incomplete }, false, true],
+    ["live committed work", { error: incomplete }, true, false],
+    ["aborted retry", { aborted: true }, false, false],
+    ["tool warning", {}, false, null],
+  ] as const)(
+    "preserves the retry result after %s",
+    async (kind, targetMeta, commit, retryNotice) => {
+      let committed = false;
+      const payloads =
+        kind === "tool warning"
+          ? [{ text: "Tool warning", isError: true }, { text: "Recovered answer" }]
+          : [{ text: "retry did not complete", isError: true }];
+      const result = await runEntry(
+        "run-cyber-preserve-returned",
+        async (provider, model) => {
+          if (model === retryModel) {
+            committed = commit;
+            return {
+              ...makeResult({ provider, model, meta: targetMeta }),
+              payloads: structuredClone(payloads),
+            };
+          }
+          return makeRefusalResult(provider, model);
+        },
+        { behavior: { kind: "command-rpc", hasCommittedSideEffect: () => committed } },
+      );
+      expect(result.model).toBe(retryModel);
+      expect(result.result.payloads).toEqual(payloads);
+      if (kind === "replay-invalid work") {
+        expect(result.result.meta.replayInvalid).toBe(true);
       }
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: "completed" as const,
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    await expect(
-      runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-        identity: { runId: "run-cyber-throw", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-        sessionOverride: { kind: "preserve" },
-        runCandidate: async (provider, model) => ({
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "policy refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        }),
-      }),
-    ).rejects.toBe(thrown);
-  });
-
-  it("does not escalate a preliminary refusal replaced by a successful final result", async () => {
-    const searchedModels: string[] = [];
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      searchedModels.push(params.model);
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-      identity: { runId: "run-cyber-replaced", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model, options) => {
-        const preliminary = {
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "preliminary refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        };
-        options.classifyResult(preliminary);
-        return makeResult({ provider, model });
-      },
-    });
-
-    expect(searchedModels).toEqual(["gpt-5.6"]);
-    expect(result.model).toBe("gpt-5.6");
-    expect(result.result.payloads).toEqual([{ text: "recovered" }]);
-  });
-
-  it.each([
-    {
-      name: "live committed side effects",
-      targetMeta: { error: { kind: "incomplete_turn" as const, message: "failed" } },
-      commit: true,
+      if (retryNotice) {
+        expect(result.attempts).toContainEqual(expect.objectContaining({ code: cyberCode }));
+      } else if (retryNotice === false) {
+        expect(result.result.meta.executionTrace?.providerPolicyRetry).toBeUndefined();
+      }
     },
-    { name: "an aborted retry", targetMeta: { aborted: true }, commit: false },
-  ])("preserves a returned Daybreak result with $name", async ({ targetMeta, commit }) => {
-    let committed = false;
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-      identity: { runId: "run-cyber-preserve-returned", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => committed },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) => {
-        if (model === "gpt-daybreak-blue-latest") {
-          committed = commit;
-          return {
-            ...makeResult({ provider, model }),
-            payloads: [{ text: "Daybreak did not complete", isError: true }],
-            meta: { ...makeResult({ provider, model }).meta, ...targetMeta },
-          };
-        }
-        return {
-          ...makeResult({ provider, model }),
-          payloads: [{ text: "policy refusal", isError: true }],
-          meta: {
-            ...makeResult({ provider, model }).meta,
-            agentMeta: {
-              sessionId: "session-1",
-              provider,
-              model,
-              agentHarnessId: "openclaw",
-              providerRefusal: { provider: "openai", category: "cyber" },
-            },
-          },
-        };
-      },
-    });
-
-    expect(result.model).toBe("gpt-daybreak-blue-latest");
-    expect(result.result.payloads).toEqual([{ text: "Daybreak did not complete", isError: true }]);
-    expect(result.result.meta.executionTrace?.providerPolicyRetry).toBeUndefined();
-  });
-
-  it("keeps a recovered Daybreak answer alongside a replay-safe tool warning", async () => {
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
-    });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-      identity: { runId: "run-cyber-warning", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) =>
-        model === "gpt-daybreak-blue-latest"
-          ? {
-              ...makeResult({ provider, model }),
-              payloads: [{ text: "Tool warning", isError: true }, { text: "Recovered answer" }],
-            }
-          : {
-              ...makeResult({ provider, model }),
-              payloads: [{ text: "policy refusal", isError: true }],
-              meta: {
-                ...makeResult({ provider, model }).meta,
-                agentMeta: {
-                  sessionId: "session-1",
-                  provider,
-                  model,
-                  agentHarnessId: "openclaw",
-                  providerRefusal: { provider: "openai", category: "cyber" },
-                },
-              },
-            },
-    });
-
-    expect(result.model).toBe("gpt-daybreak-blue-latest");
-    expect(result.result.payloads).toEqual([
-      { text: "Tool warning", isError: true },
-      { text: "Recovered answer" },
-    ]);
-  });
+  );
 
   it("keeps a cyber refusal terminal for a strict model selection", async () => {
-    const searchedModels: string[] = [];
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      searchedModels.push(params.model);
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
-      });
-      return {
-        outcome: "completed" as const,
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+    const result = await runEntry("run-cyber-strict", undefined, {
+      selection: { cfg: {}, provider: "openai", model: "gpt-5.6", fallbacksOverride: [] },
     });
-
-    const result = await runEmbeddedAgentEntry({
-      selection: {
-        cfg: {},
-        provider: "openai",
-        model: "gpt-5.6",
-        // A locked model selection reaches the runner as an explicit empty
-        // fallback list; no other model may serve the turn.
-        fallbacksOverride: [],
-      },
-      identity: { runId: "run-cyber-strict", agentId: "main", sessionId: "session-1" },
-      harness: createDirectHarness(),
-      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: async (provider, model) => ({
-        ...makeResult({ provider, model }),
-        payloads: [{ text: "policy refusal", isError: true }],
-        meta: {
-          ...makeResult({ provider, model }).meta,
-          agentMeta: {
-            sessionId: "session-1",
-            provider,
-            model,
-            agentHarnessId: "openclaw",
-            providerRefusal: { provider: "openai", category: "cyber" },
-          },
-        },
-      }),
-    });
-
-    expect(searchedModels).toEqual(["gpt-5.6"]);
+    expect(searchedModels()).toEqual(["gpt-5.6"]);
     expect(result.model).toBe("gpt-5.6");
     expect(result.result.payloads).toEqual([{ text: "policy refusal", isError: true }]);
   });
 
-  it("restores the original refusal transcript when Daybreak fails", async () => {
-    const transcript = await import("../../config/sessions/transcript.js");
-    const { makeAssistantMessageFixture } =
-      await import("../test-helpers/assistant-message-fixtures.js");
-    const append = vi
-      .spyOn(transcript, "appendExactAssistantMessageToSessionTranscript")
-      .mockResolvedValue({
-        ok: true,
-        target: {
-          agentId: "main",
-          sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
-          storePath: "/tmp/unused-cyber-transcript.sqlite",
-        },
-        messageId: "assistant-error",
+  it("restores the original refusal display when the configured retry fails", async () => {
+    const displayChanges: Array<{ text: string; visible: boolean }> = [];
+    await runEntry("run-cyber-transcript", async (provider, model, options) => {
+      const retry = model === retryModel;
+      const message = makeAssistantMessageFixture({
+        provider,
+        model,
+        errorMessage: retry ? "Retry target unauthorized" : "Original cyber refusal",
+        diagnostics: retry
+          ? undefined
+          : [{ type: "provider_refusal", timestamp: 1, details: { ...cyberRefusal } }],
       });
-    state.runWithModelFallback.mockImplementation(async (params: FallbackRunnerParams) => {
-      const candidate = await params.run(
-        params.provider,
-        params.model,
-        initialAttemptOptions(params),
-      );
-      const classification = await params.classifyResult?.({
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempt: 1,
-        total: 1,
+      options.assistantErrorTranscript.record(message);
+      options.assistantErrorTranscript.bindStream(message, (visible) => {
+        displayChanges.push({ text: message.errorMessage ?? "", visible });
       });
-      return {
-        outcome: classification ? ("exhausted" as const) : ("completed" as const),
-        result: candidate,
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      };
+      if (retry) {
+        throw Object.assign(new Error("401 unauthorized"), { status: 401 });
+      }
+      const refusal = makeRefusalResult(provider, model);
+      refusal.meta.error = { kind: "incomplete_turn", message: "Original cyber refusal" };
+      return refusal;
     });
-    try {
-      await runEmbeddedAgentEntry({
-        selection: { cfg: {}, provider: "openai", model: "gpt-5.6" },
-        identity: { runId: "run-cyber-transcript", agentId: "main", sessionId: "session-1" },
-        harness: createDirectHarness(),
-        behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-        sessionOverride: { kind: "preserve" },
-        runCandidate: async (provider, model, options) => {
-          options.assistantErrorTranscript.record(
-            makeAssistantMessageFixture({
-              provider,
-              model,
-              errorMessage:
-                model === "gpt-daybreak-blue-latest"
-                  ? "Daybreak unauthorized"
-                  : "Original cyber refusal",
-              diagnostics:
-                model === "gpt-daybreak-blue-latest"
-                  ? undefined
-                  : [
-                      {
-                        type: "provider_refusal",
-                        timestamp: 1,
-                        details: { provider: "openai", category: "cyber" },
-                      },
-                    ],
-            }),
-            {
-              agentId: "main",
-              sessionId: "session-1",
-              sessionKey: "agent:main:session-1",
-              storePath: "/tmp/unused-cyber-transcript.sqlite",
-            },
-          );
-          if (model === "gpt-daybreak-blue-latest") {
-            throw Object.assign(new Error("401 unauthorized"), { status: 401 });
-          }
-          return {
-            ...makeResult({ provider, model }),
-            payloads: [{ text: "policy refusal", isError: true }],
-            meta: {
-              ...makeResult({ provider, model }).meta,
-              error: { kind: "incomplete_turn", message: "Original cyber refusal" },
-              agentMeta: {
-                sessionId: "session-1",
-                provider,
-                model,
-                agentHarnessId: "openclaw",
-                providerRefusal: { provider: "openai", category: "cyber" },
-              },
-            },
-          };
-        },
-      });
-      expect(append).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.objectContaining({ errorMessage: "Original cyber refusal" }),
-        }),
-      );
-    } finally {
-      append.mockRestore();
-    }
+    expect(displayChanges.at(-1)).toEqual({ text: "Original cyber refusal", visible: true });
   });
 });

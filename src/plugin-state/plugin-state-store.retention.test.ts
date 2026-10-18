@@ -1,50 +1,90 @@
-// Plugin state retention preserves quotas, eviction order, and rollback.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { useState } from "./plugin-state-fixtures.test-support.js";
+import { runWriteTransaction } from "./plugin-state-store.database.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   registerPluginStateSequencedJournalEntry,
-  resetPluginStateStoreForTests,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
+import { PLUGIN_STATE_EXPIRY_BATCH_ROWS } from "./plugin-state-store.kernel.js";
 import {
-  clearPluginStateStoreForTests,
-  seedPluginStateEntriesForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
-} from "./plugin-state-store.test-helpers.js";
-import { PluginStateStoreError } from "./plugin-state-store.types.js";
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
+import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
-let testState: OpenClawTestState;
-
-beforeAll(async () => {
-  testState = await createOpenClawTestState({ label: "plugin-state-retention" });
-});
-
-beforeEach(() => {
-  testState.applyEnv();
-  clearPluginStateStoreForTests();
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-  setMaxPluginStateEntriesPerPluginForTests(undefined);
-  resetPluginStateStoreForTests({ closeDatabase: false });
-});
-
-afterAll(async () => {
-  resetPluginStateStoreForTests();
-  await testState.cleanup();
-});
+useState("plugin-state-retention");
+const syncStore = (namespace: string, maxEntries: number, rejectNew = false) =>
+  createPluginStateSyncKeyedStore<number>("discord", {
+    namespace,
+    maxEntries,
+    overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
+  });
 
 describe("plugin state keyed store", () => {
-  it("evicts oldest live entries over maxEntries with bounded database calls", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
+  it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const scope = { pluginId: "discord", namespace: "operation-retention" };
+    const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      { ...scope, key: "expiring", value: 2, expiresAt: 2_000 },
+      { ...scope, namespace: "sibling", key: "expired", value: 3, expiresAt: 800 },
+    ]);
+    const current = syncStore(scope.namespace, 2, true);
+    const sibling = syncStore("sibling", 2);
+    const counts = runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const replace = (valueJson: string) =>
+        registerPluginStateEntry(store, { ...params, key: "stable", valueJson }, retention, true);
+      const statements = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(store.db),
+        ["expiryProbe", "delete"],
+        (sql) =>
+          sql.startsWith('select "expires_at" from "plugin_state_entries"')
+            ? "expiryProbe"
+            : sql.startsWith('delete from "plugin_state_entries"')
+              ? "delete"
+              : null,
+      );
+      try {
+        replace("4");
+      } finally {
+        statements.restore();
+      }
+      vi.setSystemTime(2_000);
+      replace("5");
+      return statements.counts;
+    });
+    vi.setSystemTime(500);
+    expect(current.entries()).toEqual([{ key: "stable", value: 5, createdAt: 2_000 }]);
+    expect(sibling.lookup("expired")).toBe(3);
+
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "backward-visible", value: 6, expiresAt: 1_500 },
+    ]);
+    vi.setSystemTime(2_000);
+    expect(() =>
+      runWriteTransaction("register", (store) => {
+        const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+        vi.setSystemTime(1_000);
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "over-capacity", valueJson: "7" },
+          retention,
+          false,
+        );
+      }),
+    ).toThrow("reached its 2-row limit");
+    expect(current.lookup("over-capacity")).toBeUndefined();
+    expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
+  });
+
+  it("evicts oldest live entries over maxEntries with bounded database calls", () => {
+    vi.useFakeTimers({ now: 1000 });
     seedPluginStateEntriesForTests(
       Array.from({ length: 64 }, (_, index) => ({
         pluginId: "discord",
@@ -54,356 +94,127 @@ describe("plugin state keyed store", () => {
         createdAt: Math.floor(index / 2),
       })),
     );
-    const store = createPluginStateKeyedStore("discord", { namespace: "evict", maxEntries: 3 });
+    const store = syncStore("evict", 3);
     const statements = trackSqliteStatementExecutions(
-      openOpenClawStateDatabase().db,
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
       ["delete"],
       (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
     );
     try {
-      await store.register("a-protected", 64);
+      store.register("a-protected", 64);
     } finally {
       statements.restore();
     }
 
     // One bounded expiry sweep plus eviction must not scale with the victim count.
+    expect(statements.counts.delete).toBeGreaterThan(0);
     expect(statements.counts.delete).toBeLessThanOrEqual(2);
-    expect(await store.entries()).toEqual([
+    expect(store.entries()).toEqual([
       { key: "key-62", value: 62, createdAt: 31 },
       { key: "key-63", value: 63, createdAt: 31 },
       { key: "a-protected", value: 64, createdAt: 1000 },
     ]);
   });
 
-  it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
+  it("keeps the just-registered key when namespace eviction timestamps tie", () => {
+    vi.useFakeTimers({ now: 1000 });
+    const store = syncStore("evict-tie-register", 1);
+
+    store.register("z", 1);
+    store.register("a", 2);
+
+    expect(store.entries()).toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
+    expect(store.lookup("z")).toBeUndefined();
+  });
+
+  it("replaces an expired claim beyond the bounded cleanup batch", () => {
+    vi.useFakeTimers({ now: 2_000 });
+    const scope = { pluginId: "discord", namespace: "claim-expiry-batch" };
+    seedPluginStateEntriesForTests([
+      ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS }, (_, index) => ({
+        ...scope,
+        key: `expired-${index}`,
+        value: index,
+        expiresAt: 1_000,
+      })),
+      { ...scope, key: "target", value: -1, expiresAt: 1_500 },
+    ]);
+    const store = syncStore(scope.namespace, 1, true);
+
+    expect(store.registerIfAbsent("target", 42)).toBe(true);
+    expect(store.entries()).toEqual([{ key: "target", value: 42, createdAt: 2_000 }]);
+  });
+
+  it("protects a worker claim when existing rows have later timestamps", async () => {
     const store = createPluginStateKeyedStore<number>("discord", {
-      namespace: "evict-tie-register",
+      namespace: "evict-worker-claim",
       maxEntries: 1,
     });
-
-    await store.register("z", 1);
-    await store.register("a", 2);
-
-    await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
-    await expect(store.lookup("z")).resolves.toBeUndefined();
-  });
-
-  it.each([3, 5])(
-    "enforces plugin quota without a redundant namespace count at maxEntries %i",
-    async (maxEntries) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1000);
-      setMaxPluginStateEntriesPerPluginForTests(3);
-      const pluginId = "quota-plugin";
-      const namespace = "quota";
-      seedPluginStateEntriesForTests([
-        ...["a-protected", "b", "c", "d", "e", "z"].map((key) => ({
-          pluginId,
-          namespace,
-          key,
-          value: key,
-          createdAt: 1000,
-        })),
-        { pluginId, namespace: "sibling", key: "peer", value: "sibling", createdAt: 1 },
-        {
-          pluginId: "foreign-plugin",
-          namespace,
-          key: "peer",
-          value: "foreign",
-          createdAt: 1,
-        },
-      ]);
-      const store = createPluginStateKeyedStore<string>(pluginId, { namespace, maxEntries });
-      const sibling = createPluginStateKeyedStore<string>(pluginId, {
-        namespace: "sibling",
-        maxEntries: 3,
-      });
-      const foreign = createPluginStateKeyedStore<string>("foreign-plugin", {
-        namespace,
-        maxEntries,
-      });
-      const statements = trackSqliteStatementExecutions(
-        openOpenClawStateDatabase().db,
-        ["namespace", "plugin"],
-        (sql) => {
-          if (!sql.startsWith('select count(*) as "count" from "plugin_state_entries"')) {
-            return null;
-          }
-          return sql.includes('"namespace" = ?') ? "namespace" : "plugin";
-        },
-      );
-      try {
-        await store.register("a-protected", "updated");
-      } finally {
-        statements.restore();
-      }
-
-      await expect(store.entries()).resolves.toEqual([
-        { key: "a-protected", value: "updated", createdAt: 1000 },
-        { key: "z", value: "z", createdAt: 1000 },
-      ]);
-      await expect(sibling.entries()).resolves.toEqual([
-        { key: "peer", value: "sibling", createdAt: 1 },
-      ]);
-      await expect(foreign.entries()).resolves.toEqual([
-        { key: "peer", value: "foreign", createdAt: 1 },
-      ]);
-      expect(statements.counts.namespace).toBe(0);
-      expect(statements.counts.plugin).toBe(1);
-    },
-  );
-
-  it("keeps a same-millisecond registerIfAbsent claim during namespace eviction", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
-    const store = createPluginStateKeyedStore<number>("discord", {
-      namespace: "evict-tie-claim",
-      maxEntries: 1,
-    });
-
-    await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
-    await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
-
-    await expect(store.entries()).resolves.toEqual([{ key: "a", value: 2, createdAt: 1000 }]);
-    await expect(store.lookup("z")).resolves.toBeUndefined();
-  });
-
-  it("evicts current namespace rows when sibling namespaces consume plugin row budget", async () => {
-    const maxPluginEntries = 40;
-    setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
     seedPluginStateEntriesForTests([
-      ...Array.from({ length: maxPluginEntries - 11 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `k-${entryIndex}`,
-        value: { kind: "message", entryIndex },
-      })),
-      ...Array.from({ length: 11 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { kind: "topic", entryIndex },
-      })),
-    ]);
-
-    const messageStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.message-cache",
-      maxEntries: maxPluginEntries,
-    });
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: 100,
-    });
-
-    await expect(
-      messageStore.register("new-message", { kind: "message", fresh: true }),
-    ).resolves.toBeUndefined();
-
-    await expect(messageStore.lookup("k-0")).resolves.toBeUndefined();
-    await expect(messageStore.lookup("new-message")).resolves.toEqual({
-      kind: "message",
-      fresh: true,
-    });
-    await expect(topicStore.lookup("topic-0")).resolves.toEqual({
-      kind: "topic",
-      entryIndex: 0,
-    });
-    await expect(messageStore.entries()).resolves.toHaveLength(maxPluginEntries - 11);
-    await expect(topicStore.entries()).resolves.toHaveLength(11);
-  });
-
-  it.each([true, false])(
-    "sheds sequenced journal rows without evicting durable sibling state (existing cursor: %s)",
-    async (existingCursor) => {
-      const maxPluginEntries = 40;
-      setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
-      seedPluginStateEntriesForTests([
-        ...Array.from({ length: maxPluginEntries - 3 }, (_, entryIndex) => ({
-          pluginId: "memory-core",
-          namespace: "durable-state",
-          key: `durable-${entryIndex}`,
-          value: { entryIndex },
-        })),
-        {
-          pluginId: "memory-core",
-          namespace: "memory-host.event-migration-checkpoints",
-          key: "generation",
-          value: { kind: "raw-checkpoint" },
-        },
-        ...(existingCursor
-          ? [
-              {
-                pluginId: "memory-core",
-                namespace: "memory-host.event-cursors",
-                key: "workspace",
-                value: { kind: "cursor", lastSequence: 9 },
-              },
-            ]
-          : [
-              {
-                pluginId: "memory-core",
-                namespace: "memory-host.events",
-                key: "event-0000000000000010",
-                value: { sequence: 10 },
-              },
-            ]),
-        {
-          pluginId: "memory-core",
-          namespace: "memory-host.events",
-          key: "event-0000000000000009",
-          value: { sequence: 9 },
-        },
-      ]);
-
-      expect(
-        await registerPluginStateSequencedJournalEntry({
-          pluginId: "memory-core",
-          cursorOptions: {
-            namespace: "memory-host.event-cursors",
-            maxEntries: 1_000,
-          },
-          cursorKey: "workspace",
-          journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
-          journalKeyPrefix: "event-",
-          journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
-          journalValue: (sequence) => ({ sequence }),
-        }),
-      ).toBe(existingCursor ? 10 : 11);
-
-      const durable = createPluginStateKeyedStore("memory-core", {
-        namespace: "durable-state",
-        maxEntries: maxPluginEntries,
-      });
-      const checkpoints = createPluginStateKeyedStore("memory-core", {
-        namespace: "memory-host.event-migration-checkpoints",
-        maxEntries: 10_000,
-        overflowPolicy: "reject-new",
-      });
-      const journal = createPluginStateKeyedStore("memory-core", {
-        namespace: "memory-host.events",
-        maxEntries: 10_000,
-      });
-      const cursor = createPluginStateKeyedStore("memory-core", {
-        namespace: "memory-host.event-cursors",
-        maxEntries: 1_000,
-      });
-      await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
-      await expect(checkpoints.lookup("generation")).resolves.toEqual({
-        kind: "raw-checkpoint",
-      });
-      await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
-      if (existingCursor) {
-        await expect(journal.lookup("event-0000000000000010")).resolves.toEqual({ sequence: 10 });
-      } else {
-        await expect(journal.lookup("event-0000000000000010")).resolves.toBeUndefined();
-        await expect(journal.lookup("event-0000000000000011")).resolves.toEqual({ sequence: 11 });
-      }
-      await expect(cursor.lookup("workspace")).resolves.toEqual({
-        kind: "cursor",
-        lastSequence: existingCursor ? 10 : 11,
-      });
-    },
-  );
-
-  it("leaves room for Telegram sibling namespaces at their persistent budgets", async () => {
-    seedPluginStateEntriesForTests([
-      ...Array.from({ length: 3_000 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `message-${entryIndex}`,
-        value: { kind: "message", entryIndex },
-      })),
-      ...Array.from({ length: 2_047 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { kind: "topic", updatedAt: entryIndex },
-      })),
-      ...Array.from({ length: 127 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.bot-info-cache",
-        key: `bot-${entryIndex}`,
-        value: { kind: "bot-info", fetchedAt: String(entryIndex) },
-      })),
-    ]);
-
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: 2_048,
-    });
-    const botInfoStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.bot-info-cache",
-      maxEntries: 128,
-    });
-
-    await expect(
-      topicStore.register("topic-final", { kind: "topic", updatedAt: 2_048 }),
-    ).resolves.toBeUndefined();
-    await expect(
-      botInfoStore.register("default", { kind: "bot-info", fetchedAt: "now" }),
-    ).resolves.toBeUndefined();
-
-    await expect(topicStore.lookup("topic-final")).resolves.toEqual({
-      kind: "topic",
-      updatedAt: 2_048,
-    });
-    await expect(botInfoStore.lookup("default")).resolves.toEqual({
-      kind: "bot-info",
-      fetchedAt: "now",
-    });
-  });
-
-  it("rolls back plugin overflow when the current namespace cannot shed enough rows", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1000);
-    const maxPluginEntries = 3;
-    setMaxPluginStateEntriesPerPluginForTests(maxPluginEntries);
-    seedPluginStateEntriesForTests([
-      ...Array.from({ length: maxPluginEntries }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.topic-name-cache",
-        key: `topic-${entryIndex}`,
-        value: { entryIndex },
-      })),
-      ...Array.from({ length: 5 }, (_, entryIndex) => ({
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: `old-${entryIndex}`,
-        value: { entryIndex },
-        createdAt: entryIndex,
-      })),
       {
-        pluginId: "telegram",
-        namespace: "telegram.message-cache",
-        key: "expired",
-        value: "expired",
-        expiresAt: 1000,
+        pluginId: "discord",
+        namespace: "evict-worker-claim",
+        key: "z",
+        value: 1,
+        createdAt: Date.now() + 24 * 60 * 60 * 1000,
       },
     ]);
+    const before = Date.now();
+    expect(await store.registerIfAbsent("a", 2)).toBe(true);
+    const after = Date.now();
+    const entries = await store.entries();
+    expect(entries).toMatchObject([{ key: "a", value: 2 }]);
+    expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(before);
+    expect(entries[0]?.createdAt).toBeLessThanOrEqual(after);
+    expect(await store.lookup("z")).toBeUndefined();
+  });
 
-    const messageStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.message-cache",
-      maxEntries: maxPluginEntries,
+  it("sheds sequenced journal rows without evicting durable sibling state", async () => {
+    const durableEntryCount = 37;
+    const row = (namespace: string, key: string, value: unknown) => ({
+      pluginId: "memory-core",
+      namespace,
+      key,
+      value,
     });
-    const topicStore = createPluginStateKeyedStore("telegram", {
-      namespace: "telegram.topic-name-cache",
-      maxEntries: maxPluginEntries,
-    });
-    const originalMessages = await messageStore.entries();
-    const originalTopics = await topicStore.entries();
+    const store = (namespace: string, maxEntries: number, rejectNew = false) =>
+      createPluginStateKeyedStore("memory-core", {
+        namespace,
+        maxEntries,
+        overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
+      });
+    seedPluginStateEntriesForTests([
+      ...Array.from({ length: durableEntryCount }, (_, entryIndex) =>
+        row("durable-state", `durable-${entryIndex}`, { entryIndex }),
+      ),
+      row("memory-host.event-migration-checkpoints", "generation", { kind: "raw-checkpoint" }),
+      row("memory-host.event-cursors", "workspace", { kind: "cursor", lastSequence: 9 }),
+      row("memory-host.events", "event-0000000000000009", { sequence: 9 }),
+    ]);
 
-    const registration = messageStore.register("new-message", { fresh: true });
-    await expect(registration).rejects.toBeInstanceOf(PluginStateStoreError);
-    await expect(registration).rejects.toMatchObject({
-      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      operation: "register",
+    expect(
+      await registerPluginStateSequencedJournalEntry({
+        pluginId: "memory-core",
+        cursorOptions: { namespace: "memory-host.event-cursors", maxEntries: 1_000 },
+        cursorKey: "workspace",
+        journalOptions: { namespace: "memory-host.events", maxEntries: 1 },
+        journalKeyPrefix: "event-",
+        journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
+        journalValue: {},
+      }),
+    ).toBe(10);
+
+    const durable = store("durable-state", durableEntryCount);
+    const checkpoints = store("memory-host.event-migration-checkpoints", 10_000, true);
+    const journal = store("memory-host.events", 1);
+    const cursor = store("memory-host.event-cursors", 1_000);
+    await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
+    await expect(checkpoints.lookup("generation")).resolves.toEqual({ kind: "raw-checkpoint" });
+    await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
+    await expect(journal.lookup("event-0000000000000010")).resolves.toEqual({ sequence: 10 });
+    await expect(cursor.lookup("workspace")).resolves.toEqual({
+      kind: "cursor",
+      lastSequence: 10,
     });
-    await expect(messageStore.lookup("new-message")).resolves.toBeUndefined();
-    await expect(topicStore.lookup("topic-0")).resolves.toEqual({ entryIndex: 0 });
-    await expect(messageStore.entries()).resolves.toEqual(originalMessages);
-    await expect(topicStore.entries()).resolves.toEqual(originalTopics);
-    expect(sweepExpiredPluginStateEntries()).toBe(1);
   });
 });

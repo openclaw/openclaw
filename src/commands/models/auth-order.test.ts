@@ -15,8 +15,9 @@ const mocks = vi.hoisted(() => ({
   refreshRunningGatewayAuthState: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Order tests record fixture writes instead of mutating persistent credentials.
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: async (...args: unknown[]) => mocks.ensureAuthProfileStore(...args),
   setAuthProfileOrder: mocks.setAuthProfileOrder,
   externalCliDiscoveryForProviderAuth: () => undefined,
   resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-profiles.json`,
@@ -38,8 +39,7 @@ vi.mock("./auth-refresh.js", () => ({
   refreshRunningGatewayAuthState: mocks.refreshRunningGatewayAuthState,
 }));
 
-const { modelsAuthOrderClearCommand, modelsAuthOrderGetCommand, modelsAuthOrderSetCommand } =
-  await import("./auth-order.js");
+const { modelsAuthOrderGetCommand, modelsAuthOrderUpdateCommand } = await import("./auth-order.js");
 
 function createRuntime(): RuntimeEnv & { logs: string[] } {
   const logs: string[] = [];
@@ -89,7 +89,7 @@ describe("models auth order", () => {
 
   it("set writes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
-    await modelsAuthOrderSetCommand(
+    await modelsAuthOrderUpdateCommand(
       { provider: "anthropic", agent: "ops", order: ["anthropic:b", "anthropic:a"] },
       runtime,
     );
@@ -120,7 +120,7 @@ describe("models auth order", () => {
     });
     const runtime = createRuntime();
 
-    await modelsAuthOrderSetCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
+    await modelsAuthOrderUpdateCommand({ provider: "x-ai", order: ["xai:a"] }, runtime);
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/agent-main",
@@ -132,7 +132,7 @@ describe("models auth order", () => {
 
   it("clear removes the store order and refreshes a running gateway", async () => {
     const runtime = createRuntime();
-    await modelsAuthOrderClearCommand({ provider: "anthropic" }, runtime);
+    await modelsAuthOrderUpdateCommand({ provider: "anthropic", order: null }, runtime);
 
     expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/agent-main",
@@ -152,7 +152,10 @@ describe("models auth order", () => {
     mocks.setAuthProfileOrder.mockResolvedValue(null);
 
     await expect(
-      modelsAuthOrderSetCommand({ provider: "anthropic", order: ["anthropic:a"] }, createRuntime()),
+      modelsAuthOrderUpdateCommand(
+        { provider: "anthropic", order: ["anthropic:a"] },
+        createRuntime(),
+      ),
     ).rejects.toThrow("Failed to update auth state");
     expect(mocks.refreshRunningGatewayAuthState).not.toHaveBeenCalled();
   });

@@ -7,11 +7,12 @@ import {
   isCommandPaletteShortcut,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   shellNavDrawerTriggerFromEvent,
-  type CommandPaletteElement,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette-contract.ts";
+import { registryFor } from "../components/overlay-registry.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
@@ -26,14 +27,27 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
+  resolveNewSessionShortcut,
 } from "../lib/keyboard-shortcut-contract.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import {
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
+import {
+  readDebugOverlayMode,
+  shouldCloseDebugOverlay,
+  type DebugOverlayMode,
+} from "../pages/debug/debug-overlay-state.ts";
+import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
-  DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
+  DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
@@ -53,46 +67,40 @@ import {
 } from "./native-web-chrome.ts";
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
+  NAVIGATION_RAIL_WIDTH,
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
-  moveToastToNavDrawer,
-  restoreToastFromNavDrawer,
+  setToastInNavDrawer,
+  navDrawerFocusableElements,
   visibleNavDrawerToggle,
+  type ShellNavigationElements,
 } from "./navigation-surface.ts";
-import { isHomePanelAvailable } from "./panel-availability.ts";
+import { isCustodianPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
-type DebugOverlayElement = HTMLElement & {
-  toggle: () => void;
-};
+let nativeCommandsOwner: (() => void)[] | undefined;
 
-type KeyboardShortcutsDialogElement = HTMLElement & {
-  isOpen: boolean;
-  toggle: () => void;
-};
-
-let nativeCommandsOwner: AbortController | undefined;
-
-export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
+export interface ShellChromeHost
+  extends ShellNewSessionHost, ShellPanelHost, ShellNavigationElements {
+  readonly elements: ShellOwnedElements;
+  readonly element: HTMLElement;
+  readonly isConnected: boolean;
   readonly activeSessionKey: string;
-  readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
-  readonly commandPalette: CommandPaletteElement | undefined;
-  readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
+  readonly queryRenderedElement: (tagName: string) => Element | null;
+  readonly navigationSidebar: HTMLElement;
   navDrawerOpen: boolean;
   desktopNavigationExpanded: boolean;
   navDrawerTrigger: HTMLElement | null;
-  nativeHistoryState: NativeHistoryState;
+  setNativeHistoryState(state: NativeHistoryState): void;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-  pendingNativeNewSession: boolean;
-  requestUpdate(): void;
+  invalidate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   exitSettings(): void;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  openNewSession(agentId: string): void;
   chatNavigationOptions(
     face: BoardFace,
     options?: ApplicationNavigationOptions,
@@ -101,10 +109,17 @@ export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
 
 export class ShellChromeOwner {
   readonly panels: ShellPanelOwner;
+  private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
-  private listeners: AbortController | undefined;
+  private listeners: (() => void)[] | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
+    this.palette = new ShellCommandPaletteOwner(host, {
+      request: (element, event, replay) => this.requestLazyElement(element, event, replay),
+      clear: (event) => this.clearPendingLazyAction(event),
+      cancel: () => this.cancelPendingLazyAction(),
+      pending: () => this.pendingLazyAction?.eventType === COMMAND_PALETTE_OPEN_EVENT,
+    });
     this.panels = new ShellPanelOwner(host, (element, event) =>
       this.requestLazyElement(element, event),
     );
@@ -113,40 +128,40 @@ export class ShellChromeOwner {
 
   connect(): void {
     this.disconnect();
-    this.listeners = new AbortController();
-    // One connection owns all three targets; abort removes exactly its listeners.
-    const options = { signal: this.listeners.signal };
     const host = this.host;
-    host.nativeHistoryState = readNativeHistoryState();
-    host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
-    document.addEventListener("keydown", this.handleDocumentKeydown, {
-      capture: true,
-      signal: this.listeners.signal,
-    });
-    document.addEventListener("keydown", this.handleDocumentKeydownBubble, options);
-    window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
-    window.addEventListener("drop", this.handleUnhandledFileDrag, options);
+    host.setNativeHistoryState(readNativeHistoryState());
+    this.listeners = [
+      listen(host.element, COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget),
+      listen(document, "keydown", this.handleDocumentKeydown, { capture: true }),
+      listen(document, "keydown", this.handleDocumentKeydownBubble),
+      listen(window, "dragover", this.handleUnhandledFileDrag),
+      listen(window, "drop", this.handleUnhandledFileDrag),
+    ];
+    for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
+      this.listeners.push(listen(host.element, type, () => host.invalidate()));
+    }
     // Shipped Mac hosts use these same events even when native web chrome is absent.
     for (const [type, listener] of [
-      [COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen],
+      [COMMAND_PALETTE_OPEN_EVENT, this.palette.open],
       [SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle],
       [DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest],
       [KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest],
       ["resize", this.handleWindowResize],
       [NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState],
-      ["openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar],
-      ["openclaw:native-open-search", this.handleNativeOpenSearch],
+      ["openclaw:native-toggle-sidebar", () => this.toggleNavigationSurface()],
+      ["openclaw:native-open-search", this.openPalette],
       ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
       ["openclaw:native-new-session", this.handleNativeNewSession],
       ["openclaw:native-navigate", this.handleNativeNavigate],
       [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
       [BROWSER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredBrowserToggle],
+      [LINK_READER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredLinkReaderToggle],
       [DESKTOP_PANEL_TOGGLE_EVENT, this.panels.handleDeferredDesktopToggle],
-      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.panels.handleDeferredAssistantToggle],
-      [HOME_PANEL_TOGGLE_EVENT, this.panels.handleDeferredAssistantToggle],
+      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
+      [HOME_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
       [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
     ] as const) {
-      window.addEventListener(type, listener, options);
+      this.listeners.push(listen(window, type, listener));
     }
     this.navDrawerSwipe.connect();
     if (isMobileNavLayout()) {
@@ -159,8 +174,9 @@ export class ShellChromeOwner {
   }
 
   disconnect(): void {
+    this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
-    this.listeners?.abort();
+    this.listeners?.forEach((stop) => stop());
     this.listeners = undefined;
     this.navDrawerSwipe.disconnect();
     if (listenerOwner && nativeCommandsOwner === listenerOwner) {
@@ -187,16 +203,20 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
+      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host.element) ?? null;
       host.navDrawerOpen = true;
-      moveToastToNavDrawer(host);
-      if (!this.navDrawerSwipe.opened()) {
-        void host.updateComplete.then(() => {
-          if (host.isConnected && host.navDrawerOpen) {
-            host.querySelector<HTMLElement>(".shell-nav")?.focus({ preventScroll: true });
-          }
-        });
-      }
+      setToastInNavDrawer(host, true);
+      void host.updateComplete.then(() => {
+        if (!host.isConnected || !host.navDrawerOpen) {
+          return;
+        }
+        this.navDrawerSwipe.reset();
+        const drawer = host.navDrawerElement;
+        if (drawer) {
+          const target = navDrawerFocusableElements(drawer)[0] ?? drawer;
+          focusWithoutTooltip(target, { preventScroll: true });
+        }
+      });
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -207,53 +227,55 @@ export class ShellChromeOwner {
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
     }
+    // The sidebar owns its rail button markup and exposes no focused-button handle.
+    const activeRailView = host.navigationSidebar.querySelector<HTMLElement>(
+      '[data-navigation-view][aria-pressed="true"]',
+    );
     host.closeNavDrawer();
     context.navigation.update({ navCollapsed: nextNavCollapsed });
     if (nextNavCollapsed) {
-      void host.updateComplete.then(() => {
-        this.restoreFocusTo(host.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
-      });
+      void host.updateComplete.then(() => this.restoreFocusTo(activeRailView));
     }
   };
 
-  /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
+  /** Restore to the persistent rail view, or content when navigation is unavailable. */
   restoreFocusTo = (target: HTMLElement | null | undefined): void =>
     focusWithoutTooltip(
-      target?.isConnected && target.checkVisibility()
-        ? target
-        : this.host.querySelector<HTMLElement>(".content"),
+      target?.isConnected && target.checkVisibility() ? target : this.host.contentElement,
     );
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
+    // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
+    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
-      this.navDrawerSwipe.closed();
+      this.navDrawerSwipe.reset();
     }
-    restoreToastFromNavDrawer(host);
-    const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
+    setToastInNavDrawer(host, false);
+    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (options.restoreFocus) {
+    if (restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
 
   readonly resizeNavigation = (splitRatio: number): void => {
     const host = this.host;
-    const shell = host.querySelector<HTMLElement>(".shell");
+    const shell = host.shellElement;
     const context = host.context;
     if (!shell || !context) {
       return;
     }
+    const railWidth = shell.classList.contains("shell--navigation-rail")
+      ? NAVIGATION_RAIL_WIDTH
+      : 0;
     const navWidth = Math.round(
-      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth)),
+      Math.min(NAV_WIDTH_MAX, Math.max(NAV_WIDTH_MIN, splitRatio * shell.clientWidth - railWidth)),
     );
     context.navigation.update({ navWidth });
   };
-
-  readonly handleNativeToggleSidebar = (): void => this.toggleNavigationSurface();
-  readonly handleNativeOpenSearch = (): void => this.openPalette();
 
   readonly handleNativeToggleSearch = (event: Event): void => {
     event.preventDefault(); // Acknowledges toggle so native does not fall back to open-only search.
@@ -261,25 +283,7 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNewSession = (): void => {
-    const host = this.host;
-    const context = host.context;
-    if (host.onboardingMode) {
-      return;
-    }
-    if (!context) {
-      // Native document-finish can beat runtime initialization; replay the idempotent request.
-      host.pendingNativeNewSession = true;
-      return;
-    }
-    if (
-      !readSessionMethodAccess(context.gateway.snapshot, {
-        method: "sessions.create",
-        params: {},
-      }).allowed
-    ) {
-      return;
-    }
-    host.openNewSession(context.agentSelection.state.selectedId ?? "");
+    openShellNewSession(this.host, "native");
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
@@ -316,7 +320,7 @@ export class ShellChromeOwner {
     if (typeof detail?.canGoBack !== "boolean" || typeof detail.canGoForward !== "boolean") {
       return;
     }
-    this.host.nativeHistoryState = detail;
+    this.host.setNativeHistoryState(detail);
   };
 
   readonly handleWindowResize = (): void => {
@@ -333,12 +337,10 @@ export class ShellChromeOwner {
       // Preserve the tab-local state while keeping the responsive handoff expanded.
       host.desktopNavigationExpanded = host.context?.navigation.snapshot.navCollapsed ?? false;
     }
-    host.requestUpdate();
+    host.invalidate();
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
-        requestAnimationFrame(() => {
-          this.restoreFocusTo(visibleNavDrawerToggle(host));
-        });
+        requestAnimationFrame(() => this.restoreFocusTo(visibleNavDrawerToggle(host.element)));
       }
     });
   };
@@ -364,14 +366,15 @@ export class ShellChromeOwner {
     }
   };
 
-  dismissSidebarTransientMenus = (): boolean => dismissNavigationTransientSurfaces(this.host);
+  dismissSidebarTransientMenus = (): boolean =>
+    dismissNavigationTransientSurfaces(this.host.element);
 
   private readonly handleDocumentKeydownBubble = (event: KeyboardEvent): void => {
     const host = this.host;
     if (event.defaultPrevented || !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
       return;
     }
-    if (host.navDrawerOpen && isMobileNavLayout() && !document.openClawModalLayers?.size) {
+    if (host.navDrawerOpen && isMobileNavLayout() && !this.shouldIgnoreSettingsEscape(event)) {
       event.preventDefault();
       host.closeNavDrawer({ restoreFocus: true });
     } else if (
@@ -385,14 +388,28 @@ export class ShellChromeOwner {
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
-    if (document.openClawModalLayers?.size) {
+    if (
+      host.lazyCustomElements.visibleState?.element === DEBUG_OVERLAY_ELEMENT &&
+      shouldCloseDebugOverlay(
+        event,
+        this.pendingDebugOverlayMode,
+        // Pending debug content owns this frame while its custom element loads.
+        host.element.querySelector(".debug-overlay"),
+      )
+    ) {
+      event.preventDefault();
+      host.lazyCustomElements.close();
+      return;
+    }
+    if (this.palette.handlePendingShortcut(event) || document.openClawModalLayers?.size) {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
       handleNavDrawerKeydown(host, event);
       return;
     }
-    if (!host.commandPalette && isCommandPaletteShortcut(event)) {
+    // A replaced workspace can retain its palette ref after the DOM is detached.
+    if (!host.elements.commandPalette?.isConnected && isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
       return;
@@ -421,6 +438,12 @@ export class ShellChromeOwner {
     if (event.defaultPrevented) {
       return;
     }
+    if (matchesShortcutCombo(resolveNewSessionShortcut(), event)) {
+      if (!event.repeat && openShellNewSession(this.host, "shortcut")) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT));
@@ -442,7 +465,7 @@ export class ShellChromeOwner {
       matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
       isSettingsTakeover(host.routeState.routeId)
     ) {
-      if (host.navDrawerOpen) {
+      if (host.navDrawerOpen && !this.shouldIgnoreSettingsEscape(event)) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
         return;
@@ -465,121 +488,173 @@ export class ShellChromeOwner {
     }
   };
 
+  get pendingDebugOverlayMode(): DebugOverlayMode {
+    return readDebugOverlayMode(this.pendingLazyAction);
+  }
+
+  togglePendingDebugOverlayMode(): void {
+    const event = this.pendingLazyAction;
+    if (
+      event?.eventType !== DEBUG_OVERLAY_REQUEST_EVENT ||
+      this.host.lazyCustomElements.visibleState?.element !== DEBUG_OVERLAY_ELEMENT
+    ) {
+      return;
+    }
+    event.detail = {
+      mode: this.pendingDebugOverlayMode === "minimized" ? "expanded" : "minimized",
+    };
+    persistLazyShellAction(event);
+    this.host.invalidate();
+  }
+
   private readonly handleDebugOverlayRequest = (event: Event): void => {
     const host = this.host;
     if (host.navDrawerOpen && isMobileNavLayout()) {
       host.closeNavDrawer({ restoreFocus: false });
     }
-    const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
-    if (isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)) {
-      host.querySelector<DebugOverlayElement>(DEBUG_OVERLAY_ELEMENT.tagName)?.toggle();
-      this.clearPendingLazyAction(descriptor);
+    if (host.lazyCustomElements.visibleState?.element === DEBUG_OVERLAY_ELEMENT) {
+      if (this.pendingDebugOverlayMode === "minimized") {
+        this.togglePendingDebugOverlayMode();
+      } else {
+        host.lazyCustomElements.close();
+      }
       return;
     }
-    this.requestLazyElement(DEBUG_OVERLAY_ELEMENT, descriptor);
+    const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
+    const overlay = host.elements.debugOverlay;
+    if (overlay?.isConnected) {
+      this.clearPendingLazyAction(descriptor);
+      if (descriptor.detail && "mode" in descriptor.detail) {
+        overlay.open(readDebugOverlayMode(descriptor));
+      } else {
+        overlay.toggle();
+      }
+      return;
+    }
+    this.requestLazyElement(DEBUG_OVERLAY_ELEMENT, descriptor, () => {
+      if (this.pendingLazyAction !== descriptor) {
+        return;
+      }
+      const mounted = host.elements.debugOverlay;
+      if (!mounted?.isConnected) {
+        return;
+      }
+      const mode = this.pendingDebugOverlayMode;
+      // Opening starts inner-content recovery. Retire only the outer intent first,
+      // or the shell would erase the new reload action recorded by the overlay.
+      this.clearPendingLazyAction(descriptor);
+      mounted.open(mode);
+    });
+  };
+
+  private readonly handleAssistantToggleBeforeMount = (event: Event): void => {
+    const host = this.host;
+    if (host.elements.assistantPanel?.isConnected) {
+      return;
+    }
+    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
+    if (!(home ? isHomePanelAvailable : isCustodianPanelAvailable)(host.context?.gateway)) {
+      event.preventDefault();
+      return;
+    }
+    // Native commands can arrive before the eager frame's first render.
+    const descriptor = lazyShellEvent(
+      home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT,
+      event,
+    );
+    this.pendingLazyAction = descriptor;
+    persistLazyShellAction(descriptor);
+    host.invalidate();
   };
 
   private readonly handleKeyboardShortcutsRequest = (event: Event): void => {
     const descriptor = lazyShellEvent(KEYBOARD_SHORTCUTS_REQUEST_EVENT, event);
-    if (isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)) {
-      this.host
-        .querySelector<KeyboardShortcutsDialogElement>(KEYBOARD_SHORTCUTS_ELEMENT.tagName)
-        ?.toggle();
+    const shortcuts = this.host.elements.keyboardShortcuts;
+    if (isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT) && shortcuts?.isConnected) {
+      shortcuts.toggle();
       this.clearPendingLazyAction(descriptor);
       return;
     }
     this.requestLazyElement(KEYBOARD_SHORTCUTS_ELEMENT, descriptor);
   };
 
-  // Open controls own Escape. Slotted options hide their listbox in shadow DOM,
-  // so recognize the open select host before Settings can consume the key.
+  // Only connected overlays and editable controls own Escape before Settings.
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
-      host.commandPalette?.isOpen ||
-      host.querySelector<KeyboardShortcutsDialogElement>(KEYBOARD_SHORTCUTS_ELEMENT.tagName)
-        ?.isOpen ||
+      (host.elements.commandPalette?.isConnected && host.elements.commandPalette.isOpen) ||
+      (host.elements.keyboardShortcuts?.isConnected && host.elements.keyboardShortcuts.isOpen) ||
       overlaySnapshot?.devicePairSetupOpen ||
-      host.approvalOverlay?.dialogOpen === true ||
-      document.openClawModalLayers?.size
+      (host.elements.approvalOverlay?.isConnected &&
+        host.elements.approvalOverlay.dialogOpen === true) ||
+      document.openClawModalLayers?.size ||
+      registryFor(document).stack.at(-1)?.open
     ) {
       return true;
     }
     const target = event.target;
-    return (
-      target instanceof Element &&
-      target.closest(
-        "input, textarea, select, wa-select[open], [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
-      ) !== null
-    );
+    const control =
+      target instanceof Element
+        ? target.closest(
+            "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+          )
+        : null;
+    // The drawer owns Escape; its own dialog role is not a nested modal.
+    return control !== null && control !== host.navDrawerElement;
   }
 
-  private readonly handleCommandPaletteOpen = (event: Event, replay?: () => void): void => {
-    const host = this.host;
-    const palette = host.commandPalette;
-    const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT, event);
-    if (palette) {
-      palette.openPalette();
-      this.clearPendingLazyAction(descriptor);
-      return;
-    }
-    this.requestLazyElement(host.commandPaletteElement, descriptor, replay);
-  };
+  get commandPaletteLoading() {
+    return this.palette.loading;
+  }
 
-  readonly openPalette = (): void =>
-    this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
+  readonly openPalette = (): void => this.palette.open();
+  readonly closePendingPalette = (): void => this.palette.closePending();
+  readonly togglePalette = (): void => this.palette.toggle();
+  synchronizeCommandPaletteScope(): void {
+    this.palette.synchronizeScope();
+  }
 
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
 
-  readonly togglePalette = (): void => {
-    const palette = this.host.commandPalette;
-    if (palette) {
-      palette.togglePalette();
-    } else {
-      this.openPalette();
-    }
-  };
-
-  readonly openApprovals = (): void =>
-    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
-
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;
     const descriptor = lazyShellEvent(SHELL_APPROVALS_OPEN_EVENT, event);
-    if (isOptionalElementDefined(host.execApprovalElement)) {
-      host.approvalOverlay?.show();
+    const overlay = host.elements.approvalOverlay;
+    if (isOptionalElementDefined(host.execApprovalElement) && overlay?.isConnected) {
+      overlay.show();
       this.clearPendingLazyAction(descriptor);
       return;
     }
     this.requestLazyElement(host.execApprovalElement, descriptor);
   };
 
-  private lazyElementForShellEvent(eventType: LazyShellEvent["eventType"]): OptionalCustomElement {
-    const host = this.host;
-    const elements: Record<LazyShellEvent["eventType"], OptionalCustomElement> = {
-      [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement,
-      [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT,
-      [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT,
-      [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement,
-      [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement,
-      [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement,
-      [CUSTODIAN_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
-      [HOME_PANEL_TOGGLE_EVENT]: host.assistantPanelElement,
-      [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement,
-    };
-    return elements[eventType];
-  }
-
   readonly restorePendingLazyAction = (): void => {
     const event = this.pendingLazyAction;
-    if (!event || this.host.lazyCustomElements.visibleState) {
+    if (
+      !event ||
+      this.host.lazyCustomElements.visibleState ||
+      this.commandPaletteLoading.waitingForComposition()
+    ) {
       return;
     }
-    const element = this.lazyElementForShellEvent(event.eventType);
-    if (isOptionalElementDefined(element) && !this.host.querySelector(element.tagName)) {
+    const host = this.host;
+    const elements: Record<LazyShellEvent["eventType"], string> = {
+      [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement.tagName,
+      [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT.tagName,
+      [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT.tagName,
+      [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement.tagName,
+      [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement.tagName,
+      [LINK_READER_PANEL_TOGGLE_EVENT]: host.linkReaderPanelElement.tagName,
+      [DESKTOP_PANEL_TOGGLE_EVENT]: host.desktopPanelElement.tagName,
+      [CUSTODIAN_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
+      [HOME_PANEL_TOGGLE_EVENT]: "openclaw-assistant-panel",
+      [SHELL_APPROVALS_OPEN_EVENT]: host.execApprovalElement.tagName,
+    };
+    const tagName = elements[event.eventType];
+    if (customElements.get(tagName) && !host.queryRenderedElement(tagName)) {
       // Loaded but render-gated (e.g. the shell is still booting): nothing can
       // consume the dispatch yet, and re-dispatching re-arms a request/update
       // cycle whose microtasks starve the boot (Gateway socket included).
@@ -597,6 +672,9 @@ export class ShellChromeOwner {
     event: LazyShellEvent,
     replay: () => unknown = () => this.dispatchLazyShellEvent(event),
   ): void {
+    if (element !== this.host.commandPaletteElement) {
+      this.commandPaletteLoading.clear();
+    }
     this.pendingLazyAction = event;
     persistLazyShellAction(event);
     this.host.lazyCustomElements.request(element, () => {
@@ -629,6 +707,7 @@ export class ShellChromeOwner {
   }
 
   cancelPendingLazyAction(): void {
+    this.commandPaletteLoading.clear();
     const event = this.pendingLazyAction;
     if (event) {
       this.clearPendingLazyAction(event);
@@ -636,6 +715,7 @@ export class ShellChromeOwner {
   }
 
   abandonPendingLazyActionForContext(): void {
+    this.commandPaletteLoading.clear();
     this.panels.reset();
     this.pendingLazyAction = null;
     clearLazyShellAction();
@@ -647,35 +727,17 @@ export class ShellChromeOwner {
     this.host.lazyCustomElements.abandon();
   }
 
-  readonly handleCommandPaletteSlashCommand = (command: string): void => {
-    const host = this.host;
-    const chatHandler = host.commandPaletteTarget?.owner.isConnected
-      ? host.commandPaletteTarget.onSlashCommand
-      : null;
-    if (chatHandler) {
-      chatHandler(command);
-      return;
-    }
-    // Chat can update its existing draft; other routes hand it through navigation.
-    const navigation = host.chatNavigationOptions("chat");
-    const search = new URLSearchParams(navigation?.search ?? "");
-    search.set("draft", command.endsWith(" ") ? command : `${command} `);
-    host.navigate("chat", { ...navigation, search: `?${search.toString()}` });
-  };
+  readonly handleCommandPaletteSlashCommand = (command: string): void =>
+    this.palette.handleSlashCommand(command);
 
   readonly handleCommandPaletteTarget = (event: Event): void =>
     applyCommandPaletteTargetEvent(this.host, event);
 
-  readonly nativeNavCollapsed = (): boolean => {
-    const host = this.host;
-    const mobileNavLayout = isMobileNavLayout();
-    return (
-      host.onboardingMode ||
-      mobileNavLayout ||
-      (isSettingsTakeover(host.routeState.routeId) && !mobileNavLayout) ||
-      (!host.navDrawerOpen &&
-        !host.desktopNavigationExpanded &&
-        (host.context?.navigation.snapshot.navCollapsed ?? false))
-    );
-  };
+  readonly nativeNavCollapsed = (): boolean =>
+    this.host.onboardingMode ||
+    isMobileNavLayout() ||
+    isSettingsTakeover(this.host.routeState.routeId) ||
+    (!this.host.navDrawerOpen &&
+      !this.host.desktopNavigationExpanded &&
+      (this.host.context?.navigation.snapshot.navCollapsed ?? false));
 }

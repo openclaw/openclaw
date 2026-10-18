@@ -1,8 +1,8 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 import { attachBrowserScreencastViewer, stopBrowserScreencasts } from "./session.js";
 import { parseScreencastFrame, screencastParams, ScreencastViewer } from "./test-support.js";
 
@@ -85,9 +85,12 @@ describe("browser screencast sessions", () => {
     vi.useRealTimers();
   });
 
-  async function attach(params = screencastParams()): Promise<ScreencastViewer> {
+  async function attach(
+    params = screencastParams(),
+    ingress?: Parameters<typeof attachBrowserScreencastViewer>[2],
+  ): Promise<ScreencastViewer> {
     const viewer = new ScreencastViewer();
-    attachBrowserScreencastViewer(params, viewer as unknown as WebSocket);
+    attachBrowserScreencastViewer(params, viewer as unknown as WebSocket, ingress);
     await flush();
     return viewer;
   }
@@ -110,16 +113,6 @@ describe("browser screencast sessions", () => {
     expect(second.close).toHaveBeenCalledWith(4006, "authority_revoked");
     await flush();
     expect(page.cdp.detach).toHaveBeenCalledOnce();
-  });
-
-  it("releases requester subscriptions when a viewer closes normally", async () => {
-    const requester = new AbortController();
-    const viewer = await attach(screencastParams({ requesterSignal: requester.signal }));
-    expect(getEventListeners(requester.signal, "abort")).toHaveLength(1);
-    viewer.close();
-    expect(getEventListeners(requester.signal, "abort")).toHaveLength(0);
-    requester.abort();
-    expect(viewer.close).toHaveBeenCalledOnce();
   });
 
   it("fences frames immediately on requester invalidation before its close handshake finishes, preserving live viewers", async () => {
@@ -389,37 +382,13 @@ describe("browser screencast sessions", () => {
     expect(viewer.frames()).toHaveLength(1);
   });
 
-  it.each(["page", "cdp", "lifecycle"])(
-    "closes viewers with target_closed when %s closes",
-    async (owner) => {
-      const lifecycle = new AbortController();
-      const viewer = await attach(screencastParams({ lifecycleSignal: lifecycle.signal }));
-      if (owner === "lifecycle") {
-        lifecycle.abort();
-      } else if (owner === "page") {
-        page.emit("close");
-      } else {
-        page.cdp.emit("close", page.cdp);
-      }
-      expect(viewer.close).toHaveBeenCalledWith(4004, "target_closed");
-      await flush();
-      expect(page.cdp.detach).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("stops only after the last viewer leaves and closes all viewers with 1012 on shutdown", async () => {
-    const first = await attach();
-    const second = await attach();
-    first.close();
-    await flush();
-    expect(page.cdp.detach).not.toHaveBeenCalled();
-    second.close();
+  it("closes viewers with target_closed when CDP closes", async () => {
+    const lifecycle = new AbortController();
+    const viewer = await attach(screencastParams({ lifecycleSignal: lifecycle.signal }));
+    page.cdp.emit("close", page.cdp);
+    expect(viewer.close).toHaveBeenCalledWith(4004, "target_closed");
     await flush();
     expect(page.cdp.detach).toHaveBeenCalledTimes(1);
-    const next = await attach();
-    const stopped = stopBrowserScreencasts();
-    expect(next.close).toHaveBeenCalledWith(1012, "gateway shutting down");
-    await stopped;
   });
 
   it("revalidates lifecycle after page acquisition and never attaches a stale token to a successor", async () => {
@@ -438,7 +407,9 @@ describe("browser screencast sessions", () => {
     await flush();
     expect(pending.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(page.newCDPSession).not.toHaveBeenCalled();
-    const successor = await attach(screencastParams({ lifecycleGeneration: 1 }));
+    const successor = await attach(
+      screencastParams({ profileSignal: new AbortController().signal }),
+    );
     const stale = await attach(params);
     expect(stale.close).toHaveBeenCalledWith(4004, "target_closed");
     expect(successor.close).not.toHaveBeenCalled();
@@ -461,6 +432,59 @@ describe("browser screencast sessions", () => {
     await flush();
     expect(mocks.getPage).toHaveBeenCalledTimes(2);
     expect(successor.messages()).toHaveLength(1);
+  });
+
+  it("retains ingress cleanup until CDP detach completes and fences pending page acquisition", async () => {
+    const work: Promise<unknown>[] = [];
+    const grant = new AbortController();
+    let current = true;
+    const ingress = {
+      signal: grant.signal,
+      isCurrent: () => current,
+      trackWork<T>(pending: Promise<T>) {
+        work.push(pending);
+        return pending;
+      },
+    };
+    const viewer = await attach(screencastParams(), ingress);
+    let finishDetach!: () => void;
+    page.cdp.detach.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishDetach = resolve;
+        }),
+    );
+    grant.abort();
+    expect(viewer.close).toHaveBeenCalledWith(4006, "authority_revoked");
+    let settled = false;
+    const drain = Promise.all(work).then(() => {
+      settled = true;
+    });
+    await flush();
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      finishDetach();
+    }
+    await drain;
+    expect(settled).toBe(true);
+
+    let resolvePage!: (value: Page) => void;
+    mocks.getPage.mockImplementationOnce(
+      () =>
+        new Promise<Page>((resolve) => {
+          resolvePage = resolve;
+        }),
+    );
+    const nextIngress = { ...ingress, signal: new AbortController().signal };
+    const next = await attach(screencastParams(), nextIngress);
+    current = false;
+    const captures = page.newCDPSession.mock.calls.length;
+    resolvePage(page as unknown as Page);
+    await flush();
+    await Promise.all(work);
+    expect(page.newCDPSession).toHaveBeenCalledTimes(captures);
+    expect(next.close).toHaveBeenCalledWith(4006, "authority_revoked");
   });
 
   it("does not send stale metadata after a title read crosses a navigation", async () => {

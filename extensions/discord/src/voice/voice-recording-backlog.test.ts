@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 const voiceAudio = await import("./audio.js");
+const { CAPTURE_FINALIZE_GRACE_MS } = await import("./session.js");
 
 defineDiscordVoiceTests(
   ({
@@ -65,7 +66,13 @@ defineDiscordVoiceTests(
         const receive = (target = entry) => {
           const stream = new PassThrough({ objectMode: true });
           streams.push(stream);
-          getSessionConnection(target).receiver.subscribe.mockReturnValueOnce(stream);
+          const receiver = getSessionConnection(target).receiver;
+          // This fixture keeps sending speech until the recording budget rejects it.
+          receiver.speaking.users.set("guest", Date.now());
+          stream.once("close", () => {
+            receiver.speaking.users.delete("guest");
+          });
+          receiver.subscribe.mockReturnValueOnce(stream);
           const receiving = handleSpeakingStart(manager, target, "guest").catch(
             (error: unknown) => {
               if (!(error instanceof Error) || !error.message.includes("recording backlog")) {
@@ -75,6 +82,7 @@ defineDiscordVoiceTests(
           );
           return { stream, receiving };
         };
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const first = receive();
         try {
           for (let chunk = 0; chunk < scenario.attempts; chunk++) {
@@ -88,6 +96,10 @@ defineDiscordVoiceTests(
             ]);
             if (!continuing) {
               break;
+            }
+            if (chunk === 0) {
+              await vi.advanceTimersByTimeAsync(CAPTURE_FINALIZE_GRACE_MS + 1);
+              expect(first.stream.destroyed).toBe(false);
             }
           }
           first.stream.end();
@@ -128,14 +140,18 @@ defineDiscordVoiceTests(
           expect(sink).toHaveBeenCalledTimes(calls + 1);
           expect(replacement.transcripts?.isCurrent()).toBe(true);
         } finally {
-          release.resolve();
-          for (const stream of streams) {
-            stream.end();
+          try {
+            release.resolve();
+            for (const stream of streams) {
+              stream.end();
+            }
+            await first.receiving;
+            await entry.processingQueue;
+            await manager.destroy();
+          } finally {
+            writes.mockRestore();
+            vi.useRealTimers();
           }
-          await first.receiving;
-          await entry.processingQueue;
-          await manager.destroy();
-          writes.mockRestore();
         }
       },
     );

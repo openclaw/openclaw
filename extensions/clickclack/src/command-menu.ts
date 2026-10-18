@@ -3,6 +3,7 @@ import {
   listNativeCommandSpecsForConfig,
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
+import { truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { createClickClackClient } from "./http-client.js";
 import type { CoreConfig } from "./types.js";
 
@@ -21,10 +22,6 @@ type ClickClackCommandMenuLogger = {
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 };
-
-function truncateCodePoints(value: string, maxLength: number): string {
-  return Array.from(value).slice(0, maxLength).join("");
-}
 
 function commandArgsHint(spec: NativeCommandSpec): string {
   if (spec.args?.length) {
@@ -92,8 +89,6 @@ export async function syncClickClackCommandMenu(params: {
   log?: ClickClackCommandMenuLogger;
 }): Promise<void> {
   try {
-    // Native specs are the Phase 7c scope. Skill, plugin, and custom command
-    // catalogs can be added later when their ClickClack semantics are defined.
     const specs = listNativeCommandSpecsForConfig(params.cfg, { provider: "clickclack" });
     const commands = mapNativeCommandSpecsToClickClackMenu(specs, params.log);
     await params.client.setBotCommands(commands);

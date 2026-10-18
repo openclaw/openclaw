@@ -1,7 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { resolveConfiguredModelEntries } from "./configured-model-entries.js";
+import {
+  collectConfiguredCatalogModels,
+  resolveConfiguredModelEntries,
+} from "./configured-model-entries.js";
 
 describe("resolveConfiguredModelEntries", () => {
+  it("collects authored catalog candidates with scoped aliases and literal provider declarations", () => {
+    const models = collectConfiguredCatalogModels({
+      agents: {
+        defaults: {
+          model: "local-chat",
+          models: { "ollama/qwen3:8b": { alias: "local-chat" }, "ollama/*": {} },
+        },
+        entries: {
+          ops: { model: "local-chat", models: { "ollama/llama3.2": { alias: "local-chat" } } },
+        },
+      },
+      hooks: { gmail: { model: "local-chat" } },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [
+              {
+                id: "qwen3:8bb",
+                name: "Typo",
+                baseUrl: "http://other-server:11434",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32768,
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(models).toEqual([
+      { provider: "ollama", modelId: "qwen3:8bb", baseUrl: "http://other-server:11434" },
+      { provider: "ollama", modelId: "qwen3:8b", baseUrl: "http://127.0.0.1:11434" },
+      { provider: "ollama", modelId: "llama3.2", baseUrl: "http://127.0.0.1:11434" },
+    ]);
+  });
+
+  it.each([undefined, [], ["openclaw"]])(
+    "inherits picker choices and lets an agent replace them with %j",
+    (pickerRuntimes) => {
+      const { byKey } = resolveConfiguredModelEntries({
+        agentId: "ops",
+        allowPluginNormalization: false,
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.6-sol",
+              models: { "openai/gpt-5.6-sol": { pickerRuntimes: ["codex", "codex"] } },
+            },
+            entries: {
+              ops: {
+                models: {
+                  "openai/gpt-5.6-sol": {
+                    alias: "Work",
+                    ...(pickerRuntimes === undefined ? {} : { pickerRuntimes }),
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      expect(byKey.get("openai/gpt-5.6-sol")?.pickerRuntimes).toEqual(pickerRuntimes ?? ["codex"]);
+    },
+  );
+
   it("parses configured models without loading provider-runtime normalization", () => {
     const { entries } = resolveConfiguredModelEntries({
       allowPluginNormalization: false,

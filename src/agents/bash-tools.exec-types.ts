@@ -1,8 +1,4 @@
-/**
- * Shared type contracts for bash exec tools.
- * Defines defaults, approval follow-up payloads, elevated policy defaults, and
- * tool result details consumed across exec hosts and process controls.
- */
+import type { NodePermissionRequest } from "../../packages/gateway-protocol/src/node-permissions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
@@ -17,13 +13,51 @@ import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-a
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
+import type { ToolApprovalReview } from "../shared/tool-approval-reviews.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
-import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
-/** Runtime defaults passed into exec/process tool factories. */
+type ExecProcessFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "signal"
+  | "aborted"
+  | "runtime-error";
+
+export type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
+/** Normalized result of a spawned exec process. */
+export type ExecProcessOutcome =
+  | {
+      status: "completed";
+      exitCode: number;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
+      noOutputTimedOut?: boolean;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
+      durationMs: number;
+      aggregated: string;
+      timedOut: boolean;
+      noOutputTimedOut?: boolean;
+      failureKind: ExecProcessFailureKind;
+      oomScoreWrapperSelected?: boolean;
+      reason: string;
+    };
+
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
@@ -32,6 +66,7 @@ export type ExecToolDefaults = {
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
+  continuesConversation?: boolean;
   node?: string;
   /** Default working directory for node-host execution only. */
   nodeCwd?: string;
@@ -45,10 +80,16 @@ export type ExecToolDefaults = {
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
   preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  /** An explicit snapshot, including an empty one, replaces local store access. */
+  preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
+  /** Host-prepared routing hint; remote workers have no Gateway session database. */
+  preparedSubagentExecution?: boolean;
   autoReviewer?: ExecAutoReviewer;
   /** Reads current attempt context only when a command needs review. */
   reviewTranscript?: () => ExecAutoReviewTranscript | undefined;
   agentId?: string;
+  /** Credential owner when execution borrows another agent's tool policy. */
+  executionAgentId?: string;
   backgroundMs?: number;
   cleanupMs?: number;
   timeoutSec?: number;
@@ -66,6 +107,8 @@ export type ExecToolDefaults = {
   processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
+  /** Executing session when tool policy is borrowed from a different session. */
+  runSessionKey?: string;
   /** Stable agent run that owns any approval created by this tool. */
   runId?: string;
   /** Exact admitted execution instance that owns secret-egress proxy access. */
@@ -100,6 +143,44 @@ export type ExecToolDefaults = {
   cwd?: string;
 };
 
+/** Request and approval context shared by Gateway and node execution hosts. */
+export type ExecHostCommandParams = {
+  command: string;
+  env: Record<string, string>;
+  requestedEnv?: Record<string, string>;
+  timeoutSec?: number;
+  defaultTimeoutSec: number;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  bypassHostApprovalFloors?: boolean;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
+  signal?: AbortSignal;
+  strictInlineEval?: boolean;
+  commandHighlighting?: boolean;
+  trigger?: string;
+  agentId?: string;
+  sessionKey?: string;
+  toolCallId?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
+  bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
+  nonInteractiveApproval?: boolean;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  approvalFollowupMode?: "agent" | "direct";
+  warnings: string[];
+  notifySessionKey?: string;
+  approvalRunningNoticeMs: number;
+  processContinuationAvailable?: boolean;
+  trustedSafeBinDirs?: ReadonlySet<string>;
+};
+
 /** Outcome passed to approval follow-up factories after approved async exec. */
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
@@ -132,16 +213,11 @@ export type ExecElevatedDefaults = {
 };
 
 /** One model-backed approval review recorded on an exec tool call. */
-export type ExecToolApprovalReview = {
-  id: string;
-  label: string;
-  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
-  riskLevel?: string;
-  rationale?: string;
-};
+export type ExecToolApprovalReview = Omit<ToolApprovalReview, "userAuthorization">;
 
 /** Structured details returned by exec tool calls. */
 export type ExecToolDetails = {
+  permissionMissing?: NodePermissionRequest;
   approvalReviews?: readonly ExecToolApprovalReview[];
   approvalReviewOutcome?: "approved" | "denied" | "reviewing";
 } & (
@@ -159,7 +235,7 @@ export type ExecToolDetails = {
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied" | "permission-missing";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;

@@ -2,6 +2,11 @@
 const currentModuleUrl = import.meta.url;
 
 export const tuiPtyRuntimeEntrypoints = {
+  cli: {
+    currentModuleUrl,
+    sourceWorkerName: "../cli/tui-cli",
+    distWorkerPath: "cli/tui-cli.js",
+  },
   tui: {
     currentModuleUrl,
     sourceWorkerName: "tui",

@@ -92,7 +92,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     `groupAllowFrom` entries should be numeric Telegram user IDs, and `telegram:` / `tg:` prefixes are normalized. Non-numeric entries are ignored. Do not put group or supergroup chat IDs here — negative chat IDs belong under `channels.telegram.groups`.
     In multi-account configs, root `channels.telegram.groups` is the shared default for accounts that omit `groups`. An account-level `groups` map replaces the root map for that account. It is not deep-merged. An explicit empty account map (`groups: {}`) keeps that account isolated from the shared groups.
     Practical pattern for one-owner bots: set your user ID in `channels.telegram.allowFrom`, leave `groupAllowFrom` unset, and allow the target groups under `channels.telegram.groups`.
-    If `channels.telegram` is entirely missing from config, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
+    If `channels.telegram` is entirely missing from config, runtime defaults to `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Owner-only group setup:
 
@@ -181,7 +181,28 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Group history context is always on and bounded by `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the group history window. `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
+    To keep mentions required in the group but allow ordinary messages in forum topics created by this bot, set `requireMentionInBotThreads: false`:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          requireMention: true,
+          requireMentionInBotThreads: false,
+        },
+      },
+    },
+  },
+}
+```
+
+    This option applies only when OpenClaw knows that the receiving bot created the forum topic. A topic's `requireMentionInBotThreads` overrides the selected group setting. Set it to `true` to require a mention in those topics, even when ordinary `requireMention` is `false` or the message replies to the bot. Native and authorized control commands keep their existing behavior. Omit the option to preserve the existing mention policy.
+
+    Telegram must deliver ordinary group messages for `false` to work: disable privacy mode or make the bot a group admin. See [Privacy mode and group visibility](/channels/telegram/setup#privacy-mode-and-group-visibility). Group and sender authorization, group silence policy, and visible-reply policy still apply. See [Bot-created forum topics](/channels/telegram/threads-and-sessions#bot-created-forum-topics) for ownership tracking and its limits.
+
+    Group history context is bounded by `historyLimit` (default 50). Set `channels.telegram.historyLimit: 0` to disable the automatic window without deleting retained group messages or disabling explicit history reads. Permitted unmentioned messages are recorded without starting agent turns when mentions are required. See [Retained group history](/channels/telegram/messaging#retained-group-history). `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
 

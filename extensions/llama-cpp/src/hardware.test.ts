@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { detectLlamaCppHardware } from "./hardware.js";
 
 const probes = vi.hoisted(() => ({
@@ -9,22 +9,21 @@ const probes = vi.hoisted(() => ({
   diskContainers: {} as Record<string, string>,
 }));
 vi.mock("node:child_process", () => ({
-  execFile: vi.fn(
-    (
-      _file: string,
-      _args: string[],
-      _options: unknown,
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => {
-      const output =
-        _file === "/bin/df"
-          ? `/dev/${_args[1] === "/models" ? "disk4s1" : "disk5s1"} 100 50 50 50% /volume`
-          : _file === "/usr/sbin/diskutil"
-            ? (probes.diskContainers[_args[2] ?? ""] ?? "")
-            : probes.output;
-      callback(probes.error ?? null, output, "");
-    },
-  ),
+  execFile: (
+    file: string,
+    args: string[],
+    _options: unknown,
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ) =>
+    callback(
+      probes.error ?? null,
+      file === "/bin/df"
+        ? `/dev/${args[1] === "/models" ? "disk4s1" : "disk5s1"} 100 50 50 50% /volume`
+        : file === "/usr/sbin/diskutil"
+          ? (probes.diskContainers[args[2] ?? ""] ?? "")
+          : probes.output,
+      "",
+    ),
 }));
 
 const GIB = 1024 ** 3;
@@ -39,6 +38,13 @@ const disk = {
   files: 100,
   ffree: 50,
 };
+const detect = (options: Partial<Parameters<typeof detectLlamaCppHardware>[0]> = {}) =>
+  detectLlamaCppHardware({ cacheDir: "/models", ...options });
+async function useSeparateVolume() {
+  const stat = await readStat(os.tmpdir());
+  stat.dev += 1;
+  vi.mocked(fs.stat).mockResolvedValueOnce(stat);
+}
 
 beforeEach(async () => {
   probes.output = "";
@@ -57,149 +63,105 @@ beforeEach(async () => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("Gateway hardware detection", () => {
-  it("uses the Gateway container budget instead of the physical host capacity", async () => {
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * GIB);
-    vi.spyOn(process, "availableMemory").mockReturnValue(3 * GIB);
+it("uses the Gateway container budget instead of the physical host capacity", async () => {
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * GIB);
+  vi.spyOn(process, "availableMemory").mockReturnValue(3 * GIB);
 
-    expect(await detectLlamaCppHardware({ cacheDir: "/models" })).toMatchObject({
-      totalMemoryBytes: 8 * GIB,
-      availableMemoryBytes: 3 * GIB,
-    });
+  expect(await detect()).toMatchObject({
+    totalMemoryBytes: 8 * GIB,
+    availableMemoryBytes: 3 * GIB,
   });
+});
 
-  it("reports reclaimable Linux memory and separate NVIDIA device budgets", async () => {
-    probes.output = [
-      "NVIDIA Device A, 24576, 20000, 580.65.06, 8.9",
-      "NVIDIA Device B, 8192, 4096, 580.65.06, 7.5",
-    ].join("\n");
-
-    const hardware = await detectLlamaCppHardware({ cacheDir: "/models" });
-
-    expect(hardware).toMatchObject({
-      totalMemoryBytes: 32 * GIB,
-      availableMemoryBytes: 16 * GIB,
-      availableDiskBytes: 40 * 4096,
-      availableRuntimeDiskBytes: 40 * 4096,
-      sharedDisk: true,
-      accelerator: {
-        kind: "cuda",
-        devices: [
-          {
-            totalMemoryBytes: 24 * GIB,
-            availableMemoryBytes: 20000 * 1024 ** 2,
-            computeCapability: 8.9,
-          },
-          { totalMemoryBytes: 8 * GIB, availableMemoryBytes: 4 * GIB, computeCapability: 7.5 },
-        ],
-      },
-    });
-  });
-
-  it("counts reclaimable Apple memory once and identifies unified Metal", async () => {
-    vi.mocked(os.platform).mockReturnValue("darwin");
-    vi.mocked(os.arch).mockReturnValue("arm64");
-    probes.output = [
-      "Mach Virtual Memory Statistics: (page size of 16384 bytes)",
-      "Pages free: 65536.",
-      "Pages inactive: 131072.",
-      "Pages purgeable: 32768.",
-    ].join("\n");
-
-    const hardware = await detectLlamaCppHardware({ cacheDir: "/models" });
-
-    expect(hardware.availableMemoryBytes).toBe(3 * GIB);
-    expect(hardware.accelerator).toEqual({ kind: "metal" });
-  });
-
-  it("reports separate capacities when the model cache is on another volume", async () => {
-    const cacheStat = await readStat(os.tmpdir());
-    cacheStat.dev += 1;
-    vi.mocked(fs.stat).mockResolvedValueOnce(cacheStat);
-    vi.mocked(fs.statfs)
-      .mockResolvedValueOnce(disk)
-      .mockResolvedValueOnce({ ...disk, bavail: 5 });
-
-    expect(await detectLlamaCppHardware({ cacheDir: "/models" })).toMatchObject({
-      availableDiskBytes: 40 * 4096,
-      availableRuntimeDiskBytes: 5 * 4096,
-      sharedDisk: false,
-    });
-  });
-
-  it.each([0x9123683e, 0x794c7630, 0x2fc12fc1])(
-    "reserves combined capacity for pooled or layered Linux filesystems: %s",
-    async (type) => {
-      const cacheStat = await readStat(os.tmpdir());
-      cacheStat.dev += 1;
-      vi.mocked(fs.stat).mockResolvedValueOnce(cacheStat);
-      vi.mocked(fs.statfs).mockResolvedValue({ ...disk, type });
-
-      expect((await detectLlamaCppHardware({ cacheDir: "/models" })).sharedDisk).toBe(true);
+it("reports reclaimable Linux memory and separate NVIDIA device budgets", async () => {
+  probes.output =
+    "NVIDIA Device A, 24576, 20000, 580.65.06, 8.9\nNVIDIA Device B, 8192, 4096, 580.65.06, 7.5";
+  expect(await detect()).toMatchObject({
+    totalMemoryBytes: 32 * GIB,
+    availableMemoryBytes: 16 * GIB,
+    availableDiskBytes: 40 * 4096,
+    availableRuntimeDiskBytes: 40 * 4096,
+    sharedDisk: true,
+    accelerator: {
+      kind: "cuda",
+      devices: [
+        {
+          totalMemoryBytes: 24 * GIB,
+          availableMemoryBytes: 20000 * 1024 ** 2,
+          computeCapability: 8.9,
+        },
+        { totalMemoryBytes: 8 * GIB, availableMemoryBytes: 4 * GIB, computeCapability: 7.5 },
+      ],
     },
+  });
+});
+
+it("counts reclaimable Apple memory once and identifies unified Metal", async () => {
+  vi.mocked(os.platform).mockReturnValue("darwin");
+  vi.mocked(os.arch).mockReturnValue("arm64");
+  probes.output =
+    "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 65536.\nPages inactive: 131072.\nPages purgeable: 32768.";
+  const hardware = await detect();
+  expect(hardware.availableMemoryBytes).toBe(3 * GIB);
+  expect(hardware.accelerator).toEqual({ kind: "metal" });
+});
+
+it.each([
+  ["separate ext4 volumes", 0xef53, 5, false],
+  ["pooled Btrfs volumes", 0x9123683e, 40, true],
+] as const)("accounts for %s", async (_name, type, runtimeFree, sharedDisk) => {
+  await useSeparateVolume();
+  vi.mocked(fs.statfs)
+    .mockResolvedValueOnce({ ...disk, type })
+    .mockResolvedValueOnce({ ...disk, type, bavail: runtimeFree });
+  expect(await detect()).toMatchObject({
+    availableDiskBytes: 40 * 4096,
+    availableRuntimeDiskBytes: runtimeFree * 4096,
+    sharedDisk,
+  });
+});
+
+it.each([
+  ["disk4", true],
+  ["disk5", false],
+  [undefined, true],
+] as const)("accounts for APFS shared capacity: %s", async (runtimeContainer, sharedDisk) => {
+  vi.mocked(os.platform).mockReturnValue("darwin");
+  await useSeparateVolume();
+  probes.diskContainers = {
+    disk4s1: "<key>APFSContainerReference</key><string>disk4</string>",
+    ...(runtimeContainer
+      ? { disk5s1: `<key>APFSContainerReference</key><string>${runtimeContainer}</string>` }
+      : {}),
+  };
+
+  expect((await detect()).sharedDisk).toBe(sharedDisk);
+});
+
+it.each([
+  ["missing driver", "", new Error("ENOENT")],
+  ["invalid telemetry", "NVIDIA Device, N/A, 4096, 580.65.06, 8.9", undefined],
+] as const)("reports a CPU reason for %s", async (_name, output, error) => {
+  Object.assign(probes, { output, error });
+  expect((await detect()).accelerator).toMatchObject({ kind: "cpu", reason: expect.any(String) });
+});
+
+it("checks the nearest existing cache ancestor without creating directories", async () => {
+  vi.mocked(fs.statfs).mockRejectedValueOnce(
+    Object.assign(new Error("missing"), { code: "ENOENT" }),
   );
+  const hardware = await detect({ cacheDir: "/models/new" });
+  expect(hardware.availableDiskBytes).toBe(40 * 4096);
+  expect(fs.statfs).toHaveBeenLastCalledWith("/models");
+});
 
-  it.each([
-    { runtimeContainer: "disk4", sharedDisk: true },
-    { runtimeContainer: "disk5", sharedDisk: false },
-    { runtimeContainer: undefined, sharedDisk: true },
-  ])(
-    "accounts for APFS shared capacity: $runtimeContainer",
-    async ({ runtimeContainer, sharedDisk }) => {
-      vi.mocked(os.platform).mockReturnValue("darwin");
-      const cacheStat = await readStat(os.tmpdir());
-      cacheStat.dev += 1;
-      vi.mocked(fs.stat).mockResolvedValueOnce(cacheStat);
-      probes.diskContainers = {
-        disk4s1: "<key>APFSContainerReference</key><string>disk4</string>",
-        ...(runtimeContainer
-          ? { disk5s1: `<key>APFSContainerReference</key><string>${runtimeContainer}</string>` }
-          : {}),
-      };
+it("keeps unreadable disk capacity unknown", async () => {
+  vi.mocked(fs.statfs).mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
 
-      expect((await detectLlamaCppHardware({ cacheDir: "/models" })).sharedDisk).toBe(sharedDisk);
-    },
-  );
+  expect((await detect()).availableDiskBytes).toBeUndefined();
+});
 
-  it.each([
-    { name: "missing driver", output: "", error: new Error("ENOENT") },
-    {
-      name: "invalid telemetry",
-      output: "NVIDIA Device, N/A, 4096, 580.65.06, 8.9",
-      error: undefined,
-    },
-  ])("reports a CPU reason for $name without inventing GPU capacity", async ({ output, error }) => {
-    probes.output = output;
-    probes.error = error;
-
-    const hardware = await detectLlamaCppHardware({ cacheDir: "/models" });
-
-    expect(hardware.accelerator).toMatchObject({ kind: "cpu", reason: expect.any(String) });
-  });
-
-  it("checks the nearest existing cache ancestor without creating directories", async () => {
-    vi.mocked(fs.statfs).mockRejectedValueOnce(
-      Object.assign(new Error("missing"), { code: "ENOENT" }),
-    );
-
-    const hardware = await detectLlamaCppHardware({ cacheDir: "/models/new" });
-
-    expect(hardware.availableDiskBytes).toBe(40 * 4096);
-    expect(fs.statfs).toHaveBeenLastCalledWith("/models");
-  });
-
-  it("keeps unreadable disk capacity unknown", async () => {
-    vi.mocked(fs.statfs).mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
-
-    expect(
-      (await detectLlamaCppHardware({ cacheDir: "/models" })).availableDiskBytes,
-    ).toBeUndefined();
-  });
-
-  it("honors setup cancellation before probing", async () => {
-    await expect(
-      detectLlamaCppHardware({ cacheDir: "/models", signal: AbortSignal.abort() }),
-    ).rejects.toThrow();
-    expect(fs.statfs).not.toHaveBeenCalled();
-  });
+it("honors setup cancellation before probing", async () => {
+  await expect(detect({ signal: AbortSignal.abort() })).rejects.toThrow();
+  expect(fs.statfs).not.toHaveBeenCalled();
 });

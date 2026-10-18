@@ -1,14 +1,23 @@
+import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
   ControlUiComponentHandle,
   ControlUiComponents,
 } from "../../../src/plugin-sdk/control-ui-components.js";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
-import { icons } from "../components/icons.ts";
+import { listen as listenTo } from "../lib/reactive/listener.ts";
+
+function resolveAppearanceColor(value: string | null | undefined): string {
+  const color = normalizeSessionColorValue(value ?? "");
+  if (color) {
+    return `var(--session-color-${color})`;
+  }
+  const raw = value?.trim() ?? "";
+  return /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/iu.test(raw) ? raw : "";
+}
 
 export function createControlUiComponents(options: {
-  current: () => ApplicationContext<RouteId>;
+  current: () => ApplicationContext;
   signal: AbortSignal;
   onError: (error: unknown) => void;
 }): ControlUiComponents {
@@ -16,8 +25,9 @@ export function createControlUiComponents(options: {
     container: HTMLElement,
     initial: P,
     load: () => Promise<E>,
-    apply: (element: E, props: P, current: () => ApplicationContext<RouteId>) => void,
+    apply: (element: E, props: P, current: () => ApplicationContext) => void,
     listen?: (element: E, props: () => P) => () => void,
+    observe?: (context: ApplicationContext, refresh: () => void) => () => void,
   ): ControlUiComponentHandle<P> {
     options.current();
     options.signal.throwIfAborted();
@@ -43,12 +53,12 @@ export function createControlUiComponents(options: {
         return;
       }
       active = false;
-      options.signal.removeEventListener("abort", dispose);
+      unlistenAbort();
       unsubscribe?.();
       unlisten?.();
       element?.remove();
     };
-    options.signal.addEventListener("abort", dispose, { once: true });
+    const unlistenAbort = listenTo(options.signal, "abort", dispose, { once: true });
     void load()
       .then((loaded) => {
         // Imports can finish after navigation or reload. The retired mount must
@@ -66,6 +76,9 @@ export function createControlUiComponents(options: {
         container.append(element);
         const context = current();
         const stops = [context.gateway.subscribe(refresh), context.agents.subscribe(refresh)];
+        if (observe) {
+          stops.push(observe(context, refresh));
+        }
         unsubscribe = () => stops.forEach((stop) => stop());
       })
       .catch((error: unknown) => {
@@ -85,8 +98,71 @@ export function createControlUiComponents(options: {
   }
 
   return {
-    mountDialog: (container, props) =>
+    resolveAppearanceColor(value) {
+      options.current();
+      options.signal.throwIfAborted();
+      return resolveAppearanceColor(value);
+    },
+    mountAgentAvatar: (container, props) =>
       mount(
+        container,
+        props,
+        async () => {
+          await import("../components/solid/agent-avatar.tsx");
+          return document.createElement("openclaw-agent-avatar");
+        },
+        (element, next, current) => {
+          const context = current();
+          const agentsList = context.agents.state.agentsList;
+          const id = next.agentId || agentsList?.defaultId || "";
+          element.option = {
+            value: id,
+            label: next.label,
+            agent: agentsList?.agents.find((agent) => agent.id === id) ?? { id },
+          };
+          element.identity = context.agentIdentity.get(id);
+          void context.agentIdentity.ensure([id]);
+        },
+        undefined,
+        (context, refresh) => context.agentIdentity.subscribe(refresh),
+      ),
+    mountAppearancePicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("../components/appearance-picker.tsx");
+          return document.createElement("openclaw-appearance-picker");
+        },
+        (element, next, current) => {
+          element.props = {
+            ...next,
+            onChange: (appearance) => {
+              current();
+              next.onChange(appearance);
+            },
+          };
+        },
+      ),
+    mountAppearanceGlyph: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("../components/appearance-picker.tsx");
+          return document.createElement("openclaw-appearance-glyph");
+        },
+        (element, next) => {
+          element.props = next;
+          element.style.setProperty(
+            "--appearance-color",
+            resolveAppearanceColor(next.color) || "var(--muted)",
+          );
+        },
+      ),
+    mountDialog: (container, props) => {
+      let content: HTMLElement | undefined;
+      return mount(
         container,
         props,
         async () => {
@@ -101,20 +177,24 @@ export function createControlUiComponents(options: {
           if (next.returnFocusTarget !== undefined) {
             element.setReturnFocusTarget(next.returnFocusTarget);
           }
-          if (element.firstChild !== next.content) {
-            element.replaceChildren(next.content);
+          if (content !== next.content) {
+            // The dialog owns its shell; the plugin owns only this content node.
+            if (content) {
+              content.replaceWith(next.content);
+            } else {
+              element.append(next.content);
+            }
+            content = next.content;
           }
         },
-        (element, getProps) => {
-          const cancel = (event: Event) => {
+        (element, getProps) =>
+          listenTo(element, "modal-cancel", (event) => {
             if (getProps().onCancel() === false) {
               event.preventDefault();
             }
-          };
-          element.addEventListener("modal-cancel", cancel);
-          return () => element.removeEventListener("modal-cancel", cancel);
-        },
-      ),
+          }),
+      );
+    },
     mountAgentPicker: (container, props) =>
       mount(
         container,
@@ -128,12 +208,12 @@ export function createControlUiComponents(options: {
           element.options = next.options.map((option) => ({
             ...option,
             agent: agents.find((agent) => agent.id === option.agent?.id) ?? option.agent,
-            icon: option.icon ? icons[option.icon] : undefined,
           }));
           element.value = next.value;
           element.placeholder = next.placeholder ?? "";
           element.accessibleLabel = next.accessibleLabel;
           element.menuLabel = next.menuLabel ?? "";
+          element.variant = next.variant ?? "default";
           element.disabled = next.disabled ?? false;
           element.onSelect = (value) => {
             current();
@@ -141,12 +221,51 @@ export function createControlUiComponents(options: {
           };
         },
       ),
+    mountSelectPicker: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("../components/select-picker.ts");
+          return document.createElement("openclaw-select-picker");
+        },
+        (element, next, current) => {
+          element.className = "settings-select picker-select";
+          element.params = {
+            options: next.options,
+            value: next.value,
+            label: next.accessibleLabel,
+            searchable: next.searchable,
+            disabled: next.disabled,
+            onChange: (value) => {
+              current();
+              next.onSelect(value);
+            },
+          };
+        },
+      ),
+    mountSessionSummary: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          await import("./control-ui-session-summary.tsx");
+          return document.createElement("openclaw-plugin-session-summary");
+        },
+        (element, next, current) => {
+          element.session = next.session;
+          element.gateway = current().gateway;
+          element.agents = current().agents.state.agentsList?.agents ?? [];
+          element.agentIdentity = current().agentIdentity;
+          element.presented = next.presented;
+        },
+      ),
     mountDashboard: (container, props) =>
       mount(
         container,
         props,
         async () => {
-          await import("./control-ui-dashboard.ts");
+          await import("./control-ui-dashboard.tsx");
           return document.createElement("openclaw-plugin-session-dashboard");
         },
         (element, next, current) => {

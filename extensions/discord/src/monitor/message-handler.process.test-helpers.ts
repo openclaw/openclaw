@@ -93,7 +93,7 @@ function expectAckReactionRuntimeOptions(
   }
 }
 
-export function requireReactionCall(
+function requireReactionCall(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
 ) {
@@ -117,7 +117,7 @@ function expectReactionCallAt(
 ) {
   const call = requireReactionCall(mock, index);
   expect(call[0]).toBe(params?.channelId ?? "c1");
-  expect(call[1]).toBe(params?.messageId ?? "m1");
+  expect(call[1]).toBe(params?.messageId ?? "1001");
   expect(call[2]).toBe(emoji);
   expectAckReactionRuntimeOptions(call[3], params);
 }
@@ -200,9 +200,7 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
   await runProcessDiscordMessage(ctx);
 }
 
-export async function createBlockModeContext(
-  discordConfig: Record<string, unknown> = { streaming: { mode: "block" } },
-) {
+export async function createBlockModeContext() {
   return await createAutomaticDraftContext({
     cfg: {
       messages: { ackReaction: "👀" },
@@ -215,6 +213,6 @@ export async function createBlockModeContext(
         },
       },
     },
-    discordConfig,
+    discordConfig: { streaming: { mode: "block" } },
   });
 }

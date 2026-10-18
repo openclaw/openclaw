@@ -2,23 +2,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAuthProfileDatabaseOwnerId } from "../agents/auth-profiles/sqlite.js";
 import {
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { maybeMigrateLegacyPluginModelCatalogs } from "./doctor-plugin-model-catalog.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
 
 const tempDirs: string[] = [];
 
@@ -70,7 +72,33 @@ function migrationParams(agentDirs: string[], shouldRepair = true) {
   };
 }
 
-afterEach(() => {
+function readCatalogCacheRow(
+  agentDir: string,
+  pluginId: string,
+): {
+  value_json: string;
+  updated_at: number;
+} {
+  const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    const row = database
+      .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
+      .get("plugin-model-catalog-v1", pluginId) as
+      | { value_json: string; updated_at: number }
+      | undefined;
+    if (!row) {
+      throw new Error(`Missing generated catalog cache row for ${pluginId}`);
+    }
+    return row;
+  } finally {
+    database.close();
+  }
+}
+
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const agentDir of tempDirs.splice(0)) {
@@ -79,115 +107,289 @@ afterEach(() => {
 });
 
 describe("doctor generated plugin model catalog migration", () => {
-  it("does not create agent SQLite for a legacy-free profile", async () => {
+  it("detects SQLite-only catalogs without repairing them", async () => {
     const agentDir = createAgentDir();
+    const validSibling = generatedCatalog("anthropic");
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: generatedCatalog("zai"),
+        [encodePluginModelCatalogRelativePath("anthropic")]: validSibling,
+      },
+    });
+    const malformed = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        zai: {
+          apiKey: "preserved-provider-test-key",
+          baseUrl: "https://zai.example/v1",
+          models: [{ id: "missing-api" }, { id: "valid-api", api: "openai-completions" }],
+        },
+      },
+    });
+    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(malformed, "plugin-model-catalog-v1", "zai");
+    } finally {
+      database.close();
+    }
+    const before = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    const siblingBefore = readCatalogCacheRow(agentDir, "anthropic");
+    const malformedBefore = readCatalogCacheRow(agentDir, "zai");
+    const params = migrationParams([agentDir], false);
+    const result = await maybeMigrateLegacyPluginModelCatalogs(params);
+    expect(result).toMatchObject({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
+    const after = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(siblingBefore);
+    expect(after).toEqual(before);
+    expect(readCatalogCacheRow(agentDir, "zai")).toEqual(malformedBefore);
+  });
+
+  it("repairs only partial retained costs and persists the repair across reopening", async () => {
+    const agentDir = createAgentDir();
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("ollama")]: generatedCatalog("ollama"),
+        [encodePluginModelCatalogRelativePath("anthropic")]: generatedCatalog("anthropic"),
+      },
+    });
+    await closeOpenClawAgentDatabasesAsync(agentDir);
+    const partial = {
+      id: "partial",
+      cost: { input: 1, output: 2, tieredPricing: [{ input: 3, output: 4 }] },
+    };
+    const unchanged = [
+      { id: "priced", cost: { input: 5, output: 6, cacheRead: 7, cacheWrite: 8 } },
+      { id: "unpriced" },
+      { id: "null-cost", cost: null },
+      { id: "scalar-cost", cost: 3 },
+      { id: "array-cost", cost: [] },
+      { id: "null-rate", cost: { input: null, output: 2 } },
+      { id: "string-rate", cost: { input: "1", output: 2 } },
+    ];
+    const provider = {
+      api: "ollama",
+      baseUrl: "http://127.0.0.1:11434",
+      apiKey: "preserved-provider-test-key",
+      models: [partial, ...unchanged],
+    };
+    const retained = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: { ollama: provider },
+    });
+    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+        )
+        .run(retained, "plugin-model-catalog-v1", "ollama");
+    } finally {
+      database.close();
+    }
+    const before = readCatalogCacheRow(agentDir, "ollama");
+    const sibling = readCatalogCacheRow(agentDir, "anthropic");
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false)),
+    ).resolves.toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
+    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(before);
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
+
+    const params = migrationParams([agentDir]);
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 1,
+      removedRootCopies: 0,
+      warnings: [],
+    });
+    expect(params.note).toHaveBeenCalledWith(
+      expect.stringContaining("completed the cost of 1 model row(s)"),
+      "Doctor changes",
+    );
+    await closeOpenClawAgentDatabasesAsync(agentDir);
+    const repaired = readCatalogCacheRow(agentDir, "ollama");
+    expect(JSON.parse(repaired.value_json)).toEqual({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        ollama: {
+          ...provider,
+          models: [
+            { ...partial, cost: { ...partial.cost, cacheRead: 0, cacheWrite: 0 } },
+            ...unchanged,
+          ],
+        },
+      },
+    });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toContainEqual({
+      pluginId: "ollama",
+      contents: repaired.value_json,
+    });
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 0, migrated: 0, warnings: [] });
-    expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    ).resolves.toEqual({
+      detected: 0,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
+    expect(readCatalogCacheRow(agentDir, "ollama")).toEqual(repaired);
+    expect(readCatalogCacheRow(agentDir, "anthropic")).toEqual(sibling);
   });
 
-  it("verifies a shipped sidecar and preserves its provider credential in SQLite", async () => {
+  it("does not report a repair when SQLite rejects the planned update", async () => {
     const agentDir = createAgentDir();
-    const contents = generatedCatalog("zai", "persisted-zai-test-key");
+    const relativePath = encodePluginModelCatalogRelativePath("nvidia");
+    const refreshed = generatedCatalog("nvidia", "concurrently-refreshed-provider-test-key");
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: refreshed },
+    });
+    const malformed = JSON.stringify({
+      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+      providers: {
+        nvidia: {
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "NVIDIA_API_KEY",
+          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
+        },
+      },
+    });
+    const { db: database } = openOpenClawAgentDatabase({
+      agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    database
+      .prepare(
+        "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
+      )
+      .run(malformed, "plugin-model-catalog-v1", "nvidia");
+    // Inject the write rejection on Doctor's admitted connection without changing persisted schema.
+    database.exec("CREATE TEMP TABLE catalog_repair_refresh (value_json TEXT NOT NULL)");
+    database.prepare("INSERT INTO catalog_repair_refresh (value_json) VALUES (?)").run(refreshed);
+    database.exec(`
+        CREATE TEMP TRIGGER refresh_catalog_before_repair
+        BEFORE UPDATE OF value_json ON cache_entries
+        WHEN OLD.scope = 'plugin-model-catalog-v1'
+          AND OLD.key = 'nvidia'
+          AND NEW.value_json != (SELECT value_json FROM catalog_repair_refresh)
+        BEGIN
+          UPDATE cache_entries
+          SET value_json = (SELECT value_json FROM catalog_repair_refresh), updated_at = 99
+          WHERE scope = OLD.scope AND key = OLD.key;
+          SELECT RAISE(IGNORE);
+        END
+      `);
+
+    const params = migrationParams([agentDir]);
+    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
+    expect(params.note).not.toHaveBeenCalledWith(expect.anything(), "Doctor changes");
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "nvidia", contents: refreshed },
+    ]);
+    expect(readCatalogCacheRow(agentDir, "nvidia")).toEqual({
+      value_json: refreshed,
+      updated_at: 99,
+    });
+  });
+
+  it("retires an orphaned recovery credential only on Doctor fix", async () => {
+    const agentDir = createAgentDir();
+    const contents = generatedCatalog("zai", "interrupted-released-provider-test-key");
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: contents,
+      },
+    });
+    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+    try {
+      database
+        .prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
+        )
+        .run("plugin-model-catalog-migration-v1", "zai", contents, Date.now());
+    } finally {
+      database.close();
+    }
+
+    await expect(
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false)),
+    ).resolves.toMatchObject({ detected: 0, migrated: 0, removedRootCopies: 0, warnings: [] });
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+      { pluginId: "zai", contents },
+    ]);
+    const verified = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+      readOnly: true,
+    });
+    try {
+      expect(
+        verified
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
+          .all("plugin-model-catalog-migration-v1"),
+      ).toEqual([{ value_json: contents }]);
+      await expect(
+        maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
+      ).resolves.toMatchObject({ detected: 0, migrated: 0, removedRootCopies: 0, warnings: [] });
+      expect(
+        verified
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
+          .all("plugin-model-catalog-migration-v1"),
+      ).toEqual([]);
+    } finally {
+      verified.close();
+    }
+  });
+
+  it("imports a malformed shipped sidecar and preserves its credential", async () => {
+    const agentDir = createAgentDir();
+    const valid = generatedCatalog("zai", "persisted-zai-test-key");
+    const contents = valid.replace('"api": "openai-completions",', "");
     const sourcePath = writeLegacyCatalog(agentDir, "zai", contents);
 
     await expect(
       maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 1, migrated: 1, warnings: [] });
-
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
-  });
-
-  it("discovers and repairs a retained migration claim after an interrupted upgrade", async () => {
-    const agentDir = createAgentDir();
-    const contents = generatedCatalog("zai", "interrupted-zai-provider-test-key");
-    const pluginDir = path.join(agentDir, "plugins", "zai");
-    const claimPath = path.join(pluginDir, "catalog.json.doctor-importing-previous-process");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(claimPath, contents, "utf8");
-
-    await expect(
-      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 1, migrated: 1, warnings: [] });
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
-    expect(fs.existsSync(claimPath)).toBe(false);
-  });
-
-  it("reports and preserves conflicting retained migration claims", async () => {
-    const agentDir = createAgentDir();
-    const pluginDir = path.join(agentDir, "plugins", "zai");
-    const firstPath = path.join(pluginDir, "catalog.json.doctor-importing-first");
-    const secondPath = path.join(pluginDir, "catalog.json.doctor-importing-second");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(firstPath, generatedCatalog("zai", "first-provider-test-key"), "utf8");
-    fs.writeFileSync(secondPath, generatedCatalog("zai", "second-provider-test-key"), "utf8");
-    const params = migrationParams([agentDir]);
-
-    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
-      detected: 0,
-      migrated: 0,
-      warnings: [expect.stringContaining("Conflicting retained legacy provider catalogs")],
+    ).resolves.toEqual({
+      detected: 1,
+      migrated: 1,
+      repaired: 1,
+      removedRootCopies: 0,
+      warnings: [],
     });
-    expect(params.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Conflicting retained legacy provider catalogs"),
-    );
-    expect(fs.existsSync(firstPath)).toBe(true);
-    expect(fs.existsSync(secondPath)).toBe(true);
-    expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-  });
 
-  it("does not migrate a provider while one of its retained claims is unreadable", async () => {
-    if (process.getuid?.() === 0) {
-      return;
-    }
-    const agentDir = createAgentDir();
-    const pluginDir = path.join(agentDir, "plugins", "zai");
-    const claimPath = path.join(pluginDir, "catalog.json.doctor-importing-previous-process");
-    const sourcePath = path.join(pluginDir, "catalog.json");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(claimPath, generatedCatalog("zai", "retained-provider-test-key"), "utf8");
-    fs.writeFileSync(sourcePath, generatedCatalog("zai", "canonical-provider-test-key"), "utf8");
-    fs.chmodSync(claimPath, 0o000);
-
-    try {
-      await expect(
-        maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-      ).resolves.toEqual({
-        detected: 0,
-        migrated: 0,
-        warnings: [expect.stringContaining("Could not read legacy provider catalog")],
-      });
-      expect(fs.existsSync(claimPath)).toBe(true);
-      expect(fs.existsSync(sourcePath)).toBe(true);
-      expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-    } finally {
-      fs.chmodSync(claimPath, 0o600);
-    }
-  });
-
-  it("migrates every configured agent without mixing provider ownership", async () => {
-    const mainDir = createAgentDir();
-    const workerDir = createAgentDir();
-    const mainContents = generatedCatalog("openai", "main-provider-test-key");
-    const workerContents = generatedCatalog("anthropic", "worker-provider-test-key");
-    const mainPath = writeLegacyCatalog(mainDir, "openai", mainContents);
-    const workerPath = writeLegacyCatalog(workerDir, "anthropic", workerContents);
-
-    await expect(
-      maybeMigrateLegacyPluginModelCatalogs(migrationParams([workerDir, mainDir])),
-    ).resolves.toEqual({ detected: 2, migrated: 2, warnings: [] });
-
-    expect(listPersistedPluginModelCatalogs(mainDir)).toEqual([
-      { pluginId: "openai", contents: mainContents },
-    ]);
-    expect(listPersistedPluginModelCatalogs(workerDir)).toEqual([
-      { pluginId: "anthropic", contents: workerContents },
-    ]);
-    expect(fs.existsSync(mainPath)).toBe(false);
-    expect(fs.existsSync(workerPath)).toBe(false);
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    expect(JSON.parse(persisted[0]!.contents).providers.zai).toEqual({
+      baseUrl: "https://zai.example/v1",
+      apiKey: "persisted-zai-test-key",
+      models: [],
+    });
+    expect(fs.existsSync(sourcePath)).toBe(false);
   });
 
   it("discovers every explicit-roster agent without requiring a legacy default", async () => {
@@ -217,12 +419,14 @@ describe("doctor generated plugin model catalog migration", () => {
     await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
       detected: 2,
       migrated: 2,
+      repaired: 0,
+      removedRootCopies: 0,
       warnings: [],
     });
-    expect(listPersistedPluginModelCatalogs(mainDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(mainDir)).toEqual([
       { pluginId: "openai", contents: mainContents },
     ]);
-    expect(listPersistedPluginModelCatalogs(helperDir)).toEqual([
+    expect(loadPersistedPluginModelCatalogsReadOnly(helperDir)).toEqual([
       { pluginId: "anthropic", contents: helperContents },
     ]);
   });
@@ -231,35 +435,24 @@ describe("doctor generated plugin model catalog migration", () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai");
     const sourcePath = writeLegacyCatalog(agentDir, "zai", contents);
+    fs.chmodSync(path.dirname(sourcePath), 0o755);
     const params = migrationParams([agentDir], false);
 
-    await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
-      detected: 1,
-      migrated: 0,
-      warnings: [],
-    });
+    const result = await maybeMigrateLegacyPluginModelCatalogs(params);
 
     expect(params.prompter.confirmAutoFix).toHaveBeenCalledOnce();
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(contents);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.dirname(sourcePath)).mode & 0o777).toBe(0o755);
+    }
     expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
-  });
-
-  it("ignores user-authored and malformed catalog lookalikes", async () => {
-    const agentDir = createAgentDir();
-    const authoredPath = writeLegacyCatalog(
-      agentDir,
-      "authored",
-      JSON.stringify({ providers: { authored: { apiKey: "do-not-touch" } } }),
-    );
-    const malformedPath = writeLegacyCatalog(agentDir, "malformed", "{not-json");
-
-    await expect(
-      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 0, migrated: 0, warnings: [] });
-
-    expect(fs.existsSync(authoredPath)).toBe(true);
-    expect(fs.existsSync(malformedPath)).toBe(true);
-    expect(fs.existsSync(path.join(agentDir, "openclaw-agent.sqlite"))).toBe(false);
+    expect(result).toEqual({
+      detected: 1,
+      migrated: 0,
+      repaired: 0,
+      removedRootCopies: 0,
+      warnings: [],
+    });
   });
 
   it("migrates readable providers when another legacy catalog is unreadable", async () => {
@@ -277,12 +470,14 @@ describe("doctor generated plugin model catalog migration", () => {
       await expect(maybeMigrateLegacyPluginModelCatalogs(params)).resolves.toEqual({
         detected: 1,
         migrated: 1,
+        repaired: 0,
+        removedRootCopies: 0,
         warnings: [expect.stringContaining("Could not read legacy provider catalog")],
       });
       expect(params.runtime.error).toHaveBeenCalledWith(
         expect.stringContaining("Could not read legacy provider catalog"),
       );
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         { pluginId: "anthropic", contents: readableContents },
       ]);
       expect(fs.existsSync(unreadablePath)).toBe(true);
@@ -291,26 +486,103 @@ describe("doctor generated plugin model catalog migration", () => {
       fs.chmodSync(unreadablePath, 0o600);
     }
   });
+});
 
-  it("preserves the released provider credential over a conflicting regenerated catalog", async () => {
+describe("doctor generated catalog copies in root models.json", () => {
+  // Shape an older writer left in root models.json: the anthropic discovery block copied under
+  // its claude-cli hook alias, with zero placeholders for models the catalog had not priced.
+  const anthropicBlock = {
+    baseUrl: "https://api.anthropic.com",
+    api: "anthropic-messages",
+    models: [
+      {
+        id: "claude-opus-5",
+        name: "Claude Opus 5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      },
+      {
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 64000,
+      },
+    ],
+  };
+
+  async function seedAgent(rootProviders: Record<string, unknown>) {
     const agentDir = createAgentDir();
-    const regenerated = generatedCatalog("zai", "regenerated-sqlite-test-key");
-    const released = generatedCatalog("zai", "released-sidecar-test-key");
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath("zai")]: regenerated,
+        [encodePluginModelCatalogRelativePath("anthropic")]: `${JSON.stringify(
+          {
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: { anthropic: anthropicBlock },
+          },
+          null,
+          2,
+        )}\n`,
       },
     });
-    const sourcePath = writeLegacyCatalog(agentDir, "zai", released);
+    const rootRaw = `${JSON.stringify({ providers: rootProviders }, null, 2)}\n`;
+    fs.writeFileSync(path.join(agentDir, "models.json"), rootRaw, "utf8");
+    return { agentDir, rootRaw };
+  }
+
+  it("removes an exact copy once, keeping a byte-exact backup", async () => {
+    const authored = { baseUrl: "https://proxy.example/v1", api: "openai-completions", models: [] };
+    const { agentDir, rootRaw } = await seedAgent({
+      "claude-cli": anthropicBlock,
+      "my-proxy": authored,
+    });
+
+    const first = await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
+
+    expect(first).toMatchObject({ detected: 1, removedRootCopies: 1, warnings: [] });
+    expect(JSON.parse(fs.readFileSync(path.join(agentDir, "models.json"), "utf8"))).toEqual({
+      providers: { "my-proxy": authored },
+    });
+    const backups = fs.readdirSync(agentDir).filter((name) => name.startsWith("models.json.bak-"));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(agentDir, backups[0]!), "utf8")).toBe(rootRaw);
+
+    const second = await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
+    expect(second).toMatchObject({ detected: 0, removedRootCopies: 0 });
+  });
+
+  it("keeps edited copies and ids that config declares", async () => {
+    const edited = {
+      ...anthropicBlock,
+      models: anthropicBlock.models.map((model) =>
+        model.id === "claude-haiku-4-5"
+          ? { ...model, cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 } }
+          : model,
+      ),
+    };
+    const { agentDir: editedDir, rootRaw: editedRaw } = await seedAgent({ "claude-cli": edited });
+    const { agentDir: configuredDir, rootRaw: configuredRaw } = await seedAgent({
+      "claude-cli": anthropicBlock,
+    });
+    const configured = migrationParams([configuredDir]);
+    configured.cfg = {
+      models: { providers: { "claude-cli": { baseUrl: anthropicBlock.baseUrl, models: [] } } },
+    } as OpenClawConfig;
 
     await expect(
-      maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir])),
-    ).resolves.toEqual({ detected: 1, migrated: 1, warnings: [] });
-
-    expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
-      { pluginId: "zai", contents: released },
-    ]);
-    expect(fs.existsSync(sourcePath)).toBe(false);
+      maybeMigrateLegacyPluginModelCatalogs(migrationParams([editedDir])),
+    ).resolves.toMatchObject({ detected: 0, removedRootCopies: 0 });
+    await expect(maybeMigrateLegacyPluginModelCatalogs(configured)).resolves.toMatchObject({
+      detected: 0,
+      removedRootCopies: 0,
+    });
+    expect(fs.readFileSync(path.join(editedDir, "models.json"), "utf8")).toBe(editedRaw);
+    expect(fs.readFileSync(path.join(configuredDir, "models.json"), "utf8")).toBe(configuredRaw);
   });
 });

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
@@ -17,9 +18,14 @@ suite.define(() => {
             { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
             { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
           ];
-          const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+          const config = {
+            agents: { defaults: { model: "openai/gpt-5.5", decisionModel: "typesafe/jev-latest" } },
+          };
           const catalog = {
             models,
+            decisionModels: [
+              { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
+            ],
             defaultModels: { automaticUtilityModel: "openai/gpt-5-mini" },
           };
           const gateway = await installMockGateway(page, {
@@ -76,6 +82,17 @@ suite.define(() => {
           const utility = page.getByRole("button", { name: /^Utility Model: Auto/ });
           await expect.poll(() => utility.textContent()).toContain("GPT-5 mini");
           await expect.poll(() => utility.textContent()).toContain("alex@example.com");
+          const decision = page.locator(
+            "openclaw-select-picker:has(#model-providers-decision-model)",
+          );
+          await expect
+            .poll(() => decision.locator(".picker-select__trigger").textContent())
+            .toContain("Jev");
+          await openPicker(decision);
+          expect(
+            await decision.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
+          ).toBe(1);
+          await page.keyboard.press("Escape");
           const rows = await page
             .locator(".model-providers__defaults .settings-row")
             .evaluateAll((elements) =>
@@ -85,23 +102,39 @@ suite.define(() => {
                   .querySelector(".settings-row__control")!
                   .getBoundingClientRect();
                 return {
+                  role: (
+                    row.querySelector(".model-providers__label-with-help > span:first-child") ??
+                    row.querySelector(".settings-row__title")
+                  )?.textContent?.trim(),
                   sideBySide: label.right <= control.left && label.bottom > control.top,
                   stacked: label.bottom <= control.top,
                 };
               }),
             );
-          expect(rows).toHaveLength(5);
+          expect(rows.map((row) => row.role)).toEqual([
+            "Model",
+            "Utility Model",
+            "Utility Fallback Model",
+            "Decision Model",
+            "Fallback Model",
+            "Thinking",
+            "Fast Mode",
+          ]);
           expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
-          const header = page.locator(".content-header--settings");
-          const bounds = await header
-            .locator(".agent-select__trigger, .page-header-actions > button")
+          await page
+            .locator(".settings-sidebar openclaw-agent-select")
+            .waitFor({ state: "attached" });
+          expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
+          expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
+          const bounds = await page
+            .locator("[data-models-connect], .model-providers__refresh-button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
                 return { x, y, width: buttonWidth, height };
               }),
             );
-          expect(bounds).toHaveLength(3);
+          expect(bounds).toHaveLength(2);
           for (const [index, box] of bounds.entries()) {
             expect(box.x).toBeGreaterThanOrEqual(0);
             expect(box.x + box.width).toBeLessThanOrEqual(width);
@@ -152,6 +185,11 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
+          await openPicker(decision);
+          expect(
+            await decision.locator('[role="option"][data-value="openai/account-new"]').count(),
+          ).toBe(0);
+          expect(await decision.locator(".picker-select__trigger").textContent()).toContain("Jev");
         },
       );
     },

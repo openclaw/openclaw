@@ -1,30 +1,46 @@
 import { parseAbsoluteTimeMs } from "../parse.js";
-import type { CronJob } from "../types.js";
+import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import type { CronJob, CronRunStatus } from "../types.js";
 import {
   computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
+  HEARTBEAT_SKIP_DISABLED,
   isJobEnabled,
+  isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
+  resolveJobLastRunEndedAtMs,
   resolveJobLastRunStatus,
 } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
-import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
+import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
 /**
- * Reports whether a cron job's last completed run is older than its previous
+ * Reports whether a cron job's last completed occurrence is older than its previous
  * effective slot, which is how restart catch-up detects a missed run once
  * nextRunAtMs has already advanced past it.
  */
 export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
-  const lastRunAtMs = job.state.lastRunAtMs;
+  const lastTriggerEvalAtMs = job.trigger ? job.state.lastTriggerEvalAtMs : undefined;
+  const lastRunStatus = resolveJobLastRunStatus(job);
+  // Successful and skipped runs already advance from their end. Slots covered
+  // by that execution must not become new misses when the scheduler restarts.
+  const coveredThroughMs =
+    lastRunStatus === "ok" || lastRunStatus === "skipped"
+      ? resolveJobLastRunEndedAtMs(job)
+      : job.state.lastRunAtMs;
+  const lastRunAtMs =
+    lastTriggerEvalAtMs === undefined
+      ? coveredThroughMs
+      : Math.max(coveredThroughMs ?? lastTriggerEvalAtMs, lastTriggerEvalAtMs);
   const nextRunAtMs = job.state.nextRunAtMs;
   // Pacing supersedes intervening natural slots. Both startup admission and
   // backoff repair must retain that occurrence instead of inventing a miss.
   if (
     typeof lastRunAtMs !== "number" ||
     !Number.isFinite(lastRunAtMs) ||
+    hasPendingCronTriggerInterval(job, nowMs) ||
     (hasScheduledNextRunAtMs(nextRunAtMs) &&
       job.state.pacedNextRunAtMs === nextRunAtMs &&
       nowMs < nextRunAtMs)
@@ -37,11 +53,7 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
   } catch {
     return false;
   }
-  if (
-    typeof previousRunAtMs !== "number" ||
-    !Number.isFinite(previousRunAtMs) ||
-    previousRunAtMs <= lastRunAtMs
-  ) {
+  if (previousRunAtMs === undefined || previousRunAtMs <= lastRunAtMs) {
     return false;
   }
   // Slots computed from freshly edited scheduling inputs never existed before
@@ -55,24 +67,27 @@ export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): bool
 }
 
 export function isRunnableJob(params: {
-  state: CronServiceState;
   job: CronJob;
   nowMs: number;
-  skipJobIds?: ReadonlySet<string>;
+  forced?: boolean;
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
+  activeInProcess?: boolean;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
     job.state = {};
   }
-  if (!isJobEnabled(job)) {
+  if (
+    !hasCanonicalCronDeliveryMode(job.delivery) ||
+    hasActiveCronRun(job, params.activeInProcess)
+  ) {
     return false;
   }
-  if (params.skipJobIds?.has(job.id)) {
-    return false;
+  if (params.forced) {
+    return true;
   }
-  if (hasActiveCronRun(job)) {
+  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
     return false;
   }
   const next = job.state.nextRunAtMs;
@@ -89,7 +104,10 @@ export function isRunnableJob(params: {
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
     // The recovery owner recorded pending work after checking the exact task
     // identity. Its scheduled slot remains due even when the old run started later.
-    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+    if (
+      hasScheduledNextRunAtMs(next) &&
+      (job.state.startupCatchupAtMs === next || resolveForcePreservedOneShotAtMs(job) === next)
+    ) {
       return nowMs >= next;
     }
     const lastRun = job.state.lastRunAtMs;
@@ -120,9 +138,11 @@ export function isRunnableJob(params: {
     const lastRunAtMs = job.state.lastRunAtMs;
     // Startup loads persisted state before maintenance recompute. Suppress a
     // completed stale slot, but still replay a newer slot due by restart time.
+    // A force run explicitly leaves its scheduled occurrence unconsumed.
     const alreadyCompletedDueCronSlot =
       params.allowCronMissedRunByLastRun &&
       job.schedule.kind === "cron" &&
+      job.state.forcePreservedNextRunAtMs !== next &&
       (lastRunStatus === "ok" || lastRunStatus === "skipped") &&
       typeof lastRunAtMs === "number" &&
       Number.isFinite(lastRunAtMs) &&
@@ -136,12 +156,38 @@ export function isRunnableJob(params: {
     } catch {
       return false;
     }
-    return typeof latestRunAtMs === "number" && latestRunAtMs > lastRunAtMs;
+    const lastEndedAtMs = resolveJobLastRunEndedAtMs(job) ?? lastRunAtMs;
+    return latestRunAtMs !== undefined && latestRunAtMs > lastEndedAtMs;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
   return hasMissedCronSlotSinceLastRun(job, nowMs);
+}
+
+function isScheduledTerminalOneShotRetry(
+  job: CronJob,
+  lastRunStatus: CronRunStatus,
+  lastRun: unknown,
+  nextRun: unknown,
+): boolean {
+  if (
+    !isJobEnabled(job) ||
+    typeof nextRun !== "number" ||
+    typeof lastRun !== "number" ||
+    nextRun <= lastRun
+  ) {
+    return false;
+  }
+  if (lastRunStatus === "error") {
+    return true;
+  }
+  return (
+    lastRunStatus === "skipped" &&
+    job.sessionTarget === "main" &&
+    job.wakeMode === "now" &&
+    job.state.lastError === HEARTBEAT_SKIP_DISABLED
+  );
 }
 
 function isErrorBackoffPending(
@@ -154,28 +200,4 @@ function isErrorBackoffPending(
   }
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);
   return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
-}
-
-export function collectRunnableJobs(
-  state: CronServiceState,
-  nowMs: number,
-  opts?: {
-    skipJobIds?: ReadonlySet<string>;
-    skipAtIfAlreadyRan?: boolean;
-    allowCronMissedRunByLastRun?: boolean;
-  },
-): CronJob[] {
-  if (!state.store) {
-    return [];
-  }
-  return state.store.jobs.filter((job) =>
-    isRunnableJob({
-      state,
-      job,
-      nowMs,
-      skipJobIds: opts?.skipJobIds,
-      skipAtIfAlreadyRan: opts?.skipAtIfAlreadyRan,
-      allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
-    }),
-  );
 }

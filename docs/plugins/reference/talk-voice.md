@@ -20,6 +20,7 @@ Manage Talk voice selection (list/set).
 ## Surface
 
 - Slash commands: `/voice`
+- Contracts: `tools`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

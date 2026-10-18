@@ -8,10 +8,10 @@ import {
   type OpusDecoderHandle as LibopusDecoder,
   type OpusEncoderHandle as LibopusEncoder,
 } from "libopus-wasm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
-import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
+import { createStreamingPcmResampler } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const SAMPLE_RATE = 48_000;
@@ -41,7 +41,6 @@ const FFMPEG_PCM_ARGUMENTS = [
 
 type OpusDecodeCallbacks = {
   onError?: (err: unknown) => void;
-  onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 };
 
@@ -49,12 +48,14 @@ type StreamCallback = (error?: Error | null) => void;
 
 let warnedOpusMissing = false;
 
-function buildWavBuffer(pcm: Buffer): Buffer {
+function buildWavBuffer(chunks: readonly Buffer[]): Buffer {
+  const pcmBytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const blockAlign = (CHANNELS * BIT_DEPTH) / 8;
   const byteRate = SAMPLE_RATE * blockAlign;
-  const header = Buffer.alloc(VOICE_WAV_HEADER_BYTES);
+  const wav = Buffer.allocUnsafe(VOICE_WAV_HEADER_BYTES + pcmBytes);
+  const header = wav.subarray(0, VOICE_WAV_HEADER_BYTES);
   header.write("RIFF", 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
+  header.writeUInt32LE(36 + pcmBytes, 4);
   header.write("WAVE", 8);
   header.write("fmt ", 12);
   header.writeUInt32LE(16, 16);
@@ -65,12 +66,12 @@ function buildWavBuffer(pcm: Buffer): Buffer {
   header.writeUInt16LE(blockAlign, 32);
   header.writeUInt16LE(BIT_DEPTH, 34);
   header.write("data", 36);
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
-}
-
-export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
-  return new DiscordOpusEncodeStream();
+  header.writeUInt32LE(pcmBytes, 40);
+  let offset = VOICE_WAV_HEADER_BYTES;
+  for (const chunk of chunks) {
+    offset += chunk.copy(wav, offset);
+  }
+  return wav;
 }
 
 export function createDiscordOpusPlaybackStream(input: Readable | string): Readable {
@@ -79,7 +80,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  const opusStream = createDiscordOpusEncodeStream();
+  const opusStream = new DiscordOpusEncodeStream();
   const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
   let stderrBytes = 0;
   let ffmpegClosed = false;
@@ -144,7 +145,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   return opusStream;
 }
 
-class DiscordOpusEncodeStream extends Duplex {
+export class DiscordOpusEncodeStream extends Duplex {
   #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #partialBytes = 0;
   #pending: { chunk: Buffer; offset: number; done: StreamCallback } | undefined;
@@ -306,10 +307,6 @@ class DiscordOpusEncodeStream extends Duplex {
   }
 }
 
-function pcmInt16ToBuffer(pcm: Int16Array): Buffer {
-  return Buffer.from(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-}
-
 export async function decodeOpusStreamChunks(
   stream: Readable,
   params: OpusDecodeCallbacks & {
@@ -337,12 +334,11 @@ async function* decodeOpusFrames(
     if (!warnedOpusMissing) {
       warnedOpusMissing = true;
       params.onWarn(
-        `discord voice: no usable opus decoder available (libopus-wasm: ${formatErrorMessage(err)}); cannot decode voice audio`,
+        "discord voice: no usable opus decoder available (libopus-wasm); cannot decode voice audio",
       );
     }
     return;
   }
-  params.onVerbose("opus decoder: libopus-wasm");
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
@@ -350,13 +346,16 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield { pcm: pcmInt16ToBuffer(decoded), packet: chunk };
+        yield {
+          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          packet: chunk,
+        };
       }
     }
   } catch (err) {
     params.onError?.(err);
     if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+      logVerbose("discord voice: opus decode failed");
     }
   } finally {
     decoder.free();
@@ -438,26 +437,19 @@ export function createRealtimePcmToDiscordConverter() {
   };
 }
 
-function estimateDurationSeconds(pcm: Buffer): number {
-  const bytesPerSample = (BIT_DEPTH / 8) * CHANNELS;
-  if (bytesPerSample <= 0) {
-    return 0;
-  }
-  return pcm.length / (bytesPerSample * SAMPLE_RATE);
-}
-
 export async function writeVoiceWavFile(
-  pcm: Buffer,
-): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
+  chunks: readonly Buffer[],
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
+  // Snapshot borrowed PCM before workspace creation can suspend the receive owner.
+  const wav = buildWavBuffer(chunks);
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });
   try {
-    const filePath = await workspace.write("segment.wav", buildWavBuffer(pcm));
+    const filePath = await workspace.write("segment.wav", wav);
     return {
       path: filePath,
-      durationSeconds: estimateDurationSeconds(pcm),
       cleanup: () => workspace[Symbol.asyncDispose](),
     };
   } catch (error) {

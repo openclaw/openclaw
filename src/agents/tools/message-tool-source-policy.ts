@@ -5,6 +5,7 @@ import {
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TObject } from "typebox";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { AgentRuntimeMessageActionContext } from "../../gateway/message-action-turn-capability.js";
@@ -12,10 +13,19 @@ import { MessageActionDeniedError } from "../../infra/outbound/message-action-de
 import { sourceDeliveryTargetsMatch } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { channelTargetSchema, stringEnum } from "../schema/typebox.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { readToolStringParam } from "./common.js";
 import { normalizeEscapedLineBreaksForVisibleText } from "./message-tool-visible-content.js";
+
+export function resolveSourceReplySinkDeliveryMode(
+  provider: string | undefined,
+  configuredMode: SourceReplyDeliveryMode | undefined,
+): SourceReplyDeliveryMode | undefined {
+  // Internal tool sends use the private sink; the run's final answer stays automatic.
+  return normalizeMessageChannel(provider) === INTERNAL_MESSAGE_CHANNEL
+    ? "message_tool_only"
+    : configuredMode;
+}
 
 function sourceReplyPolicyError(message: string): MessageActionDeniedError {
   return new MessageActionDeniedError(
@@ -24,24 +34,23 @@ function sourceReplyPolicyError(message: string): MessageActionDeniedError {
     "message-source-reply:current-conversation",
   );
 }
-export const SOURCE_REPLY_ONLY_MESSAGE_SCHEMA = Type.Object({
-  action: stringEnum(["send"], {
-    description: "Send a text reply to the current source conversation.",
-  }),
-  channel: Type.Optional(Type.String()),
-  target: Type.Optional(channelTargetSchema()),
-  accountId: Type.Optional(Type.String()),
-  message: Type.Optional(
-    Type.String({ description: "Text to send to the current source conversation." }),
-  ),
-  replyTo: Type.Optional(Type.String()),
-  threadId: Type.Optional(Type.String()),
-});
-const SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES = new Set(["to", "channelId", "final"]);
+// Arguments a source-bound completion reply may carry; anything else could retarget it.
+const SOURCE_REPLY_ONLY_ARG_NAMES = new Set([
+  "action",
+  "channel",
+  "target",
+  "accountId",
+  "message",
+  "replyTo",
+  "threadId",
+  "to",
+  "channelId",
+  "final",
+]);
 const SOURCE_REPLY_FINAL_PROPERTY = Type.Optional(
   Type.Boolean({
     description:
-      "For admitted message-tool-only source turns, set false for progress; set true, or omit, for the completed reply. Ignored for other sends.",
+      "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
   }),
 );
 
@@ -63,15 +72,8 @@ export function enforceSourceReplyOnlyTextDirectives(args: Record<string, unknow
     stripPlainTextToolCallBlocks(withoutCitationMarkers),
   ])) {
     const directives = parseReplyDirectives(normalized, { extractMarkdownImages: true });
-    if (
-      directives.replyToTag ||
-      directives.audioAsVoice ||
-      directives.mediaUrls?.length ||
-      directives.isSilent
-    ) {
-      throw sourceReplyPolicyError(
-        "Completion source replies cannot contain non-text or silent directives.",
-      );
+    if (directives.replyToTag || directives.audioAsVoice || directives.mediaUrls?.length) {
+      throw sourceReplyPolicyError("Completion source replies cannot contain non-text directives.");
     }
   }
 }
@@ -128,10 +130,7 @@ export function enforceSourceReplyOnlyMessageAction(params: {
     );
   }
   for (const name of Object.keys(params.args)) {
-    if (
-      !Object.hasOwn(SOURCE_REPLY_ONLY_MESSAGE_SCHEMA.properties, name) &&
-      !SOURCE_REPLY_ONLY_RUNTIME_ARG_NAMES.has(name)
-    ) {
+    if (!SOURCE_REPLY_ONLY_ARG_NAMES.has(name)) {
       throw sourceReplyPolicyError(`Completion source replies cannot use the "${name}" argument.`);
     }
   }

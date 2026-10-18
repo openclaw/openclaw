@@ -98,6 +98,7 @@ suite.define(() => {
       ).toBe(0);
 
       await page.getByRole("button", { name: "Close Files" }).click();
+      await page.locator(".chat-workspace-rail").waitFor({ state: "detached" });
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
@@ -127,16 +128,14 @@ suite.define(() => {
       await openChatSidePanelType(page, "Review");
       await page.locator('[data-panel-slot="detail"]:not([hidden])').waitFor();
       await page.getByRole("button", { name: "Actions for AFTER_RUN.md" }).click();
-      await page
-        .locator('openclaw-session-diff-menu wa-dropdown-item[value="reveal-file"]')
-        .click();
+      await page.locator('openclaw-session-diff-menu button[value="reveal-file"]').click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(3);
       await page.locator(".chat-workspace-rail__file-name", { hasText: "AFTER_RUN.md" }).waitFor({
         timeout: 10_000,
       });
-      await page.locator("wa-tab").filter({ hasText: "Review" }).click();
+      await page.locator(".tabstrip-tab").filter({ hasText: "Review" }).click();
       await gateway.setMethodResponse("sessions.files.list", {
         files: [
           {
@@ -153,7 +152,7 @@ suite.define(() => {
       await page.getByText("Workspace stayed inactive.").first().waitFor();
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(3);
 
-      await page.locator("wa-tab").filter({ hasText: "Files" }).click();
+      await page.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
         .toBe(4);
@@ -282,7 +281,12 @@ suite.define(() => {
       await search.fill("read-file");
       await expect
         .poll(() => groups.locator(".chat-workspace-rail__file-name:visible").allTextContents())
-        .toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
+        .toEqual(["read-file-1.ts", "read-file-2.ts"]);
+      expect(
+        await groups
+          .locator(".chat-workspace-rail__file-open:visible")
+          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+      ).toEqual(["src/read-file-1.ts", "src/read-file-2.ts"]);
       expect(await groups.count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);

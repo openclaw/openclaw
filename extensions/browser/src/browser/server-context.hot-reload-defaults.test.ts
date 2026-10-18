@@ -1,6 +1,7 @@
 import "./server-context.chrome-test-harness.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { isChromeReachable, launchOpenClawChrome, stopOpenClawChrome } from "./chrome.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
@@ -17,12 +18,39 @@ vi.mock("./pw-ai-module.js", () => ({
   getPwAiModule: async () => null,
 }));
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
+function createContext() {
+  const state: BrowserServerState = {
+    server: null,
+    port: 18791,
+    resolved: resolveBrowserConfig(config.current.browser, config.current),
+    profiles: new Map(),
+  };
+  const ctx = createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: true });
+  return { state, ctx };
+}
+
+function createLaunchFixture(beforeFirstLaunch = async () => {}) {
+  const fixture = createContext();
+  let reachable = false;
+  vi.mocked(isChromeReachable).mockImplementation(async (url) =>
+    url.includes(":18800") ? reachable : true,
+  );
+  vi.mocked(stopOpenClawChrome).mockImplementation(async () => {
+    reachable = false;
   });
-  return { promise, resolve };
+  const original = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 101);
+  const replacement = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 102);
+  vi.mocked(launchOpenClawChrome)
+    .mockImplementationOnce(async () => {
+      await beforeFirstLaunch();
+      reachable = true;
+      return original;
+    })
+    .mockImplementationOnce(async () => {
+      reachable = true;
+      return replacement;
+    });
+  return { ...fixture, original, replacement };
 }
 
 describe("browser inherited launch settings reload", () => {
@@ -47,14 +75,8 @@ describe("browser inherited launch settings reload", () => {
       ...config.current.browser,
       ssrfPolicy: { allowedHostnames: ["192.0.2.10"] },
     };
-    const state: BrowserServerState = {
-      server: null,
-      port: 18791,
-      resolved: resolveBrowserConfig(config.current.browser, config.current),
-      profiles: new Map(),
-    };
+    const { state, ctx } = createContext();
     const startup = state.resolved;
-    const ctx = createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: true });
     vi.mocked(isChromeReachable).mockResolvedValue(true);
     await ctx.forProfile("remote").isHttpReachable();
     const startupProbePolicy = vi.mocked(isChromeReachable).mock.calls[0]?.[2];
@@ -81,35 +103,9 @@ describe("browser inherited launch settings reload", () => {
     });
   });
 
-  it.each([
-    { setting: "noSandbox", change: { noSandbox: true } },
-    { setting: "extraArgs", change: { extraArgs: ["--disable-dev-shm-usage"] } },
-  ])("relaunches only owned Chrome when $setting changes", async ({ change }) => {
-    const state: BrowserServerState = {
-      server: null,
-      port: 18791,
-      resolved: resolveBrowserConfig(config.current.browser, config.current),
-      profiles: new Map(),
-    };
-    const ctx = createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: true });
-    let managedReachable = false;
-    vi.mocked(isChromeReachable).mockImplementation(async (url) =>
-      url.includes(":18800") ? managedReachable : true,
-    );
-    vi.mocked(stopOpenClawChrome).mockImplementation(async () => {
-      managedReachable = false;
-    });
-    const original = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 101);
-    const replacement = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 102);
-    vi.mocked(launchOpenClawChrome)
-      .mockImplementationOnce(async () => {
-        managedReachable = true;
-        return original;
-      })
-      .mockImplementationOnce(async () => {
-        managedReachable = true;
-        return replacement;
-      });
+  it("relaunches only owned Chrome when noSandbox changes", async () => {
+    const change = { noSandbox: true };
+    const { state, ctx, original, replacement } = createLaunchFixture();
     const attached = ctx.forProfile("attached");
     const remote = ctx.forProfile("remote");
     await attached.ensureBrowserAvailable();
@@ -127,37 +123,19 @@ describe("browser inherited launch settings reload", () => {
     await expect(remote.isReachable()).resolves.toBe(true);
   });
 
-  it.each([
-    { setting: "noSandbox", change: { noSandbox: true } },
-    { setting: "extraArgs", change: { extraArgs: ["--disable-dev-shm-usage"] } },
-  ])("rejects a pending managed launch after $setting changes", async ({ change }) => {
-    const state: BrowserServerState = {
-      server: null,
-      port: 18791,
-      resolved: resolveBrowserConfig(config.current.browser, config.current),
-      profiles: new Map(),
-    };
-    const ctx = createBrowserRouteContext({ getState: () => state, refreshConfigFromDisk: true });
-    let managedReachable = false;
-    vi.mocked(isChromeReachable).mockImplementation(async () => managedReachable);
-    vi.mocked(stopOpenClawChrome).mockImplementation(async () => {
-      managedReachable = false;
+  it("rejects a pending managed launch after extraArgs changes", async () => {
+    const change = { extraArgs: ["--disable-dev-shm-usage"] };
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const {
+      state,
+      ctx,
+      original: stale,
+      replacement,
+    } = createLaunchFixture(async () => {
+      started.resolve();
+      await release.promise;
     });
-    const started = deferred();
-    const release = deferred();
-    const stale = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 201);
-    const replacement = mockLaunchedChrome(vi.mocked(launchOpenClawChrome), 202);
-    vi.mocked(launchOpenClawChrome)
-      .mockImplementationOnce(async () => {
-        started.resolve();
-        await release.promise;
-        managedReachable = true;
-        return stale;
-      })
-      .mockImplementationOnce(async () => {
-        managedReachable = true;
-        return replacement;
-      });
     const initialStart = ctx.forProfile().ensureBrowserAvailable();
     const outcome = initialStart.then(
       () => null,

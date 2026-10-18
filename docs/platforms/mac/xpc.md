@@ -32,6 +32,15 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
 - Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution. The response reader remains open until the result arrives.
 
+The exec response deadline includes the requested command `timeoutMs`, the
+companion's 15-second approval window, and 5 seconds for transport overhead.
+An omitted timeout keeps the 20-second default; `timeoutMs: 0` disables the
+response deadline while preserving cancellation. After submission, a response
+deadline reports `TIMEOUT` and a lost or oversized reply reports `UNKNOWN`.
+Both mean the execution outcome is unknown; the command is never replayed
+locally. `COMPANION_APP_UNAVAILABLE` is reserved for requests that could not be
+submitted to the companion.
+
 Diagram (SCI):
 
 ```text
@@ -105,7 +114,7 @@ profile selection, safe credential input, and background app launch.
 - The built-in agent `computer` tool does **not** use this socket. A paired macOS node fulfills `computer.act` in the app process with embedded Peekaboo services.
 - UI automation uses a separate UNIX socket (`~/Library/Application Support/OpenClaw/<socket>`) and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app -> Claude.app -> OpenClaw.app -> local execution.
-- Security: bridge hosts require the exact signed Peekaboo client bundle identifier and Peekaboo's canonical
+- Security: bridge hosts require the exact signed Peekaboo client bundle identifier and Peekaboo's official
   current/legacy release signer set. `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`
   guards a DEBUG-only same-UID escape hatch (Peekaboo convention).
 - See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.

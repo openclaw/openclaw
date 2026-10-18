@@ -1,13 +1,20 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
-import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
+import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
+import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
 import {
   AUTOMATIONS_TOOL_NAME,
   isAutomationsToolName,
@@ -17,30 +24,54 @@ import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
 } from "../channels/plugins/conversation-read-origin.js";
+import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
   isAgentHarnessSessionStoreEntryProtected,
 } from "../sessions/agent-harness-session-key.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
-  authorizeResolvedSessionMutation,
-  resolveSessionSharingTarget,
-} from "./session-sharing.js";
+  authorizePreparedSessionMutation,
+  authorizeSessionAgentRun,
+  isGatewayAdmin,
+} from "./session-sharing-policy.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "./session-sharing-read.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+import { isToolUploadRequest } from "./tool-upload-policy.js";
+import {
+  areGatewayUploadsEnabled,
+  assertGatewayUploadsEnabled,
+  GATEWAY_UPLOADS_DISABLED_MESSAGE,
+} from "./upload-policy.js";
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -141,14 +172,23 @@ function mergeActionIntoArgsIfSupported(params: {
 }
 
 function resolveToolInputErrorStatus(err: unknown): number | null {
+  if (
+    err instanceof SessionMutationAuthorizationChangedError ||
+    err instanceof SessionMutationFactsUnavailableError
+  ) {
+    return 403;
+  }
+  if (err instanceof GatewayClientRequestError && err.code === ErrorCodes.FORBIDDEN) {
+    return 403;
+  }
   if (err instanceof ToolInputError) {
-    const status = (err as { status?: unknown }).status;
+    const status = err.status;
     return typeof status === "number" ? status : 400;
   }
   if (typeof err !== "object" || err === null || !("name" in err)) {
     return null;
   }
-  const name = (err as { name?: unknown }).name;
+  const name = err.name;
   if (name !== "ToolInputError" && name !== "ToolAuthorizationError") {
     return null;
   }
@@ -163,7 +203,7 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   if (getPluginToolMeta(tool)) {
     return "plugin";
   }
-  if (getChannelAgentToolMeta(tool as never)) {
+  if (getChannelAgentToolMeta(tool)) {
     return "channel";
   }
   return "core";
@@ -180,17 +220,41 @@ type InvokeGatewayToolParams = {
   /** Host-minted authority from the calling connection; never derived from wire params. */
   operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
   operatorScopes?: readonly string[];
+  approvalReviewerDeviceId?: string;
   senderIsOwner?: boolean;
   clientCaps?: string[];
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
   signal?: AbortSignal;
+  assertInvocationCurrent?: () => void;
 };
 
 async function invokeGatewayToolWithSignal(
-  params: InvokeGatewayToolParams & { signal: AbortSignal },
+  params: InvokeGatewayToolParams & {
+    signal: AbortSignal;
+    preparedSession?: { entry: SessionEntry | undefined };
+    releaseSessionFacts: Array<() => void>;
+  },
 ): Promise<ToolsInvokeOutcome> {
+  let hasClientUploads = false;
+  const assertCapturedInputCommitAllowed = () => {
+    params.signal.throwIfAborted();
+    if (hasClientUploads) {
+      assertGatewayUploadsEnabled(getRuntimeConfig());
+    }
+  };
+  const sessionChecks: Array<() => void> = [];
+  const assertCallerCurrent = () => {
+    params.signal.throwIfAborted();
+    params.assertInvocationCurrent?.();
+  };
+  const assertInvocationCurrent = () => {
+    assertCallerCurrent();
+    for (const check of sessionChecks) {
+      check();
+    }
+  };
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
     params.conversationReadOrigin,
   );
@@ -201,30 +265,26 @@ async function invokeGatewayToolWithSignal(
   const toolName = isAutomationsToolName(requestedToolName)
     ? AUTOMATIONS_TOOL_NAME
     : requestedToolName;
+  const failure = (
+    status: Extract<ToolsInvokeOutcome, { ok: false }>["status"],
+    type: ToolsInvokeErrorType,
+    message: string,
+    details?: { requiresApproval: boolean },
+  ): ToolsInvokeOutcome => ({ ok: false, status, toolName, error: { type, message, ...details } });
   if (!toolName) {
-    return {
-      ok: false,
-      status: 400,
-      toolName: "",
-      error: { type: "invalid_request", message: "tools.invoke requires name" },
-    };
+    return failure(400, "invalid_request", "tools.invoke requires name");
   }
 
   if (process.env.VITEST && MEMORY_TOOL_NAMES.has(toolName)) {
     const reasons = resolveMemoryToolDisableReasons(params.cfg);
     if (reasons.length > 0) {
       const suffix = ` (${reasons.join(", ")})`;
-      return {
-        ok: false,
-        status: 400,
-        toolName,
-        error: {
-          type: "invalid_request",
-          message:
-            `memory tools are disabled in tests${suffix}. ` +
-            `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
-        },
-      };
+      return failure(
+        400,
+        "invalid_request",
+        `memory tools are disabled in tests${suffix}. ` +
+          `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and check that plugins.enabled is not false).`,
+      );
     }
   }
 
@@ -237,14 +297,27 @@ async function invokeGatewayToolWithSignal(
     argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
       ? (argsRaw as Record<string, unknown>)
       : {};
+  // HTTP wraps operators in synthetic clients too. Only an RPC's host-owned
+  // runtime identity exempts it; requested conversation origin is wire data.
+  const sourceClient = getPluginRuntimeGatewayRequestScope()?.client;
+  const internalRpc =
+    params.toolCallIdPrefix === "rpc" &&
+    (sourceClient?.internal?.syntheticClient === true ||
+      sourceClient?.internal?.agentRuntimeIdentity !== undefined);
+  // Plugins opt in at their byte writer, including names the wire classifier cannot know.
+  const assertInputCommitAllowed = () => {
+    params.signal.throwIfAborted();
+    if (!internalRpc) {
+      assertGatewayUploadsEnabled(getRuntimeConfig());
+    }
+  };
+  hasClientUploads = !internalRpc && isToolUploadRequest(toolName, args);
+  if (hasClientUploads && !areGatewayUploadsEnabled(params.cfg)) {
+    return failure(403, "tool_call_blocked", GATEWAY_UPLOADS_DISABLED_MESSAGE);
+  }
   const sessionTarget = resolveSessionTarget({ cfg: params.cfg, input: params.input });
   if (!sessionTarget.ok) {
-    return {
-      ok: false,
-      status: 400,
-      toolName,
-      error: { type: "invalid_request", message: sessionTarget.error.message },
-    };
+    return failure(400, "invalid_request", sessionTarget.error.message);
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
   const authenticatedUserProfile = params.cfg.gateway?.roles
@@ -256,145 +329,225 @@ async function invokeGatewayToolWithSignal(
     operatorRoleActor: params.operatorRoleActor,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
-  const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
-    cfg: params.cfg,
-    client,
-    sessionKey,
-    agentId: selectedAgentId,
-  });
-  if (primarySessionAuthorizationError) {
-    return {
-      ok: false,
-      status: 403,
-      toolName,
-      error: {
-        type: "tool_call_blocked",
-        message: primarySessionAuthorizationError.message,
-      },
+  const sessionEntry = params.preparedSession
+    ? params.preparedSession.entry
+    : (
+        await loadGatewaySessionEntryReadOnlyInWorker({
+          cfg: params.cfg,
+          key: sessionKey,
+          agentId: selectedAgentId,
+          assertActive: assertInvocationCurrent,
+        })
+      ).entry;
+  const profiles =
+    isGatewayAdmin(client) && !params.cfg.gateway?.roles
+      ? undefined
+      : await prepareSessionSharingProfiles(client);
+  const prepareAuthorization = async (
+    key: string,
+    agentId: string,
+    authorizeMissing: (
+      cfg: OpenClawConfig,
+      prepared?: Parameters<typeof authorizeSessionAgentRun>[1],
+    ) => ReturnType<typeof authorizeGatewaySessionCreation> | null,
+  ) => {
+    if (!profiles) {
+      sessionChecks.push(() => {
+        if (getRuntimeConfig().gateway?.roles) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(ErrorCodes.FORBIDDEN, "Session role policy changed; retry the request"),
+          );
+        }
+      });
+      return () => null;
+    }
+    const facts = await prepareSessionMutationFacts({
+      cfg: params.cfg,
+      sessionKey: key,
+      agentId,
+      allowMissing: true,
+    });
+    params.releaseSessionFacts.push(facts.release);
+    const authorize = (cfg = params.cfg) => {
+      const current = facts.readCurrent(cfg);
+      const sharing = prepareProjectedSessionSharing({
+        cfg,
+        client,
+        profiles,
+        isMember: (_target, identityId) => current.membership.has(identityId),
+      });
+      const prepared = {
+        policy: sharing.policy,
+        aliases: profiles.readCurrent().profile?.aliases ?? new Set<string>(),
+      };
+      return (
+        authorizePreparedSessionMutation(
+          { cfg, client, sessionKey: key, agentId },
+          current,
+          prepared,
+        ) ?? (!current.target ? authorizeMissing(cfg, prepared) : null)
+      );
     };
+    sessionChecks.push(() => {
+      const error = authorize(getRuntimeConfig());
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
+    });
+    return authorize;
+  };
+  const authorizePrimary = await prepareAuthorization(
+    sessionKey,
+    selectedAgentId,
+    (cfg, prepared) =>
+      // Standalone calls cannot create the sandbox provenance a normal session run records.
+      authorizeSessionAgentRun(
+        {
+          cfg,
+          client,
+          target: { agentId: selectedAgentId, canonicalKey: sessionKey },
+        },
+        prepared,
+      ),
+  );
+  const primarySessionAuthorizationError = authorizePrimary();
+  if (primarySessionAuthorizationError) {
+    return failure(403, "tool_call_blocked", primarySessionAuthorizationError.message);
   }
   if (authenticatedUserProfile && (toolName === "sessions_spawn" || toolName === "sessions_send")) {
-    const nestedSessionKey = normalizeOptionalString(args.sessionKey);
+    const rawNestedSessionKey = normalizeOptionalString(args.sessionKey);
+    const nestedSessionKey = rawNestedSessionKey
+      ? normalizeSessionKeyPreservingOpaquePeerIds(rawNestedSessionKey)
+      : undefined;
     const nestedAgentId = normalizeOptionalString(args.agentId);
     const targetAgent = nestedSessionKey
       ? resolveRequestedSessionAgentId(params.cfg, nestedSessionKey, nestedAgentId)
       : undefined;
     if (targetAgent && !targetAgent.ok) {
-      return {
-        ok: false,
-        status: 400,
-        toolName,
-        error: { type: "invalid_request", message: targetAgent.error.message },
-      };
+      return failure(400, "invalid_request", targetAgent.error.message);
     }
     const targetAgentId = targetAgent?.agentId ?? nestedAgentId ?? selectedAgentId;
-    const existingTarget =
+    const authorizeCreation = (
+      cfg = params.cfg,
+      prepared?: Parameters<typeof authorizeGatewaySessionCreation>[1],
+    ) =>
+      authorizeGatewaySessionCreation(
+        { cfg, client, agentId: targetAgentId },
+        prepared ??
+          (profiles &&
+            prepareProjectedSessionSharing({ cfg, client, profiles, isMember: () => false })),
+      );
+    const authorizeNested =
       toolName === "sessions_send" && nestedSessionKey
-        ? resolveSessionSharingTarget({
-            cfg: params.cfg,
-            sessionKey: nestedSessionKey,
-            agentId: targetAgentId,
-          })
-        : null;
-    const authorizationError =
-      (toolName === "sessions_send" && nestedSessionKey
-        ? authorizeResolvedSessionMutation({
-            cfg: params.cfg,
-            client,
-            sessionKey: nestedSessionKey,
-            agentId: targetAgentId,
-          })
-        : null) ??
-      (!existingTarget
-        ? authorizeGatewaySessionCreation({
-            cfg: params.cfg,
-            client,
-            agentId: targetAgentId,
-          })
-        : null);
+        ? await prepareAuthorization(nestedSessionKey, targetAgentId, authorizeCreation)
+        : authorizeCreation;
+    if (authorizeNested === authorizeCreation) {
+      sessionChecks.push(() => {
+        const error = authorizeCreation(getRuntimeConfig());
+        if (error) {
+          throw new SessionMutationAuthorizationChangedError(error);
+        }
+      });
+    }
+    const authorizationError = authorizeNested();
+    const nestedSource =
+      nestedSessionKey &&
+      captureSessionEntryMetadataRead(
+        { sessionKey: nestedSessionKey, agentId: targetAgentId },
+        () => {
+          params.signal.throwIfAborted();
+          params.assertInvocationCurrent?.();
+        },
+      );
+    if (nestedSource) {
+      const initial = nestedSource.readCurrent();
+      sessionChecks.push(() => {
+        const current = nestedSource.readCurrent();
+        const error = authorizeNested(getRuntimeConfig());
+        if (
+          error ||
+          current?.sessionId !== initial?.sessionId ||
+          current?.lifecycleRevision !== initial?.lifecycleRevision
+        ) {
+          throw new SessionMutationAuthorizationChangedError(
+            error ?? errorShape(ErrorCodes.FORBIDDEN, "Target session changed; retry the request"),
+          );
+        }
+      });
+    }
     if (authorizationError) {
-      return {
-        ok: false,
-        status: 403,
-        toolName,
-        error: { type: "tool_call_blocked", message: authorizationError.message },
-      };
+      return failure(403, "tool_call_blocked", authorizationError.message);
     }
   }
-  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
-    agentId: selectedAgentId,
-  }).entry;
   if (
     isAgentHarnessSessionKey(sessionKey) &&
     (!sessionEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, sessionEntry))
   ) {
-    return {
-      ok: false,
-      status: 400,
-      toolName,
-      error: {
-        type: "invalid_request",
-        message: AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-      },
-    };
+    return failure(400, "invalid_request", AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
   }
+  const sessionWorkspace =
+    resolveIngressWorkspaceOverrideForSessionRun({
+      spawnedBy: sessionEntry?.spawnedBy,
+      workspaceDir: sessionEntry?.spawnedWorkspaceDir,
+      cwd: sessionEntry?.spawnedCwd,
+    }) ?? resolveAgentWorkspaceDir(params.cfg, selectedAgentId);
+  const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
+    sessionEntry,
+    sessionWorkspace,
+  );
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
       sessionId: sessionEntry?.sessionId,
+      sessionPermissionPolicy,
+      preparedSessionWorkspaceDir: sessionWorkspace,
       agentId: selectedAgentId,
       messageProvider: params.messageChannel,
       accountId: params.accountId,
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
       senderIsOwner: params.senderIsOwner,
       clientCaps: params.clientCaps,
       conversationReadOrigin,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
+      assertInvocationCurrent,
+      assertInputCommitAllowed,
       disablePluginTools,
       gatewayRequestedTools,
     });
 
-  let { agentId, tools, workspaceDir } = resolveTools(knownCoreTool);
+  let { agentId, tools, workspaceDir } = await resolveTools(knownCoreTool);
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
-    ({ agentId, tools, workspaceDir } = resolveTools(false));
+    ({ agentId, tools, workspaceDir } = await resolveTools(false));
   }
   const requestedAgentId = normalizeOptionalString(params.input.agentId);
-  if (requestedAgentId && agentId && requestedAgentId !== agentId) {
-    return {
-      ok: false,
-      status: 400,
-      toolName,
-      error: {
-        type: "invalid_request",
-        message: `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
-      },
-    };
+  if (requestedAgentId && agentId && selectedAgentId !== agentId) {
+    return failure(
+      400,
+      "invalid_request",
+      `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
+    );
   }
   const tool = tools.find((candidate) => candidate.name === toolName);
   if (!tool) {
-    return {
-      ok: false,
-      status: 404,
-      toolName,
-      error: { type: "not_found", message: `Tool not available: ${toolName}` },
-    };
+    return failure(404, "not_found", `Tool not available: ${toolName}`);
   }
 
   try {
-    const gatewayTool: AnyAgentTool = tool;
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
       ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
       : `${params.toolCallIdPrefix}-${conversationReadOrigin}-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
-      toolSchema: gatewayTool.parameters,
+      toolSchema: tool.parameters,
       action,
       args,
     });
+    assertInvocationCurrent();
     const hookResult = await runBeforeToolCallHook({
       toolName,
       params: toolArgs,
@@ -403,6 +556,7 @@ async function invokeGatewayToolWithSignal(
         agentId,
         config: params.cfg,
         sessionKey,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         workspaceDir,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
@@ -410,59 +564,63 @@ async function invokeGatewayToolWithSignal(
       approvalMode: params.approvalMode,
     });
     if (hookResult.blocked) {
-      return {
-        ok: false,
-        status: 403,
-        toolName,
-        error: {
-          type: "tool_call_blocked",
-          message: hookResult.reason,
-          requiresApproval: hookResult.deniedReason === "plugin-approval",
-        },
-      };
+      return failure(403, "tool_call_blocked", hookResult.reason, {
+        requiresApproval: hookResult.deniedReason === "plugin-approval",
+      });
     }
-    params.signal?.throwIfAborted();
-    const executeTool = async () =>
-      await gatewayTool.execute?.(toolCallId, hookResult.params, params.signal);
-    const result = authenticatedUserProfile
-      ? await withOperatorToolGatewayAuthority(
-          {
-            authenticatedUserProfile,
-            operatorRoleActor: params.operatorRoleActor,
-            scopes: params.operatorScopes ?? [],
-          },
-          executeTool,
-        )
-      : await executeTool();
+    // Keep byte custody even when hooks or hydration replace buffers with stored paths.
+    hasClientUploads ||= !internalRpc && isToolUploadRequest(toolName, hookResult.params);
+    const result = await withOperatorToolGatewayAuthority(
+      {
+        authenticatedUserProfile,
+        operatorRoleActor: params.operatorRoleActor,
+        scopes: client.connect.scopes ?? [],
+        assertCurrent: assertInvocationCurrent,
+        assertInputCommitAllowed: assertCapturedInputCommitAllowed,
+      },
+      async () => {
+        assertInvocationCurrent();
+        assertCapturedInputCommitAllowed();
+        return await tool.execute?.(toolCallId, hookResult.params, params.signal);
+      },
+    );
+    const executedAction = asOptionalRecord(hookResult.params)?.action;
+    const delivery =
+      toolName === "message" &&
+      resolveToolSource(tool) === "core" &&
+      (isMessageToolSendActionName(executedAction) ||
+        executedAction === "poll" ||
+        executedAction === "broadcast")
+        ? readEmbeddedMessageDeliveryFact(
+            asOptionalRecord(asOptionalRecord(result)?.details)?.messageDelivery,
+          )
+        : undefined;
+    // The send may create its session row. Returning its receipt still requires live caller authority.
+    if (delivery?.status === "settled" || delivery?.partialDelivery === true) {
+      assertCallerCurrent();
+    } else {
+      assertInvocationCurrent();
+    }
     return {
       ok: true,
       status: 200,
       toolName,
-      source: resolveToolSource(gatewayTool),
+      source: resolveToolSource(tool),
       result,
     };
   } catch (err) {
     const inputStatus = resolveToolInputErrorStatus(err);
     if (inputStatus !== null) {
-      return {
-        ok: false,
-        status: inputStatus === 403 ? 403 : 400,
-        toolName,
-        error: {
-          type: "tool_error",
-          message: formatErrorMessage(err) || "invalid tool arguments",
-        },
-      };
+      return failure(
+        inputStatus === 403 ? 403 : 400,
+        "tool_error",
+        formatErrorMessage(err) || "invalid tool arguments",
+      );
     }
     if (!params.signal?.aborted) {
       logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
     }
-    return {
-      ok: false,
-      status: 500,
-      toolName,
-      error: { type: "tool_error", message: "tool execution failed" },
-    };
+    return failure(500, "tool_error", "tool execution failed");
   }
 }
 
@@ -471,12 +629,75 @@ export async function invokeGatewayTool(
   params: InvokeGatewayToolParams,
 ): Promise<ToolsInvokeOutcome> {
   const requestAbort = new AbortController();
+  const releaseSessionFacts: Array<() => void> = [];
   const signal = params.signal
     ? AbortSignal.any([params.signal, requestAbort.signal])
     : requestAbort.signal;
   try {
-    return await invokeGatewayToolWithSignal({ ...params, signal });
+    const target = resolveSessionTarget({ cfg: params.cfg, input: params.input });
+    if (target.ok && isIncognitoSessionKey(target.sessionKey)) {
+      const assertSourceCurrent = () => {
+        signal.throwIfAborted();
+        params.assertInvocationCurrent?.();
+      };
+      return (
+        (await withSessionActorStorage(
+          target,
+          {
+            lifetime: { assertCurrent: assertSourceCurrent, assertReadable: assertSourceCurrent },
+            authority: { assertCurrent: assertSourceCurrent, authorize: assertSourceCurrent },
+          },
+          ({ actor, authority }) => {
+            const entry = actor.snapshot(authority)?.entry;
+            const assertCurrent = () => {
+              const current = actor.snapshot(authority)?.entry;
+              if (
+                current?.sessionId !== entry?.sessionId ||
+                current?.lifecycleRevision !== entry?.lifecycleRevision ||
+                current?.permissionMode !== entry?.permissionMode ||
+                current?.spawnedCwd !== entry?.spawnedCwd ||
+                current?.spawnedWorkspaceDir !== entry?.spawnedWorkspaceDir ||
+                current?.spawnedBy !== entry?.spawnedBy
+              ) {
+                throw new SessionMutationAuthorizationChangedError(
+                  errorShape(
+                    ErrorCodes.FORBIDDEN,
+                    "Session tool policy changed; retry the request",
+                  ),
+                );
+              }
+            };
+            return invokeGatewayToolWithSignal({
+              ...params,
+              signal,
+              releaseSessionFacts,
+              preparedSession: { entry },
+              assertInvocationCurrent: assertCurrent,
+            });
+          },
+        )) ?? {
+          ok: false,
+          status: 404,
+          toolName: normalizeOptionalString(params.input.name ?? params.input.tool) ?? "",
+          error: { type: "not_found", message: `Session not found: ${target.sessionKey}` },
+        }
+      );
+    }
+    return await invokeGatewayToolWithSignal({ ...params, signal, releaseSessionFacts });
+  } catch (error) {
+    if (!(error instanceof SessionMutationFactsUnavailableError)) {
+      throw error;
+    }
+    return {
+      ok: false,
+      status: 403,
+      toolName: normalizeOptionalString(params.input.name ?? params.input.tool) ?? "",
+      error: { type: "tool_call_blocked", message: error.message },
+    };
   } finally {
+    for (const release of releaseSessionFacts) {
+      release();
+    }
     requestAbort.abort();
   }
 }

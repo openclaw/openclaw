@@ -1,6 +1,8 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { createComponent, createSignal, merge } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import {
@@ -9,9 +11,13 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatMetadata, retireChatMetadataRequests } from "./chat-state-refresh.ts";
+import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 
 afterEach(() => vi.useRealTimers());
 
@@ -28,8 +34,13 @@ it.each(["agent:work:current", "global"])(
       model: "model",
       modelProvider: "test",
       contextTokens: 8192,
+      permissionMode: "workspace",
     };
-    const after = { ...before, contextTokens: 262144 };
+    const after: GatewaySessionRow = {
+      ...before,
+      contextTokens: 262144,
+      permissionMode: "guarded",
+    };
     const other: GatewaySessionRow = {
       key: "agent:other:kept",
       sessionId: "other-session",
@@ -37,6 +48,8 @@ it.each(["agent:work:current", "global"])(
       updatedAt: 1,
     };
     const query = { agentId: "work", spawnedBy: key, limit: 10000 };
+    let permissionReadbackUnavailable = false;
+    let currentRow = before;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "models.list") {
         return { models: [] };
@@ -45,13 +58,17 @@ it.each(["agent:work:current", "global"])(
         return { commands: [] };
       }
       if (method === "sessions.describe") {
-        return { session: after };
+        return { session: currentRow };
+      }
+      if (method === "sessions.patch") {
+        throw new Error("Permission application failed");
       }
       if (method === "sessions.list") {
-        return sessionsResult(
-          (params as { agentId?: string }).agentId === "other" ? [other] : [before],
-          1,
-        );
+        const otherAgent = (params as { agentId?: string }).agentId === "other";
+        if (!otherAgent && permissionReadbackUnavailable) {
+          throw new Error("Permission readback unavailable");
+        }
+        return sessionsResult(otherAgent ? [other] : [currentRow], 1);
       }
       return {};
     });
@@ -66,7 +83,7 @@ it.each(["agent:work:current", "global"])(
       assistantAgentId: "work",
       connected: true,
       connectionEpoch: 1,
-      requestUpdate: vi.fn(),
+      chatModelSwitchPromises: {},
     } as unknown as ChatPageHost;
     const observation = sessions.observeList(query, () => {});
     try {
@@ -75,6 +92,49 @@ it.each(["agent:work:current", "global"])(
       state.sessionsResult = sessionsResult([before], 1);
       state.sessionsResultAgentId = "work";
       await refreshChatMetadata(state);
+      const writeAccess = { allowed: true, requiredScope: "operator.write" } as const;
+      const controls = () =>
+        renderChatPaneComposerControls({
+          state,
+          selectedSession: state.sessionsResult?.sessions[0],
+          agentDefaultModel: undefined,
+          modelAccess: writeAccess,
+          effortAccess: writeAccess,
+          contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
+          permissionAccess: writeAccess,
+          canSelectFull: true,
+          onModelSetup: vi.fn(),
+        });
+      const container = document.createElement("div");
+      permissionReadbackUnavailable = true;
+      await controls().permissionPicker.onSelect("full");
+      expect(request).toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({
+          key,
+          permissionMode: "full",
+          expectedSessionId: before.sessionId,
+        }),
+      );
+      expect(state.chatError).toContain("Failed to update permissions");
+      const [currentPicker, setCurrentPicker] = createSignal(controls().permissionPicker);
+      const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
+        container,
+      });
+      onTestFinished(view.unmount);
+      const drawPermission = () => {
+        setCurrentPicker(controls().permissionPicker);
+        flush();
+      };
+      const picker = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+      expect(picker.getAttribute("aria-label")).toContain(
+        t("chat.permissionControls.modes.full.label"),
+      );
+      expect(picker.disabled).toBe(false);
+      await expect(observation.refresh()).rejects.toThrow("Permission readback unavailable");
+      permissionReadbackUnavailable = false;
+      currentRow = after;
+      const primaryRevision = sessions.canonicalListRevision;
       const initialLists = request.mock.calls.filter(
         ([method]) => method === "sessions.list",
       ).length;
@@ -83,11 +143,19 @@ it.each(["agent:work:current", "global"])(
       await vi.advanceTimersByTimeAsync(1000);
       expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(262144);
       expect(sessions.listSnapshot(query).result?.sessions[0]?.contextTokens).toBe(262144);
+      expect(state.sessionsResult?.sessions[0]?.permissionMode).toBe("guarded");
+      expect(sessions.listSnapshot(query).result?.sessions[0]?.permissionMode).toBe("guarded");
+      expect(sessions.canonicalListRevision).toBe(primaryRevision);
       expect(sessions.state.agentId).toBe("other");
       expect(sessions.state.result?.sessions).toEqual([other]);
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
         initialLists,
       );
+      drawPermission();
+      expect(picker.getAttribute("aria-label")).toContain(
+        t("chat.permissionControls.modes.guarded.label"),
+      );
+      expect(picker.disabled).toBe(false);
       expect(request).toHaveBeenCalledWith("sessions.describe", { key, agentId: "work" });
       // Actual membership events still refresh the matching windows.
       emitEvent({
@@ -95,7 +163,7 @@ it.each(["agent:work:current", "global"])(
         event: "sessions.changed",
         payload: { key: "agent:work:new", agentId: "work", reason: "create", spawnedBy: key },
       });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.list").length,
       ).toBeGreaterThan(initialLists);
@@ -103,7 +171,7 @@ it.each(["agent:work:current", "global"])(
         ([method]) => method === "sessions.list",
       ).length;
       emitEvent({ type: "event", event: "config.changed", payload: {} });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
         afterMembership + 2,
       );

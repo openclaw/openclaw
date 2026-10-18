@@ -6,11 +6,12 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it } from "vitest";
-import type { PromotionWeights } from "./short-term-promotion-types.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
+} from "./short-term-promotion-types.js";
+import {
   rankShortTermPromotionCandidates,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
@@ -25,89 +26,81 @@ const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 type CalibrationClass = "genuine" | "filler" | "oneoff";
 
-function createRecallEntry(params: {
-  key: string;
-  snippet?: string;
-  signalCount: number;
-  avgScore: number;
-  queryHashes: string[];
-  recallDays: string[];
-  conceptTags: string[];
-}): ShortTermRecallEntry {
+function createRecallEntry(
+  key: string,
+  signalCount: number,
+  avgScore: number,
+  overrides: Partial<ShortTermRecallEntry> = {},
+): ShortTermRecallEntry {
   return {
-    key: params.key,
+    key,
     path: "memory/2026-04-01.md",
     startLine: 1,
     endLine: 1,
     source: "memory",
-    snippet: params.snippet ?? `${params.key} durable note`,
+    snippet: `${key} durable note`,
     recallCount: 0,
-    dailyCount: params.signalCount,
+    dailyCount: signalCount,
     groundedCount: 0,
-    totalScore: params.avgScore * params.signalCount,
-    maxScore: params.avgScore,
+    totalScore: avgScore * signalCount,
+    maxScore: avgScore,
     firstRecalledAt: "2026-04-01T10:00:00.000Z",
     lastRecalledAt: NOW_ISO,
-    queryHashes: params.queryHashes,
-    userQueryHashes: params.queryHashes,
-    recallDays: params.recallDays,
-    conceptTags: params.conceptTags,
+    queryHashes: THREE_QUERY_HASHES,
+    userQueryHashes: overrides.queryHashes ?? THREE_QUERY_HASHES,
+    recallDays: RECALL_DAYS,
+    conceptTags: ["backup", "glacier"],
+    ...overrides,
   };
+}
+
+function writeRecallEntries(workspaceDir: string, entries: Record<string, ShortTermRecallEntry>) {
+  return shortTermTestState.writeRawRecallStore(workspaceDir, {
+    version: 1,
+    updatedAt: NOW_ISO,
+    entries,
+  });
+}
+
+function rankCandidates(
+  workspaceDir: string,
+  options: Partial<Parameters<typeof rankShortTermPromotionCandidates>[0]> = {},
+) {
+  return rankShortTermPromotionCandidates({
+    workspaceDir,
+    minScore: 0,
+    minRecallCount: 0,
+    minUniqueQueries: 0,
+    nowMs: NOW_MS,
+    ...options,
+  });
 }
 
 async function writeCalibrationStore(workspaceDir: string): Promise<void> {
   const entries = [
-    createRecallEntry({
-      key: "genuine-a",
-      signalCount: 3,
-      avgScore: 0.58,
-      queryHashes: THREE_QUERY_HASHES,
-      recallDays: RECALL_DAYS,
+    createRecallEntry("genuine-a", 3, 0.58, {
       conceptTags: ["backup", "backups", "glacier", "s3"],
     }),
-    createRecallEntry({
-      key: "genuine-b",
-      signalCount: 3,
-      avgScore: 0.6,
-      queryHashes: THREE_QUERY_HASHES,
-      recallDays: RECALL_DAYS,
-      conceptTags: ["backup", "backups", "glacier", "s3"],
-    }),
-    createRecallEntry({
-      key: "genuine-c",
-      signalCount: 3,
-      avgScore: 0.62,
-      queryHashes: THREE_QUERY_HASHES,
-      recallDays: RECALL_DAYS,
-      conceptTags: ["backup", "glacier", "s3"],
-    }),
+    createRecallEntry("genuine-b", 3, 0.6, { conceptTags: ["backup", "backups", "glacier", "s3"] }),
+    createRecallEntry("genuine-c", 3, 0.62, { conceptTags: ["backup", "glacier", "s3"] }),
     ...[0.2, 0.3, 0.4].map((avgScore, index) =>
-      createRecallEntry({
-        key: `filler-${index}`,
+      createRecallEntry(`filler-${index}`, 3, avgScore, {
         snippet: "Routine heartbeat completed successfully.",
-        signalCount: 3,
-        avgScore,
-        queryHashes: THREE_QUERY_HASHES,
-        recallDays: RECALL_DAYS,
         conceptTags: [],
       }),
     ),
     ...[0.8, 0.9, 0.99].map((avgScore, index) =>
-      createRecallEntry({
-        key: `oneoff-${index}`,
-        signalCount: 1,
-        avgScore,
+      createRecallEntry(`oneoff-${index}`, 1, avgScore, {
         queryHashes: ["query-a"],
         recallDays: ["2026-04-03"],
         conceptTags: ["novel", "signal", "single", "mention"].slice(0, index + 2),
       }),
     ),
   ];
-  await shortTermTestState.writeRawRecallStore(workspaceDir, {
-    version: 1,
-    updatedAt: NOW_ISO,
-    entries: Object.fromEntries(entries.map((entry) => [entry.key, entry])),
-  });
+  await writeRecallEntries(
+    workspaceDir,
+    Object.fromEntries(entries.map((entry) => [entry.key, entry])),
+  );
   await shortTermTestState.writeRawPhaseSignalStore(workspaceDir, {
     version: 1,
     updatedAt: NOW_ISO,
@@ -116,13 +109,7 @@ async function writeCalibrationStore(workspaceDir: string): Promise<void> {
         .filter((entry) => entry.key.startsWith("genuine-"))
         .map((entry) => [
           entry.key,
-          {
-            key: entry.key,
-            lightHits: 3,
-            remHits: 3,
-            lastLightAt: NOW_ISO,
-            lastRemAt: NOW_ISO,
-          },
+          { key: entry.key, lightHits: 3, remHits: 3, lastLightAt: NOW_ISO, lastRemAt: NOW_ISO },
         ]),
     ),
   });
@@ -143,13 +130,7 @@ describe("short-term promotion score calibration", () => {
     const workspaceDir = await createTempWorkspace("promotion-score-distribution-");
     await writeCalibrationStore(workspaceDir);
 
-    const measured = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: NOW_MS,
-    });
+    const measured = await rankCandidates(workspaceDir);
     const distribution = {
       genuine: scoresForClass(measured, "genuine"),
       filler: scoresForClass(measured, "filler"),
@@ -172,20 +153,13 @@ describe("short-term promotion score calibration", () => {
 
   it("keeps sweep and direct promotion fallback defaults aligned", () => {
     const sweep = resolveMemoryDeepDreamingConfig({ pluginConfig: {} });
-    expect({
-      minScore: sweep.minScore,
-      minRecallCount: sweep.minRecallCount,
-      minUniqueQueries: sweep.minUniqueQueries,
-    }).toEqual({
+    const direct = {
       minScore: DEFAULT_PROMOTION_MIN_SCORE,
       minRecallCount: DEFAULT_PROMOTION_MIN_RECALL_COUNT,
       minUniqueQueries: DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-    });
-    expect({
-      minScore: DEFAULT_PROMOTION_MIN_SCORE,
-      minRecallCount: DEFAULT_PROMOTION_MIN_RECALL_COUNT,
-      minUniqueQueries: DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-    }).toEqual({
+    };
+    expect(sweep).toMatchObject(direct);
+    expect(direct).toEqual({
       minScore: DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
       minRecallCount: DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
       minUniqueQueries: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -194,108 +168,31 @@ describe("short-term promotion score calibration", () => {
 
   it("keeps the minimum score boundary inclusive", async () => {
     const workspaceDir = await createTempWorkspace("promotion-score-boundary-");
-    const boundary = createRecallEntry({
-      key: "boundary",
-      signalCount: 1,
-      avgScore: DEFAULT_PROMOTION_MIN_SCORE,
-      queryHashes: ["query-a"],
-      recallDays: ["2026-04-03"],
+    const boundary = createRecallEntry("boundary", 10, 0, {
+      queryHashes: ["query-a", "query-b", "query-c", "query-d", "query-e"],
+      recallDays: [],
       conceptTags: [],
     });
-    await shortTermTestState.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: NOW_ISO,
-      entries: { boundary },
-    });
-    const relevanceOnly: PromotionWeights = {
-      frequency: 0,
-      relevance: 1,
-      diversity: 0,
-      recency: 0,
-      consolidation: 0,
-      conceptual: 0,
-    };
-
-    await expect(
-      rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: DEFAULT_PROMOTION_MIN_SCORE,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        weights: relevanceOnly,
-        nowMs: NOW_MS,
-      }),
-    ).resolves.toHaveLength(1);
-    await expect(
-      rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: DEFAULT_PROMOTION_MIN_SCORE + 0.000001,
-        minRecallCount: 0,
-        minUniqueQueries: 0,
-        weights: relevanceOnly,
-        nowMs: NOW_MS,
-      }),
-    ).resolves.toHaveLength(0);
+    await writeRecallEntries(workspaceDir, { boundary });
+    await expect(rankCandidates(workspaceDir, { minScore: 0.54 })).resolves.toHaveLength(1);
+    await expect(rankCandidates(workspaceDir, { minScore: 0.540001 })).resolves.toHaveLength(0);
   });
 
-  it("preserves unambiguous recall-only legacy query diversity", async () => {
-    const workspaceDir = await createTempWorkspace("promotion-recall-only-upgrade-");
-    const legacy = createRecallEntry({
-      key: "legacy-recall-only",
-      signalCount: 3,
-      avgScore: 1,
-      queryHashes: THREE_QUERY_HASHES,
-      recallDays: RECALL_DAYS,
-      conceptTags: ["backup", "glacier"],
+  it.each([
+    { name: "recall-only", recallCount: 3, dailyCount: 0, minUniqueQueries: 3, retained: 1 },
+    { name: "mixed", recallCount: 1, dailyCount: 2, minUniqueQueries: 1, retained: 0 },
+  ])("preserves only unambiguous $name legacy query diversity", async (entry) => {
+    const workspaceDir = await createTempWorkspace("promotion-legacy-upgrade-");
+    const legacy = createRecallEntry(`legacy-${entry.name}`, 3, 1, {
+      recallCount: entry.recallCount,
+      dailyCount: entry.dailyCount,
     });
-    legacy.recallCount = 3;
-    legacy.dailyCount = 0;
     delete legacy.userQueryHashes;
-    await shortTermTestState.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: NOW_ISO,
-      entries: { legacy },
-    });
-
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 3,
-      nowMs: NOW_MS,
-    });
-
-    expect(ranked).toHaveLength(1);
-    expect(ranked[0]?.uniqueQueries).toBe(3);
-  });
-
-  it("fails closed for ambiguous mixed legacy query hashes", async () => {
-    const workspaceDir = await createTempWorkspace("promotion-mixed-upgrade-");
-    const legacy = createRecallEntry({
-      key: "legacy-mixed",
-      signalCount: 3,
-      avgScore: 1,
-      queryHashes: THREE_QUERY_HASHES,
-      recallDays: RECALL_DAYS,
-      conceptTags: ["backup", "glacier"],
-    });
-    legacy.recallCount = 1;
-    legacy.dailyCount = 2;
-    delete legacy.userQueryHashes;
-    await shortTermTestState.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: NOW_ISO,
-      entries: { legacy },
-    });
-
-    await expect(
-      rankShortTermPromotionCandidates({
-        workspaceDir,
-        minScore: 0,
-        minRecallCount: 0,
-        minUniqueQueries: 1,
-        nowMs: NOW_MS,
-      }),
-    ).resolves.toHaveLength(0);
+    await writeRecallEntries(workspaceDir, { legacy });
+    const ranked = await rankCandidates(workspaceDir, { minUniqueQueries: entry.minUniqueQueries });
+    expect(ranked).toHaveLength(entry.retained);
+    if (entry.retained) {
+      expect(ranked[0]?.uniqueQueries).toBe(3);
+    }
   });
 });

@@ -1,4 +1,5 @@
 // Public user-profile and self-service account contracts.
+export * from "./schema/users-background.js";
 export {
   GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
@@ -26,6 +27,16 @@ export {
   UsersLinkAuthProfileResultSchema,
   UsersLinkEmailParamsSchema,
   UsersLinkEmailResultSchema,
+  UsersMergeParamsSchema,
+  UsersMergeResultSchema,
+  UserChannelIdentitySchema,
+  UserChannelIdentityLinkSchema,
+  UsersLinkChannelIdentityParamsSchema,
+  UsersLinkChannelIdentityResultSchema,
+  UsersUnlinkChannelIdentityParamsSchema,
+  UsersUnlinkChannelIdentityResultSchema,
+  UsersListChannelIdentitiesParamsSchema,
+  UsersListChannelIdentitiesResultSchema,
   UsersListAuthLinksParamsSchema,
   UsersListAuthLinksResultSchema,
   PersonalGitHubAccountSchema,
@@ -48,6 +59,10 @@ export {
   UsersPrefsChangedEventSchema,
   UsersPrefsSetParamsSchema,
   UsersPrefsSetResultSchema,
+  UsersPersonalFileGetParamsSchema,
+  UsersPersonalFileSetParamsSchema,
+  UsersPersonalFileGetResultSchema,
+  UsersPersonalFileSetResultSchema,
   UsersSelfParamsSchema,
   UsersSelfResultSchema,
   UsersSetAvatarParamsSchema,

@@ -12,6 +12,40 @@ For Linux-specific issues (especially snap Chromium), see
 For WSL2 Gateway + Windows Chrome split-host setups, see
 [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
+## Slow first browser request
+
+Managed Chrome starts on demand when an operation needs it. The browser control
+service being ready means its routes are available; it does not mean Chrome has
+finished starting. `tabs` checks the current browser without launching it.
+
+Local tool dispatch, Gateway, and node requests wait for shared managed-browser startup before
+spending their action timeout. Startup allows up to two minutes for profile
+bootstrap, decoration, launch, and CDP readiness. A caller that cancels or stops
+waiting does not cancel the shared launch. Stopping or resetting the browser
+does cancel it. If startup exhausts its own budget, the error names the profile
+and startup deadline; inspect the browser startup logs before retrying.
+
+## Inspection times out but screenshots work
+
+Snapshots and page-text reads use a browser automation connection that can become
+stale even while tab listing and screenshots still work. OpenClaw reconnects once
+when that connection can no longer resolve the requested tab. Unresponsive sibling
+tabs share one target-inspection wait instead of adding a separate wait per tab.
+
+Retry the inspection once with the same profile and target ID. If it still fails,
+run `openclaw browser doctor` and inspect a screenshot before restarting the
+Gateway. A browser-rendered HTTP error, such as `403 Forbidden`, is evidence that
+the website denied access; it does not establish whether a profile or resource
+exists.
+
+## Output directory errors
+
+If an output fails with `Invalid path: must stay within output directory`, set
+the output directory to its resolved path. Browser outputs reject
+user-created symlinks anywhere in the directory path, including when the final
+directory already exists. The macOS `/tmp` and `/var` system aliases remain
+supported.
+
 ## CDP startup failure vs navigation SSRF block
 
 These are different failure classes and they point to different code paths.
@@ -46,9 +80,18 @@ How to read the results:
 
 Important behavior details:
 
-- Browser config defaults to a fail-closed SSRF policy object even when you do not configure `browser.ssrfPolicy`.
+- Browser config defaults to an SSRF policy object that blocks disallowed destinations even when you do not configure `browser.ssrfPolicy`.
 - For the local loopback `openclaw` managed profile, CDP health checks intentionally skip browser SSRF reachability enforcement for OpenClaw's own local control plane.
+- Local managed Chrome gets up to 60 seconds for launch discovery, followed by up to 30 seconds for CDP readiness. Readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays; checks near the deadline use shorter timeouts.
+- Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness checks; canceling one caller waiting for a shared start does not stop that shared launch.
 - Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
+
+Resetting or deleting a local managed profile stops a verified browser left by an
+earlier Gateway runtime before moving its data. If a live profile owner cannot be
+verified or stopped, OpenClaw preserves the profile data and reports the reason.
+Close the browser using that profile and check its Chromium lock before retrying.
+Locks naming another hostname remain unverified, including after a machine rename;
+starting the browser also preserves that locked profile's preferences.
 
 Security guidance:
 

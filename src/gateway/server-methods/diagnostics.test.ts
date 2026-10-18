@@ -1,7 +1,3 @@
-/**
- * Tests for gateway diagnostics methods and their request-handler responses.
- */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -14,7 +10,6 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "../../logging/diagnostic-stability.js";
-import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
 import {
   enqueueCommandInLane,
@@ -28,21 +23,43 @@ type LaneDiagnosticsPayload = {
   ts: number;
 } & ReturnType<typeof getCommandLaneDiagnostics>;
 
-async function requestLaneDiagnostics(): Promise<LaneDiagnosticsPayload> {
+async function requestDiagnostics(method: string, params: Record<string, unknown> = {}) {
   const respond = vi.fn();
   await expectDefined(
-    diagnosticsHandlers["diagnostics.lanes"],
-    'diagnosticsHandlers["diagnostics.lanes"] test invariant',
+    diagnosticsHandlers[method],
+    method,
   )({
-    req: { type: "req", id: "lanes", method: "diagnostics.lanes", params: {} },
-    params: {},
+    req: { type: "req", id: "diagnostics", method, params: {} },
+    params,
     client: null,
     isWebchatConnect: () => false,
     context: {} as never,
     respond,
   });
   expect(respond).toHaveBeenCalledTimes(1);
-  return respond.mock.calls[0]?.[1] as LaneDiagnosticsPayload;
+  return respond;
+}
+
+async function requestLaneDiagnostics(): Promise<LaneDiagnosticsPayload> {
+  return (await requestDiagnostics("diagnostics.lanes")).mock
+    .calls[0]?.[1] as LaneDiagnosticsPayload;
+}
+
+async function blockLane(lane: string) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const active = enqueueCommandInLane(lane, async () => {
+    started.resolve();
+    await release.promise;
+  });
+  await started.promise;
+  return { active, release: release.resolve };
+}
+
+async function expectLane(lane: string, state: Partial<LaneDiagnosticsPayload["lanes"][number]>) {
+  expect((await requestLaneDiagnostics()).lanes).toContainEqual(
+    expect.objectContaining({ lane, ...state }),
+  );
 }
 
 describe("diagnostics gateway methods", () => {
@@ -64,30 +81,21 @@ describe("diagnostics gateway methods", () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
-    emitDiagnosticEvent({
-      type: "payload.large",
+    const event = {
+      type: "payload.large" as const,
       surface: "gateway.http.json",
-      action: "rejected",
+      action: "rejected" as const,
       bytes: 1024,
       limitBytes: 512,
-    });
+    };
+    emitDiagnosticEvent(event);
 
-    const respond = vi.fn();
-    await expectDefined(
-      diagnosticsHandlers["diagnostics.stability"],
-      'diagnosticsHandlers["diagnostics.stability"] test invariant',
-    )({
-      req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
-      params: { type: "payload.large", limit: 10 },
-      client: null,
-      isWebchatConnect: () => false,
-      context: {} as never,
-      respond,
+    const respond = await requestDiagnostics("diagnostics.stability", {
+      type: "payload.large",
+      limit: 10,
     });
-
-    expect(respond).toHaveBeenCalledTimes(1);
     const firstRespondCall = respond.mock.calls[0];
-    expect(firstRespondCall).toEqual([
+    expect(firstRespondCall).toStrictEqual([
       true,
       {
         generatedAt: now.toISOString(),
@@ -100,11 +108,7 @@ describe("diagnostics gateway methods", () => {
           {
             seq: 2,
             ts: now.getTime(),
-            type: "payload.large",
-            surface: "gateway.http.json",
-            action: "rejected",
-            bytes: 1024,
-            limitBytes: 512,
+            ...event,
             count: undefined,
             channel: undefined,
             pluginId: undefined,
@@ -123,42 +127,15 @@ describe("diagnostics gateway methods", () => {
       },
       undefined,
     ]);
-    expect(Object.keys(firstRespondCall?.[1] as Record<string, unknown>).toSorted()).toEqual([
-      "capacity",
-      "count",
-      "dropped",
-      "events",
-      "firstSeq",
-      "generatedAt",
-      "lastSeq",
-      "summary",
-    ]);
   });
 
   it("rejects invalid stability params", async () => {
-    const respond = vi.fn();
-    await expectDefined(
-      diagnosticsHandlers["diagnostics.stability"],
-      'diagnosticsHandlers["diagnostics.stability"] test invariant',
-    )({
-      req: { type: "req", id: "1", method: "diagnostics.stability", params: {} },
-      params: { limit: 0 },
-      client: null,
-      isWebchatConnect: () => false,
-      context: {} as never,
-      respond,
-    });
+    const respond = await requestDiagnostics("diagnostics.stability", { limit: 0 });
 
-    expect(respond.mock.calls).toEqual([
-      [
-        false,
-        undefined,
-        {
-          code: "INVALID_REQUEST",
-          message: "limit must be between 1 and 1000",
-        },
-      ],
-    ]);
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "limit must be between 1 and 1000",
+    });
   });
 
   it("reports static lanes in sorted order and hides disabled lanes only after work drains", async () => {
@@ -166,88 +143,96 @@ describe("diagnostics gateway methods", () => {
     const originalConcurrency = getCommandLaneSnapshot(lane).maxConcurrent;
     setCommandLaneConcurrency(lane, 1);
 
-    const activeStarted = createDeferred();
-    const activeRelease = createDeferred();
-    const active = enqueueCommandInLane(lane, async () => {
-      activeStarted.resolve();
-      await activeRelease.promise;
-    });
-    await activeStarted.promise;
+    const { active, release } = await blockLane(lane);
     let queued: Promise<void> | undefined;
 
     try {
       setCommandLaneConcurrency(lane, 0);
-      expect((await requestLaneDiagnostics()).lanes).toContainEqual(
-        expect.objectContaining({ lane, activeCount: 1, queuedCount: 0, maxConcurrent: 0 }),
-      );
+      await expectLane(lane, { activeCount: 1, queuedCount: 0, maxConcurrent: 0 });
       setCommandLaneConcurrency(lane, 1);
       queued = enqueueCommandInLane(lane, async () => undefined);
       const payload = await requestLaneDiagnostics();
       expect(payload.ts).toBeGreaterThan(0);
       expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
+        CommandLane.ActiveMemory,
         CommandLane.Background,
         CommandLane.Cron,
         CommandLane.CronNested,
         CommandLane.HookDispatch,
         CommandLane.Main,
         CommandLane.Nested,
+        CommandLane.RestartRecovery,
         CommandLane.Subagent,
         CommandLane.SystemAgent,
+        CommandLane.SystemAgentInference,
       ]);
-      expect(payload.lanes).toContainEqual(
-        expect.objectContaining({
-          lane,
-          activeCount: 1,
-          queuedCount: 1,
-          maxConcurrent: 1,
-          blockedBy: "lane",
-        }),
-      );
+      await expectLane(lane, {
+        activeCount: 1,
+        queuedCount: 1,
+        maxConcurrent: 1,
+        blockedBy: "lane",
+      });
 
       setCommandLaneConcurrency(lane, 0);
-      activeRelease.resolve();
+      release();
       await active;
-      expect((await requestLaneDiagnostics()).lanes).toContainEqual(
-        expect.objectContaining({ lane, activeCount: 0, queuedCount: 1, maxConcurrent: 0 }),
-      );
+      await expectLane(lane, { activeCount: 0, queuedCount: 1, maxConcurrent: 0 });
 
       setCommandLaneConcurrency(lane, 1);
       await queued;
-      expect((await requestLaneDiagnostics()).lanes).toContainEqual(
-        expect.objectContaining({ lane, activeCount: 0, queuedCount: 0, maxConcurrent: 1 }),
-      );
+      await expectLane(lane, { activeCount: 0, queuedCount: 0, maxConcurrent: 1 });
 
       setCommandLaneConcurrency(lane, 0);
       expect((await requestLaneDiagnostics()).lanes.map((snapshot) => snapshot.lane)).not.toContain(
         lane,
       );
     } finally {
-      activeRelease.resolve();
+      release();
       setCommandLaneConcurrency(lane, 1);
       await Promise.all([active, queued]);
       setCommandLaneConcurrency(lane, originalConcurrency);
     }
   });
 
-  it("reports background owners once in the aggregate without duplicating dynamic lanes", async () => {
+  it("reports subagent totals with per-session capacity without exposing parent identities", async () => {
     const before = await requestLaneDiagnostics();
-    const owner = createBackgroundWorkOwner({ owner: "core:diagnostics-test", maxConcurrent: 1 });
+    const originalConcurrency = getCommandLaneSnapshot(CommandLane.Subagent).maxConcurrent;
+    const parentA = "subagent:agent:main:private-parent-a";
+    const parents = [parentA, "subagent:agent:main:private-parent-b"];
     const gate = createDeferred();
-    const active = owner.enqueue(async () => await gate.promise);
-    const queued = owner.enqueue(async () => undefined);
+    setCommandLaneConcurrency(CommandLane.Subagent, 3);
+    const runs = parents.flatMap((lane) =>
+      Array.from({ length: 2 }, () => enqueueCommandInLane(lane, async () => await gate.promise)),
+    );
     try {
-      const payload = await requestLaneDiagnostics();
-      expect(payload.lanes.find((snapshot) => snapshot.lane === "background")).toMatchObject({
-        activeCount: 1,
+      let payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 4,
+        queuedCount: 0,
+        maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 0,
+        blockedBy: null,
+      });
+      runs.push(
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+      );
+      payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 5,
         queuedCount: 1,
         maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 1,
         blockedBy: "lane",
       });
-      expect(payload.lanes.some((snapshot) => snapshot.lane === owner.lane)).toBe(false);
       expect(payload.dynamic).toEqual(before.dynamic);
+      expect(JSON.stringify(payload)).not.toContain("private-parent");
     } finally {
       gate.resolve();
-      await Promise.all([active, queued]);
+      await Promise.all(runs);
+      setCommandLaneConcurrency(CommandLane.Subagent, originalConcurrency);
     }
   });
 
@@ -256,32 +241,21 @@ describe("diagnostics gateway methods", () => {
     const before = await requestLaneDiagnostics();
     setCommandLaneConcurrency(lane, 1);
 
-    const activeStarted = createDeferred();
-    const activeRelease = createDeferred();
-    const active = enqueueCommandInLane(lane, async () => {
-      activeStarted.resolve();
-      await activeRelease.promise;
-    });
-    await activeStarted.promise;
+    const { active, release } = await blockLane(lane);
     const queued = enqueueCommandInLane(lane, async () => undefined);
 
     try {
       const payload = await requestLaneDiagnostics();
-      const baseline = before.dynamic ?? {
-        laneCount: 0,
-        activeCount: 0,
-        queuedCount: 0,
-        queuedLaneCount: 0,
-      };
+      const baseline = before.dynamic;
       expect(payload.lanes.map((snapshot) => snapshot.lane)).not.toContain(lane);
       expect(payload.dynamic).toEqual({
-        laneCount: baseline.laneCount + 1,
-        activeCount: baseline.activeCount + 1,
-        queuedCount: baseline.queuedCount + 1,
-        queuedLaneCount: baseline.queuedLaneCount + 1,
+        laneCount: (baseline?.laneCount ?? 0) + 1,
+        activeCount: (baseline?.activeCount ?? 0) + 1,
+        queuedCount: (baseline?.queuedCount ?? 0) + 1,
+        queuedLaneCount: (baseline?.queuedLaneCount ?? 0) + 1,
       });
     } finally {
-      activeRelease.resolve();
+      release();
       await Promise.all([active, queued]);
     }
   });

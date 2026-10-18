@@ -1,4 +1,3 @@
-// Projects bound conversations into channel delivery targets.
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import {
   normalizeConversationTargetParams,
@@ -40,7 +39,6 @@ export function formatConversationTarget(params: ConversationTargetParams): stri
   );
 }
 
-/** Resolves a persisted conversation reference directly into normalized delivery fields. */
 export function deliveryContextFromConversation(
   conversation?: ConversationRef | null,
 ): DeliveryContext | undefined {

@@ -1,26 +1,41 @@
 import DOMPurify from "dompurify";
 import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
-import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
-import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
-import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
-import { createMarkdownParser } from "./markdown-parser.ts";
+import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import {
+  markdownHighlightingPending,
+  markdownHighlightingReady,
+  renderMarkdownCodeBlock,
+} from "./markdown-code-blocks.ts";
+import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
+import { markdownGitHubAliasSignature } from "./markdown-github-repositories.ts";
+import {
+  prepareMarkdownHumanMentions,
+  restoreMarkdownHumanMentions,
+} from "./markdown-human-mentions.ts";
+import type { MarkdownJson } from "./markdown-json.ts";
+import { createMarkdownParser } from "./markdown-parser.ts";
+import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
+import {
+  MARKDOWN_PARSE_LIMIT,
   normalizeMarkdownRenderOptions,
   type MarkdownRenderEnv,
   type MarkdownRenderOptions,
 } from "./markdown-render-options.ts";
-import { repairStreamingMarkdownTail, splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import {
-  escapeMarkdownHtml,
-  isMarkdownBlockArtText,
-  normalizeMarkdownLineBreaks,
-} from "./markdown-text.ts";
+  hasStreamingMarkdownHtml,
+  repairStreamingMarkdownTail,
+  splitStableStreamingMarkdown,
+  streamingMarkdownStableHtml,
+  streamingMarkdownState,
+} from "./markdown-streaming.ts";
+import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
 
 const allowedTags = [
   "a",
@@ -42,6 +57,7 @@ const allowedTags = [
   "input",
   "li",
   "ol",
+  "openclaw-person-reference",
   "p",
   "pre",
   "s",
@@ -60,6 +76,8 @@ const allowedTags = [
 
 const allowedAttrs = [
   "checked",
+  "profile-id",
+  "label",
   "class",
   "disabled",
   "href",
@@ -96,12 +114,9 @@ const progressSanitizeOptions = {
   ALLOWED_TAGS: [...allowedTags, "progress"],
   ALLOWED_ATTR: [...allowedAttrs, "value", "max"],
 };
-const PROGRESS_CARD_RAW_CONTENT_BLOCK_RE =
-  /<(script|style|iframe|object|template)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
 
-let hooksInstalled = false;
+const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
 const MARKDOWN_CHAR_LIMIT = 140_000;
-const MARKDOWN_PARSE_LIMIT = 40_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
 const MARKDOWN_CACHE_LIMIT = 500;
@@ -325,27 +340,28 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
   ["plugins", "diffs-language-pack"],
 ];
-const markdownCache = new Map<string, string>();
+const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
+const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
-function getCachedMarkdown(key: string): string | null {
-  const cached = markdownCache.get(key);
-  if (cached === undefined) {
-    return null;
+function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
+  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
+  const state = streamingMarkdownState(streamKey);
+  const cached = state?.input;
+  let normalized: string;
+  if (cached && source.startsWith(cached.source)) {
+    const appended = source.slice(cached.source.length);
+    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
+    normalized =
+      cached.source.endsWith("\r") && appended.startsWith("\n")
+        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
+        : `${cached.normalized}${normalizedAppend}`;
+  } else {
+    normalized = normalizeMarkdownLineBreaks(source);
   }
-  markdownCache.delete(key);
-  markdownCache.set(key, cached);
-  return cached;
-}
-
-function setCachedMarkdown(key: string, value: string) {
-  markdownCache.set(key, value);
-  if (markdownCache.size <= MARKDOWN_CACHE_LIMIT) {
-    return;
+  if (state) {
+    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
   }
-  const oldest = markdownCache.keys().next().value;
-  if (oldest) {
-    markdownCache.delete(oldest);
-  }
+  return normalized;
 }
 
 function isControlUiRoutePath(pathname: string): boolean {
@@ -385,10 +401,6 @@ function stripCurrentControlUiBasePath(pathname: string): string[] {
   return segments.slice(baseSegments.length);
 }
 
-function segmentsStartWith(segments: string[], prefix: string[]): boolean {
-  return prefix.every((segment, index) => segments[index] === segment);
-}
-
 function isControlUiResourcePath(segments: string[]): boolean {
   if (segments.includes("__openclaw__") || segments.includes("__openclaw")) {
     return true;
@@ -397,7 +409,9 @@ function isControlUiResourcePath(segments: string[]): boolean {
   if (!segment || APP_RESOURCE_ROOT_SEGMENTS.has(segment)) {
     return true;
   }
-  return APP_RESOURCE_PATH_PREFIXES.some((prefix) => segmentsStartWith(segments, prefix));
+  return APP_RESOURCE_PATH_PREFIXES.some((prefix) =>
+    prefix.every((prefixSegment, index) => segments[index] === prefixSegment),
+  );
 }
 
 function isDocsRootPath(normalizedPath: string, segments: string[]): boolean {
@@ -427,10 +441,7 @@ function normalizeDocsRootHref(href: string): string {
     if (isControlUiResourcePath(resourceSegments)) {
       return href;
     }
-    if (isDocsRootPath(normalizedPath, segments)) {
-      return url.href;
-    }
-    return href;
+    return isDocsRootPath(normalizedPath, segments) ? url.href : href;
   } catch {
     return href;
   }
@@ -464,13 +475,17 @@ function hasMarkdownContentName(node: Node): boolean {
   return [...node.childNodes].some(hasMarkdownContentName);
 }
 
-function installHooks() {
-  if (hooksInstalled) {
-    return;
+function markdownSanitizer(options = sanitizeOptions) {
+  const cached = sanitizers.get(options);
+  if (cached) {
+    return cached;
   }
-  hooksInstalled = true;
+  // Persistent configs ignore per-call options; each allowlist owns its instance
+  // so progress markup cannot widen ordinary Markdown or other sanitizer users.
+  const sanitizer = DOMPurify(window);
+  sanitizer.setConfig(options);
 
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  sanitizer.addHook("afterSanitizeAttributes", (node) => {
     if (!(node instanceof HTMLAnchorElement)) {
       return;
     }
@@ -522,6 +537,8 @@ function installHooks() {
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
   });
+  sanitizers.set(options, sanitizer);
+  return sanitizer;
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -543,39 +560,55 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
-  installHooks();
-  const activeSanitizeOptions = renderOptions.progressBars
-    ? progressSanitizeOptions
-    : sanitizeOptions;
+function renderSanitizedMarkdown(
+  renderInput: string,
+  renderOptions: MarkdownRenderEnv,
+  blockArt?: boolean,
+): string {
+  const sanitizer = markdownSanitizer(
+    renderOptions.progressBars ? progressSanitizeOptions : sanitizeOptions,
+  );
   const documentMode = renderOptions.mode === "document";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
     : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
   const input = renderOptions.progressBars
-    ? appendMarkdownTruncationNotice(truncated).replace(PROGRESS_CARD_RAW_CONTENT_BLOCK_RE, "")
+    ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
-  if (isMarkdownBlockArtText(truncated.text)) {
-    return DOMPurify.sanitize(
+  if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
+    return sanitizer.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
-      activeSanitizeOptions,
     );
   }
   if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return DOMPurify.sanitize(toEscapedPlainTextHtml(input, renderOptions), activeSanitizeOptions);
+    return sanitizer.sanitize(toPlainTextElement(input, renderOptions));
   }
-  let rendered: string;
+  let rendered: string | HTMLDivElement;
   try {
     rendered = markdownParser.render(input, renderOptions);
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    rendered = toEscapedPlainTextHtml(input, renderOptions);
+    rendered = toPlainTextElement(input, renderOptions);
   }
-  return DOMPurify.sanitize(rendered, activeSanitizeOptions);
+  return sanitizer.sanitize(rendered);
+}
+
+// Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
+// Both inputs still use the same code-block renderer and sanitizer boundary.
+export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
+  return markdownSanitizer()
+    .sanitize(
+      // HTML parsing normalizes literal CRs; character references survive both
+      // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+      renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+        json,
+      }).replaceAll("\r", "&#13;"),
+    )
+    .replaceAll("\r", "&#13;");
 }
 
 export function toSanitizedMarkdownHtml(
@@ -583,8 +616,17 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
+  const prepared =
+    renderOptions.mode === "document" || markdownLocal.length <= MARKDOWN_PARSE_LIMIT
+      ? prepareMarkdownHumanMentions(
+          markdownLocal,
+          renderOptions.humanMentions,
+          markdownParser.utils.normalizeReference,
+        )
+      : { source: markdownLocal, tokens: [] };
+  renderOptions.humanMentionTokens = prepared.tokens;
   const renderInput = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
+    stripUnsupportedCitationControlMarkers(prepared.source),
   );
   if (!renderInput.trim()) {
     return "";
@@ -592,23 +634,43 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
-  const cached = getCachedMarkdown(cacheKey);
-  if (cached !== null) {
-    return cached;
+  const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
+  let cached = markdownCache.get(cacheKey);
+  // Only highlightable code changes when the optional highlighter loads.
+  if (
+    !cached ||
+    (cached.highlighting !== undefined && cached.highlighting !== markdownHighlightingReady())
+  ) {
+    cached = { html: renderSanitizedMarkdown(renderInput, renderOptions) };
+    if (HIGHLIGHTABLE_CODE_RE.test(cached.html)) {
+      cached.highlighting = markdownHighlightingReady();
+    }
   }
-  const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  setCachedMarkdown(cacheKey, sanitized);
-  return sanitized;
+  markdownCache.delete(cacheKey);
+  markdownCache.set(cacheKey, cached);
+  pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
+  return cached.html;
 }
 
-function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): string {
-  return renderAssistantTranscriptPlainTextFallback(
-    normalizeMarkdownLineBreaks(value),
+function markdownRenderKey(options: MarkdownRenderEnv): string {
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${JSON.stringify(options.githubRepo ? [options.githubRepo.owner, options.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(options.githubRepositories, options.githubRepo)}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+}
+
+function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
+  return createAssistantTranscriptPlainTextFallback(
+    restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
     options.assistantTranscriptRoleHeaders,
-    () => t("sessionsView.assistant"),
-    escapeMarkdownHtml,
   );
+}
+
+/** Keep late highlighting in the same mutable DOM owner, including stream finalization. */
+export function partitionMarkdownHtml(html: string, streamKey?: string): [string, string] {
+  if (!HIGHLIGHTABLE_CODE_RE.test(html) || !markdownHighlightingPending()) {
+    return [html, ""];
+  }
+  const previous = streamingMarkdownStableHtml(streamKey);
+  const stable = html.startsWith(previous) ? previous : "";
+  return [stable, html.slice(stable.length)];
 }
 
 export function toStreamingMarkdownParts(
@@ -617,9 +679,11 @@ export function toStreamingMarkdownParts(
   streamKey?: string,
 ): [stableHtml: string, tailHtml: string] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const rawInput = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
-  );
+  // Explicit selections are complete user input, not incremental assistant text.
+  if (renderOptions.humanMentions.length) {
+    return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
+  }
+  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
   if (isMarkdownBlockArtText(rawInput)) {
     return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
   }
@@ -630,23 +694,68 @@ export function toStreamingMarkdownParts(
   const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
   const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+  const { boundary: candidateBoundary, tailRepairStart } = splitStableStreamingMarkdown(
     input,
     streamKey,
     truncated.text.length,
   );
+  let boundary = candidateBoundary;
   const stableMarkdown = input.slice(0, boundary);
-  const streamingTail = input.slice(boundary);
-  const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
+  let streamingTail = input.slice(boundary);
+  const state = streamingMarkdownState(streamKey);
+  const previous = state?.rendered;
+  const renderKey = markdownRenderKey(renderOptions);
+  const append = previous && stableMarkdown.startsWith(previous.markdown);
+  // Literal code cannot acquire HTML ownership after its block is complete.
+  const hasHtml = append
+    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
+    : hasStreamingMarkdownHtml(stableMarkdown);
+  // Containers and block-art classification can outlive a completed boundary.
+  // The message parse guard also keeps applying to the complete prefix.
+  const incremental =
+    previous?.options === renderKey &&
+    append &&
+    (previous.markdown === stableMarkdown ||
+      (previous.markdown.endsWith("\n") &&
+        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
+        !hasHtml &&
+        !isMarkdownBlockArtText(stableMarkdown) &&
+        !previous.html.includes('class="markdown-block-art"') &&
+        (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
+  let stableHtml = incremental ? previous.html : "";
+  const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
+  if (stableAppend) {
+    const appendedHtml = renderSanitizedMarkdown(stableAppend, { ...renderOptions });
+    // File-label collisions and standalone block art depend on the whole prefix.
+    stableHtml =
+      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
+      (renderOptions.fileLinks &&
+        stableHtml.includes('class="markdown-file-link"') &&
+        appendedHtml.includes('class="markdown-file-link"'))
+        ? renderSanitizedMarkdown(stableMarkdown, { ...renderOptions })
+        : stableHtml + appendedHtml;
+  }
+  if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
+    // Keep provisional code in the mutable tail so highlighting can arrive
+    // before its DOM is promoted to stable content, preserving reader controls.
+    const retained = previous?.options === renderKey && append ? previous : undefined;
+    boundary = retained?.markdown.length ?? 0;
+    stableHtml = retained?.html ?? "";
+    streamingTail = input.slice(boundary);
+  } else if (state) {
+    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
+  }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
-  const tailHtml =
+  // The whole input was classified above; an isolated tail is not block art.
+  const tailHtml = renderSanitizedMarkdown(
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
-      : renderSanitizedMarkdown(
-          repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-          renderOptions,
-        );
+      ? streamingTail
+      : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
+    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
+    false,
+  );
   return [stableHtml, tailHtml];
 }

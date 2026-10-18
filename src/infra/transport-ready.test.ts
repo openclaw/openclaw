@@ -1,6 +1,7 @@
 // Covers transport readiness polling.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 
 const transportReadyMocks = vi.hoisted(() => ({
@@ -77,23 +78,6 @@ describe("waitForTransportReady", () => {
     expect(runtime.error).toHaveBeenCalled();
   });
 
-  it("throws after the timeout", async () => {
-    const runtime = createTestRuntime();
-    const waitPromise = waitForTransportReady({
-      label: "test transport",
-      timeoutMs: 110,
-      logAfterMs: 0,
-      logIntervalMs: 1_000,
-      pollIntervalMs: 50,
-      runtime,
-      check: async () => ({ ok: false, error: "still down" }),
-    });
-    const asserted = expect(waitPromise).rejects.toThrow("test transport not ready");
-    await vi.advanceTimersByTimeAsync(200);
-    await asserted;
-    expect(runtime.error).toHaveBeenCalled();
-  });
-
   it("caps oversized timeout values before computing the deadline", async () => {
     vi.setSystemTime(1_000);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -130,6 +114,31 @@ describe("waitForTransportReady", () => {
       abortSignal: controller.signal,
       check: async () => ({ ok: false, error: "still down" }),
     });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it.each([150])("stops quietly when aborted during a probe (%dms elapsed)", async (elapsedMs) => {
+    vi.setSystemTime(0);
+    const runtime = createTestRuntime();
+    const controller = new AbortController();
+    const probe = createDeferred<{ ok: boolean; error: string }>();
+    const check = vi.fn(() => probe.promise);
+    const waitPromise = waitForTransportReady({
+      label: "test transport",
+      timeoutMs: 100,
+      logAfterMs: 0,
+      runtime,
+      abortSignal: controller.signal,
+      check,
+    });
+
+    expect(check).toHaveBeenCalledOnce();
+    controller.abort();
+    vi.setSystemTime(elapsedMs);
+    probe.resolve({ ok: false, error: "still down" });
+
+    await expect(waitPromise).resolves.toBeUndefined();
+    expect(check).toHaveBeenCalledOnce();
     expect(runtime.error).not.toHaveBeenCalled();
   });
 

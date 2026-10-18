@@ -7,7 +7,7 @@ read_when:
 title: "Plugin bundles"
 ---
 
-OpenClaw can install plugins from four external ecosystems: the vendor-neutral
+OpenClaw can install plugins from four external formats: the vendor-neutral
 [**Agent Plugins**](https://agent-plugins.org) standard, plus **Codex**,
 **Claude**, and **Cursor**. These are called **bundles** - content and metadata
 packs that OpenClaw maps into native features like skills, hooks, and MCP tools.
@@ -122,8 +122,13 @@ them:
 - OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths.
 - Bundle LSP config is merged into the effective embedded OpenClaw LSP
   defaults.
+- Runtime tool allowlists can select bundle LSP tools with `bundle-lsp`,
+  `group:plugins`, or matching `lsp_*` names and globs. Each independent
+  restriction must permit the tool.
 - Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
+- Canceling a turn or compaction cancels pending LSP startup, stops additional
+  servers from starting, and cleans up servers already acquired by that operation.
 
 ### Detected but not executed
 
@@ -136,6 +141,8 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
 ## MCP for embedded OpenClaw
 
 - Enabled bundles can contribute MCP server config.
+- Stdio commands default their working directory to the plugin config directory.
+  Remote HTTP servers do not receive an implicit working directory.
 - OpenClaw merges bundle MCP config into the effective embedded OpenClaw
   settings as `mcpServers`.
 - OpenClaw exposes supported bundle MCP tools during embedded OpenClaw agent
@@ -144,7 +151,7 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
   default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway.
 - Project-local embedded agent settings still apply after bundle defaults, so
   workspace settings can override bundle MCP entries when needed.
-- Bundle MCP tool catalogs are sorted deterministically before registration, so
+- Bundle MCP tool catalogs are sorted in a fixed order before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks.
 
 ### Transports
@@ -196,7 +203,9 @@ MCP servers can use stdio or HTTP transport.
   descriptions and logs.
 - `connectionTimeoutMs` overrides the default 30-second connection timeout for
   both stdio and HTTP transports. Request timeout defaults to 60 seconds and
-  can be overridden with `requestTimeoutMs`.
+  can be overridden with `requestTimeoutMs`. Tool listing (`tools/list`) at
+  session start uses `requestTimeoutMs` when it is set, and 10 seconds
+  otherwise.
 
 ### Tool naming
 
@@ -211,7 +220,7 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - Full tool names are capped at 64 characters.
 - Empty server names fall back to `mcp`.
 - Colliding sanitized names are disambiguated with numeric suffixes.
-- Final exposed tool order is deterministic by safe name, keeping repeated
+- Final exposed tool order is sorted by safe name, keeping repeated
   embedded-agent turns cache-stable.
 - Profile filtering treats every tool from one bundle MCP server as
   plugin-owned by `bundle-mcp`, so profile allow/deny lists can reference

@@ -1,4 +1,3 @@
-// Telegram plugin module implements sticker cache behavior.
 import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAutoImageModel } from "openclaw/plugin-sdk/media-runtime";
@@ -46,7 +45,6 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   }
 
   const { provider, model } = resolved;
-  logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
     const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({

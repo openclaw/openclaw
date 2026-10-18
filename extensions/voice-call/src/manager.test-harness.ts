@@ -4,13 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { onTestFinished } from "vitest";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import type { CallManagerContext } from "./manager/context.js";
 import { persistCallRecord } from "./manager/store.js";
@@ -84,14 +88,21 @@ export class FakeProvider implements VoiceCallProvider {
 }
 
 export function createTestStorePath(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
+  // Registered before managers: LIFO cleanup joins their work before retiring
+  // this store's workers, without closing another live fixture's database.
+  onTestFinished(async () => {
+    await closeOpenClawStateDatabaseByPathAsync(path.join(storePath, "state", "openclaw.sqlite"));
+    fs.rmSync(storePath, { recursive: true, force: true });
+  });
+  return storePath;
 }
 
 export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("voice-call", options),
+    openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests<T>("voice-call", options, { assertCurrent() {} }),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
@@ -131,7 +142,13 @@ export async function finalizeTestManagerCalls(manager: CallManager): Promise<vo
 export function registerTestManagerCleanup(manager: CallManager): CallManager {
   // Register before initialize can fail. Store/runtime owners must outlive this
   // LIFO finish hook; this fixture does not reset shared stores or runtimes.
-  onTestFinished(() => finalizeTestManagerCalls(manager));
+  onTestFinished(async () => {
+    try {
+      await finalizeTestManagerCalls(manager);
+    } finally {
+      await manager.stop();
+    }
+  });
   return manager;
 }
 
@@ -143,7 +160,7 @@ export async function createManagerHarness(
   provider: FakeProvider;
   storePath: string;
 }> {
-  const config = VoiceCallConfigSchema.parse({
+  const config = normalizeVoiceCallConfig({
     enabled: true,
     provider: "plivo",
     fromNumber: "+15550000000",
@@ -180,13 +197,6 @@ export async function writeCallsToStore(
   }
 }
 
-export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
-  fs.mkdirSync(storePath, { recursive: true });
-  const logPath = path.join(storePath, "calls.jsonl");
-  const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";
-  fs.writeFileSync(logPath, lines);
-}
-
 export function makePersistedCall(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -195,6 +205,7 @@ export function makePersistedCall(
     providerCallId: `prov-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     provider: "plivo",
     direction: "outbound",
+    agentId: "main",
     state: "answered",
     from: "+15550000000",
     to: "+15550000001",
@@ -216,11 +227,13 @@ export function createEventManagerHarness() {
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
-        openKeyedStore: (options: OpenKeyedStoreOptions) => {
+        openKeyedStoreV2: (options: OpenAsyncKeyedStoreOptions) => {
           if (shouldFail?.()) {
             throw new Error("synthetic SQLite persistence failure");
           }
-          return createPluginStateKeyedStoreForTests("voice-call", options);
+          return createPluginStateKeyedStoreV2ForTests("voice-call", options, {
+            assertCurrent() {},
+          });
         },
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call event tests");
@@ -257,6 +270,7 @@ export function createEventManagerHarness() {
     while (pendingWork.size > 0) {
       await Promise.allSettled(pendingWork);
     }
+    await closeOpenClawStateDatabaseAsync();
     for (const ctx of ownedContexts) {
       fs.rmSync(ctx.storePath, { recursive: true, force: true });
     }
@@ -269,9 +283,9 @@ export function createEventManagerHarness() {
       activeCalls: new Map(),
       providerCallIdMap: new Map(),
       processedEventIds: new Set(),
-      rejectedProviderCallIds: new Map(),
+      rejectedProviderCallIds: new Set(),
       provider: null,
-      config: VoiceCallConfigSchema.parse({
+      config: normalizeVoiceCallConfig({
         enabled: true,
         provider: "plivo",
         fromNumber: "+15550000000",
@@ -314,7 +328,7 @@ export function createEventManagerHarness() {
   }
 
   function createInboundDisabledConfig() {
-    return VoiceCallConfigSchema.parse({
+    return normalizeVoiceCallConfig({
       enabled: true,
       provider: "plivo",
       fromNumber: "+15550000000",

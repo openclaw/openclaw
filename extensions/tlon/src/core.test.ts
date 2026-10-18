@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
+import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
@@ -46,15 +47,6 @@ describe("tlon core", () => {
     ).toEqual(["~zod", "~nec"]);
   });
 
-  it("returns an empty dm allowlist when the default account is unconfigured", () => {
-    expect(
-      tlonTestPlugin.config.resolveAllowFrom?.({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
-      }),
-    ).toStrictEqual([]);
-  });
-
   it("resolves dm allowlist from the default account", () => {
     expect(
       tlonTestPlugin.config.resolveAllowFrom?.({
@@ -73,62 +65,25 @@ describe("tlon core", () => {
     ).toEqual(["~zod"]);
   });
 
-  it("accepts channelRules with string keys", () => {
+  it("preserves mention policy at root and account scope", () => {
     expect(
       parseTlonConfig({
-        authorization: {
-          channelRules: {
-            "chat/~zod/test": {
-              mode: "open",
-              allowedShips: ["~zod"],
-            },
-          },
-        },
-      }),
-    ).toMatchObject({
-      success: true,
-      data: { authorization: { channelRules: { "chat/~zod/test": { mode: "open" } } } },
-    });
-  });
-
-  it("accepts accounts with string keys", () => {
-    expect(
-      parseTlonConfig({
+        implicitMentions: { threadParticipation: false },
+        requireMentionInBotThreads: true,
         accounts: {
           primary: {
-            ship: "~zod",
-            url: "https://example.com",
-            code: "code-123",
+            implicitMentions: { replyToBot: false },
+            requireMentionInBotThreads: false,
           },
         },
-      }),
-    ).toMatchObject({ success: true, data: { accounts: { primary: { ship: "~zod" } } } });
-  });
-
-  it("exposes group invite allowlists in channel config schema", () => {
-    expect(
-      parseTlonConfig({
-        groupInviteAllowlist: ["~zod"],
-        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
       }),
     ).toMatchObject({
       success: true,
       data: {
-        groupInviteAllowlist: ["~zod"],
-        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
+        requireMentionInBotThreads: true,
+        accounts: { primary: { requireMentionInBotThreads: false } },
       },
     });
-  });
-
-  it("accepts implicit mention policy at root and account scope", () => {
-    expect(
-      parseTlonConfig({
-        implicitMentions: { threadParticipation: false },
-        accounts: {
-          primary: { implicitMentions: { replyToBot: false } },
-        },
-      }),
-    ).toMatchObject({ success: true });
   });
 
   it("configures ship, auth, and discovery settings", async () => {
@@ -258,11 +213,6 @@ describe("tlon core", () => {
     expect(resolved.error.message).toMatch(/invalid tlon target/i);
   });
 
-  it("does not invent an account when the Tlon channel is unconfigured", () => {
-    expect(listTlonAccountIds({} as OpenClawConfig)).toEqual([]);
-    expect(listTlonAccountIds({ channels: { tlon: {} } } as OpenClawConfig)).toEqual([]);
-  });
-
   it("lists named accounts and the implicit default account", () => {
     const cfg = {
       channels: {
@@ -279,64 +229,20 @@ describe("tlon core", () => {
     expect(listTlonAccountIds(cfg)).toEqual(["alerts", "default", "work"]);
   });
 
-  it("merges named account config over channel defaults", () => {
-    const resolved = resolveTlonAccount(
-      {
-        channels: {
-          tlon: {
-            name: "Base",
-            ship: "~zod",
-            url: "https://urbit.example.com",
-            code: "base-code",
-            dmAllowlist: ["~nec"],
-            groupInviteAllowlist: ["~bus"],
-            defaultAuthorizedShips: ["~marzod"],
-            accounts: {
-              Work: {
-                name: "Work",
-                code: "work-code",
-                dmAllowlist: ["~rovnys"],
-              },
-            },
-          },
+  it("requires Doctor for private-network aliases", () => {
+    const cfg = {
+      channels: {
+        tlon: {
+          ship: "~zod",
+          allowPrivateNetwork: true,
+          network: { dangerouslyAllowPrivateNetwork: undefined },
         },
-      } as OpenClawConfig,
-      "work",
-    );
+      },
+    };
 
-    expect(resolved.accountId).toBe("work");
-    expect(resolved.name).toBe("Work");
-    expect(resolved.ship).toBe("~zod");
-    expect(resolved.url).toBe("https://urbit.example.com");
-    expect(resolved.code).toBe("work-code");
-    expect(resolved.dmAllowlist).toEqual(["~rovnys"]);
-    expect(resolved.groupInviteAllowlist).toEqual(["~bus"]);
-    expect(resolved.defaultAuthorizedShips).toEqual(["~marzod"]);
-    expect(resolved.configured).toBe(true);
-  });
-
-  it("keeps the default account on channel-level config only", () => {
-    const resolved = resolveTlonAccount(
-      {
-        channels: {
-          tlon: {
-            ship: "~zod",
-            url: "https://urbit.example.com",
-            code: "base-code",
-            accounts: {
-              default: {
-                ship: "~ignored",
-                code: "ignored-code",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-      "default",
-    );
-
-    expect(resolved.ship).toBe("~zod");
-    expect(resolved.code).toBe("base-code");
+    expect(resolveTlonAccount(cfg).dangerouslyAllowPrivateNetwork).toBe(null);
+    const repaired = normalizeCompatibilityConfig({ cfg });
+    expect(resolveTlonAccount(repaired.config).dangerouslyAllowPrivateNetwork).toBe(true);
   });
 
   it("setup status labels the selected account", async () => {

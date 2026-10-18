@@ -1,21 +1,21 @@
-// Xiaomi plugin module implements thinking behavior.
 import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import { XIAOMI_PROVIDER_ID, XIAOMI_TOKEN_PLAN_PROVIDER_ID } from "./provider-catalog.js";
 
-const MIMO_REASONING_MODEL_IDS = new Set(["mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-pro"]);
+const MIMO_REASONING_MODEL_IDS = new Set([
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
+  "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
+]);
 
 function isMiMoReasoningModelId(modelId: string): boolean {
   return MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase());
 }
 
-function isMiMoProviderId(providerId: unknown): boolean {
-  return providerId === XIAOMI_PROVIDER_ID || providerId === XIAOMI_TOKEN_PLAN_PROVIDER_ID;
-}
-
-export function isMiMoReasoningModelRef(model: { provider?: string; id?: unknown }): boolean {
+export function isMiMoReasoningModelRef(model: { provider: string; id: string }): boolean {
   return (
-    isMiMoProviderId(model.provider) &&
-    typeof model.id === "string" &&
+    (model.provider === XIAOMI_PROVIDER_ID || model.provider === XIAOMI_TOKEN_PLAN_PROVIDER_ID) &&
     isMiMoReasoningModelId(model.id)
   );
 }

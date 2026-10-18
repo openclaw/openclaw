@@ -1,76 +1,116 @@
-/* ===========================================
-   Sessions page
-   Structure comes from the settings design language (settings.css). This file
-   keeps the sessions-specific escape hatches: overview facts, roster toolbar,
-   table cells, and the row drawer's flat interior.
-   =========================================== */
+/* Structure comes from the settings design language (settings.css). This file
+   keeps the sessions-specific toolbar, table cells, and row drawer. */
 
-/* Load error surfaced above the sections. */
 .sessions-error {
   color: var(--danger);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
 
-/* Sessions is a scan-heavy workspace, so keep its section rhythm tighter than
-   form-heavy settings pages while preserving the shared control sizes. */
-.settings-page:has(.sessions-transcript-search) {
-  gap: var(--space-4);
+.sessions-hub-header .page-title {
+  margin: 0;
+  font-size: 26px;
 }
 
-.settings-page:has(.sessions-transcript-search) > .settings-section {
-  gap: var(--space-2);
-}
-
-/* --- Compact overview facts stay attached to the Sessions heading. --- */
-.settings-section__heading:has(.sessions-heading-facts) {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.sessions-heading-facts {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
+.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
   color: var(--muted);
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
-.sessions-heading-fact strong {
+.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:hover {
   color: var(--text-strong);
-  font-family: var(--mono);
-  font-weight: 700;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
-.sessions-heading-fact--active,
-.sessions-heading-fact--active strong {
-  color: var(--ok);
+.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
-.sessions-heading-fact__separator {
-  color: var(--border-strong);
+.settings-section__actions .sessions-toolbar__icon.btn--icon.btn--xs svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-section__actions .sessions-filter-popover__trigger.active {
+  color: var(--accent);
+}
+
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-color: transparent;
+}
+
+.settings-section__actions .sessions-toolbar__new-session.btn--icon.btn--xs:hover {
+  color: var(--primary-foreground);
+  background: var(--primary-hover);
+  border-color: transparent;
 }
 
 /* --- Transcript search: server-backed message content, separate from roster filters --- */
 .sessions-transcript-search {
   display: grid;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
 }
 
 .sessions-transcript-search__form {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.sessions-transcript-search__input {
+  position: relative;
+  width: min(280px, 32vw);
+  min-width: 120px;
 }
 
 .sessions-transcript-search__input input {
-  min-height: 34px;
+  width: 100%;
+  min-height: 28px;
+  padding-inline-end: 30px;
+}
+
+.sessions-transcript-search__clear {
+  position: absolute;
+  inset-inline-end: 2px;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  translate: 0 -50%;
+}
+
+.sessions-transcript-search__clear:hover {
+  color: var(--text);
+}
+
+.sessions-transcript-search__clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sessions-transcript-search__clear svg {
+  width: 14px;
+  height: 14px;
 }
 
 .sessions-transcript-search__status:empty {
@@ -172,37 +212,74 @@
   white-space: nowrap;
 }
 
-/* --- Toolbar: search + filters + grouping in one strip inside the group --- */
-.sessions-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.sessions-toolbar__search {
+.sessions-filter-popover__search {
   position: relative;
-  flex: 1 1 220px;
-  min-width: 180px;
+  width: 100%;
 }
 
-.sessions-toolbar__search svg {
+.sessions-filter-popover__search > svg {
   position: absolute;
   top: 50%;
-  left: 9px;
+  inset-inline-start: 9px;
   width: 14px;
   height: 14px;
   translate: 0 -50%;
   stroke: var(--muted);
-  fill: none;
   stroke-width: 1.8px;
   pointer-events: none;
 }
 
-.sessions-toolbar__search input {
-  padding-left: 30px;
+.sessions-filter-popover__search input {
+  padding-inline: 30px 34px;
+}
+
+.sessions-filter-popover__clear {
+  position: absolute;
+  inset-inline-end: 1px;
+  top: 50%;
+  translate: 0 -50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: transparent;
+}
+
+.sessions-filter-popover__clear[hidden] {
+  display: none;
+}
+
+.sessions-filter-popover__clear:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.sessions-filter-popover__clear:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sessions-filter-popover__clear svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .sessions-filter-popover__search input {
+    min-height: 44px;
+    padding-inline-end: 48px;
+  }
+
+  .sessions-filter-popover__clear {
+    width: 44px;
+    height: 44px;
+  }
 }
 
 .session-filter-toggle-group {
@@ -212,20 +289,25 @@
   gap: var(--space-1);
 }
 
-.session-filter-field {
+.session-filter-field,
+.session-filter-check {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 4px 0 8px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-filter-field {
+  padding: 0 4px 0 8px;
   transition: border-color var(--duration-fast) ease;
 }
 
-.session-filter-field:focus-within {
+.session-filter-field:focus-within,
+.session-filter-check:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
 }
@@ -266,25 +348,12 @@
 
 .session-filter-check {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 30px;
-  box-sizing: border-box;
   padding: 0 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   user-select: none;
   transition:
     border-color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
-}
-
-.session-filter-check:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
 }
 
 .session-filter-check--active {
@@ -335,27 +404,14 @@
   color: var(--text);
 }
 
-.sessions-filter-popover {
-  --max-width: min(280px, calc(100vw - 48px));
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.sessions-filter-popover::part(body) {
-  padding: 0;
+.sessions-filter-popover.oc-popover {
+  --oc-overlay-max-width: min(280px, calc(100vw - 48px));
+  --oc-overlay-distance: 8px;
+  --oc-popover-padding: 0;
 }
 
 .sessions-filter-popover__trigger {
-  width: 32px;
-  height: 32px;
   flex: 0 0 auto;
-  justify-content: center;
-  padding: 0;
-}
-
-.sessions-filter-popover__trigger svg {
-  width: 14px;
-  height: 14px;
 }
 
 .sessions-filter-popover__panel {
@@ -372,6 +428,15 @@
 .sessions-filter-popover__fields {
   display: grid;
   gap: var(--space-2);
+}
+
+.sessions-filter-popover__panel .sessions-view-segment {
+  display: flex;
+  width: 100%;
+}
+
+.sessions-filter-popover__panel .sessions-view-segment > * {
+  flex: 1 1 0;
 }
 
 .sessions-filter-popover__panel .session-filter-field {
@@ -425,9 +490,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-/* --- Table --- */
 .sessions-table {
-  min-width: 760px;
+  min-width: 520px;
 }
 
 .sessions-table th,
@@ -479,68 +543,26 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-/* Session identity cell */
 .session-key-cell {
   display: flex;
   align-items: center;
-  gap: 10px;
   min-width: 0;
-  max-width: 340px;
 }
 
-/* Kind avatar tile; tint mapping mirrors the kind text below. */
-.session-avatar {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  color: var(--muted);
-  background: var(--bg-hover);
-  border-radius: var(--radius-sm);
+.sessions-table .session-agent-col {
+  width: 170px;
+  max-width: 170px;
 }
 
-.session-avatar svg {
+.session-agent-col openclaw-agent-row-chip {
+  width: 100%;
+}
+
+.session-actions .icon-btn svg,
+.session-details-toggle svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.session-avatar--cron {
-  color: var(--ok);
-  background: var(--ok-subtle);
-}
-
-.session-avatar--direct {
-  color: var(--accent-2);
-  background: var(--accent-2-subtle);
-}
-
-.session-avatar--group {
-  color: var(--info);
-  background: var(--info-subtle);
-}
-
-.session-avatar--global {
-  color: var(--warn);
-  background: var(--warn-subtle);
-}
-
-.session-avatar__status {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 9px;
-  height: 9px;
-  background: var(--ok);
-  border: 2px solid var(--card);
-  border-radius: 50%;
 }
 
 .session-key-cell__text {
@@ -565,7 +587,8 @@
   white-space: nowrap;
 }
 
-.session-key-display-name {
+.session-key-display-name,
+.session-detail-stat__value {
   min-width: 0;
   overflow: hidden;
   font-size: var(--control-ui-text-sm);
@@ -578,7 +601,7 @@
   flex: 0 1 auto;
   max-width: 140px;
   overflow: hidden;
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-overflow: ellipsis;
@@ -595,9 +618,8 @@
 }
 
 .session-kind--direct {
-  color: var(--accent-2);
+  color: color-mix(in srgb, var(--accent-2) 65%, var(--text));
 }
-
 .session-kind--group {
   color: var(--info);
 }
@@ -610,30 +632,6 @@
   color: var(--warn);
 }
 
-/* Status cell */
-.session-status-col {
-  width: 118px;
-  min-width: 108px;
-}
-
-.session-status-stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.session-status-stack .settings-status {
-  max-width: 116px;
-}
-
-.session-status-stack .settings-status > :last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* --- Initial-load skeleton --- */
 .session-skeleton-row td {
   border-bottom: 1px solid var(--border);
 }
@@ -670,7 +668,6 @@
   }
 }
 
-/* --- Empty states --- */
 .sessions-table .data-table-empty-state {
   display: flex;
   flex-direction: column;
@@ -687,33 +684,10 @@
 .data-table-empty-state__message svg {
   width: 26px;
   height: 26px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
   opacity: 0.45;
 }
 
-/* Activity cells */
-.session-token-cell {
-  min-width: 96px;
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-.session-tokens {
-  display: grid;
-  gap: 5px;
-  cursor: default;
-}
-
-.session-tokens__value {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-/* Actions cell: details disclosure + row tools */
 .session-actions-col {
   width: 76px;
 }
@@ -728,19 +702,21 @@
   gap: 2px;
 }
 
-/* icons.ts SVGs carry no stroke/fill attributes; without these rules the
-   glyphs paint solid black and read as blank squares on dark surfaces. */
-.session-actions .icon-btn {
+.session-actions .icon-btn,
+.session-details-toggle {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
   height: 28px;
-  padding: 0;
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-actions .icon-btn {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
   opacity: 0.65;
   transition:
     color var(--duration-fast) ease,
@@ -749,28 +725,20 @@
     opacity var(--duration-fast) ease;
 }
 
-.session-actions .icon-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sessions-table tr:hover .session-actions .icon-btn,
 .session-actions .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled) {
+.session-actions .icon-btn:hover:not(:disabled),
+.session-details-toggle:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible {
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -781,38 +749,15 @@
 }
 
 .session-details-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: 5px;
-  height: 28px;
   padding: 0 7px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   transition:
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .session-details-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -824,7 +769,6 @@
   transform: rotate(180deg);
 }
 
-/* Group rows (grouped mode) */
 .session-group-row td {
   padding: 6px 12px;
   background: var(--bg-elevated);
@@ -866,7 +810,6 @@
   font-weight: 500;
 }
 
-/* --- Row drawer: overrides, stats, compaction history (flat interior) --- */
 .session-details-row td {
   padding: 0;
   background: var(--bg-accent);
@@ -925,18 +868,6 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.session-details-section__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.session-details-section__title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
 .session-overrides-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -979,86 +910,17 @@
 }
 
 .session-detail-stat__value {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.session-details-empty {
-  padding: 4px 0;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-list {
-  display: grid;
-}
-
-.session-checkpoint-card {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3) 0;
-}
-
-.session-checkpoint-card + .session-checkpoint-card {
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.session-checkpoint-card__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.session-checkpoint-card__header strong,
-.session-checkpoint-card__delta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-checkpoint-card__delta {
-  flex: 0 1 auto;
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-checkpoint-card__summary {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.session-checkpoint-card__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-/* --- Narrow layouts --- */
 @media (max-width: 768px) {
-  .sessions-toolbar {
-    align-items: stretch;
-  }
-
-  .sessions-transcript-search__form {
-    flex-wrap: wrap;
+  .sessions-hub-header .page-title {
+    font-size: 22px;
   }
 
   .sessions-transcript-search__input {
-    flex-basis: 100%;
-  }
-
-  .sessions-transcript-search__form .btn {
-    flex: 1 1 auto;
-  }
-
-  .sessions-toolbar__search {
-    flex-basis: 100%;
+    width: min(220px, calc(100vw - 190px));
   }
 
   .session-filter-toggle-group,
@@ -1078,11 +940,5 @@
 
   .session-groupby__select {
     flex: 1 1 auto;
-  }
-}
-
-@media (max-width: 560px) {
-  .sessions-filter-popover__trigger {
-    margin-left: auto;
   }
 }

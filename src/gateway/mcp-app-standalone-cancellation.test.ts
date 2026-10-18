@@ -17,7 +17,6 @@ import {
   resetStandaloneMcpAppTestState,
   resolveMcpAppActiveView,
   runtime,
-  secret,
   view,
 } from "./mcp-app-standalone.http.test-support.js";
 
@@ -35,13 +34,11 @@ describe("MCP App standalone request cancellation", () => {
       await finish.promise;
       return { content: [{ type: "text", text: "completed once" }] };
     });
-    const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+    const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
     const server = createServer((req, res) => {
       void handleMcpAppStandaloneHttpRequest(req, res, {
         gatewayPort: 18_789,
         sandboxPort: 18_790,
-        nowMs,
-        ticketSecret: secret,
       }).finally(() => handled.resolve());
     });
     await new Promise<void>((resolve) => {
@@ -101,15 +98,13 @@ describe("MCP App standalone request cancellation", () => {
       const clientDone = createDeferred<number | string>();
       let leakedCloseListeners = 0;
       let handlerError: unknown;
-      const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs, secret }).ticket;
+      const ticket = issueTicket({ sessionKey: "agent:main:main", view, nowMs }).ticket;
       const server = createServer((req, res) => {
         const originalListeners = new Set(req.socket.listeners("close"));
         entered.resolve();
         void handleMcpAppStandaloneHttpRequest(req, res, {
           gatewayPort: 18_789,
           sandboxPort: 18_790,
-          nowMs,
-          ticketSecret: secret,
         })
           .catch((error: unknown) => {
             handlerError = error;
@@ -255,7 +250,6 @@ describe("MCP App standalone request cancellation", () => {
       sessionKey: "agent:main:main",
       view: requestView,
       nowMs,
-      secret,
     }).ticket;
     const pending = request({
       url: "/__openclaw__/mcp-app/view",

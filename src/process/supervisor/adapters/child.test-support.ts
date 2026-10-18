@@ -5,6 +5,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { vi, type Mock } from "vitest";
 
+export function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
 export function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough() as ChildProcess["stdin"];
@@ -50,7 +54,7 @@ export function createStubChild(pid = 1234) {
   return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
 }
 
-type SpawnWithFallbackParams = {
+type SpawnAndWaitParams = {
   argv?: string[];
   options?: {
     detached?: boolean;
@@ -59,17 +63,16 @@ type SpawnWithFallbackParams = {
     windowsHide?: boolean;
     windowsVerbatimArguments?: boolean;
   };
-  fallbacks?: Array<{ detached?: boolean }>;
 };
 
-export function firstSpawnWithFallbackParams(mock: Mock): SpawnWithFallbackParams {
+export function firstSpawnAndWaitParams(mock: Mock): SpawnAndWaitParams {
   const [call] = mock.mock.calls;
   if (!call) {
-    throw new Error("expected spawnWithFallback call");
+    throw new Error("expected spawnAndWait call");
   }
   const [params] = call;
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
-    throw new Error("expected spawnWithFallback params to be an object");
+    throw new Error("expected spawnAndWait params to be an object");
   }
   return params;
 }
@@ -97,9 +100,16 @@ export async function createWindowsNpmShim(params: {
   const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
   const shimHead =
     "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n";
-  const shimCommand = entrypoint.endsWith(".exe")
-    ? `"%dp0%\\${relativeEntrypoint}" %*\r\n`
-    : `IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
+  const shimCommand = `IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
   await writeFile(path.join(binDir, `${params.command}.cmd`), `${shimHead}${shimCommand}`, "utf8");
   return { binDir, entrypoint };
+}
+type ChildAdapterFactory = typeof import("./child.js").createChildAdapter;
+
+export function readyChildAdapter(create: ChildAdapterFactory) {
+  return async (params: Parameters<ChildAdapterFactory>[0]) => {
+    const { adapter, ready } = await create(params);
+    await ready;
+    return adapter;
+  };
 }

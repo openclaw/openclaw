@@ -33,7 +33,7 @@ const hostStats: NodeHostStats = {
   updatedAtMs: now - 27 * 24 * 60 * 60 * 1000,
 };
 
-describe.each(["status", "describe"])("nodes %s host stats", (command) => {
+describe.each(["status", "describe"])("nodes %s rendering", (command) => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(Date, "now").mockReturnValue(now);
@@ -41,11 +41,19 @@ describe.each(["status", "describe"])("nodes %s host stats", (command) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    { label: "connected", connected: true, stats: hostStats },
-    { label: "last known", connected: false, stats: hostStats },
+    { label: "connected", connected: true, stats: hostStats, version: "1.2.3", display: "v1.2.3" },
+    {
+      label: "last known",
+      connected: false,
+      stats: hostStats,
+      version: "v1.2.3",
+      display: "v1.2.3",
+    },
     {
       label: "memory only",
       connected: true,
+      version: "canary",
+      display: "canary",
       stats: {
         cpuCount: 2,
         memoryTotalBytes: 1024 ** 3,
@@ -53,9 +61,23 @@ describe.each(["status", "describe"])("nodes %s host stats", (command) => {
         updatedAtMs: now,
       },
     },
-    { label: "unavailable", connected: false, stats: undefined },
-  ])("renders $label stats and preserves JSON", async ({ connected, stats }) => {
-    const node = { nodeId: "node-1", paired: true, connected, hostStats: stats };
+    {
+      label: "unavailable",
+      connected: false,
+      stats: undefined,
+      version: "  V1.2.3  ",
+      display: "V1.2.3",
+    },
+  ])("renders $label details and preserves JSON", async (nodeCase) => {
+    const { connected, stats, version, display } = nodeCase;
+    const node = {
+      nodeId: "node-1",
+      paired: true,
+      connected,
+      hostStats: stats,
+      coreVersion: version,
+      uiVersion: version,
+    };
     mocks.call.mockResolvedValue(command === "status" ? { nodes: [node] } : node);
     const nodes = new Command("nodes");
     registerNodesStatusCommands(nodes);
@@ -63,6 +85,7 @@ describe.each(["status", "describe"])("nodes %s host stats", (command) => {
     await nodes.parseAsync(args, { from: "user" });
 
     const output = mocks.log.mock.calls.map(([line]) => String(line)).join("\n");
+    expect(output).toContain(`core ${display} · ui ${display}`);
     if (stats === hostStats) {
       expect(output).toContain("load 3.2/24 · mem 151/192 GB · disk 1.2 TB free");
     } else if (stats) {

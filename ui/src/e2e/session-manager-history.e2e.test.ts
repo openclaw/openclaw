@@ -82,15 +82,20 @@ suite.define(() => {
         await mainRow.waitFor({ state: "visible", timeout: 10_000 });
         await researchRow.waitFor({ state: "visible", timeout: 10_000 });
 
-        const rosterFilter = page.locator('.sessions-toolbar__search input[type="text"]');
+        await page.getByRole("button", { name: "Filters", exact: true }).click();
+        const rosterFilter = page.locator(
+          '.sessions-filter-popover:popover-open input[type="text"]',
+        );
         await rosterFilter.fill("Research");
         await expect.poll(() => mainRow.count()).toBe(0);
         await researchRow.waitFor({ state: "visible" });
         await captureUiProof(page, "01-session-filter.png");
         await rosterFilter.fill("");
         await mainRow.waitFor({ state: "visible" });
+        await page.keyboard.press("Escape");
 
         const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
+        await transcriptSearch.getByRole("button", { name: "Search transcripts" }).click();
         const transcriptInput = transcriptSearch.getByRole("searchbox", {
           name: "Search session transcripts",
         });
@@ -99,10 +104,15 @@ suite.define(() => {
         const result = page.locator(".sessions-transcript-search__result");
         await result.waitFor({ state: "visible", timeout: 10_000 });
         expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
-          agentId: "main",
           limit: 25,
           query: "deployment history",
-          sessionKeys: [main.key, research.key],
+          scope: {
+            agentId: "main",
+            excludeDock: true,
+            includeGlobal: true,
+            includeUnknown: false,
+            configuredAgentsOnly: true,
+          },
         });
         await result.click();
         await expect

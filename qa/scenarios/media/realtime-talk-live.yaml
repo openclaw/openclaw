@@ -26,7 +26,7 @@ scenario:
     - test/e2e/qa-lab/media/realtime-talk-live.ts
     - scripts/dev/realtime-talk-live-smoke.ts
     - extensions/openai/realtime-voice-provider.ts
-    - ui/src/pages/chat/realtime-talk-webrtc.ts
+    - ui/src/pages/chat/talk/webrtc.ts
   execution:
     kind: script
     path: test/e2e/qa-lab/media/realtime-talk-live.ts

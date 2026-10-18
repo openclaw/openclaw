@@ -48,6 +48,10 @@ Matrix supports the shared `contextVisibility` control for supplemental room con
 
 This affects supplemental context visibility only, not whether the inbound message itself can trigger a reply. Trigger authorization still comes from `groupPolicy`, `groups`, `groupAllowFrom`, and DM policy settings.
 
+## Tool context reads
+
+The official Matrix plugin supports message-tool reads of messages, reactions, pins, custom emotes, member profiles, and room details when bundled or installed from npm or ClawHub. These reads use the selected account's room and DM scope checks and its `actions` settings. Member profiles require membership in the requested room; custom emotes include that room's packs and the account's personal pack.
+
 ## DM and room policy
 
 ```json5

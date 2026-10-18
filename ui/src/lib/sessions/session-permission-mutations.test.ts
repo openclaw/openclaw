@@ -1,70 +1,66 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  SessionsListResult,
+  SessionsPatchResult,
+} from "../../api/types.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
 import {
-  createSessionCapabilityHarness,
-  createGatewayHarness,
-  createTestSessionCapability,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+  sessionRpcHarness as permissionHarness,
+  liveSessionEvent,
+  patchReceipt,
+} from "./session-rpc.test-support.ts";
 
-it.each(["generation-b", "  generation-b  ", "  "])(
+function permissionRow(
+  key: string,
+  sessionId: string,
+  updatedAt: number,
+  permissionMode: GatewaySessionRow["permissionMode"],
+) {
+  return { key, sessionId, updatedAt, permissionMode, kind: "direct" as const };
+}
+
+it.each(["  generation-b  ", "  "])(
   "binds the normalized expected incarnation %j instead of a stale primary row",
   async (expectedSessionId) => {
     const key = "agent:main:permission-successor";
-    const original = {
-      key,
-      kind: "direct" as const,
-      sessionId: "generation-a",
-      updatedAt: 1,
-      permissionMode: "guarded" as const,
-    };
+    const original = permissionRow(key, "generation-a", 1, "guarded");
     const successor = { ...original, sessionId: "generation-b", updatedAt: 3 };
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          path: "(sessions)",
-          key,
-          entry: { sessionId: successor.sessionId, updatedAt: 4, permissionMode: "full" },
-        };
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCalls += 1;
-      return sessionsResult(
-        [
-          listCalls === 1
-            ? original
-            : listCalls === 2
-              ? successor
-              : { ...successor, updatedAt: 4, permissionMode: "full" },
-        ],
-        listCalls,
-      );
+    const { sessions } = permissionHarness({
+      "sessions.patch": () =>
+        patchReceipt(key, {
+          sessionId: successor.sessionId,
+          updatedAt: 4,
+          permissionMode: "full",
+        }),
+      "sessions.list": () => {
+        listCalls += 1;
+        return sessionsResult(
+          [
+            listCalls === 1
+              ? original
+              : listCalls === 2
+                ? successor
+                : { ...successor, updatedAt: 4, permissionMode: "full" },
+          ],
+          listCalls,
+        );
+      },
     });
-    const { sessions } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
-    try {
-      await sessions.refresh({ force: true });
-      await sessions.refreshList({ agentId: "main", includeDerivedTitles: false });
-      expect(sessions.state.result?.sessions[0]?.sessionId).toBe(original.sessionId);
-      await sessions.patch(key, { permissionMode: "full" }, { expectedSessionId });
+    await sessions.refresh({ force: true });
+    await sessions.refreshList({ agentId: "main", includeDerivedTitles: false });
+    expect(sessions.state.result?.sessions[0]?.sessionId).toBe(original.sessionId);
+    await sessions.patch(key, { permissionMode: "full" }, { expectedSessionId });
 
-      expect(sessions.state.result?.sessions[0]).toMatchObject({
-        sessionId: successor.sessionId,
-        permissionMode: "full",
-      });
-      expect(listCalls).toBe(3);
-      expect(sessions.state.loading).toBe(false);
-    } finally {
-      sessions.dispose();
-    }
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      sessionId: successor.sessionId,
+      permissionMode: "full",
+    });
+    expect(listCalls).toBe(3);
+    expect(sessions.state.loading).toBe(false);
   },
 );
 
@@ -72,128 +68,128 @@ it.each([
   { eventAt: 2, ackAt: 3, eventMode: "guarded", expected: "workspace", expectedLists: 2 },
   { eventAt: 2, ackAt: 3, eventMode: "full", expected: "workspace", expectedLists: 2 },
   { eventAt: 3, ackAt: 2, eventMode: "guarded", expected: "guarded", expectedLists: 1 },
-])(
+] as const)(
   "keeps the newer permission when a $eventMode snapshot at $eventAt crosses an acknowledgment at $ackAt",
   async ({ eventAt, ackAt, eventMode, expected, expectedLists }) => {
     const key = "agent:main:permission-pending";
     const sessionId = "permission-pending-generation";
     const patch = createDeferred<SessionsPatchResult>();
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        return patch.promise;
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      listCalls += 1;
-      if (ackAt < eventAt && listCalls > 1) {
-        throw new Error("Roster unavailable");
-      }
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            sessionId,
-            updatedAt: listCalls === 1 ? 1 : 3,
-            permissionMode: listCalls === 1 ? "guarded" : "workspace",
-          },
-        ],
-        listCalls,
-      );
+    const { sessions, emitEvent } = permissionHarness({
+      "sessions.patch": () => patch.promise,
+      "sessions.list": () => {
+        listCalls += 1;
+        if (ackAt < eventAt && listCalls > 1) {
+          throw new Error("Roster unavailable");
+        }
+        return sessionsResult(
+          [
+            permissionRow(
+              key,
+              sessionId,
+              listCalls === 1 ? 1 : 3,
+              listCalls === 1 ? "guarded" : "workspace",
+            ),
+          ],
+          listCalls,
+        );
+      },
     });
-    const { sessions, emitEvent } = createSessionCapabilityHarness(
-      request as unknown as GatewayBrowserClient["request"],
-    );
+    await sessions.refresh({ force: true });
+    const pending = sessions.patch(key, { permissionMode: "workspace" });
+    emitEvent(liveSessionEvent(permissionRow(key, sessionId, eventAt, eventMode), {}));
+    patch.resolve(patchReceipt(key, { sessionId, updatedAt: ackAt, permissionMode: "workspace" }));
+    await pending;
+    expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(expected);
+    expect(sessions.state.loading).toBe(false);
+    expect(listCalls).toBe(expectedLists);
+  },
+);
+
+it.each([
+  ["none", "workspace", 2, "workspace"],
+  ["after", "workspace", 2, "workspace"],
+  ["before", "guarded", 1, "workspace"],
+  ["before", "full", 1, "full"],
+  ["other-incarnation", "full", 1, "workspace"],
+] as const)(
+  "keeps permission and refresh error with descriptor %s/%s, ack at %s",
+  async (read, mode, ackAt, expected) => {
+    const key = "agent:main:permission-refresh";
+    const sessionId = "permission-refresh-generation";
+    const initial = { ...permissionRow(key, sessionId, 1, "guarded"), label: "Permission refresh" };
+    const confirmed = { ...initial, permissionMode: "workspace" as const, updatedAt: ackAt };
+    const readBeforeAck = read === "before" || read === "other-incarnation";
+    const described = {
+      ...initial,
+      permissionMode: mode,
+      sessionId: read === "other-incarnation" ? "other-generation" : sessionId,
+      updatedAt: readBeforeAck ? initial.updatedAt : ackAt,
+    };
+    const acknowledgement = createDeferred<SessionsPatchResult>();
+    const patchRequested = createDeferred();
+    const refresh = createDeferred<SessionsListResult>();
+    const refreshRequested = createDeferred();
+    const patchResult = patchReceipt(key, confirmed);
+    let listCalls = 0;
+    const { gateway, sessions } = permissionHarness({
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "sessions.list": () => {
+        listCalls += 1;
+        if (listCalls === 1) {
+          return sessionsResult([initial], 1);
+        }
+        refreshRequested.resolve();
+        return refresh.promise;
+      },
+      "sessions.patch": () => {
+        patchRequested.resolve();
+        return acknowledgement.promise;
+      },
+      "sessions.describe": () => ({ session: { ...described } }),
+    });
+    const observation = sessions.observeRow({ key, agentId: "main" }, () => undefined);
+    const readDescriptor = async () => {
+      const reconcile = observation.captureReconcile();
+      const result = await gateway.snapshot.client!.request<{ session: typeof described }>(
+        "sessions.describe",
+        { key },
+      );
+      expect(reconcile(result.session)).toMatchObject({
+        status: "current",
+        row: read === "other-incarnation" ? initial : described,
+      });
+    };
+    let pending: ReturnType<typeof sessions.patch> | undefined;
     try {
       await sessions.refresh({ force: true });
-      const pending = sessions.patch(key, { permissionMode: "workspace" });
-      emitEvent({
-        type: "event",
-        event: "session.message",
-        payload: {
-          key,
-          sessionKey: key,
-          kind: "direct",
-          sessionId,
-          updatedAt: eventAt,
-          permissionMode: eventMode,
-          archived: false,
-          hasActiveRun: true,
-          status: "running",
-        },
-      });
-      patch.resolve({
-        ok: true,
-        path: "(sessions)",
-        key,
-        entry: { sessionId, updatedAt: ackAt, permissionMode: "workspace" },
-      });
-      await pending;
-      expect(sessions.state.result?.sessions[0]?.permissionMode).toBe(expected);
-      expect(sessions.state.loading).toBe(false);
-      expect(listCalls).toBe(expectedLists);
+      pending = sessions.patch(key, { permissionMode: "workspace" });
+      await patchRequested.promise;
+      if (readBeforeAck) {
+        await readDescriptor();
+      }
+      acknowledgement.resolve(patchResult);
+      await refreshRequested.promise;
+      if (read === "after") {
+        await readDescriptor();
+      }
+      refresh.reject(new Error("Roster refresh unavailable"));
+
+      const result = await pending;
+      expect(result).toMatchObject({ listRefreshError: "Roster refresh unavailable" });
+      expect(sessions.state.result?.sessions).toEqual([
+        expect.objectContaining({ ...confirmed, permissionMode: expected }),
+      ]);
+      expect(observation.row).toMatchObject({ sessionId, permissionMode: expected });
+      expect(sessions.state.error).toContain("Roster refresh unavailable");
     } finally {
+      acknowledgement.resolve(patchResult);
+      refresh.resolve(sessionsResult([confirmed], ackAt));
+      await pending;
       sessions.dispose();
     }
   },
 );
-
-it("keeps a confirmed permission mode when its list refresh fails", async () => {
-  const key = "agent:main:permission-refresh";
-  const sessionId = "permission-refresh-generation";
-  let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      listCalls += 1;
-      if (listCalls > 1) {
-        throw new Error("Roster refresh unavailable");
-      }
-      return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            label: "Permission refresh",
-            permissionMode: "guarded",
-            sessionId,
-            updatedAt: 1,
-          },
-        ],
-        1,
-      );
-    }
-    if (method === "sessions.patch") {
-      return {
-        key,
-        entry: { permissionMode: "workspace", sessionId, updatedAt: 2 },
-      };
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
-  const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createTestSessionCapability(gateway);
-
-  await sessions.refresh({ force: true });
-  const result = await sessions.patch(key, { permissionMode: "workspace" });
-
-  expect(result).toMatchObject({ listRefreshError: "Roster refresh unavailable" });
-  expect(sessions.state.result?.sessions).toEqual([
-    expect.objectContaining({
-      key,
-      label: "Permission refresh",
-      permissionMode: "workspace",
-      sessionId,
-      updatedAt: 2,
-    }),
-  ]);
-  expect(sessions.state.error).toContain("Roster refresh unavailable");
-  sessions.dispose();
-});
 
 it("discards patch A and its refresh after patch B applies first", async () => {
   const key = "agent:main:permission-ordering";
@@ -201,36 +197,23 @@ it("discards patch A and its refresh after patch B applies first", async () => {
   const patchA = createDeferred<SessionsPatchResult>();
   const patchB = createDeferred<SessionsPatchResult>();
   let listCalls = 0;
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    if (method === "sessions.list") {
+  const { sessions, request } = permissionHarness({
+    "sessions.subscribe": () => ({ subscribed: true }),
+    "sessions.list": () => {
       listCalls += 1;
       if (listCalls > 2) {
         throw new Error("Obsolete refresh should not run");
       }
       return sessionsResult(
-        [
-          {
-            key,
-            kind: "direct",
-            permissionMode: listCalls === 1 ? "guarded" : "full",
-            sessionId,
-            updatedAt: listCalls,
-          },
-        ],
+        [permissionRow(key, sessionId, listCalls, listCalls === 1 ? "guarded" : "full")],
         1,
       );
-    }
-    if (method === "sessions.patch") {
+    },
+    "sessions.patch": (params) => {
       const permissionMode = (params as { permissionMode?: unknown })?.permissionMode;
       return permissionMode === "workspace" ? patchA.promise : patchB.promise;
-    }
-    throw new Error(`Unexpected request: ${method}`);
+    },
   });
-  const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-  const sessions = createTestSessionCapability(gateway);
   await sessions.refresh({ force: true });
 
   const older = sessions.patch(key, { permissionMode: "workspace" });
@@ -247,26 +230,27 @@ it("discards patch A and its refresh after patch B applies first", async () => {
       expect.objectContaining({ permissionMode: "full" }),
     ),
   );
-  patchB.resolve({
-    ok: true,
-    path: "/sessions/permission-ordering.jsonl",
-    key,
-    entry: { permissionMode: "full", sessionId, updatedAt: 2 },
-  });
+  patchB.resolve(
+    patchReceipt(
+      key,
+      { permissionMode: "full", sessionId, updatedAt: 2 },
+      "/sessions/permission-ordering.jsonl",
+    ),
+  );
   await newer;
-  patchA.resolve({
-    ok: true,
-    path: "/sessions/permission-ordering.jsonl",
-    key,
-    entry: { permissionMode: "workspace", sessionId, updatedAt: 3 },
-  });
+  patchA.resolve(
+    patchReceipt(
+      key,
+      { permissionMode: "workspace", sessionId, updatedAt: 3 },
+      "/sessions/permission-ordering.jsonl",
+    ),
+  );
   await older;
 
   expect(sessions.state.result?.sessions).toEqual([
     expect.objectContaining({ key, permissionMode: "full", sessionId, updatedAt: 2 }),
   ]);
   expect(listCalls).toBe(2);
-  sessions.dispose();
 });
 
 it.each(["success", "failure"])(
@@ -276,53 +260,42 @@ it.each(["success", "failure"])(
     const sessionId = "permission-refresh-ordering-generation";
     const refreshA = createDeferred<SessionsListResult>();
     let listCalls = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
+    const { sessions, emitEvent } = permissionHarness({
+      "sessions.subscribe": () => ({ subscribed: true }),
+      "sessions.list": () => {
         listCalls += 1;
         return listCalls === 1
-          ? sessionsResult(
-              [{ key, kind: "direct", permissionMode: "guarded", sessionId, updatedAt: 1 }],
-              1,
-            )
+          ? sessionsResult([permissionRow(key, sessionId, 1, "guarded")], 1)
           : refreshA.promise;
-      }
-      if (method === "sessions.patch") {
-        return {
-          ok: true,
-          path: "/sessions/permission-refresh-ordering.jsonl",
+      },
+      "sessions.patch": () =>
+        patchReceipt(
           key,
-          entry: { permissionMode: "workspace", sessionId, updatedAt: 2 },
-        };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+          { permissionMode: "workspace", sessionId, updatedAt: 2 },
+          "/sessions/permission-refresh-ordering.jsonl",
+        ),
     });
-    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-    const sessions = createTestSessionCapability(gateway);
     await sessions.refresh({ force: true });
 
     const older = sessions.patch(key, { permissionMode: "workspace" });
     await vi.waitFor(() => expect(listCalls).toBe(2));
-    sessions.reconcileChanged({
-      sessionKey: key,
-      key,
-      kind: "direct",
-      reason: "patch",
-      permissionMode: "full",
-      sessionId,
-      updatedAt: 3,
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: key,
+        key,
+        kind: "direct",
+        reason: "patch",
+        permissionMode: "full",
+        sessionId,
+        updatedAt: 3,
+      },
     });
     if (outcome === "failure") {
       refreshA.reject(new Error("obsolete refresh failed"));
     } else {
-      refreshA.resolve(
-        sessionsResult(
-          [{ key, kind: "direct", permissionMode: "workspace", sessionId, updatedAt: 2 }],
-          2,
-        ),
-      );
+      refreshA.resolve(sessionsResult([permissionRow(key, sessionId, 2, "workspace")], 2));
     }
 
     await expect(older).resolves.not.toHaveProperty("listRefreshError");
@@ -336,6 +309,5 @@ it.each(["success", "failure"])(
     ]);
     expect(sessions.state.error).toBeNull();
     expect(sessions.state.loading).toBe(false);
-    sessions.dispose();
   },
 );

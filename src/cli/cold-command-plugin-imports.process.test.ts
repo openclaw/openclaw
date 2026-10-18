@@ -5,10 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cold-commands-"));
@@ -110,7 +112,7 @@ it.each(cases)(
 
     const result = await execFileAsync(
       process.execPath,
-      ["--import", "tsx", "src/entry.ts", ...args],
+      [...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)), ...args],
       {
         cwd: path.resolve("."),
         env: {

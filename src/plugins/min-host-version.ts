@@ -1,4 +1,3 @@
-// Checks plugin minimum host version compatibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { valid as validSemver } from "semver";
 import { compareOpenClawVersions } from "../config/version.js";
@@ -33,10 +32,7 @@ export function parseMinHostVersionRequirement(
   raw: unknown,
   options: { allowLegacyBareSemver?: boolean } = {},
 ): MinHostVersionRequirement | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }

@@ -1,17 +1,17 @@
-// Pure platform and payload helpers for remote skill binary probes.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
+import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import type { SkillEntry } from "../types.js";
 
 export function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
-  }
-  if (typeof err === "string") {
-    return err;
   }
   if (err instanceof Error) {
     return err.message;
@@ -19,11 +19,14 @@ export function extractErrorMessage(err: unknown): string | undefined {
   if (typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
+  if (
+    typeof err === "string" ||
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint" ||
+    typeof err === "symbol"
+  ) {
     return String(err);
-  }
-  if (typeof err === "symbol") {
-    return err.toString();
   }
   if (typeof err === "object") {
     try {
@@ -42,7 +45,7 @@ export function isMacPlatform(platform?: string, deviceFamily?: string): boolean
 }
 
 export function supportsSystemRun(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.run");
+  return commands?.includes("system.run") ?? false;
 }
 
 export function isRemoteSkillEligibilityNode(
@@ -62,27 +65,14 @@ export function isRemoteSkillEligibilityNode(
   );
 }
 
-export function supportsSystemWhich(commands?: string[]): boolean {
-  return Array.isArray(commands) && commands.includes("system.which");
-}
-
 export function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
-  const bins = new Set<string>();
-  for (const entry of entries) {
-    const os = entry.metadata?.os ?? [];
-    if (os.length > 0 && !os.includes(targetPlatform)) {
-      continue;
-    }
-    for (const bin of [
-      ...(entry.metadata?.requires?.bins ?? []),
-      ...(entry.metadata?.requires?.anyBins ?? []),
-    ]) {
-      if (bin.trim()) {
-        bins.add(bin.trim());
-      }
-    }
-  }
-  return [...bins];
+  return normalizeUniqueStringEntries(
+    entries.flatMap(({ metadata }) =>
+      !isOsRequirementSatisfied(metadata?.os ?? [], [targetPlatform])
+        ? []
+        : [...(metadata?.requires?.bins ?? []), ...(metadata?.requires?.anyBins ?? [])],
+    ),
+  );
 }
 
 export function buildBinProbeScript(bins: string[]): string {
@@ -111,10 +101,7 @@ export function parseBinProbePayload(
         .filter(Boolean);
     }
     if (typeof parsed.stdout === "string") {
-      return parsed.stdout
-        .split(/\r?\n/)
-        .map((line) => normalizeOptionalString(line) ?? "")
-        .filter(Boolean);
+      return normalizeStringEntries(parsed.stdout.split(/\r?\n/));
     }
   } catch {
     return [];

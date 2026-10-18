@@ -25,6 +25,21 @@ not be sandbox-blocked, and a runtime backend must be loaded and healthy. If
 any condition fails, ACP skills and `sessions_spawn` ACP guidance stay hidden
 so the agent does not suggest an unavailable backend.
 
+ACP policy changes apply without restarting the Gateway. Enablement, dispatch,
+the default agent, and allowed agents govern new admissions; backend and fallback
+settings govern subsequent turns. Admitted turns retain their session ownership.
+The ACPX health check selects from the current allowed agents unless its plugin
+config sets an explicit `probeAgent`.
+
+ACPX session state defaults to `acpx/` inside the OpenClaw state directory
+(`OPENCLAW_STATE_DIR`, normally `~/.openclaw`). The working directory and installed
+package directory do not need to be writable for session resets. An explicit
+`plugins.entries.acpx.config.stateDir` still overrides this location. Sessions in
+the former `<workspace>/state` default are migrated automatically at ACPX startup
+or by `openclaw doctor --fix` when the new default is empty. Set `stateDir` only
+if you want to keep the old location. If migration fails, ACPX warns and keeps
+using the old location for that process; the warning names the override to set.
+
 <AccordionGroup>
   <Accordion title="First-run gotchas">
     - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`, or the installed ACP backend is intentionally blocked (`/acp doctor` reports the missing allowlist entry).
@@ -72,6 +87,7 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `droid`      | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
 | `fast-agent` | fast-agent-mcp ACP adapter                     | Fetched on demand with `uvx`.                                                       |
 | `gemini`     | Gemini CLI ACP adapter                         | Requires Gemini CLI auth or API key setup.                                          |
+| `grok-build` | Grok Build CLI (`grok agent stdio`)            | Requires Grok Build installed and authenticated on the host.                        |
 | `iflow`      | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `kilocode`   | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                 |
 | `kimi`       | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                            |
@@ -79,12 +95,17 @@ With the `acpx` backend, use these ids as `/acp spawn <id>` or
 | `mux`        | Mux CLI ACP adapter                            | Fetched on demand with `npx`.                                                       |
 | `opencode`   | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
 | `openclaw`   | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
+| `pool`       | Poolside Agent (`pool acp`)                    | Requires the Poolside CLI installed and authenticated on the Gateway host.          |
 | `qoder`      | Qoder CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
 | `qwen`       | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
 | `trae`       | Trae CLI ACP adapter                           | Adapter availability and model control depend on the installed CLI.                 |
 
 `pi` (pi-acp) is also registered in the acpx backend but is not a coding
 harness in the same sense as the others above.
+
+`grok-build` is the ACPX agent target that launches the Grok Build CLI, not
+the xAI model id `xai/grok-build-0.1`. Pass `grok-build` as `agentId` for ACP;
+use the xAI model id only in an OpenClaw model field.
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
 policy still checks `acp.allowedAgents` and any

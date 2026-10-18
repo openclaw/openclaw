@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * Link every package installed under `<pluginDir>/node_modules` into `distNodeModules` so
- * dependency lookups rooted at the packaged plugin resolve the plugin-owned install.
+ * Link plugin-owned packages under `<pluginDir>/node_modules` into `distNodeModules`
+ * so packaged plugins resolve dependencies without linking checkout ancestors.
  */
 export function linkSourcePluginDependencies(pluginDir, distNodeModules) {
   const sourceModules = path.join(pluginDir, "node_modules");
@@ -22,10 +22,20 @@ export function linkSourcePluginDependencies(pluginDir, distNodeModules) {
   // An outer node_modules junction misresolves pnpm's relative links on Windows.
   // Link canonical package roots individually; keep scopes real and payloads source-owned.
   // Preserve .bin for managed launchers that resolve the plugin's private CLI shim.
+  const hostAlias = path.resolve(distNodeModules, "../../node_modules/openclaw");
+  const checkoutRoot = fs.realpathSync(path.resolve(pluginDir, "../.."));
   for (const name of packages) {
     const target = path.join(distNodeModules, name);
+    const source = fs.realpathSync(path.join(sourceModules, name));
+    const canonical =
+      name === "openclaw" && source === checkoutRoot && fs.existsSync(hostAlias)
+        ? fs.realpathSync(hostAlias)
+        : source;
+    const relative = path.relative(canonical, path.resolve(distNodeModules));
+    if (relative.split(path.sep)[0] !== ".." && !path.isAbsolute(relative)) {
+      continue;
+    }
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    const canonical = fs.realpathSync(path.join(sourceModules, name));
     // POSIX release checkouts relocate as a unit; Windows junctions require absolute targets.
     fs.symlinkSync(
       process.platform === "win32" ? canonical : path.relative(path.dirname(target), canonical),

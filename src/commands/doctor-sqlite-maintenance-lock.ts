@@ -3,34 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
-import {
-  acquireGatewayLock,
-  GatewayLockError,
-  type GatewayLockOptions,
-} from "../infra/gateway-lock.js";
+import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
 import type { DoctorSessionSqliteMode } from "./doctor-session-sqlite-types.js";
 
 const MAINTENANCE_LOCK_TIMEOUT_MS = 250;
 const MAINTENANCE_LOCK_POLL_INTERVAL_MS = 25;
-
-type MaintenanceLockOptions = Pick<
-  GatewayLockOptions,
-  | "lockDir"
-  | "now"
-  | "platform"
-  | "pollIntervalMs"
-  | "readProcessCmdline"
-  | "readProcessStartTime"
-  | "sleep"
-  | "staleMs"
-  | "timeoutMs"
->;
-
-type DoctorSqliteMaintenanceLockDeps = {
-  acquireLock?: typeof acquireGatewayLock;
-  lockOptions?: MaintenanceLockOptions;
-};
 
 export type DoctorSqliteMaintenanceAuthority = {
   assertCurrent(): void;
@@ -42,7 +21,7 @@ export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
     public override readonly cause: GatewayLockError,
   ) {
     super(
-      `Cannot run ${operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
+      `Cannot run ${operation}: ${formatGatewayLockFailure(cause)}. Resolve the lock failure and retry.`,
     );
     this.name = "DoctorSqliteMaintenanceLockUnavailableError";
   }
@@ -110,22 +89,25 @@ export function assertDoctorSqliteMaintenancePathsNotAliased(
   }
 }
 
-function inspectMaintenancePath(
-  operation: string,
-  protectedPath: string,
-  ownershipRoots: readonly string[],
-): fs.Stats | undefined {
-  assertPathComponentsNotSymbolicLinks(operation, protectedPath, ownershipRoots);
-  let stat: fs.Stats;
+function readMaintenancePathStat(filePath: string): fs.Stats | undefined {
   try {
-    stat = fs.lstatSync(protectedPath);
+    return fs.lstatSync(filePath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
     throw error;
   }
-  if (stat.isSymbolicLink()) {
+}
+
+function inspectMaintenancePath(
+  operation: string,
+  protectedPath: string,
+  ownershipRoots: readonly string[],
+): fs.Stats | undefined {
+  assertPathComponentsNotSymbolicLinks(operation, protectedPath, ownershipRoots);
+  const stat = readMaintenancePathStat(protectedPath);
+  if (stat?.isSymbolicLink()) {
     throw new Error(
       `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
     );
@@ -146,14 +128,9 @@ function assertPathComponentsNotSymbolicLinks(
   let currentPath = rootPath;
   for (const segment of relativePath.split(path.sep).filter(Boolean)) {
     currentPath = path.join(currentPath, segment);
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(currentPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
+    const stat = readMaintenancePathStat(currentPath);
+    if (!stat) {
+      return;
     }
     if (stat.isSymbolicLink()) {
       throw new Error(
@@ -168,28 +145,22 @@ export function isDestructiveDoctorSessionSqliteMode(mode: DoctorSessionSqliteMo
 }
 
 /** Run one destructive doctor operation while excluding Gateway startup and peer maintenance. */
-export async function withDoctorSqliteMaintenanceLock<T>(
-  params: {
-    env?: NodeJS.ProcessEnv;
-    operation: string;
-    protectedPaths?: readonly string[];
-    reconcileHardlink?: (filePath: string) => Promise<void>;
-    run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T;
-  },
-  deps: DoctorSqliteMaintenanceLockDeps = {},
-): Promise<T> {
+export async function withDoctorSqliteMaintenanceLock<T>(params: {
+  env?: NodeJS.ProcessEnv;
+  operation: string;
+  protectedPaths?: readonly string[];
+  reconcileHardlink?: (filePath: string) => Promise<void>;
+  run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T;
+}): Promise<T> {
   const env = params.env ?? process.env;
-  const acquireLock = deps.acquireLock ?? acquireGatewayLock;
-  const lockOptions = deps.lockOptions;
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
   try {
-    lock = await acquireLock({
-      ...lockOptions,
+    lock = await acquireGatewayLock({
       allowInTests: true,
       env,
-      pollIntervalMs: lockOptions?.pollIntervalMs ?? MAINTENANCE_LOCK_POLL_INTERVAL_MS,
+      pollIntervalMs: MAINTENANCE_LOCK_POLL_INTERVAL_MS,
       role: "sqlite-maintenance",
-      timeoutMs: lockOptions?.timeoutMs ?? MAINTENANCE_LOCK_TIMEOUT_MS,
+      timeoutMs: MAINTENANCE_LOCK_TIMEOUT_MS,
     });
   } catch (error) {
     if (error instanceof GatewayLockError) {
@@ -203,18 +174,21 @@ export async function withDoctorSqliteMaintenanceLock<T>(
 
   let active = true;
   try {
-    await assertMaintenancePathsOwnedByStateDir(
-      env,
-      params.operation,
-      params.protectedPaths ?? [],
-      params.reconcileHardlink,
-    );
-    return await params.run({
-      assertCurrent() {
-        if (!active) {
-          throw new Error("Doctor SQLite maintenance authority has expired.");
-        }
-      },
+    return await lock.run(async () => {
+      await assertMaintenancePathsOwnedByStateDir(
+        env,
+        params.operation,
+        params.protectedPaths ?? [],
+        params.reconcileHardlink,
+      );
+      return await params.run({
+        assertCurrent() {
+          if (!active) {
+            throw new Error("Doctor SQLite maintenance authority has expired.");
+          }
+          lock.assertCurrent();
+        },
+      });
     });
   } finally {
     active = false;

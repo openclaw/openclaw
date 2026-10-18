@@ -1,57 +1,38 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { listRunsForControllerFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsForControllerFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import {
-  activateSwarmRun,
-  isSwarmRunActive,
-  isSwarmRunWaitingForCapacity,
-  ownsSwarmRunReservation,
-  releaseSwarmRun,
-  removeQueuedSwarmRun,
-  reserveSwarmRun,
-} from "../agents/subagents/swarm/swarm-scheduler.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
+import * as swarm from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-  type SessionWorkAdmissionLease,
-} from "../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../tasks/detached-task-runtime-contract.js";
-import { loadTaskRegistryStateFromSqliteReadOnlyResult } from "../tasks/task-registry.store.sqlite.js";
-import {
-  agentCommandMock,
-  connectOk,
-  createGatewaySuiteHarness,
-  installGatewayTestHooks,
-  onceMessage,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import * as sessions from "../config/sessions/session-accessor.js";
+import * as sessionWork from "../sessions/session-lifecycle-admission.js";
+import * as fixture from "./test-helpers.js";
 
-let gateway: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-installGatewayTestHooks({
+let gateway: Awaited<ReturnType<typeof fixture.createGatewaySuiteHarness>>;
+fixture.installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    gateway = await createGatewaySuiteHarness();
+    gateway = await fixture.createGatewaySuiteHarness();
   },
   cleanup: async () => {
     await runQaGatewayFixture(
       async () => gateway?.close(),
       async () => {
         await settleSubagentRegistryPersistenceWork();
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
       },
     );
@@ -59,202 +40,339 @@ installGatewayTestHooks({
 });
 
 await import("./server.js");
+// Prepare the lazy handler before the first creation RPC starts its response deadline.
+await import("./server-methods/sessions-create.js");
 
-test.each([false, true])(
-  "chat.abort interrupts all siblings before cleanup and preserves failure accounting (fault=%s)",
-  async (fault) => {
-    const suffix = fault ? "fault" : "success";
+for (const [suffix, name] of [
+  ["success", "public session creation and child Stop publish readable cancellation state"],
+  ["fault", "chat.abort interrupts all siblings before cleanup and preserves failure accounting"],
+  [
+    "replacement",
+    "typed Stop rejects a replaced parent while retaining its accepted child cancellation",
+  ],
+] as const) {
+  test(name, async () => {
+    const fault = suffix === "fault";
+    const replaceParent = suffix === "replacement";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
     const groupId = `sibling-abort-${suffix}`;
-    const running = Array.from({ length: 8 }, (_, index) => `running-${suffix}-${index}`);
-    const queued = [`queued-${suffix}-0`, `queued-${suffix}-1`];
+    const running = Array.from(
+      { length: fault ? 8 : 1 },
+      (_, index) => `running-${suffix}-${index}`,
+    );
+    const firstRunId = expectDefined(running[0], "first running child");
+    const queued = fault ? [`queued-${suffix}-0`, `queued-${suffix}-1`] : [];
     const selected = [...running, ...queued];
     const failedRunId = fault ? running[3] : undefined;
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    testState.sessionStorePath = storePath;
-    await writeSessionStore({
-      entries: { [parentKey]: { sessionId: `parent-session-${suffix}`, updatedAt: Date.now() } },
-    });
+    let parentSessionId = `parent-session-${suffix}`;
+    const replacementScope = {
+      storePath,
+      agentId: "main",
+      sessionKey: parentKey,
+      sessionId: `replacement-session-${suffix}`,
+    };
+    const replacementCanary = "The replacement conversation must survive the earlier Stop.";
+    let replacementBefore: Awaited<ReturnType<typeof sessions.loadTranscriptEvents>> | undefined;
+    fixture.testState.sessionStorePath = storePath;
+    const seedSession = (key: string, id: string) =>
+      writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey: key,
+        defaultSessionId: id,
+      });
+    if (fault || replaceParent) {
+      // Prior cases still have Gateway-owned monitors; preserve their rows.
+      await seedSession(parentKey, parentSessionId);
+    }
 
     const socket = await gateway.openWs();
     const parentStarted = createDeferred<AgentCommandOpts>();
     const parentFinish = createDeferred();
-    const leases: SessionWorkAdmissionLease[] = [];
+    const leases: sessionWork.SessionWorkAdmissionLease[] = [];
     const interrupted: string[] = [];
     const firstInterrupted = createDeferred();
     const slotReleaseResults: boolean[] = [];
     const start = vi.fn(async () => {});
+    const reserve = (runId: string, maxConcurrent: number) =>
+      swarm.reserveSwarmRun({ groupId, runId, maxConcurrent, activeRunIds: running });
     let parentRequestId: string | undefined;
-    let abortResponse: ReturnType<typeof rpcReq> | undefined;
+    let abortResponse: ReturnType<typeof fixture.rpcReq> | undefined;
     let abortOutcome:
-      | Promise<
-          { ok: true; response: Awaited<ReturnType<typeof rpcReq>> } | { ok: false; error: unknown }
-        >
+      | Promise<PromiseSettledResult<Awaited<ReturnType<typeof fixture.rpcReq>>>>
       | undefined;
     let responseSettled = false;
+    let acceptedKillIntent: SubagentRunRecord["killIntent"];
+    const expectResponse = (
+      response: Awaited<ReturnType<typeof fixture.rpcReq>>,
+      shape: Record<string, unknown>,
+    ) => expect(response, JSON.stringify(response.error)).toMatchObject(shape);
+    const runtimeKey = (runId: string) => getSubagentRunRuntimeKey(subagentRuns.get(runId)!);
+    const describe = async (
+      key: string,
+      sessionId: string,
+      fields: Record<string, unknown> = {},
+    ) => {
+      const response = await fixture.rpcReq(socket, "sessions.describe", { key, agentId: "main" });
+      expectResponse(response, {
+        ok: true,
+        payload: { session: { key, sessionId, ...fields } },
+      });
+    };
 
     await runQaGatewayFixture(
       async () => {
-        await connectOk(socket, {
+        if (!fault && !replaceParent) {
+          await fixture.prepareGatewayReplyRuntimeForTest({ force: true });
+        }
+        await fixture.connectOk(socket, {
           scopes: ["operator.read", "operator.write"],
           prePairDevice: true,
         });
-        agentCommandMock.mockImplementationOnce(async (input) => {
+        if (!fault && !replaceParent) {
+          const created = await fixture.rpcReq<{ key: string; sessionId: string }>(
+            socket,
+            "sessions.create",
+            {
+              agentId: "main",
+              key: parentKey,
+            },
+          );
+          expectResponse(created, {
+            ok: true,
+            payload: { key: parentKey },
+          });
+          parentSessionId = expectDefined(created.payload, "created non-main parent").sessionId;
+          expect(parentSessionId).not.toBe("");
+        }
+        fixture.agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
-          command.onExecutionStarted?.();
+          await command.onExecutionStarted?.();
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();
         });
-        const accepted = await rpcReq(socket, "agent", {
+        const accepted = await fixture.rpcReq(socket, "agent", {
           sessionKey: parentKey,
           message: "Keep this synthetic parent active until Stop",
           idempotencyKey: parentRunId,
         });
         parentRequestId = accepted.id;
-        expect(accepted).toMatchObject({
+        expectResponse(accepted, {
           ok: true,
           payload: { runId: parentRunId, status: "accepted" },
         });
-        await expect.poll(() => agentCommandMock.mock.calls.length, { timeout: 2_000 }).toBe(1);
         const parent = await parentStarted.promise;
+        expect(fixture.agentCommandMock).toHaveBeenCalledTimes(1);
 
         for (const runId of selected) {
-          await writeSubagentSessionEntry({
-            stateDir,
-            agentId: "main",
-            sessionKey: sessionKey(runId),
-            defaultSessionId: `${runId}-session`,
-          });
-          if (queued.includes(runId)) {
-            expect(
-              reserveSwarmRun({ groupId, runId, maxConcurrent: 8, activeRunIds: running }),
-            ).toBe(true);
+          const childStorePath = await seedSession(sessionKey(runId), `${runId}-session`);
+          if (running.includes(runId)) {
+            // Recovery must observe the live owner when the run is registered.
+            leases.push(
+              await sessionWork.beginSessionWorkAdmission({
+                scope: storePath,
+                identities: [sessionKey(runId), `${runId}-session`],
+                run: {
+                  runId,
+                  sessionKey: sessionKey(runId),
+                  sessionId: `${runId}-session`,
+                  agentId: "main",
+                },
+                assertAllowed: () => {},
+                onInterrupt: () => {
+                  interrupted.push(runId);
+                  firstInterrupted.resolve();
+                  slotReleaseResults.push(swarm.releaseSwarmRun(runId));
+                  if (runId === failedRunId) {
+                    throw new Error("synthetic sibling interruption failure");
+                  }
+                  return { runId };
+                },
+              }),
+            );
           }
-          registerSubagentRun({
+          if (queued.includes(runId)) {
+            expect(reserve(runId, 8)).toBe(true);
+          }
+          await registerSubagentRun({
             runId,
             childSessionKey: sessionKey(runId),
+            childAgentId: "main",
+            sessionEntry: sessions.loadExactSessionEntryReadOnly({
+              storePath: childStorePath,
+              sessionKey: sessionKey(runId),
+            })?.entry,
             requesterSessionKey: parentKey,
             requesterAgentId: "main",
             requesterTurnRunId: parentRunId,
             requesterDisplayKey: parentKey,
             task: runId,
             cleanup: "keep",
-            collect: true,
+            collect: !replaceParent,
             groupId,
             queued: queued.includes(runId),
             expectsCompletionMessage: false,
-            taskRowOwnership: "required",
           });
           if (queued.includes(runId)) {
-            activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
+            swarm.activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
           }
         }
-        for (const runId of running) {
-          expect(isSwarmRunActive(runId)).toBe(true);
-          leases.push(
-            await beginSessionWorkAdmission({
-              scope: storePath,
-              identities: [sessionKey(runId), `${runId}-session`],
-              assertAllowed: () => {},
-              onInterrupt: () => {
-                interrupted.push(runId);
-                firstInterrupted.resolve();
-                slotReleaseResults.push(releaseSwarmRun(runId));
-                if (runId === failedRunId) {
-                  throw new Error("synthetic sibling interruption failure");
-                }
-              },
-            }),
-          );
+        if (queued.length === 0) {
+          expect(reserve(firstRunId, 1)).toBe(false);
         }
+        expect(running.every((runId) => swarm.isSwarmRunActive(runId))).toBe(true);
         for (const runId of queued) {
-          expect(isSwarmRunWaitingForCapacity(runId, subagentRuns.get(runId)!)).toBe(true);
+          expect(swarm.isSwarmRunWaitingForCapacity(runId, runtimeKey(runId))).toBe(true);
         }
-        const activeAdmissionCount = getActiveSessionWorkAdmissionCount();
+        const activeAdmissionCount = sessionWork.getActiveSessionWorkAdmissionCount();
         expect(activeAdmissionCount).toBeGreaterThanOrEqual(running.length);
         expect(start).not.toHaveBeenCalled();
 
-        abortResponse = rpcReq(socket, "chat.abort", {
-          sessionKey: parentKey,
-          agentId: "main",
-          runId: parentRunId,
+        if (replaceParent) {
+          const history = await fixture.rpcReq<{
+            sessionId: string;
+            sessionInfo: { activeLeafEntryId: string | null };
+          }>(socket, "chat.history", { sessionKey: parentKey });
+          expect(history.ok).toBe(true);
+          const payload = expectDefined(history.payload, "parent history");
+          expect(payload.sessionId).toBe(parentSessionId);
+          expect(payload.sessionInfo).toHaveProperty("activeLeafEntryId");
+          fixture.embeddedRunMock.activeIds.add(`${firstRunId}-session`);
+          abortResponse = fixture.rpcReq(socket, "chat.send", {
+            sessionKey: parentKey,
+            message: "/stop",
+            sessionId: parentSessionId,
+            expectedLeafEntryId: payload.sessionInfo.activeLeafEntryId,
+            idempotencyKey: "stop-parent-replaced-during-drain",
+          });
+        } else {
+          abortResponse = fixture.rpcReq(socket, "chat.abort", {
+            sessionKey: parentKey,
+            agentId: "main",
+            runId: parentRunId,
+          });
+        }
+        abortOutcome = Promise.allSettled([abortResponse]).then(([outcome]) => {
+          responseSettled = true;
+          return expectDefined(outcome, "Stop outcome");
         });
-        abortOutcome = abortResponse.then(
-          (response) => {
-            responseSettled = true;
-            return { ok: true as const, response };
-          },
-          (error: unknown) => {
-            responseSettled = true;
-            return { ok: false as const, error };
-          },
-        );
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           firstInterrupted.promise,
-          abortOutcome.then(() => {
-            throw new Error("chat.abort completed before interrupting its children");
-          }),
-        ]);
+          abortOutcome,
+          "chat.abort completed before interrupting its children",
+        );
         // No child may make sibling interruption wait for this fixture-owned cleanup.
         await expect.poll(() => interrupted.toSorted(), { timeout: 2_000 }).toEqual(running);
         expect(parent.abortSignal!.aborted).toBe(true);
         expect(slotReleaseResults).toEqual(running.map(() => true));
         expect(leases.every((lease) => lease.isActive())).toBe(true);
-        expect(getActiveSessionWorkAdmissionCount()).toBe(activeAdmissionCount);
+        expect(sessionWork.getActiveSessionWorkAdmissionCount()).toBe(activeAdmissionCount);
         expect(responseSettled).toBe(false);
         expect(start).not.toHaveBeenCalled();
+        if (replaceParent) {
+          acceptedKillIntent = structuredClone(
+            expectDefined(subagentRuns.get(firstRunId)?.killIntent, "accepted child kill intent"),
+          );
+          sessions.replaceSessionEntrySync(replacementScope, {
+            sessionId: replacementScope.sessionId,
+            lifecycleRevision: "replacement",
+            updatedAt: Date.now(),
+          });
+          expect(
+            sessions.appendTranscriptMessageSync(replacementScope, {
+              eventId: "replacement-canary",
+              message: { role: "user", content: replacementCanary },
+              parentId: null,
+            }).ok,
+          ).toBe(true);
+          replacementBefore = await sessions.loadTranscriptEvents(replacementScope);
+          expect(replacementBefore).toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ content: replacementCanary }),
+            }),
+          );
+        }
         for (const lease of leases.toReversed()) {
           lease.release();
         }
         const outcome = await abortOutcome;
-        if (!outcome.ok) {
-          throw outcome.error;
+        if (outcome.status === "rejected") {
+          throw outcome.reason;
         }
-        if (fault) {
-          expect(outcome.response).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-          expect(outcome.response.error?.message).toContain(
-            "synthetic sibling interruption failure",
+        if (replaceParent) {
+          expectResponse(outcome.value, {
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              details: {
+                code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                method: "chat.send",
+                sessionKey: parentKey,
+              },
+            },
+          });
+          expect(fixture.embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);
+          expect(fixture.embeddedRunMock.activeIds.has(`${firstRunId}-session`)).toBe(true);
+          expect(sessions.loadExactSessionEntryReadOnly(replacementScope)?.entry.sessionId).toBe(
+            replacementScope.sessionId,
           );
+          expect(await sessions.loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
+        } else if (fault) {
+          expectResponse(outcome.value, {
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: expect.stringContaining("synthetic sibling interruption failure"),
+            },
+          });
         } else {
-          expect(outcome.response).toMatchObject({
+          expectResponse(outcome.value, {
             ok: true,
             payload: { ok: true, aborted: true, runIds: [parentRunId] },
           });
         }
 
-        const persistedRuns = new Map(
-          loadSubagentRunsForControllerFromSqlite(parentKey).map((run) => [run.runId, run]),
+        if (!fault && !replaceParent) {
+          await describe(sessionKey(firstRunId), `${firstRunId}-session`, {
+            status: "killed",
+            hasActiveRun: false,
+          });
+          await describe(parentKey, parentSessionId);
+        }
+        const persistedRuns = listRunsForControllerFromRuns(
+          loadSubagentRegistryFromSqlite(),
+          parentKey,
         );
-        const persistedTasks = loadTaskRegistryStateFromSqliteReadOnlyResult();
-        expect(persistedTasks.state).toBe("ready");
-        const tasks = [...persistedTasks.snapshot.tasks.values()].filter((task) =>
-          selected.includes(task.runId ?? ""),
-        );
-        expect(tasks).toHaveLength(selected.length);
-        expect(tasks.map((task) => task.runId)).toEqual(expect.arrayContaining(selected));
-        expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
-        for (const runId of selected) {
-          const task = tasks.find((candidate) => candidate.runId === runId)!;
-          const run = persistedRuns.get(runId)!;
-          if (runId === failedRunId) {
-            expect(task.status).toBe("running");
+        expect(persistedRuns.map((run) => run.runId).toSorted()).toEqual(selected.toSorted());
+        for (const run of persistedRuns) {
+          const { runId } = run;
+          if (replaceParent && run.killIntent) {
+            // Bookkeeping may fail after interruption; the exact durable claim remains recoverable.
+            expect(run.killIntent).toEqual(acceptedKillIntent);
+          } else if (runId === failedRunId) {
             expect(run.execution.status).toBe("running");
             expect(run.execution.endedAt).toBeUndefined();
           } else {
-            expect(task).toMatchObject({ status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR });
             expect(run).toMatchObject({
               endedReason: "subagent-killed",
               execution: { status: "terminal" },
             });
           }
+          if (replaceParent && !run.killIntent) {
+            expect(run.killReconciliation).toMatchObject({
+              killedAt: expectDefined(acceptedKillIntent, "accepted child kill intent").requestedAt,
+              taskCancellationAccepted: true,
+            });
+          }
           if (queued.includes(runId)) {
             expect(run.execution.startedAt).toBeUndefined();
-            expect(ownsSwarmRunReservation(runId, subagentRuns.get(runId)!)).toBe(false);
+            expect(swarm.ownsSwarmRunReservation(runId, runtimeKey(runId))).toBe(false);
           }
         }
         expect(start).not.toHaveBeenCalled();
@@ -265,13 +383,13 @@ test.each([false, true])(
           lease.release();
         }
         const outcome = await abortOutcome;
-        if (outcome && !outcome.ok) {
-          throw outcome.error;
+        if (outcome?.status === "rejected") {
+          throw outcome.reason;
         }
       },
       async () => {
         const terminal = parentRequestId
-          ? onceMessage(
+          ? fixture.onceMessage(
               socket,
               (frame) =>
                 frame.type === "res" &&
@@ -282,15 +400,27 @@ test.each([false, true])(
         parentFinish.resolve();
         await terminal;
       },
-      () => {
-        for (const runId of selected) {
-          removeQueuedSwarmRun(runId);
-          releaseSwarmRun(runId);
+      async () => {
+        const reservationReleases: Promise<void>[] = [];
+        try {
+          for (const runId of selected) {
+            if (replaceParent) {
+              fixture.embeddedRunMock.activeIds.delete(`${runId}-session`);
+            }
+            const hold = swarm.holdQueuedSwarmRun(runId);
+            if (hold) {
+              hold.withdraw();
+              reservationReleases.push(hold.release());
+            }
+            swarm.releaseSwarmRun(runId);
+          }
+          socket.close();
+          expect(sessionWork.getActiveSessionLifecycleMutationCount()).toBe(0);
+          expect(sessionWork.getActiveSessionWorkAdmissionCount()).toBe(0);
+        } finally {
+          await Promise.all(reservationReleases);
         }
-        socket.close();
-        expect(getActiveSessionLifecycleMutationCount()).toBe(0);
-        expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       },
     );
-  },
-);
+  });
+}

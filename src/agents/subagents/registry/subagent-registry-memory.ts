@@ -1,19 +1,205 @@
-/**
- * Process-local live subagent run map.
- *
- * Shared by registry read/write helpers for active in-memory run state.
- */
 import { isDeepStrictEqual } from "node:util";
+import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
+import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { transferFollowupCohort } from "../completion/session-followup-cohort.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAgentId,
+} from "./subagent-child-owner-match.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
+import {
+  publishSubagentRunChanges,
+  subscribeSubagentRunChanges,
+} from "./subagent-registry-publication.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
+  retainSubagentRunRuntimeOwner,
+  isQueuedSubagentRunRekey,
+  isSameSubagentRunOwner,
+  latestSubagentRun,
+  compareSubagentRunGeneration,
+} from "./subagent-run-generation.js";
+import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
+
+function freezeValue(value: unknown): void {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeValue(child);
+  }
+  Object.freeze(value);
+}
+
+const immutableSessionListFacts = new WeakMap<SubagentRunRecord, SubagentRunReadRecord>();
+const evictedSubagentRunPayloads = new WeakSet<SubagentRunRecord>();
+
+/** Finished rows retain topology and ownership; selected readers load their durable payload. */
+export function compactSubagentRunForMemory(entry: SubagentRunRecord): SubagentRunRecord {
+  if (
+    evictedSubagentRunPayloads.has(entry) ||
+    entry.execution.status !== "terminal" ||
+    typeof entry.cleanupCompletedAt !== "number" ||
+    entry.requesterTurnRunId ||
+    entry.requesterSettleWake ||
+    entry.pauseReason ||
+    entry.killIntent ||
+    entry.killReconciliation ||
+    entry.collectorLaunchCleanupPending ||
+    entry.delivery?.status === "pending" ||
+    entry.delivery?.status === "in_progress" ||
+    entry.delivery?.status === "suspended"
+  ) {
+    return immutableSubagentRun(entry);
+  }
+  const compact = copySubagentRunRuntimeOwner(entry, {
+    ...entry,
+    // A sliced preview can otherwise retain the entire original V8 string.
+    task: Buffer.from(entry.task.slice(0, 160), "utf16le").toString("utf16le"),
+    ...(entry.completion ? { completion: { ...entry.completion } } : {}),
+  });
+  if (compact.completion) {
+    delete compact.completion.resultText;
+    delete compact.completion.fallbackResultText;
+  }
+  bindGatewayContextResolver(compact, getGatewayContextResolver(entry));
+  evictedSubagentRunPayloads.add(compact);
+  return immutableSubagentRun(compact);
+}
+
+export function isSubagentRunPayloadEvicted(entry: SubagentRunRecord): boolean {
+  return evictedSubagentRunPayloads.has(entry);
+}
+
+/** Hydrate only payload fields: the resident row still owns current lifecycle facts. */
+export function restoreSubagentRunPayload(
+  resident: SubagentRunRecord,
+  full: SubagentRunRecord,
+): SubagentRunRecord {
+  if (!evictedSubagentRunPayloads.has(resident)) {
+    return immutableSubagentRun(resident);
+  }
+  const restored = copySubagentRunRuntimeOwner(resident, {
+    ...resident,
+    task: full.task,
+    ...(resident.completion
+      ? {
+          completion: {
+            ...resident.completion,
+            resultText: full.completion?.resultText,
+            fallbackResultText: full.completion?.fallbackResultText,
+          },
+        }
+      : {}),
+  });
+  bindGatewayContextResolver(restored, getGatewayContextResolver(resident));
+  return immutableSubagentRun(restored);
+}
+
+/** A row replacement owns a new projection; retired immutable rows release theirs through GC. */
+export function immutableSubagentRunSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
+  const prepared = immutableSessionListFacts.get(entry);
+  if (prepared) {
+    return prepared;
+  }
+  prepareGatewayContextBindingOwner(entry);
+  freezeSubagentRunReadRecord(entry);
+  const projection = freezeSubagentRunReadRecord(projectSubagentRunForSessionList(entry));
+  immutableSessionListFacts.set(entry, projection);
+  return projection;
+}
+
+export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
+  immutableSubagentRunSessionList(entry);
+  return entry;
+}
+
+/** Registry projections contain only canonical JSON fields and owner-created containers. */
+export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(record: T): T {
+  freezeValue(record);
+  return record;
+}
+
+class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
+  private readonly latest = new Map<string, SubagentRunRecord>();
+
+  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
+    super();
+  }
+
+  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
+    const key = this.keyFor(entry);
+    if (!key) {
+      return;
+    }
+    const indexedRuns = this.get(key);
+    if (operation === "remove") {
+      if (indexedRuns?.get(runId) !== entry) {
+        return;
+      }
+      indexedRuns.delete(runId);
+      if (indexedRuns.size === 0) {
+        this.delete(key);
+        this.latest.delete(key);
+      } else if (this.latest.get(key) === entry) {
+        for (const remaining of indexedRuns.values()) {
+          this.latest.set(key, remaining);
+        }
+      }
+    } else {
+      if (indexedRuns) {
+        indexedRuns.set(runId, entry);
+      } else {
+        this.set(key, new Map([[runId, entry]]));
+      }
+      this.latest.set(key, entry);
+    }
+  }
+
+  getLatest(key: string): SubagentRunRecord | undefined {
+    return this.latest.get(key);
+  }
+
+  override clear(): void {
+    super.clear();
+    this.latest.clear();
+  }
+}
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
-// maintains the index through every existing mutation path (registry, run
-// manager, tests); collector identity and childSessionKey are fixed at
-// registration, so in-place lifecycle field edits never require re-indexing.
-const collectorRunIdByChildSessionKey = new Map<string, string>();
-const runsByChildSessionKey = new Map<string, Map<string, SubagentRunRecord>>();
-const runsByCollectorGroupKey = new Map<string, Map<string, SubagentRunRecord>>();
+// maintains the index whenever the row owner publishes a new immutable value.
+const collectorsByChildSessionOwner = new SubagentRunIndex((entry) =>
+  entry.collect === true ? childSessionOwnerKey(entry) : undefined,
+);
+const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childSessionKey);
+const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
+const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
+const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
+const runIndexes = [
+  collectorsByChildSessionOwner,
+  childSessionCandidatesByKey,
+  runsByChildSessionOwner,
+  runsByRequesterSessionKey,
+  runsByCollectorGroupKey,
+];
+
+function childSessionOwnerKey(entry: {
+  childSessionKey: string;
+  childAgentId?: string;
+}): string | undefined {
+  const owner = resolveSubagentChildAgentId(entry);
+  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+}
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   if (entry.collect !== true || !entry.groupId) {
@@ -25,179 +211,477 @@ function collectorGroupKey(entry: SubagentRunRecord): string | undefined {
   ]);
 }
 
-function removeIndexedSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
+type SubagentRetirementObservation =
+  | ({ entry: SubagentRunRecord; state: "selected" | "retired" } & Pick<
+      SubagentRunRecord,
+      "generation" | "createdAt"
+    >)
+  | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
+
+type SubagentRetirementPublication = {
+  key: object;
+  promise: Promise<void>;
+  resolve: () => void;
+  settled: boolean;
+};
+
+const retirementPublications = new Map<object, Set<SubagentRetirementPublication>>();
+
+export function waitForSubagentRetirementPublication(
+  observed: SubagentRunRecord,
+): Promise<void> | undefined {
+  const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
+  const pending = retirementPublications.get(getSubagentRunRuntimeKey(entry));
+  if (!pending?.size) {
+    return undefined;
   }
-  const indexedRuns = index.get(key);
-  if (indexedRuns?.get(runId) !== entry) {
-    return;
-  }
-  indexedRuns.delete(runId);
-  if (indexedRuns.size === 0) {
-    index.delete(key);
-  }
+  return Promise.all([...pending].map((publication) => publication.promise)).then(() => undefined);
 }
 
-function indexSubagentRun(
-  index: Map<string, Map<string, SubagentRunRecord>>,
-  key: string | undefined,
-  runId: string,
-  entry: SubagentRunRecord,
-) {
-  if (!key) {
-    return;
-  }
-  const indexedRuns = index.get(key);
-  if (indexedRuns) {
-    indexedRuns.set(runId, entry);
-  } else {
-    index.set(key, new Map([[runId, entry]]));
-  }
+export function hasPendingSubagentRetirementPublication(observed: SubagentRunRecord): boolean {
+  const entry = getCurrentSubagentRunOwner(subagentRuns, observed) ?? observed;
+  return Boolean(retirementPublications.get(getSubagentRunRuntimeKey(entry))?.size);
 }
 
-type SubagentRetirementScope = {
-  observation:
-    | ({ entry: SubagentRunRecord; state: "selected" | "retired" } & Pick<
-        SubagentRunRecord,
-        "generation" | "createdAt"
-      >)
-    | { entry?: never; generation?: never; createdAt?: never; state: "superseded" };
-  isSuccessor: (candidate: SubagentRunRecord) => boolean;
+function completeRetirementPublication(publication: SubagentRetirementPublication): void {
+  if (publication.settled) {
+    return;
+  }
+  publication.settled = true;
+  const pending = retirementPublications.get(publication.key);
+  pending?.delete(publication);
+  if (pending?.size === 0) {
+    retirementPublications.delete(publication.key);
+  }
+  publication.resolve();
+}
+
+type CompletionAuthority = NonNullable<
+  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
+>;
+type CompletionCustody = {
+  authority: CompletionAuthority;
+  entry: SubagentRunRecord;
+  stop: () => void;
 };
 
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
-  private readonly retirementScopes = new Set<SubagentRetirementScope>();
+  readLookup = new SubagentSessionReadLookup();
+  private readonly completionAuthorities = new Map<object, CompletionCustody>();
+  // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
+  // True marks restart custody; false marks a live admitted source.
+  private readonly operatorCompletionEntries = new WeakMap<object, boolean>();
+  private readonly retiredCompletionEntries = new WeakSet<object>();
 
-  /** A cancellation borrows retirement evidence only for its own lexical lifetime. */
+  retireCompletionAuthority(observed: SubagentRunRecord): void {
+    const entry = this.currentValue(observed);
+    this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(entry));
+    this.releaseCompletionAuthority(entry);
+  }
+
+  isCompletionAuthorityRetired(entry: SubagentRunRecord): boolean {
+    return this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(this.currentValue(entry)));
+  }
+
+  private currentValue(entry: SubagentRunRecord): SubagentRunRecord {
+    return getCurrentSubagentRunOwner(this, entry) ?? entry;
+  }
+
+  requireCompletionAuthority(entry: SubagentRunRecord): void {
+    this.operatorCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
+  }
+
+  bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
+    const entry = this.currentValue(row);
+    const key = getSubagentRunRuntimeKey(entry);
+    // A committed operator-owned row stays restricted if its source expires before publication.
+    this.operatorCompletionEntries.set(key, this.operatorCompletionEntries.get(key) ?? recovered);
+    source.assertCurrent();
+    if (
+      this.retiredCompletionEntries.has(key) &&
+      !isSameSubagentRunOwner(this.get(entry.runId), entry)
+    ) {
+      throw new Error("Subagent completion retry no longer owns its source");
+    }
+    this.releaseCompletionAuthority(entry);
+    this.operatorCompletionEntries.set(key, recovered);
+    this.retiredCompletionEntries.delete(key);
+    const custody: CompletionCustody = {
+      authority: source,
+      entry,
+      stop: () => source.signal.removeEventListener("abort", revoked),
+    };
+    const revoked = () => this.releaseCompletionAuthority(custody.entry);
+    this.completionAuthorities.set(key, custody);
+    source.signal.addEventListener("abort", revoked, { once: true });
+    if (source.signal.aborted) {
+      revoked();
+    }
+  }
+
+  releaseCompletionAuthority(observed: SubagentRunRecord): void {
+    const entry = this.currentValue(observed);
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    this.completionAuthorities.delete(getSubagentRunRuntimeKey(entry));
+    custody?.stop();
+    custody?.authority.release();
+  }
+
+  private assertCompletionEntryCurrent(entry: SubagentRunRecord): void {
+    const current =
+      this.get(entry.runId) ??
+      this.readLookup
+        .selectRunIds(new Set([entry.swarmRunId ?? entry.runId]))
+        .map((id) => this.get(id))
+        .find((candidate) => candidate && isQueuedSubagentRunRekey(entry, candidate));
+    if (current && !isSameSubagentRunOwner(current, entry)) {
+      throw new Error("Subagent completion runtime owner is no longer active");
+    }
+    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry))) {
+      throw new Error("Subagent completion requester store was retired");
+    }
+    if (
+      this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
+      !isSameSubagentRunOwner(this.get(entry.runId), entry)
+    ) {
+      throw new Error("Subagent completion authority is no longer active");
+    }
+  }
+
+  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
+    const entry = this.currentValue(observed);
+    this.assertCompletionEntryCurrent(entry);
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    // Cancellation notices belong to the admitted cancellation caller, not its revoked target.
+    // Keep that caller's existing dispatch restrictions; never turn a successful result into a notice.
+    if (this.isCancellationNotice(entry)) {
+      return run();
+    }
+    if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
+      throw new Error("Subagent completion authority is no longer active");
+    }
+    return custody ? custody.authority.run(run) : run();
+  }
+
+  private isCancellationNotice(entry: SubagentRunRecord): boolean {
+    return (
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      entry.execution.outcome?.status === "error" &&
+      !this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(entry))
+    );
+  }
+
+  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+    const batch = observed.map((entry) => this.currentValue(entry));
+    batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
+    const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
+    // Only a cancellation-only batch can use the independently admitted cancellation caller.
+    if (!resultEntry) {
+      return run();
+    }
+    const first = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry))?.authority
+      .operatorAuthority;
+    // Mixed waves must still prove the cancelled member's original source is live and identical.
+    // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
+    for (const entry of batch) {
+      const source = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority
+        .operatorAuthority;
+      if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !source) {
+        throw new Error("Subagent completion authority is no longer active");
+      }
+      source?.assertCurrent();
+      // Siblings re-admitted independently share durable input evidence, not an old capability.
+      const sameRecoveredSource =
+        this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
+        this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
+        resultEntry.operatorRecoverySource !== undefined &&
+        isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
+      if (
+        (!sameRecoveredSource && source?.source !== first?.source) ||
+        !isDeepStrictEqual(source?.scopes, first?.scopes)
+      ) {
+        throw new Error("Subagent completion batch has incompatible operator authority");
+      }
+    }
+    return this.runWithCompletionAuthority(resultEntry, run);
+  }
+
+  /** Committed replacement transfers custody without reviving a retired source. */
+  transferCompletionAuthority(previous: SubagentRunRecord, next: SubagentRunRecord): void {
+    transferFollowupCohort(previous, next);
+    const previousKey = getSubagentRunRuntimeKey(previous);
+    const nextKey = getSubagentRunRuntimeKey(next);
+    if (this.retiredCompletionEntries.has(previousKey)) {
+      this.retiredCompletionEntries.add(nextKey);
+    }
+    const recovered = this.operatorCompletionEntries.get(previousKey);
+    if (recovered !== undefined) {
+      this.operatorCompletionEntries.set(nextKey, recovered);
+    }
+    const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
+    if (!custody) {
+      return;
+    }
+    this.completionAuthorities.delete(getSubagentRunRuntimeKey(previous));
+    custody.entry = next;
+    this.completionAuthorities.set(getSubagentRunRuntimeKey(next), custody);
+  }
+
+  /** Only acknowledged registry state retires completion custody. */
+  settleCompletionAuthorities(
+    committed: ReadonlyMap<string, SubagentRunRecord>,
+    changedRunIds?: readonly string[],
+  ): void {
+    const changed = changedRunIds && new Set(changedRunIds);
+    for (const { entry } of this.completionAuthorities.values()) {
+      if (changed && !changed.has(entry.runId)) {
+        continue;
+      }
+      const record = committed.get(entry.runId);
+      if (
+        !record ||
+        !isSameSubagentRunOwner(this.get(entry.runId), entry) ||
+        record.generation !== entry.generation ||
+        (!record.requesterTurnRunId &&
+          !record.requesterSettleWake &&
+          record.pauseReason !== "sessions_yield" &&
+          (record.cleanupCompletedAt !== undefined ||
+            record.delivery?.status === "suspended" ||
+            record.delivery?.status === "discarded" ||
+            record.suppressCompletionDelivery === true))
+      ) {
+        this.releaseCompletionAuthority(entry);
+      }
+    }
+  }
+
+  /** Keep captured cancellation work; inspect current successors only at use. */
   captureRetirement(
     entry: SubagentRunRecord,
     isSuccessor: (candidate: SubagentRunRecord) => boolean,
   ) {
-    const scope: SubagentRetirementScope = {
-      observation: {
-        entry,
-        generation: entry.generation,
-        createdAt: entry.createdAt,
-        state: "selected",
-      },
-      isSuccessor,
+    const { promise, resolve } = createDeferredCore();
+    const publication = {
+      key: getSubagentRunRuntimeKey(entry),
+      promise,
+      resolve,
+      settled: false,
     };
-    this.retirementScopes.add(scope);
+    const pending = retirementPublications.get(publication.key);
+    if (pending) {
+      pending.add(publication);
+    } else {
+      retirementPublications.set(publication.key, new Set([publication]));
+    }
+    // A newer row can already coexist with a specifically selected legacy task.
+    const initial =
+      latestSubagentRun(
+        getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+      ) ?? entry;
+    let active = true;
+    const observe = (): SubagentRetirementObservation => {
+      const successor = latestSubagentRun(
+        getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
+        (candidate) =>
+          !isSameSubagentRunOwner(candidate, entry) &&
+          (candidate.runId === entry.runId ||
+            (compareSubagentRunGeneration(candidate, initial) >= 0 &&
+              !isSameSubagentRunOwner(candidate, initial))) &&
+          isSuccessor(candidate),
+      );
+      if (!active || successor) {
+        return { state: "superseded" };
+      }
+      const current = getCurrentSubagentRunOwner(this, entry);
+      const selected = current ?? entry;
+      return {
+        entry: selected,
+        generation: selected.generation,
+        createdAt: selected.createdAt,
+        state: current ? "selected" : "retired",
+      };
+    };
     return {
       get observation() {
-        return scope.observation;
+        return observe();
       },
+      completePublication: () => completeRetirementPublication(publication),
       release: () => {
-        scope.observation = { state: "superseded" };
-        this.retirementScopes.delete(scope);
+        active = false;
+        completeRetirementPublication(publication);
       },
     };
   }
 
-  /** Publish only accepted ownership, after synchronous registration/recovery rollback decisions. */
+  /** Registration checks current rows; retired temporary successors need no retained fence. */
+  captureRegistrationOwnership(
+    childSessionKey: string,
+    expectedEntry?: SubagentRunRecord,
+    childAgentId?: string,
+  ) {
+    let active = true;
+    let accepted = expectedEntry;
+    const latest = () =>
+      latestSubagentRun(getSubagentRunsForChildSession(childSessionKey, childAgentId));
+    const initial = latest();
+    const replaced = (observed: SubagentRunRecord | undefined) => {
+      const current = latest();
+      return current !== undefined && !isSameSubagentRunOwner(current, observed);
+    };
+    return {
+      get superseded() {
+        return accepted !== undefined && replaced(accepted);
+      },
+      assertCurrent: () => {
+        if (!active || replaced(accepted ?? initial)) {
+          throw new Error("Subagent registration owner changed during preparation");
+        }
+      },
+      accept: (entry: SubagentRunRecord) => {
+        if (!active || !matchesSubagentChildSessionOwner(entry, childSessionKey, childAgentId)) {
+          throw new Error("Subagent registration owner changed before publication");
+        }
+        accepted = entry;
+        this.commitOwnership(entry);
+      },
+      release: () => {
+        active = false;
+      },
+    };
+  }
+
+  /** Publish accepted runtime ownership after the row's commit acknowledgement. */
   commitOwnership(entry: SubagentRunRecord): void {
-    if (this.get(entry.runId) !== entry) {
-      return;
-    }
-    for (const scope of this.retirementScopes) {
-      const previous = scope.observation.entry;
-      if (
-        previous &&
-        previous !== entry &&
-        previous.childSessionKey === entry.childSessionKey &&
-        scope.isSuccessor(entry)
-      ) {
-        const receipt = previous.execution.restartRecovery;
-        // Follow only the committed receipt handoff. An ordinary displacement closes
-        // this operation permanently, even if its row disappears before Stop resumes.
-        scope.observation =
-          receipt?.phase === "accepted" &&
-          receipt.idempotencyKey === entry.runId &&
-          entry.execution.restartRecovery === receipt
-            ? {
-                entry,
-                generation: entry.generation,
-                createdAt: entry.createdAt,
-                state: "selected",
-              }
-            : { state: "superseded" };
-      }
+    if (isSameSubagentRunOwner(this.get(entry.runId), entry)) {
+      publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
     }
   }
 
-  /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
+  /** Notify readers after the row's committed retirement. */
   confirmRetirement(entry: SubagentRunRecord): void {
-    for (const scope of this.retirementScopes) {
-      const observed = scope.observation;
-      if (
-        observed.entry === entry &&
-        observed.state === "selected" &&
-        this.get(entry.runId) !== entry
-      ) {
-        observed.state = "retired";
-      }
+    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+  }
+
+  private publishRuntimeOwner(previous: SubagentRunRecord, entry: SubagentRunRecord): void {
+    this.transferCompletionAuthority(previous, entry);
+    bindGatewayContextResolver(entry, getGatewayContextResolver(previous));
+  }
+
+  /** The row owner invokes this only after the source deletion and accepted address commit. */
+  publishQueuedSubagentRunRekey(previous: SubagentRunRecord, accepted: SubagentRunRecord): void {
+    const current = this.get(accepted.runId);
+    if (!current || !isSameSubagentRunOwner(current, accepted)) {
+      return;
     }
+    if (
+      !isSameSubagentRunOwner(previous, current) ||
+      !isQueuedSubagentRunRekey(previous, current)
+    ) {
+      throw new Error("Queued subagent rekey lost its physical execution owner");
+    }
+    this.publishRuntimeOwner(previous, current);
   }
 
   override set(runId: string, entry: SubagentRunRecord): this {
     const prev = this.get(runId);
+    retainSubagentRunRuntimeOwner(prev, entry);
+    if (prev && prev !== entry && isSameSubagentRunOwner(prev, entry)) {
+      this.publishRuntimeOwner(prev, entry);
+    }
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
-      if (prev.collect === true && prev.childSessionKey) {
-        collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
       }
     }
     super.set(runId, entry);
-    indexSubagentRun(runsByChildSessionKey, entry.childSessionKey, runId, entry);
-    indexSubagentRun(runsByCollectorGroupKey, collectorGroupKey(entry), runId, entry);
-    if (entry.collect === true && entry.childSessionKey) {
-      collectorRunIdByChildSessionKey.set(entry.childSessionKey, runId);
+    this.readLookup.set(runId, entry);
+    for (const index of runIndexes) {
+      index.update(runId, entry, "add");
     }
     return this;
   }
 
   override delete(runId: string): boolean {
+    this.readLookup.set(runId, undefined);
     const prev = this.get(runId);
     if (prev) {
-      removeIndexedSubagentRun(runsByChildSessionKey, prev.childSessionKey, runId, prev);
-      removeIndexedSubagentRun(runsByCollectorGroupKey, collectorGroupKey(prev), runId, prev);
-    }
-    if (
-      prev?.collect === true &&
-      prev.childSessionKey &&
-      collectorRunIdByChildSessionKey.get(prev.childSessionKey) === runId
-    ) {
-      collectorRunIdByChildSessionKey.delete(prev.childSessionKey);
+      for (const index of runIndexes) {
+        index.update(runId, prev, "remove");
+      }
     }
     return super.delete(runId);
   }
 
   override clear(): void {
-    for (const scope of this.retirementScopes) {
-      scope.observation = { state: "superseded" };
+    for (const { entry } of this.completionAuthorities.values()) {
+      this.releaseCompletionAuthority(entry);
     }
-    this.retirementScopes.clear();
+    for (const pending of retirementPublications.values()) {
+      for (const publication of pending) {
+        completeRetirementPublication(publication);
+      }
+    }
     super.clear();
-    collectorRunIdByChildSessionKey.clear();
-    runsByChildSessionKey.clear();
-    runsByCollectorGroupKey.clear();
+    this.readLookup = new SubagentSessionReadLookup();
+    for (const index of runIndexes) {
+      index.clear();
+    }
+    publishSubagentRunChanges();
   }
 }
 
 export const subagentRuns = new SubagentRunMap();
 
-/** Iterate live generations for one child session without scanning the registry. */
-export function getSubagentRunsForChildSession(
+// Immutable row publications refresh keyed membership; full replacements invalidate it.
+subscribeSubagentRunChanges("projection", ({ runIds: ids }) => {
+  if (!ids) {
+    subagentRuns.readLookup.invalidateSessions();
+  } else {
+    for (const id of ids) {
+      subagentRuns.readLookup.set(id, subagentRuns.get(id));
+    }
+  }
+});
+
+export function getSubagentSessionReadLookup(runs: ReadonlyMap<string, SubagentRunRecord>) {
+  return runs instanceof SubagentRunMap ? runs.readLookup : new SubagentSessionReadLookup(runs);
+}
+
+/** Resolve an observed physical execution through its existing queued/accepted address index. */
+export function getCurrentSubagentRunOwner(
+  runs: Map<string, SubagentRunRecord>,
+  observed: SubagentRunRecord,
+): SubagentRunRecord | undefined {
+  const ids = new Set([observed.runId, observed.swarmRunId ?? observed.runId]);
+  for (const id of getSubagentSessionReadLookup(runs).selectRunIds(ids)) {
+    const current = runs.get(id);
+    if (current && isSameSubagentRunOwner(current, observed)) {
+      return current;
+    }
+  }
+  return undefined;
+}
+
+export function getSubagentChildSessionCandidates(
   childSessionKey: string,
 ): Iterable<SubagentRunRecord> {
-  return runsByChildSessionKey.get(childSessionKey)?.values() ?? [];
+  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
+}
+
+/** Iterate live generations for one child session without scanning the registry. */
+export function* getSubagentRunsForChildSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): Iterable<SubagentRunRecord> {
+  const key = childSessionOwnerKey({ childSessionKey, childAgentId });
+  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
+}
+
+/** Current requester-owned generations, without restoring or scanning retained rows. */
+export function getSubagentRunsForRequesterSession(
+  requesterSessionKey: string,
+): Iterable<SubagentRunRecord> {
+  return runsByRequesterSessionKey.get(requesterSessionKey)?.values() ?? [];
 }
 
 /** Iterate live collector members for one requester/group archive decision. */
@@ -214,18 +698,22 @@ export function getSubagentRunsForCollectorGroup(
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */
-export function findSwarmCollectorSession(childSessionKey?: string): SubagentRunRecord | undefined {
+export function findSwarmCollectorSession(
+  childSessionKey?: string,
+  childAgentId?: string,
+): SubagentRunRecord | undefined {
   const key = childSessionKey?.trim();
   if (!key) {
     return undefined;
   }
-  const runId = collectorRunIdByChildSessionKey.get(key);
-  return runId ? subagentRuns.get(runId) : undefined;
+  const ownerKey = childSessionOwnerKey({ childSessionKey: key, childAgentId });
+  return ownerKey ? collectorsByChildSessionOwner.getLatest(ownerKey) : undefined;
 }
 
 /** Resolve the host-registered collector that authorizes a Gateway request. */
 export function findAuthorizedSwarmCollectorRequest(params: {
   childSessionKey?: string;
+  childAgentId?: string;
   idempotencyKey?: string;
   outputSchema?: Record<string, unknown>;
 }): SubagentRunRecord | undefined {
@@ -233,7 +721,7 @@ export function findAuthorizedSwarmCollectorRequest(params: {
   if (!idempotencyKey) {
     return undefined;
   }
-  const entry = findSwarmCollectorSession(params.childSessionKey);
+  const entry = findSwarmCollectorSession(params.childSessionKey, params.childAgentId);
   if (!entry) {
     return undefined;
   }

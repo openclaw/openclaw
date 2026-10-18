@@ -87,6 +87,7 @@ suite.define(() => {
             ),
           )
           .toMatchObject({ asyncWrites: [crimsonUrl], legacyWrites: [crimsonUrl] });
+        await expect.poll(() => pageRoot.getByRole("status").textContent()).toContain("Copied!");
 
         await page.evaluate(() => {
           (

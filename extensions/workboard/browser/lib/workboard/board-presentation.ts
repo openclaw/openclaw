@@ -12,19 +12,3 @@ export function workboardBoardLabel(board: Pick<WorkboardBoardSummary, "id" | "n
     ? `${explicitName} (${board.id})`
     : workboardBoardName(board);
 }
-
-export function workboardBoardGlyph(
-  board: Pick<WorkboardBoardSummary, "id" | "name" | "icon">,
-): string {
-  const icon = board.icon?.trim();
-  if (icon) {
-    return icon;
-  }
-  return Array.from(workboardBoardName(board))[0]?.toLocaleUpperCase() ?? "#";
-}
-
-export function workboardBoardColor(
-  board: Pick<WorkboardBoardSummary, "color">,
-): string | undefined {
-  return board.color?.trim() || undefined;
-}

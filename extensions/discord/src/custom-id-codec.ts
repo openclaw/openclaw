@@ -1,14 +1,10 @@
-// Discord plugin module implements shared custom-id value codecs.
-
 /**
  * URI-component codec for values embedded in `k=v;` custom-id grammars
  * (exec approvals, model picker, command args, agent components).
  * Decode falls back to the raw value: Discord redelivers old component ids
  * indefinitely and historical values may predate strict encoding.
  */
-export function encodeCustomIdComponent(value: string): string {
-  return encodeURIComponent(value);
-}
+export const encodeCustomIdComponent: (value: string) => string = encodeURIComponent;
 
 export function decodeCustomIdComponent(value: string): string {
   try {

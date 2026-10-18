@@ -1,17 +1,20 @@
-/** Builds platform-specific log and start hints for daemon status output. */
+import { formatCliCommand } from "../cli/command-format.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 export function buildPlatformRuntimeLogHints(params: {
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
   systemdServiceName: string;
+  systemd?: GatewayServiceRuntime["systemd"];
   windowsTaskName: string;
 }): string[] {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
-    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
+    const logs = resolveGatewaySupervisorLogPaths(env);
     // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
     return [
       `Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,
@@ -19,8 +22,10 @@ export function buildPlatformRuntimeLogHints(params: {
     ];
   }
   if (platform === "linux") {
+    const scope = params.systemd?.scope === "system" ? "--system" : "--user";
+    const unit = params.systemd?.unit ?? `${params.systemdServiceName}.service`;
     return [
-      `Logs: journalctl --user -u ${params.systemdServiceName}.service -n 200 --no-pager`,
+      `Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`,
       `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
@@ -35,12 +40,16 @@ export function buildPlatformRuntimeLogHints(params: {
 
 /** Build recovery details after the caller selects its applicable runtime state. */
 export function buildGatewayRuntimeRecoveryHints(params: {
-  kind: "gui-session" | "stopped";
+  kind: "gui-session" | "stopped" | "disabled-task";
   restartCommand: string;
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
+  systemd?: GatewayServiceRuntime["systemd"];
 }): string[] {
+  const windowsTaskName =
+    params.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+    resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE);
   const hints =
     params.kind === "gui-session"
       ? [
@@ -49,16 +58,22 @@ export function buildGatewayRuntimeRecoveryHints(params: {
           "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
         ]
       : [];
+  if (params.kind === "disabled-task") {
+    hints.push(
+      `Scheduled Task '${windowsTaskName}' is registered but DISABLED; run \`${formatCliCommand("openclaw gateway start", params.env)}\` (or \`${formatCliCommand("openclaw doctor --fix", params.env)}\`) to re-enable it.`,
+    );
+  }
   if (params.logFile) {
     hints.push(`File logs: ${params.logFile}`);
   }
-  if (params.kind === "stopped") {
+  if (params.kind !== "gui-session") {
     hints.push(
       ...buildPlatformRuntimeLogHints({
         platform: params.platform,
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
-        windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
+        systemd: params.systemd,
+        windowsTaskName,
       }),
     );
   }

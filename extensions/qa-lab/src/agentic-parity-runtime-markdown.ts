@@ -1,8 +1,10 @@
 import {
+  formatCacheMisses,
   formatRuntimeCacheCount,
   formatRuntimeCacheHitPercent,
 } from "./agentic-parity-cache-usage.js";
 import type { QaRuntimeParityReport } from "./agentic-parity-runtime-report-contract.js";
+import { pushQaReportListSection } from "./report.js";
 import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import { formatRuntimeSpeedComparison, formatRuntimeWallClockMs } from "./runtime-parity-timing.js";
 
@@ -10,22 +12,11 @@ function formatRuntimeCacheMisses(diagnostics: RuntimeParityCacheDiagnostics | u
   if (!diagnostics) {
     return "N/A";
   }
-  if (diagnostics.cacheTelemetryTurns === 0) {
-    return diagnostics.unmeasuredPostWarmTurns.length > 0
-      ? `N/A (unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")})`
-      : "N/A";
-  }
-  const measuredMisses =
-    diagnostics.cacheMisses.length === 0
-      ? "none"
-      : diagnostics.cacheMisses
-          .map((miss) => `turn ${miss.turn} (${miss.inputTokens} uncached input)`)
-          .join(", ");
-  if (diagnostics.unmeasuredPostWarmTurns.length === 0) {
-    return measuredMisses;
-  }
-  const unknownTurns = `unmeasured turns ${diagnostics.unmeasuredPostWarmTurns.join(", ")}`;
-  return measuredMisses === "none" ? `N/A (${unknownTurns})` : `${measuredMisses}; ${unknownTurns}`;
+  return formatCacheMisses(
+    diagnostics.cacheTelemetryTurns === 0 ? null : diagnostics.cacheMisses,
+    diagnostics.unmeasuredPostWarmTurns,
+    "uncached input",
+  );
 }
 
 export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
@@ -80,11 +71,7 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     );
   }
   if (report.failures.length > 0) {
-    lines.push("## Gate Failures", "");
-    for (const failure of report.failures) {
-      lines.push(`- ${failure}`);
-    }
-    lines.push("");
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
   }
   lines.push("## Scenario Comparison", "");
   for (const scenario of report.scenarios) {
@@ -125,10 +112,6 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     }
     lines.push("");
   }
-  lines.push("## Notes", "");
-  for (const note of report.notes) {
-    lines.push(`- ${note}`);
-  }
-  lines.push("");
+  pushQaReportListSection(lines, "Notes", report.notes);
   return lines.join("\n");
 }

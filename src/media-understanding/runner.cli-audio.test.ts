@@ -1,515 +1,396 @@
-// CLI audio runner tests cover prompt/language templating and command execution
-// options for local transcription binaries.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import * as globals from "../globals.js";
+import { logWarn } from "../logger.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
-import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { runCliEntry } from "./runner.entries.js";
+import { runCapability } from "./runner.js";
 import {
   createSafeAudioFixtureBuffer,
   withAudioFixture,
   withMediaFixture,
 } from "./runner.test-utils.js";
-import type { MediaAttachment } from "./types.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../process/exec.js", () => ({
-  runExec: (...args: unknown[]) => runExecMock(...args),
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: vi.fn(),
 }));
-
+vi.mock("../process/exec.js", () => ({ runExec: (...args: unknown[]) => runExecMock(...args) }));
 vi.mock("../media/media-services.js", () => ({
   runFfmpeg: (...args: unknown[]) => runFfmpegMock(...args),
 }));
 
-let runCliEntry: typeof import("./runner.entries.js").runCliEntry;
+type Fixture = Parameters<Parameters<typeof withAudioFixture>[1]>[0];
+type Overrides = Pick<Parameters<typeof runCliEntry>[0], "config" | "request">;
 
-type TranscriptFileCase = {
-  name: string;
-  command: string;
-  args: string[];
-  resolvePath: (args: string[]) => string;
-};
-
-const transcriptFileCases: TranscriptFileCase[] = [
-  {
-    name: "whisper.cpp short flags",
-    command: "whisper-cli",
-    args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
-    resolvePath: (args) => `${args[2]}.txt`,
-  },
-  {
-    name: "whisper.cpp long flags",
-    command: "whisper-cli",
-    args: ["--output-txt", "--output-file={{OutputBase}}", "{{MediaPath}}"],
-    resolvePath: (args) => `${args[1]?.slice("--output-file=".length)}.txt`,
-  },
-  {
-    name: "OpenAI Whisper explicit txt",
-    command: "whisper",
-    args: ["{{MediaPath}}", "--output_format=txt", "--output_dir={{OutputDir}}"],
-    resolvePath: (args) =>
-      path.join(
-        args[2]?.slice("--output_dir=".length) ?? "",
-        `${path.parse(args[0] ?? "").name}.txt`,
-      ),
-  },
-  {
-    name: "OpenAI Whisper default all output",
-    command: "whisper",
-    args: ["-o", "{{OutputDir}}", "{{MediaPath}}"],
-    resolvePath: (args) => path.join(args[1] ?? "", `${path.parse(args[2] ?? "").name}.txt`),
-  },
-  {
-    name: "parakeet txt output",
-    command: "parakeet-mlx",
-    args: ["{{MediaPath}}", "--output-format", "txt", "--output-dir", "{{OutputDir}}"],
-    resolvePath: (args) => path.join(args[4] ?? "", `${path.parse(args[0] ?? "").name}.txt`),
-  },
-  {
-    name: "parakeet all output with default template",
-    command: "parakeet-mlx",
-    args: [
-      "{{MediaPath}}",
-      "--output-format=all",
-      "--output-dir={{OutputDir}}",
-      "--output-template={filename}",
-    ],
-    resolvePath: (args) =>
-      path.join(
-        args[2]?.slice("--output-dir=".length) ?? "",
-        `${path.parse(args[0] ?? "").name}.txt`,
-      ),
-  },
-];
-
-function requireFirstRunExecCall(): unknown[] {
-  const [call] = runExecMock.mock.calls;
-  if (!call) {
-    throw new Error("expected runExec call");
-  }
-  return call;
+function runFixture(
+  { ctx, media, cache }: Fixture,
+  entry: MediaUnderstandingModelConfig,
+  options: Overrides = {},
+) {
+  const attachment = expectDefined(media[0], "audio attachment");
+  return runCliEntry({ capability: "audio", entry, cfg: {}, ctx, attachment, cache, ...options });
 }
 
-function requireFirstAttachment(media: MediaAttachment[]): MediaAttachment {
-  const attachment = media[0];
-  if (!attachment) {
-    throw new Error("expected media attachment");
-  }
-  return attachment;
-}
-
-async function runAudioEntry(params: {
-  command: string;
-  args: string[];
-}): Promise<Awaited<ReturnType<typeof runCliEntry>>> {
+async function runAudioEntry(
+  entry: MediaUnderstandingModelConfig,
+  options?: Overrides,
+): Promise<Awaited<ReturnType<typeof runCliEntry>>> {
   let result: Awaited<ReturnType<typeof runCliEntry>> = null;
-  await withAudioFixture(`openclaw-cli-${params.command}`, async ({ ctx, media, cache }) => {
-    result = await runCliEntry({
-      capability: "audio",
-      entry: { type: "cli", command: params.command, args: params.args },
-      cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-      ctx,
-      attachment: requireFirstAttachment(media),
-      cache,
-      config: {} as never,
-    });
+  await withAudioFixture("openclaw-cli-audio", async (fixture) => {
+    result = await runFixture(fixture, entry, options);
   });
   return result;
 }
 
-describe("media-understanding CLI audio entry", () => {
-  beforeAll(async () => {
-    ({ runCliEntry } = await import("./runner.entries.js"));
+function expectExec(
+  command: string,
+  args: unknown[],
+  options: unknown = { timeoutMs: 60_000, maxBuffer: CLI_OUTPUT_MAX_BUFFER },
+) {
+  expect(runExecMock).toHaveBeenCalledExactlyOnceWith(command, args, options);
+}
+
+function runModels({ ctx, media, cache }: Fixture, models: MediaUnderstandingModelConfig[]) {
+  return runCapability({
+    capability: "audio",
+    cfg: { tools: { media: { models } } },
+    ctx,
+    media,
+    attachments: cache,
+    providerRegistry: new Map(),
   });
+}
 
-  beforeEach(() => {
-    runExecMock.mockReset().mockResolvedValue({ stdout: "cli transcript" });
-    runFfmpegMock.mockReset();
-  });
+const whisper = {
+  command: "whisper-cli",
+  args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
+};
+type FileCase = [
+  name: string,
+  command: string,
+  args: string[],
+  path: (args: string[]) => string,
+  text: string | null,
+  requested?: string,
+  observed?: string,
+];
+const transcriptFileCases: FileCase[] = [
+  [
+    "whisper.cpp short flags and observed Metal device",
+    whisper.command,
+    [...whisper.args, "--device", "GPU0"],
+    (args) => `${args[2]}.txt`,
+    "file transcript",
+    "device:GPU0",
+    "metal",
+  ],
+  [
+    "whisper.cpp long flags and CPU request",
+    whisper.command,
+    ["--output-txt", "--output-file={{OutputBase}}", "{{MediaPath}}", "--no-gpu"],
+    (args) => `${args[1]?.slice("--output-file=".length)}.txt`,
+    "file transcript",
+    "cpu",
+  ],
+  [
+    "missing OpenAI Whisper explicit txt",
+    "whisper",
+    ["{{MediaPath}}", "--output_format=txt", "--output_dir={{OutputDir}}"],
+    (args) =>
+      path.join(
+        args[2]?.slice("--output_dir=".length) ?? "",
+        `${path.parse(args[0] ?? "").name}.txt`,
+      ),
+    null,
+  ],
+  [
+    "artifact-only OpenAI Whisper default all output",
+    "whisper",
+    ["-o", "{{OutputDir}}", "{{MediaPath}}"],
+    (args) => path.join(args[1] ?? "", `${path.parse(args[2] ?? "").name}.txt`),
+    "context:",
+  ],
+  [
+    "parakeet environment-selected output",
+    "parakeet-mlx",
+    ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
+    (args) => path.join(args[2] ?? "", `${path.parse(args[0] ?? "").name}.txt`),
+    "file transcript",
+  ],
+];
 
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
+beforeEach(() => {
+  runExecMock.mockReset().mockResolvedValue({ stdout: "cli transcript" });
+  runFfmpegMock.mockReset();
+});
+afterEach(() => vi.clearAllMocks());
 
-  it("applies per-request prompt and language overrides to CLI transcription templating", async () => {
-    let mediaPath = "";
-
-    await withAudioFixture(
-      "openclaw-cli-audio",
-      async ({ ctx, mediaPath: fixturePath, media, cache }) => {
-        mediaPath = await fs.realpath(fixturePath);
-
-        await runCliEntry({
-          capability: "audio",
-          entry: {
-            type: "cli",
-            command: "mock-transcriber",
-            args: [
-              "--prompt",
-              "{{Prompt}}",
-              "--language",
-              "{{Language}}",
-              "--file",
-              "{{MediaPath}}",
-            ],
-            prompt: "entry prompt",
-            language: "de",
-          },
-          cfg: {
-            tools: {
-              media: {
-                audio: {
-                  prompt: "configured prompt",
-                  language: "fr",
-                  _requestPromptOverride: "Focus on names",
-                  _requestLanguageOverride: "en",
-                },
-              },
-            },
-          } as OpenClawConfig,
-          ctx,
-          attachment: requireFirstAttachment(media),
-          cache,
-          config: {
-            prompt: "configured prompt",
-            language: "fr",
-            _requestPromptOverride: "Focus on names",
-            _requestLanguageOverride: "en",
-          } as never,
-        });
-      },
+it.each([
+  ["cli-missing-command", undefined, false],
+  ["cli-missing-attachment-arg", "invalid-transcribe", true],
+] as const)("reports %s and handles configured fallback", async (reason, command, fallback) => {
+  await withAudioFixture("openclaw-cli-invalid", async (fixture) => {
+    const invalid: MediaUnderstandingModelConfig = {
+      type: "cli",
+      command,
+      capabilities: ["audio"],
+    };
+    await expect(runFixture(fixture, invalid)).rejects.toMatchObject({ reason });
+    const working: MediaUnderstandingModelConfig = {
+      type: "cli",
+      command: "working-transcribe",
+      args: ["{{ AttachmentPath }}"],
+      capabilities: ["audio"],
+    };
+    const result = await runModels(fixture, fallback ? [invalid, working] : [invalid]);
+    expect(result.decision).toMatchObject({
+      outcome: fallback ? "success" : "failed",
+      attachmentProcessing: { 0: fallback ? "completed" : "omitted" },
+      attachmentDispositions: { 0: { kind: fallback ? "handled" : "failed" } },
+    });
+    const failed = { type: "cli", outcome: "failed", reason: expect.stringContaining(reason) };
+    expect(result.decision.attachments[0]?.attempts).toMatchObject(
+      fallback
+        ? [failed, { type: "cli", provider: "working-transcribe", outcome: "success" }]
+        : [failed],
     );
-
-    expect(runExecMock).toHaveBeenCalledTimes(1);
-    const [command, args, options] = requireFirstRunExecCall();
-    expect(command).toBe("mock-transcriber");
-    expect(args).toEqual(["--prompt", "Focus on names", "--language", "en", "--file", mediaPath]);
-    expect(options).toEqual({
-      timeoutMs: 60_000,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-    });
+    if (fallback) {
+      expect(result.outputs[0]?.text).toBe("cli transcript");
+      expectExec("working-transcribe", [expect.any(String)], expect.any(Object));
+    } else {
+      expect(result.outputs).toEqual([]);
+      expect(logWarn).toHaveBeenCalledWith(expect.stringContaining(reason));
+      expect(runExecMock).not.toHaveBeenCalled();
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    }
   });
+});
 
-  it.each([
-    { source: "model entry", entryLanguage: "de", configLanguage: "fr", expected: "de" },
-    {
-      source: "capability default",
-      entryLanguage: undefined,
-      configLanguage: "fr",
-      expected: "fr",
-    },
-  ])("applies the configured $source language to CLI templating", async (testCase) => {
-    await withAudioFixture("openclaw-cli-language", async ({ ctx, media, cache }) => {
-      await runCliEntry({
-        capability: "audio",
-        entry: {
-          type: "cli",
-          command: "mock-transcriber",
-          args: ["--language", "{{Language}}", "--file", "{{MediaPath}}"],
-          language: testCase.entryLanguage,
-        },
-        cfg: {
-          tools: { media: { audio: { language: testCase.configLanguage } } },
-        } as OpenClawConfig,
-        ctx,
-        attachment: requireFirstAttachment(media),
-        cache,
-        config: { language: testCase.configLanguage } as never,
-      });
-    });
-
-    const [, args] = requireFirstRunExecCall();
-    expect(args).toEqual(["--language", testCase.expected, "--file", expect.any(String)]);
+it("preserves custom arguments relative to the attachment working directory", async () => {
+  await withAudioFixture("openclaw-cli-custom-input", async (fixture) => {
+    const args = ["describe", path.basename(fixture.mediaPath)];
+    expect((await runFixture(fixture, { command: "agy", args }))?.text).toBe("cli transcript");
+    expectExec(
+      "agy",
+      args,
+      expect.objectContaining({ cwd: path.dirname(await fs.realpath(fixture.mediaPath)) }),
+    );
   });
+});
 
-  it.each([
-    { name: "one attachment", count: 1, leadingEmpty: false },
-    { name: "many attachments after an empty slot", count: 2, leadingEmpty: true },
-  ])(
-    "projects facts-first and deprecated template variables for $name",
-    async ({ count, leadingEmpty }) => {
-      await withTestDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
-        const media = await Promise.all(
-          Array.from({ length: count }, async (_, index) => {
-            const mediaPath = path.join(base, `audio-${index}.wav`);
-            await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer());
-            return {
-              path: mediaPath,
-              url: `media://inbound/audio-${index}.wav`,
-              contentType: index === 0 ? "audio/wav" : "audio/x-wav",
-            };
-          }),
-        );
-        const alignedMedia: Array<Partial<(typeof media)[number]>> = leadingEmpty
-          ? [{}, ...media]
-          : media;
-        const ctx = {
-          media: alignedMedia,
-        };
-        const attachments = normalizeMediaAttachments(ctx);
-        expect(attachments.map((attachment) => attachment.index)).toEqual(
-          leadingEmpty ? [1, 2] : [0],
-        );
-        const cache = createMediaAttachmentCache(attachments, {
-          localPathRoots: [base],
-          includeDefaultLocalPathRoots: false,
-        });
-        try {
-          for (const [callIndex, attachment] of attachments.entries()) {
-            await runCliEntry({
-              capability: "audio",
-              entry: {
-                type: "cli",
-                command: "mock-transcriber",
-                args: [
-                  "{{AttachmentPath}}",
-                  "{{AttachmentUrl}}",
-                  "{{AttachmentContentType}}",
-                  "{{AttachmentDir}}",
-                  "{{AttachmentIndex}}",
-                  "{{MediaPath}}",
-                  "{{MediaUrl}}",
-                  "{{MediaType}}",
-                  "{{MediaDir}}",
-                  "{{MediaPaths}}",
-                ],
-              },
-              cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-              ctx,
-              attachment,
-              cache,
-              config: {} as never,
-            });
-            expect(runExecMock.mock.calls[callIndex]?.[1]).toEqual([
-              media[callIndex]?.path,
-              media[callIndex]?.url,
-              media[callIndex]?.contentType,
-              base,
-              String(attachment.index),
-              media[callIndex]?.path,
-              media[callIndex]?.url,
-              media[callIndex]?.contentType,
-              base,
-              "",
-            ]);
-          }
-        } finally {
-          await cache.cleanup();
-        }
-      });
-    },
-  );
-
-  it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
-    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      await fs.writeFile(testCase.resolvePath(args), "file transcript\n");
-      return { stdout: "Transcribing...\n", stderr: "" };
-    });
-
-    const result = await runAudioEntry(testCase);
-
-    expect(result?.text).toBe("file transcript");
-  });
-
-  it("removes the CLI scratch directory when audio conversion fails", async () => {
-    let scratchDir = "";
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      const outputPath = args.at(-1);
-      if (!outputPath) {
-        throw new Error("expected ffmpeg output path");
-      }
-      scratchDir = path.dirname(outputPath);
-      throw new Error("ffmpeg conversion failed");
-    });
-
-    await withMediaFixture(
+it("uses capability language and entry prompt precedence without logging prompts", async () => {
+  const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+  const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+  try {
+    await runAudioEntry(
       {
-        filePrefix: "openclaw-cli-whisper-conversion-failure",
-        extension: "mp3",
-        mediaType: "audio/mpeg",
-        fileContents: createSafeAudioFixtureBuffer(),
+        command: "mock-transcriber",
+        args: ["--prompt", "{{Prompt}}", "--language", "{{Language}}", "--file", "{{MediaPath}}"],
+        prompt: "entry prompt",
       },
-      async ({ ctx, media, cache }) => {
-        await expect(
-          runCliEntry({
-            capability: "audio",
-            entry: {
-              type: "cli",
-              command: "whisper-cli",
-              args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
-            },
-            cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-            ctx,
-            attachment: requireFirstAttachment(media),
-            cache,
-            config: {} as never,
-          }),
-        ).rejects.toThrow("ffmpeg conversion failed");
-      },
+      { config: { prompt: "configured prompt", language: "fr" } },
     );
+    expectExec("mock-transcriber", [
+      "--prompt",
+      "entry prompt",
+      "--language",
+      "fr",
+      "--file",
+      expect.any(String),
+    ]);
+    expect(JSON.stringify(log.mock.calls)).not.toContain("entry prompt");
+  } finally {
+    log.mockRestore();
+    verbose.mockRestore();
+  }
+});
 
-    expect(scratchDir).not.toBe("");
-    await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
+it("substitutes an unset language as an empty argument instead of dropping it", async () => {
+  await runAudioEntry({
+    command: "mock-transcriber",
+    args: ["--language", "{{Language}}", "--file", "{{AttachmentPath}}"],
   });
+  expectExec("mock-transcriber", ["--language", "", "--file", expect.any(String)]);
+});
 
-  it("records the backend observed during a whisper.cpp model run", async () => {
-    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      await fs.writeFile(`${args[2]}.txt`, "observed transcript\n");
+it.each(transcriptFileCases)(
+  "honors %s transcript file authority",
+  async (_name, command, args, resolvePath, text, requestedBackend, observedBackend) => {
+    runExecMock.mockImplementationOnce(async (_command, argv: string[]) => {
+      if (text !== null) {
+        await fs.writeFile(resolvePath(argv), text);
+      }
       return {
-        stdout: "",
-        stderr: "whisper_backend_init_gpu: using MTL0 backend",
+        stdout: "Transcribing...\n",
+        stderr: observedBackend ? "whisper_backend_init_gpu: using MTL0 backend" : "",
       };
     });
-
-    const result = await runAudioEntry({
-      command: "whisper-cli",
-      args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
-    });
-
-    expect(result).toMatchObject({
-      provider: "whisper-cli",
-      model: "whisper-cli",
-      observedBackend: "metal",
-      text: "observed transcript",
-    });
-  });
-
-  it("reads parakeet txt output selected through its upstream environment", async () => {
-    const testCase: TranscriptFileCase = {
-      name: "parakeet environment output",
-      command: "parakeet-mlx",
-      args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
-      resolvePath: (args) => path.join(args[2] ?? "", `${path.parse(args[0] ?? "").name}.txt`),
-    };
-    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      await fs.writeFile(testCase.resolvePath(args), "environment transcript\n");
-      return { stdout: "Transcribing...\n", stderr: "" };
-    });
-
     const result = await withEnvAsync(
       { PARAKEET_OUTPUT_FORMAT: "txt", PARAKEET_OUTPUT_TEMPLATE: undefined },
-      async () => await runAudioEntry(testCase),
+      () => runAudioEntry({ command, args }),
     );
-
-    expect(result?.text).toBe("environment transcript");
-  });
-
-  it.each(
-    transcriptFileCases.flatMap((testCase) =>
-      (["empty", "missing"] as const).map((fileState) => Object.assign({ fileState }, testCase)),
-    ),
-  )("treats $fileState $name transcript output as empty", async (testCase) => {
-    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      if (testCase.fileState === "empty") {
-        await fs.writeFile(testCase.resolvePath(args), "  \n");
-      }
-      return { stdout: "Transcribing with Whisper...\n", stderr: "" };
-    });
-
-    await expect(runAudioEntry(testCase)).resolves.toBeNull();
-  });
-
-  it.each([
-    {
-      name: "generic Node wrapper",
-      command: "node",
-      args: [
-        "./skills/local-whisper/transcribe.js",
-        "{{MediaPath}}",
-        "--output-dir",
-        "{{OutputDir}}",
-      ],
-    },
-    {
-      name: "parakeet default srt output",
-      command: "parakeet-mlx",
-      args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
-    },
-    {
-      name: "parakeet custom output template",
-      command: "parakeet-mlx",
-      args: [
-        "{{MediaPath}}",
-        "--output-format",
-        "txt",
-        "--output-dir",
-        "{{OutputDir}}",
-        "--output-template",
-        "custom-{filename}",
-      ],
-    },
-  ])("preserves stdout for $name without an inferred file contract", async (testCase) => {
-    const result = await runAudioEntry(testCase);
-
-    expect(result?.text).toBe("cli transcript");
-  });
-
-  it("surfaces unexpected transcript file read errors", async () => {
-    const testCase = transcriptFileCases[0];
-    if (!testCase) {
-      throw new Error("missing transcript file test case");
-    }
-    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
-      await fs.mkdir(testCase.resolvePath(args));
-      return { stdout: "Transcribing...\n", stderr: "" };
-    });
-
-    await expect(runAudioEntry(testCase)).rejects.toMatchObject({ code: "EISDIR" });
-  });
-
-  it("treats sherpa structured JSON with empty text as empty output", async () => {
-    runExecMock.mockResolvedValueOnce({
-      stdout:
-        '{"lang":"","emotion":"","event":"","text":"","timestamps":[],"durations":[],"tokens":[],"ys_log_probs":[],"words":[]}',
-      stderr: "",
-    });
-
-    await withAudioFixture("openclaw-cli-audio-empty-sherpa", async ({ ctx, media, cache }) => {
-      const result = await runCliEntry({
-        capability: "audio",
-        entry: {
-          type: "cli",
-          command: "sherpa-onnx-offline",
-          args: ["{{MediaPath}}"],
-        },
-        cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-        ctx,
-        attachment: requireFirstAttachment(media),
-        cache,
-        config: {} as never,
-      });
-
+    if (text === "file transcript") {
+      expect(result).toMatchObject({ text, provider: command, model: command });
+      expect(result?.requestedBackend).toBe(requestedBackend);
+      expect(result?.observedBackend).toBe(observedBackend);
+    } else {
       expect(result).toBeNull();
+    }
+  },
+);
+
+it.each([
+  { language: "fr", expected: "fr" },
+  { language: "fr", request: { language: "es" }, expected: "es" },
+  { language: "fr", config: { language: "de" }, expected: "de" },
+  { expected: undefined },
+  { language: "fr", request: { language: "" }, expected: undefined },
+  { command: "whisper-cli", language: "fr", expected: undefined },
+])("forwards auto-discovered Whisper language: %j", async (options) => {
+  await withTestDir({ prefix: "openclaw-auto-language-" }, async (dir) => {
+    const command = options.command ?? "whisper";
+    await fs.writeFile(
+      path.join(dir, `${command}${process.platform === "win32" ? ".cmd" : ""}`),
+      "synthetic executable",
+      { mode: 0o755 },
+    );
+    const model = path.join(dir, "model.bin");
+    await fs.writeFile(model, "synthetic model");
+    runExecMock.mockImplementation(async (_executable, args: string[]) => {
+      if (command === "whisper") {
+        await fs.writeFile(
+          path.join(
+            expectDefined(args[args.indexOf("--output_dir") + 1], "Whisper output directory"),
+            `${path.parse(args.at(-1) ?? "").name}.txt`,
+          ),
+          "fixture transcript",
+        );
+      } else if (args.includes("-of")) {
+        await fs.writeFile(`${args[args.indexOf("-of") + 1]}.txt`, "fixture transcript");
+      }
+      return { stdout: "", stderr: "" };
     });
+    await withAudioFixture("openclaw-auto-language", async ({ ctx, media, cache }) => {
+      const result = await withEnvAsync(
+        { PATH: dir, WHISPER_CPP_MODEL: model, SHERPA_ONNX_MODEL_DIR: undefined },
+        () =>
+          runCapability({
+            capability: "audio",
+            cfg: { tools: { media: { audio: { language: options.language } } } },
+            ctx,
+            media,
+            attachments: cache,
+            providerRegistry: new Map(),
+            request: options.request,
+            config: options.config,
+          }),
+      );
+      expect(result.outputs[0]?.text).toBe("fixture transcript");
+    });
+    const args = runExecMock.mock.calls.find(
+      ([executable]) =>
+        executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
+    )?.[1];
+    expect(args).toBeDefined();
+    if (options.expected === undefined) {
+      expect(args).not.toContain("--language");
+    } else {
+      expect(args.filter((arg: string) => arg === "--language")).toHaveLength(1);
+      expect(args[args.indexOf("--language") + 1]).toBe(options.expected);
+    }
+    expect(args).not.toContain("{{Language}}");
   });
+});
 
-  it("extracts sherpa text from the final structured output line", async () => {
-    runExecMock.mockResolvedValueOnce({
-      stdout: 'loading model\n{"text":"sherpa transcript","tokens":["sherpa","transcript"]}\n',
-      stderr: "",
-    });
+it.each([
+  ["{{Language}}", "de", { language: "en" }, "en"],
+  ["{{Language}}", "de", undefined, "de"],
+  ["it", "de", { language: "en" }, "it"],
+  [undefined, undefined, { language: "en" }, undefined],
+] as const)("preserves explicit CLI language %s", async (value, language, request, expected) => {
+  const args = [...(value === undefined ? [] : ["--language", value]), "{{AttachmentPath}}"];
+  await runAudioEntry(
+    { command: "whisper", args, language },
+    { config: { language: "fr" }, request },
+  );
+  expect(runExecMock.mock.calls[0]?.[1]).toEqual([
+    ...(expected === undefined ? [] : ["--language", expected]),
+    expect.any(String),
+  ]);
+});
 
-    await withAudioFixture("openclaw-cli-audio-sherpa-json", async ({ ctx, media, cache }) => {
-      const result = await runCliEntry({
-        capability: "audio",
-        entry: {
-          type: "cli",
-          command: "sherpa-onnx-offline",
-          args: ["{{MediaPath}}"],
-        },
-        cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
-        ctx,
-        attachment: requireFirstAttachment(media),
-        cache,
-        config: {} as never,
-      });
-
-      expect(result?.text).toBe("sherpa transcript");
-    });
+it("removes the CLI scratch directory when audio conversion fails", async () => {
+  let scratchDir = "";
+  runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+    const outputPath = args.at(-1);
+    if (!outputPath) {
+      throw new Error("expected ffmpeg output path");
+    }
+    scratchDir = path.dirname(outputPath);
+    throw new Error("ffmpeg conversion failed");
   });
+  await withMediaFixture(
+    {
+      filePrefix: "openclaw-cli-conversion",
+      extension: "mp3",
+      mediaType: "audio/mpeg",
+      fileContents: createSafeAudioFixtureBuffer(),
+    },
+    async (fixture) => {
+      await expect(runFixture(fixture, whisper)).rejects.toThrow("ffmpeg conversion failed");
+    },
+  );
+  expect(scratchDir).not.toBe("");
+  await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("preserves parakeet stdout for default srt output without a file contract", async () => {
+  const result = await withEnvAsync(
+    { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },
+    () =>
+      runAudioEntry({
+        command: "parakeet-mlx",
+        args: ["{{MediaPath}}", "--output-dir", "{{OutputDir}}"],
+      }),
+  );
+  expect(result?.text).toBe("cli transcript");
+});
+
+it("surfaces unexpected transcript file read errors", async () => {
+  runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
+    await fs.mkdir(`${args[2]}.txt`);
+    return { stdout: "Transcribing...\n", stderr: "" };
+  });
+  await expect(runAudioEntry(whisper)).rejects.toMatchObject({ code: "EISDIR" });
+});
+
+it.each([
+  {
+    name: "empty structured output",
+    stdout: '{"text":""}',
+    args: ["{{MediaPath}}"],
+    expected: null,
+  },
+  {
+    name: "final structured line",
+    stdout: 'loading model\n{"text":"sherpa transcript","tokens":["sherpa","transcript"]}\n',
+    args: ["--provider=cuda", "{{MediaPath}}"],
+    expected: { text: "sherpa transcript", requestedBackend: "cuda" },
+  },
+])("extracts sherpa $name", async ({ stdout, args, expected }) => {
+  runExecMock.mockResolvedValueOnce({ stdout, stderr: "" });
+  const result = await runAudioEntry({ command: "sherpa-onnx-offline", args });
+  if (expected === null) {
+    expect(result).toBeNull();
+  } else {
+    expect(result).toMatchObject(expected);
+  }
 });

@@ -1,6 +1,6 @@
 # OpenClaw Baseten Provider
 
-Official OpenClaw provider plugin for Baseten Model APIs, including Thinking Machines Lab's Inkling.
+Official OpenClaw provider plugin for Baseten Model APIs, with DeepSeek V4.1 Flash as the starter model.
 
 Install from OpenClaw:
 

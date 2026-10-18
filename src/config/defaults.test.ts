@@ -10,11 +10,14 @@ import {
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import {
   applyAgentDefaults,
   applyContextPruningDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
 } from "./defaults.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -106,19 +109,57 @@ describe("config defaults", () => {
     expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
+  it.each(["staged", "ambient"] as const)(
+    "materializes provider defaults from the supplied env when auth is %s",
+    (source) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", source === "ambient" ? "ambient-fixture" : "");
+      const env = { ANTHROPIC_API_KEY: source === "staged" ? "staged-fixture" : "" };
+      mocks.applyProviderConfigDefaultsForConfig.mockImplementation(
+        ({ config, env: providerEnv }: { config: OpenClawConfig; env: NodeJS.ProcessEnv }) => ({
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              ...(providerEnv.ANTHROPIC_API_KEY
+                ? { contextPruning: { mode: "cache-ttl", ttl: "1h" } }
+                : {}),
+            },
+          },
+        }),
+      );
+      const config = materializeRuntimeConfig(
+        { agents: { defaults: {} } },
+        {
+          env,
+          manifestRegistry: { plugins: [] },
+        },
+      );
+      if (source === "staged") {
+        expect(config.agents?.defaults?.contextPruning).toEqual({ mode: "cache-ttl", ttl: "1h" });
+        expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledWith(
+          expect.objectContaining({ env }),
+        );
+      } else {
+        expect(config.agents?.defaults?.contextPruning).toBeUndefined();
+        expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+      }
+      expect(process.env.ANTHROPIC_API_KEY).toBe(source === "ambient" ? "ambient-fixture" : "");
+    },
+  );
+
   it("defaults ackReactionScope without deriving other message fields", () => {
     const next = applyMessageDefaults({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha",
               theme: "helpful sloth",
               emoji: "🦥",
             },
           },
-        ],
+        },
       },
       messages: {},
     } as never);
@@ -146,6 +187,45 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
+
+  it.each([false, true])(
+    "normalizes keyed agent models without authoring a legacy list (projection: %s)",
+    (withProjection) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            worker: {
+              model: {
+                primary: "google/gemini-3-pro-preview",
+                fallbacks: ["google/gemini-3-pro-preview"],
+              },
+              models: { "google/gemini-3-pro-preview": { alias: "worker-model" } },
+            },
+            helper: { model: "google/gemini-3-pro-preview" },
+          },
+        },
+      };
+      if (withProjection) {
+        attachAgentListProjection(config);
+      }
+
+      const next = applyModelDefaults(config, { manifestRegistry: { plugins: [] } });
+
+      expect(next.agents?.entries).toEqual({
+        worker: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview"],
+          },
+          models: { "google/gemini-3.1-pro-preview": { alias: "worker-model" } },
+        },
+        helper: { model: "google/gemini-3.1-pro-preview" },
+      });
+      expect(Object.keys(next.agents ?? {})).not.toContain("list");
+      expect(structuredClone(next)).not.toHaveProperty("agents.list");
+    },
+  );
 });
 
 describe("applyModelDefaults catalog seeding", () => {
@@ -156,6 +236,8 @@ describe("applyModelDefaults catalog seeding", () => {
         modelCatalog: {
           providers: {
             " OpenAI ": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
                   id: "gpt-5.6-sol",
@@ -190,7 +272,6 @@ describe("applyModelDefaults catalog seeding", () => {
   ])(
     "seeds $providerId models (normalizer supplies rows: $generatedRows)",
     async ({ providerId, generatedRows }) => {
-      const { applyModelDefaults } = await import("./defaults.js");
       const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
       // SAFETY: config schema accepts omitted model metadata before materialization.
       const models = [
@@ -233,8 +314,7 @@ describe("applyModelDefaults catalog seeding", () => {
     },
   );
 
-  it("keeps authored metadata authoritative over the catalog row", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps authored metadata authoritative over the catalog row", () => {
     const cfg = applyModelDefaults(
       {
         models: {
@@ -267,8 +347,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.maxTokens).toBe(4_096);
   });
 
-  it("keeps catalog-seeded compatibility out of authored route overrides", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps catalog-seeded compatibility out of authored route overrides", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
@@ -364,8 +443,7 @@ describe("applyModelDefaults catalog seeding", () => {
       expectedCost: { ...authoredFlatCost, tieredPricing: [] },
       expectedUsd: 0.00327,
     },
-  ])("$name", async ({ authoredCost, expectedCost, expectedUsd }) => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  ])("$name", ({ authoredCost, expectedCost, expectedUsd }) => {
     const tieredRegistry = {
       plugins: [
         {
@@ -409,7 +487,7 @@ describe("applyModelDefaults catalog seeding", () => {
     ).toBeCloseTo(expectedUsd, 10);
   });
 
-  it("copies frozen catalog metadata before downstream normalization", async () => {
+  it("copies frozen catalog metadata before downstream normalization", () => {
     const supportedReasoningEfforts = Object.freeze(["low", "high"]);
     const compat = Object.freeze({ supportedReasoningEfforts });
     const frozenRegistry = {
@@ -419,6 +497,8 @@ describe("applyModelDefaults catalog seeding", () => {
           modelCatalog: {
             providers: {
               openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
                 models: [
                   Object.freeze({
                     id: "gpt-5.6-sol",
@@ -434,7 +514,6 @@ describe("applyModelDefaults catalog seeding", () => {
       ],
       // SAFETY: minimal frozen manifest record reproducing production registry ownership.
     } as never;
-    const { applyModelDefaults } = await import("./defaults.js");
     const cfg = applyModelDefaults(
       {
         models: {
@@ -459,8 +538,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(compat.supportedReasoningEfforts).toEqual(["low", "high"]);
   });
 
-  it("falls back to generic defaults when no catalog row matches", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("falls back to generic defaults when no catalog row matches", () => {
     const cfg = applyModelDefaults(
       {
         models: {

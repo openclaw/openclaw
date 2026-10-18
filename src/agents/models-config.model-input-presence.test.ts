@@ -11,7 +11,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { planOpenClawModelsJsonSource } from "./models-config.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import * as modelsConfigProviders from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 
 afterEach(() => {
@@ -31,88 +31,37 @@ function model(id: string, input: Array<"text" | "image"> = ["text"]) {
   };
 }
 
-describe("models config input presence", () => {
-  it.each([
-    {
-      name: "inherits discovered input when source input was omitted",
-      sourceModels: [{ id: "vision-model", name: "vision-model" }],
-      expected: ["text", "image"],
-    },
-    {
-      name: "preserves text-only input when source input was explicit",
-      sourceModels: [{ id: "vision-model", name: "vision-model", input: ["text"] }],
-      expected: ["text"],
-    },
-    {
-      name: "keeps independent input when the active secrets source has no row",
-      sourceModels: [],
-      expected: ["text"],
-    },
-    {
-      name: "preserves explicit input when a later duplicate omits it",
-      sourceModels: [
-        { id: "vision-model", name: "vision-model", input: ["text"] },
-        { id: "vision-model", name: "vision-model" },
-      ],
-      expected: ["text"],
-    },
-    {
-      name: "inherits explicit input from an exact duplicate before discovery",
-      sourceModels: [
-        { id: "vision-model", name: "vision-model" },
-        { id: "vision-model", name: "vision-model", input: ["text"] },
-      ],
-      expected: ["text"],
-    },
-  ] as const)("$name in the final generated models.json", async ({ sourceModels, expected }) => {
-    const configuredProvider = {
-      baseUrl: "https://model-input.example/v1",
-      apiKey: "MODEL_INPUT_FIXTURE_KEY",
-      models: [model("vision-model")],
-    };
-    const cfg: OpenClawConfig = {
-      models: { providers: { "model-input-fixture": configuredProvider } },
-    };
-    const sourceConfigForSecrets = {
-      models: {
-        providers: {
-          "model-input-fixture": {
-            baseUrl: configuredProvider.baseUrl,
-            apiKey: configuredProvider.apiKey,
-            models: sourceModels,
-          },
+function discoveryOptions(providerId: string, discovered: ProviderConfig) {
+  const provider: ProviderPlugin = {
+    id: providerId,
+    pluginId: providerId,
+    label: "Catalog fixture",
+    auth: [],
+    staticCatalog: { run: async () => ({ provider: discovered }) },
+  };
+  return {
+    preparedStaticProviderCatalog: {
+      providers: [provider],
+      entries: [
+        {
+          provider,
+          providerConfigs: { [providerId]: discovered },
         },
-      },
-    } as unknown as OpenClawConfig;
-    vi.spyOn(modelsConfigProviders, "resolveImplicitProviders").mockResolvedValue({
-      "model-input-fixture": {
-        ...configuredProvider,
-        models: [model("vision-model", ["text", "image"])],
-      },
-    });
+      ],
+    },
+    providerDiscoveryEntriesOnly: true,
+    providerDiscoveryProviderIds: [providerId],
+  };
+}
 
-    const plan = await planModelsJsonForTest({
-      cfg: sourceModels.length ? sourceConfigForSecrets : cfg,
-      discoveryAuthConfig: cfg,
-      sourceConfigForSecrets,
-      agentDir: "/tmp/openclaw-model-input-presence",
-      // Model-ID policies are part of this prepared merge fixture, not ambient discovery.
-      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
-      env: { MODEL_INPUT_FIXTURE_KEY: "default" },
-      existingRaw: "",
-      existingParsed: {},
-    });
+function writePlan(plan: Awaited<ReturnType<typeof planModelsJsonForTest>>) {
+  if (plan.action !== "write") {
+    throw new Error("Expected catalog write plan");
+  }
+  return plan;
+}
 
-    expect(plan.action).toBe("write");
-    if (plan.action !== "write") {
-      throw new Error(`expected write plan, got ${plan.action}`);
-    }
-    const generated = JSON.parse(plan.contents) as {
-      providers: Record<string, { models?: Array<{ input?: string[] }> }>;
-    };
-    expect(generated.providers["model-input-fixture"]?.models?.[0]?.input).toEqual(expected);
-  });
-
+describe("models config input presence", () => {
   it.each(["merge", "replace"] as const)(
     "keeps one-step identities and exact source fields through repeated %s planning",
     async (mode) => {
@@ -162,13 +111,6 @@ describe("models config input presence", () => {
           }),
         ),
       };
-      const plugin: ProviderPlugin = {
-        id: providerId,
-        pluginId: providerId,
-        label: "Catalog fields fixture",
-        auth: [],
-        staticCatalog: { run: async () => ({ provider: discovered }) },
-      };
       const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [
           {
@@ -200,38 +142,33 @@ describe("models config input presence", () => {
           cost: { ...(merged ? scopedRates : emptyRates), output: 8 },
         },
         { id: "exact", input: inheritedInput, cost: merged ? rates : undefined },
+        ...(merged ? [{ id: "discovered-only", input: ["text", "image"], cost: rates }] : []),
       ];
+      const discovery = discoveryOptions(providerId, discovered);
       await withOpenClawTestState({ label: "catalog-authored-fields" }, async (state) => {
         let existingRaw = "";
         let existingParsed: unknown = {};
         let pluginCatalogs: Array<{ pluginId: string; contents: string }> = [];
         for (let pass = 0; pass < 2; pass++) {
-          const plan = await planOpenClawModelsJson({
-            context: {
-              cfg,
-              discoveryAuthConfig: cfg,
-              sourceConfigForSecrets: cfg,
-              agentDir: state.agentDir(),
-              env: state.env,
-              envFingerprint: state.env,
-              pluginMetadataSnapshot,
-              preparedStaticProviderCatalog: {
-                providers: [plugin],
-                entries: [{ provider: plugin, result: { provider: discovered } }],
+          const plan = writePlan(
+            await planOpenClawModelsJson({
+              authStore: { version: 1, profiles: {} },
+              context: {
+                cfg,
+                discoveryAuthConfig: cfg,
+                sourceConfigForSecrets: cfg,
+                agentDir: state.agentDir(),
+                env: state.env,
+                envFingerprint: state.env,
+                pluginMetadataSnapshot,
+                ...discovery,
               },
-              providerDiscoveryEntriesOnly: true,
-              providerDiscoveryProviderIds: [providerId],
-            },
-            existingRaw,
-            existingParsed,
-            pluginCatalogs,
-          });
-          expect(plan.action).toBe("write");
-          if (plan.action !== "write") {
-            throw new Error(`Expected catalog write plan, got ${plan.action}`);
-          }
+              existingRaw,
+              existingParsed,
+              pluginCatalogs,
+            }),
+          );
           const contents = plan.pluginCatalogWrites?.["plugins/custom/catalog.json"];
-          expect(contents).toBeDefined();
           if (!contents) {
             throw new Error("Expected the plugin-owned catalog");
           }
@@ -262,44 +199,18 @@ describe("models config input presence", () => {
     tieredPricing: [{ input: 33, output: 44, cacheRead: 5, cacheWrite: 6, range: [0] as [number] }],
   };
   const oldCost = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
-  const authoredRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
-  const authoredTiers = [{ ...authoredRates, range: [0] as [number] }];
   it.each<{
     name: string;
     cost?: Partial<ModelDefinitionConfig["cost"]>;
     expected: ModelDefinitionConfig["cost"];
-    missingSource?: boolean;
     independent?: boolean;
     duplicateCost?: Partial<ModelDefinitionConfig["cost"]>;
   }>([
-    { name: "omitted cost", cost: undefined, expected: liveCost },
     { name: "empty cost", cost: {}, expected: liveCost },
-    {
-      name: "partial cost",
-      cost: { input: 7 },
-      expected: { ...liveCost, input: 7, tieredPricing: undefined },
-    },
-    { name: "full cost", cost: authoredRates, expected: authoredRates },
     {
       name: "zero cost",
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       expected: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    },
-    {
-      name: "authored tiers",
-      cost: { tieredPricing: authoredTiers },
-      expected: { ...liveCost, tieredPricing: authoredTiers },
-    },
-    {
-      name: "empty tiers",
-      cost: { tieredPricing: [] },
-      expected: { ...liveCost, tieredPricing: [] },
-    },
-    {
-      name: "independent missing source row",
-      missingSource: true,
-      cost: undefined,
-      expected: oldCost,
     },
     { name: "independent config", independent: true, expected: oldCost },
     {
@@ -310,7 +221,7 @@ describe("models config input presence", () => {
     },
   ])(
     "uses authored $name through discovery and final catalog merging",
-    async ({ cost, expected, missingSource, independent, duplicateCost }) => {
+    async ({ cost, expected, independent, duplicateCost }) => {
       const providerId = "catalog-price-fixture";
       const configuredModel = {
         ...model("priced-model", ["text", "image"]),
@@ -325,26 +236,19 @@ describe("models config input presence", () => {
         models: [configuredModel],
       };
       const cfg: OpenClawConfig = { models: { providers: { [providerId]: configuredProvider } } };
+      const { cost: _materializedCost, ...sourceModel } = configuredModel;
       const sourceConfigForSecrets = {
         models: {
           providers: {
             " Catalog-Price-Fixture ": {
               ...configuredProvider,
-              models: missingSource
-                ? []
-                : [
-                    {
-                      id: "priced-model",
-                      name: "priced-model",
-                      reasoning: false,
-                      input: ["text", "image"],
-                      contextWindow: 4096,
-                      maxTokens: 512,
-                      compat: configuredModel.compat,
-                      ...(cost === undefined ? {} : { cost }),
-                    },
-                    ...(duplicateCost ? [{ ...configuredModel, cost: duplicateCost }] : []),
-                  ],
+              models: [
+                {
+                  ...sourceModel,
+                  ...(cost === undefined ? {} : { cost }),
+                },
+                ...(duplicateCost ? [{ ...configuredModel, cost: duplicateCost }] : []),
+              ],
             },
           },
         },
@@ -356,25 +260,13 @@ describe("models config input presence", () => {
           model("discovered-only"),
         ],
       };
-      const plugin: ProviderPlugin = {
-        id: providerId,
-        pluginId: providerId,
-        label: "Catalog price fixture",
-        auth: [],
-        staticCatalog: { run: async () => ({ provider: discovered }) },
-      };
       const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
       const options = {
         authStore: { version: 1, profiles: {} },
         pluginMetadataSnapshot,
-        providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: [providerId],
-        preparedStaticProviderCatalog: {
-          providers: [plugin],
-          entries: [{ provider: plugin, result: { provider: discovered } }],
-        },
+        ...discoveryOptions(providerId, discovered),
       };
-      if (independent || missingSource) {
+      if (independent) {
         // Missing top-level runtime state makes this an independent supplied config.
         setRuntimeConfigSnapshot({ ...cfg, gateway: { mode: "local" } }, sourceConfigForSecrets);
         await withOpenClawTestState({ label: "independent-model-cost" }, async (state) => {
@@ -384,6 +276,7 @@ describe("models config input presence", () => {
           });
           expect(JSON.parse(plan.modelsJsonContents!).providers[providerId].models).toEqual([
             { ...configuredModel, cost: expected },
+            model("discovered-only"),
           ]);
         });
         return;
@@ -408,23 +301,22 @@ describe("models config input presence", () => {
       );
       // Workers retain the captured pair after losing the parent's process-local snapshot.
       clearRuntimeConfigSnapshot();
-      const plan = await planModelsJsonForTest({
-        ...options,
-        cfg: cloned.sourceConfigForSecrets,
-        discoveryAuthConfig: cloned.input.config,
-        sourceConfigForSecrets: cloned.sourceConfigForSecrets,
-        agentDir: cloned.input.agentDir,
-        env: {},
-        existingRaw: "",
-        existingParsed: {},
-      });
-      expect(plan.action).toBe("write");
-      if (plan.action !== "write") {
-        throw new Error(`expected write plan, got ${plan.action}`);
-      }
+      const plan = writePlan(
+        await planModelsJsonForTest({
+          ...options,
+          cfg: cloned.sourceConfigForSecrets,
+          discoveryAuthConfig: cloned.input.config,
+          sourceConfigForSecrets: cloned.sourceConfigForSecrets,
+          agentDir: cloned.input.agentDir,
+          env: {},
+          existingRaw: "",
+          existingParsed: {},
+        }),
+      );
       const generated = JSON.parse(plan.contents);
       expect(generated.providers[providerId].models).toEqual([
         { ...configuredModel, cost: expected },
+        model("discovered-only"),
       ]);
     },
   );

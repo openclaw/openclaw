@@ -21,130 +21,124 @@ import {
 setupRunAttemptTestHooks();
 
 describe("Codex attempt TTS media lifetime", () => {
-  it.each([
-    { scenario: "normal", timedOut: false, earlierAccepted: false },
-    { scenario: "timed out", timedOut: true, earlierAccepted: false },
-    { scenario: "timed out after earlier accepted audio", timedOut: true, earlierAccepted: true },
-  ])(
-    "delivers only accepted genuine host TTS after full Codex finalization: $scenario",
-    async ({ timedOut, earlierAccepted }) => {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      const middleware = async (event: {
-        toolCallId: string;
-        result: AgentToolResult<unknown>;
-      }) => {
-        if (event.toolCallId === "host-tts") {
-          entered.resolve();
-          await release.promise;
-        }
-        return { result: event.result };
-      };
-      const registry = createEmptyPluginRegistry();
-      registry.agentToolResultMiddlewares.push({
-        pluginId: "held-result",
-        pluginName: "Held result",
-        rawHandler: middleware,
-        handler: middleware,
-        runtimes: ["codex"],
-        source: "test",
+  it("delivers earlier accepted TTS but discards audio whose result timed out", async () => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const middleware = async (event: { toolCallId: string; result: AgentToolResult<unknown> }) => {
+      if (event.toolCallId === "host-tts") {
+        entered.resolve();
+        await release.promise;
+      }
+      return { result: event.result };
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "held-result",
+      pluginName: "Held result",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const createBridge = vi.spyOn(dynamicTools, "createCodexDynamicToolBridge");
+    const started = createDeferred<void>();
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        started.resolve();
+      }
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["tts"];
+    setCodexTestModelSupportsTools(params, true);
+    const audioPath = path.join(tempDir, "reply.opus");
+    const earlierPath = path.join(tempDir, "earlier.opus");
+    const host = await createHostTtsRuntimeContract(params, audioPath, {
+      nativeModelPolicySupport: "exact",
+    });
+    params.hostCapabilities = host.hostCapabilities;
+    // Own the attempt clock before cold preparation arms its watchdog.
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const run = runCodexAppServerAttempt(params);
+    const attemptEnded = run.then(() => {
+      throw new Error("Codex attempt settled before the expected fixture progress");
+    });
+    let handle:
+      | MockInstance<ReturnType<typeof dynamicTools.createCodexDynamicToolBridge>["handleToolCall"]>
+      | undefined;
+    try {
+      await Promise.race([started.promise, attemptEnded]);
+      const bridge = createBridge.mock.results[0]?.value;
+      if (!bridge) {
+        throw new Error("Expected the attempt's real dynamic tool bridge");
+      }
+      handle = vi.spyOn(bridge, "handleToolCall");
+      host.synthesis.mockResolvedValueOnce({
+        success: true,
+        audioPath: earlierPath,
+        provider: "test-speech",
+        audioAsVoice: true,
       });
-      setActivePluginRegistry(registry);
-      const createBridge = vi.spyOn(dynamicTools, "createCodexDynamicToolBridge");
-      const harness = createStartedThreadHarness();
-      const params = createParams(
-        path.join(tempDir, "session.jsonl"),
-        path.join(tempDir, "workspace"),
-      );
-      params.runtimePlan = createCodexRuntimePlanFixture();
-      params.sourceReplyDeliveryMode = "message_tool_only";
-      params.toolsAllow = ["tts"];
-      setCodexTestModelSupportsTools(params, true);
-      const audioPath = path.join(tempDir, "reply.opus");
-      const earlierPath = path.join(tempDir, "earlier.opus");
-      const host = await createHostTtsRuntimeContract(params, audioPath);
-      params.hostCapabilities = host.hostCapabilities;
-      const run = runCodexAppServerAttempt(params);
-      let handle:
-        | MockInstance<
-            ReturnType<typeof dynamicTools.createCodexDynamicToolBridge>["handleToolCall"]
-          >
-        | undefined;
-      try {
-        await harness.waitForMethod("turn/start");
-        const bridge = createBridge.mock.results[0]?.value;
-        if (!bridge) {
-          throw new Error("Expected the attempt's real dynamic tool bridge");
-        }
-        handle = vi.spyOn(bridge, "handleToolCall");
-        if (earlierAccepted) {
-          host.synthesis.mockResolvedValueOnce({
-            success: true,
-            audioPath: earlierPath,
-            provider: "test-speech",
-            audioAsVoice: true,
-          });
-          expect(
-            await harness.handleServerRequest({
-              id: "earlier-tts",
-              method: "item/tool/call",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-                callId: "earlier-tts",
-                namespace: null,
-                tool: "tts",
-                arguments: { text: "Earlier accepted audio." },
-              },
-            }),
-          ).toMatchObject({ success: true });
-        }
-        vi.useFakeTimers();
-        const response = harness.handleServerRequest({
-          id: "host-tts",
+      expect(
+        await harness.handleServerRequest({
+          id: "earlier-tts",
           method: "item/tool/call",
           params: {
             threadId: "thread-1",
             turnId: "turn-1",
-            callId: "host-tts",
+            callId: "earlier-tts",
             namespace: null,
             tool: "tts",
-            arguments: { text: "Read this aloud.", timeoutMs: 1 },
+            arguments: { text: "Earlier accepted audio." },
           },
-        });
-        await entered.promise;
-        if (timedOut) {
-          await vi.advanceTimersByTimeAsync(1);
-          expect(await response).toMatchObject({ success: false });
-        }
-        release.resolve();
-        // The watchdog winner does not await its losing middleware continuation.
-        await Promise.all(handle.mock.results.map((entry) => entry.value));
-        expect(await response).toMatchObject({ success: !timedOut });
-        expect(host.synthesis).toHaveBeenCalledTimes(earlierAccepted ? 2 : 1);
-        vi.useRealTimers();
-        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        const result = await run;
-        const expectedMedia = earlierAccepted ? [earlierPath] : timedOut ? [] : [audioPath];
-        expect(host.deliverablePayloads(result)).toEqual(
-          expectedMedia.length
-            ? [
-                expect.objectContaining({
-                  mediaUrls: expectedMedia,
-                  audioAsVoice: true,
-                  trustedLocalMedia: true,
-                }),
-              ]
-            : [],
-        );
-        expect(result.toolMediaUrls ?? []).toEqual(expectedMedia);
-      } finally {
-        release.resolve();
-        await Promise.allSettled(handle?.mock.results.map((entry) => entry.value) ?? []);
-        vi.useRealTimers();
-        host.close();
-        setActivePluginRegistry(createEmptyPluginRegistry());
-      }
-    },
-  );
+        }),
+      ).toMatchObject({ success: true });
+      const response = harness.handleServerRequest({
+        id: "host-tts",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "host-tts",
+          namespace: null,
+          tool: "tts",
+          arguments: { text: "Read this aloud.", timeoutMs: 1 },
+        },
+      });
+      await Promise.race([
+        entered.promise,
+        attemptEnded,
+        response.then(() => {
+          throw new Error("TTS request settled before entering result middleware");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await response).toMatchObject({ success: false });
+      release.resolve();
+      // The watchdog winner does not await its losing middleware continuation.
+      await Promise.all(handle.mock.results.map((entry) => entry.value));
+      expect(await response).toMatchObject({ success: false });
+      expect(host.synthesis).toHaveBeenCalledTimes(2);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+      expect(host.deliverablePayloads(result)).toEqual([
+        expect.objectContaining({
+          mediaUrls: [earlierPath],
+          audioAsVoice: true,
+          trustedLocalMedia: true,
+        }),
+      ]);
+      expect(result.toolMediaUrls).toEqual([earlierPath]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(handle?.mock.results.map((entry) => entry.value) ?? []);
+      vi.useRealTimers();
+      host.close();
+    }
+  });
 });

@@ -1,4 +1,3 @@
-// Signal helper module supports config schema behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   buildChannelConfigSchema,
@@ -15,19 +14,10 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { z } from "zod";
 import { resolveSignalAccountEntry } from "./account-selection.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
+import { LEGACY_SIGNAL_TRANSPORT_FIELDS } from "./legacy-transport.js";
+import { assertSignalSocketTransport } from "./transport-url.js";
 
-const SIGNAL_RETIRED_TRANSPORT_KEYS = [
-  "apiMode",
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
+const SIGNAL_RETIRED_TRANSPORT_KEYS = ["apiMode", ...LEGACY_SIGNAL_TRANSPORT_FIELDS] as const;
 
 const SIGNAL_TRANSPORT_URL_PATTERN = /^[Hh][Tt][Tt][Pp][Ss]?:\/\/(?![^/?#]*@)/;
 const SignalTransportUrlSchema = z
@@ -70,6 +60,10 @@ const SignalTransportSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("managed-native"),
       configPath: z.string().optional(),
+      socketPath: z
+        .string()
+        .regex(/^\/(?!\/)[^\0]*[^/\0]$/, "Expected an absolute POSIX socket file path")
+        .optional(),
       url: SignalTransportUrlSchema.optional(),
       httpHost: z.string().optional(),
       httpPort: z.number().int().min(1).max(65_535).optional(),
@@ -78,7 +72,18 @@ const SignalTransportSchema = z.discriminatedUnion("kind", [
       receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
       ignoreStories: z.boolean().optional(),
     })
-    .strict(),
+    .strict()
+    .superRefine((transport, ctx) => {
+      try {
+        assertSignalSocketTransport(transport);
+      } catch (error) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["socketPath"],
+          message: String(error instanceof Error ? error.message : error),
+        });
+      }
+    }),
   z
     .object({
       kind: z.literal("external-native"),

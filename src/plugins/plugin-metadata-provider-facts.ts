@@ -2,32 +2,29 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type {
-  PluginManifestProviderEndpoint,
-  PluginManifestProviderRequestProvider,
-} from "./manifest.js";
+import type { PluginManifestProviderEndpoint } from "./manifest.js";
 import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
-import type { PluginProviderAuthAliasCandidate } from "./plugin-metadata-snapshot.types.js";
+import type {
+  PluginProviderAuthAliasCandidate,
+  PluginProviderAuthContribution,
+} from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
+import { listSetupProviderIds } from "./setup-descriptors.js";
 
 const PROVIDER_ENDPOINT_CLASSES = new Set(
-  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
+  "anthropic-public cerebras-native chutes-native deepseek-native github-copilot-native groq-native meta-native mistral-public minimax-native moonshot-native modelstudio-native novita-native nvidia-native openai-public openai opencode-native opencode-go-native azure-openai openrouter vercel-ai-gateway xai-native xiaomi-native zai-native google-generative-ai google-vertex".split(
     " ",
   ),
 );
 
 function normalizeProviderHosts(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {
@@ -51,7 +48,7 @@ function hostMatchesSuffix(host: string, suffix: string): boolean {
     : host === suffix || host.endsWith(`.${suffix}`);
 }
 
-/** Shares declared endpoint matching between request classification and catalog eligibility. */
+/** Matches endpoint facts normalized by their metadata or catalog preparation owner. */
 export function matchesPluginProviderEndpoint(
   endpoint: PluginManifestProviderEndpoint,
   params: {
@@ -62,18 +59,11 @@ export function matchesPluginProviderEndpoint(
   return (
     (endpoint.hosts ?? []).includes(params.host) ||
     (endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix)) ||
-    Boolean(
-      params.normalizedBaseUrl &&
-      (endpoint.baseUrls ?? []).some(
-        (baseUrl) =>
-          baseUrl === params.normalizedBaseUrl ||
-          normalizePluginProviderBaseUrl(baseUrl) === params.normalizedBaseUrl,
-      ),
-    )
+    Boolean(params.normalizedBaseUrl && endpoint.baseUrls?.includes(params.normalizedBaseUrl))
   );
 }
 
-function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
+export function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoint[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -83,7 +73,7 @@ function prepareProviderEndpoints(value: unknown): PluginManifestProviderEndpoin
       continue;
     }
     const endpointClass = normalizeOptionalString(endpoint.endpointClass);
-    if (!endpointClass || !PROVIDER_ENDPOINT_CLASSES.has(endpointClass)) {
+    if (!endpointClass) {
       continue;
     }
     const googleVertexRegion = normalizeOptionalString(endpoint.googleVertexRegion);
@@ -152,45 +142,60 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   return aliases;
 }
 
-export function buildPluginMetadataProviderFacts(plugins: readonly PluginManifestRecord[]) {
-  const providerEndpoints = plugins.flatMap((plugin) =>
-    prepareProviderEndpoints(plugin.providerEndpoints),
+export function buildPluginMetadataProviderFacts(
+  plugins: readonly PluginManifestRecord[],
+  enabledPluginIds?: ReadonlySet<string>,
+) {
+  const providerEndpoints = [...plugins, ...listOfficialExternalProviderEndpointManifests()]
+    .flatMap((plugin) => prepareProviderEndpoints(plugin.providerEndpoints))
+    .filter((endpoint) => PROVIDER_ENDPOINT_CLASSES.has(endpoint.endpointClass));
+  const providerRequests = new Map(
+    [...collectPluginProviderRequestOwners(plugins)].map(([provider, { policy }]) => [
+      provider,
+      policy,
+    ]),
   );
-  const providerRequests = new Map<string, PluginManifestProviderRequestProvider>();
+  const providerAuthContributions: PluginProviderAuthContribution[] = [];
+  const providersManagingOwnAvailability = new Set<string>();
+  const selectedProviders = new Set<string>();
   for (const plugin of plugins) {
-    const requests = isRecord(plugin.providerRequest?.providers)
-      ? plugin.providerRequest.providers
-      : {};
-    for (const [rawProvider, request] of Object.entries(requests)) {
-      if (!isRecord(request)) {
-        continue;
+    if (enabledPluginIds?.has(plugin.id)) {
+      for (const rawProvider of plugin.providers) {
+        const provider = normalizeProviderId(rawProvider);
+        if (!provider || selectedProviders.has(provider)) {
+          continue;
+        }
+        selectedProviders.add(provider);
+        if (plugin.managesOwnAvailability === true) {
+          providersManagingOwnAvailability.add(provider);
+        }
       }
-      const provider = normalizeLowercaseStringOrEmpty(rawProvider);
-      if (!provider) {
-        continue;
-      }
-      const supportsStreamingUsage = isRecord(request.openAICompletions)
-        ? request.openAICompletions.supportsStreamingUsage
-        : undefined;
-      providerRequests.set(provider, {
-        ...(normalizeOptionalString(request.family)
-          ? { family: normalizeOptionalString(request.family) }
-          : {}),
-        ...(normalizeOptionalString(request.compatibilityFamily) === "moonshot"
-          ? { compatibilityFamily: "moonshot" as const }
-          : {}),
-        ...(typeof supportsStreamingUsage === "boolean"
-          ? { openAICompletions: { supportsStreamingUsage } }
-          : {}),
+    }
+    // Package declarations are stable; readers still decide eligibility against current config.
+    const envProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.envVars?.length,
+    );
+    const evidenceProviders = (plugin.setup?.providers ?? []).filter(
+      (provider) => provider.authEvidence?.length,
+    );
+    const fallbackProviderRefs =
+      plugin.setup?.requiresRuntime !== false
+        ? listSetupProviderIds(plugin).map(normalizeProviderId).filter(Boolean)
+        : [];
+    if (envProviders.length || evidenceProviders.length || fallbackProviderRefs.length) {
+      providerAuthContributions.push({
+        plugin,
+        envProviders,
+        evidenceProviders,
+        fallbackProviderRefs,
       });
     }
-  }
-  for (const manifest of listOfficialExternalProviderEndpointManifests()) {
-    providerEndpoints.push(...prepareProviderEndpoints(manifest.providerEndpoints));
   }
   return {
     providerEndpoints,
     providerRequests,
+    providerAuthContributions,
+    providersManagingOwnAvailability,
     modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     providerAuthAliases: buildPluginMetadataProviderAuthAliases(plugins),
   };

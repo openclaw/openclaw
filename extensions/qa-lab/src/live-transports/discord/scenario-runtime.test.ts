@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  discordQaScenarioSupport,
-  type DiscordQaScenarioImplementation,
-} from "./discord-live.runtime.js";
+import * as testing from "./discord-live.runtime.js";
+import type { DiscordQaScenarioImplementation } from "./discord-live.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 import { runDiscordScenario } from "./scenario-runtime.js";
 
@@ -37,7 +35,6 @@ describe("Discord QA scenario runtime", () => {
       sutAccountId: "sut",
       sutIdentity: { id: "323456789012345678", bot: true },
     } as unknown as DiscordQaScenarioEnvironment;
-    const testing = discordQaScenarioSupport.testing;
     vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
       id: "523456789012345678",
       channel_id: environment.runtimeEnv.channelId,
@@ -67,5 +64,46 @@ describe("Discord QA scenario runtime", () => {
         source: "request-to-observed-message",
       },
     });
+  });
+
+  it("leaves harness cleanup headroom while proving no reply", async () => {
+    const implementation = {
+      buildRun: () => ({
+        kind: "channel-message" as const,
+        expectReply: false,
+        input: "ignore this",
+        expectedTextIncludes: [],
+        matchText: "must not appear",
+      }),
+    } satisfies DiscordQaScenarioImplementation;
+    const environment = {
+      configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
+      driverIdentity: { id: "423456789012345678", bot: true },
+      observedMessages: [],
+      outputDir: "/unused",
+      runtimeEnv: {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotToken: "driver-token",
+        sutBotToken: "sut-token",
+        sutApplicationId: "323456789012345678",
+      },
+      scenario: { id: "discord-mention-gating", timeoutMs: 8_000, title: "Mention gating" },
+      sutAccountId: "sut",
+      sutIdentity: { id: "323456789012345678", bot: true },
+    } as unknown as DiscordQaScenarioEnvironment;
+    vi.spyOn(testing, "sendChannelMessage").mockResolvedValue({
+      id: "523456789012345678",
+      channel_id: environment.runtimeEnv.channelId,
+      timestamp: "2026-09-02T12:00:00.000Z",
+    });
+    const poll = vi.spyOn(testing, "pollChannelMessages").mockImplementation(async (params) => {
+      throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
+    });
+
+    await expect(runDiscordScenario(environment, implementation)).resolves.toEqual({
+      details: "no reply",
+    });
+    expect(poll).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5_000 }));
   });
 });

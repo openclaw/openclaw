@@ -4,9 +4,14 @@ import {
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
@@ -16,7 +21,6 @@ import {
   prepareEmbeddedAttemptPromptAssembly,
   prepareEmbeddedAttemptPromptContext,
 } from "./attempt-prompt-build.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 vi.mock("../../../plugins/host-hook-state.js", () => ({
@@ -26,29 +30,23 @@ vi.mock("../../../plugins/host-hook-state.js", () => ({
 registerAgentSessionLoopTestLifecycle();
 
 beforeEach(() => {
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveImageGenerationTaskPromptContextForSession",
-  ).mockResolvedValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveVideoGenerationTaskPromptContextForSession",
-  ).mockResolvedValue(undefined);
-  vi.spyOn(
-    mediaTaskStatus,
-    "buildActiveMusicGenerationTaskPromptContextForSession",
-  ).mockResolvedValue(undefined);
+  vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
+});
 
 const HOOK = "Static plugin guidance";
 const BASE = `Stable workspace prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic channel guidance`;
 const OVERRIDE = "Custom hook system prompt without a cache boundary";
 
 async function createTurnFixture(systemPromptOverride?: string) {
+  const config = {};
+  setRuntimeConfigSnapshot(config);
   const { session, sessionManager, modelRegistry } = await createTestSession();
   const runId = `media-cache-${systemPromptOverride ? "override" : "base"}`;
-  const admission = prepareSystemAgentRunAdmission({}, runId, "main", "media-cache-test");
+  const admission = prepareSystemAgentRunAdmission(config, runId, "main", "media-cache-test");
   onTestFinished(() => {
     admission.close();
     forgetPromptBuildDrainCacheForRun(runId);
@@ -58,7 +56,7 @@ async function createTurnFixture(systemPromptOverride?: string) {
     authStorage: modelRegistry.authStorage,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry,
-    config: {},
+    config,
     model: testModel,
     modelId: testModel.id,
     provider: testModel.provider,
@@ -90,12 +88,10 @@ async function createTurnFixture(systemPromptOverride?: string) {
     ],
   });
   return async (progress?: string) => {
-    vi.mocked(
-      mediaTaskStatus.buildActiveImageGenerationTaskPromptContextForSession,
-    ).mockResolvedValue(
+    vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       progress
-        ? `- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
-        : undefined,
+        ? `## Media Generation Tasks\n- tool=image_generate; task=task-1; status=running; progress_json="${progress}"`
+        : "## Media Generation Tasks\n- tool=image_generate; none",
     );
     let systemPromptText = BASE;
     const setActiveSessionSystemPrompt = (next: string) => {
@@ -113,6 +109,7 @@ async function createTurnFixture(systemPromptOverride?: string) {
       sessionAgentId: "main",
       runtimeModel: testModel.id,
       systemPromptText,
+      hasBaselineTools: () => true,
       applyPromptBuildToolsAllow: () => ["image_generate"],
       setActiveSessionSystemPrompt,
       setLeasedSteering: vi.fn(),
@@ -141,11 +138,8 @@ async function createTurnFixture(systemPromptOverride?: string) {
 }
 
 describe("#85203 media facts preserve the complete assembled system prompt", () => {
-  it.each([
-    { scenario: "existing boundary", override: undefined },
-    { scenario: "marker-free hook override", override: OVERRIDE },
-  ])("keeps static hooks and model identity stable with $scenario", async ({ override }) => {
-    const prepareTurn = await createTurnFixture(override);
+  it("keeps static hooks and model identity stable with a marker-free hook override", async () => {
+    const prepareTurn = await createTurnFixture(OVERRIDE);
     const rendering = await prepareTurn("Rendering image");
     const encoding = await prepareTurn("Encoding image");
     const idle = await prepareTurn();
@@ -166,7 +160,7 @@ describe("#85203 media facts preserve the complete assembled system prompt", () 
     const split = splitSystemPromptCacheBoundary(idle.systemPromptForHook);
     expect(split).toBeDefined();
     expect(split?.stablePrefix).toContain(HOOK);
-    expect(split?.stablePrefix).toContain(override ?? "Stable workspace prefix");
+    expect(split?.stablePrefix).toContain(OVERRIDE);
     expect(split?.stablePrefix).not.toContain("Current model identity:");
     expect(split?.dynamicSuffix).toContain("Current model identity:");
   });

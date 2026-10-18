@@ -1,60 +1,48 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
-import {
-  buildGatewaySessionEventFields,
-  buildGatewaySessionSnapshot,
-} from "./session-event-payload.js";
+import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+
+it("clears transient title pending in both event and nested session snapshots", () => {
+  const sessionRow = { key: "agent:main:dashboard:title", kind: "direct" as const, updatedAt: 1 };
+  expect(
+    buildGatewaySessionSnapshot({
+      sessionRow: { ...sessionRow, titlePending: true },
+      includeSession: true,
+    }),
+  ).toMatchObject({ titlePending: true, session: { titlePending: true } });
+  expect(buildGatewaySessionSnapshot({ sessionRow, includeSession: true })).toMatchObject({
+    titlePending: false,
+    session: { titlePending: false },
+  });
+});
+
+it("clears assistant previews in event and nested session snapshots", () => {
+  const sessionRow = { key: "agent:main:preview", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: {
+      ...sessionRow,
+      lastAssistantMessage: { text: "Previous answer", timestamp: 100 },
+    },
+    includeSession: true,
+  });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow, includeSession: true });
+  expect({ ...previous, ...cleared }).toMatchObject({
+    lastAssistantMessage: null,
+    session: { lastAssistantMessage: null },
+  });
+});
 
 it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
   const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
-  const previous = buildGatewaySessionEventFields({
+  const previous = buildGatewaySessionSnapshot({
     sessionRow: { ...sessionRow, autoLabel: "Device", displayName: "Device" },
   });
-  const cleared = buildGatewaySessionEventFields({ sessionRow });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
   expect({ ...previous, ...cleared }).toMatchObject({ autoLabel: null, displayName: null });
 });
 
-it("projects session actors and explicitly clears absent attribution", () => {
-  expect(
-    buildGatewaySessionEventFields({
-      sessionRow: {
-        key: "agent:main:owned",
-        kind: "direct",
-        updatedAt: 1,
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-        participantCount: 1,
-      },
-    }),
-  ).toMatchObject({
-    createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-    archivedBy: null,
-    archiveReason: null,
-    participants: [{ identity: { type: "profile", id: "profile-bob" }, label: "Bob" }],
-    participantCount: 1,
-  });
-
-  expect(
-    buildGatewaySessionEventFields({
-      sessionRow: {
-        key: "agent:main:archived",
-        kind: "direct",
-        updatedAt: 2,
-        archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-        archiveReason: "active-session-cap",
-      },
-    }),
-  ).toMatchObject({
-    createdActor: null,
-    archivedBy: { type: "human", id: "profile-bob", label: "Bob" },
-    archiveReason: "active-session-cap",
-    participants: [],
-    participantCount: 0,
-  });
-});
-
 it("projects the prepared permission boundary only for an explicit mode", () => {
-  const ordinary = buildGatewaySessionEventFields({
+  const ordinary = buildGatewaySessionSnapshot({
     sessionRow: {
       key: "agent:main:ordinary",
       kind: "direct",
@@ -66,7 +54,7 @@ it("projects the prepared permission boundary only for an explicit mode", () => 
   expect(ordinary).not.toHaveProperty("sessionRoot");
 
   expect(
-    buildGatewaySessionEventFields({
+    buildGatewaySessionSnapshot({
       sessionRow: {
         key: "agent:main:workspace",
         kind: "direct",
@@ -180,25 +168,9 @@ it("preserves active run id ownership across omitted, liveness, and exact states
   });
 });
 
-it.each(["user", "auto", null] as const)(
-  "carries model override source %s into session change events",
-  (source) => {
-    expect(
-      buildGatewaySessionEventFields({
-        sessionRow: {
-          key: "agent:main:pinned",
-          kind: "direct",
-          updatedAt: 1,
-          modelOverrideSource: source,
-        },
-      }).modelOverrideSource,
-    ).toBe(source);
-  },
-);
-
-it.each(["user", "auto", null] as const)(
-  "serializes lifecycle starts without model source %s or prior terminal timing",
-  (modelOverrideSource) => {
+it.each([false, true])(
+  "serializes lifecycle starts without prior timing, deriving liveness from the owner (active=%s)",
+  (active) => {
     // oxlint-disable-next-line unicorn/prefer-structured-clone -- exercise timing clears on the wire
     const snapshot: unknown = JSON.parse(
       JSON.stringify(
@@ -216,10 +188,11 @@ it.each(["user", "auto", null] as const)(
             modelProvider: "provider",
             activeModel: "model-b",
             activeModelProvider: "fallback-provider",
-            modelOverrideSource,
+            modelOverrideSource: "user",
           },
           lifecycle: true,
           includeSession: true,
+          activeRunState: active ? { active: true, runIds: ["next-run"] } : undefined,
           event: {
             runId: "next-run",
             sessionId: "pinned-session",
@@ -232,12 +205,21 @@ it.each(["user", "auto", null] as const)(
       ),
     );
     expect(snapshot).toMatchObject({
-      status: "running",
+      ...(active ? { status: "running" } : {}),
       startedAt: 300,
       endedAt: null,
       runtimeMs: null,
-      session: { status: "running", startedAt: 300, endedAt: null, runtimeMs: null },
+      session: {
+        ...(active ? { status: "running" } : {}),
+        startedAt: 300,
+        endedAt: null,
+        runtimeMs: null,
+      },
     });
+    if (!active) {
+      expect(snapshot).not.toHaveProperty("status");
+      expect(snapshot).not.toHaveProperty("session.status");
+    }
     for (const field of [
       "model",
       "modelProvider",
@@ -262,8 +244,11 @@ it.each([
         key: "agent:main:terminal",
         sessionId: "terminal-session",
         kind: "direct",
+        createdAt: 50,
+        lastReadAt: 150,
+        lastActivityAt: 120,
+        unread: false,
         updatedAt: 100,
-        status: "running",
         startedAt: 100,
       },
       includeSession: true,
@@ -276,15 +261,25 @@ it.each([
         seq: 1,
         ts: 200,
         stream: "lifecycle",
+        controlUiVisible: true,
         data: { phase: "end", startedAt: 100, endedAt: 200, aborted },
       },
     }),
   ).toMatchObject({
     status,
+    unread: true,
+    lastActivityAt: 200,
     hasActiveRun: true,
     endedAt: 200,
     runtimeMs: 100,
-    session: { status, hasActiveRun: true, endedAt: 200, runtimeMs: 100 },
+    session: {
+      status,
+      unread: true,
+      lastActivityAt: 200,
+      hasActiveRun: true,
+      endedAt: 200,
+      runtimeMs: 100,
+    },
   });
 });
 
@@ -292,10 +287,19 @@ it("publishes prompt budgets and their invalidation to subscribed sessions", () 
   const status = contextBudgetStatusFixture();
   const row = { key: "agent:main:main", kind: "direct" as const, updatedAt: 2 };
   expect(
-    buildGatewaySessionEventFields({ sessionRow: { ...row, contextBudgetStatus: status } }),
+    buildGatewaySessionSnapshot({ sessionRow: { ...row, contextBudgetStatus: status } }),
   ).toHaveProperty("contextBudgetStatus", status);
-  expect(buildGatewaySessionEventFields({ sessionRow: row })).toHaveProperty(
+  expect(buildGatewaySessionSnapshot({ sessionRow: row })).toHaveProperty(
     "contextBudgetStatus",
     null,
   );
+});
+
+it("publishes and clears device folder bindings in subscribed snapshots", () => {
+  const sessionRow = { key: "agent:main:folder", kind: "direct" as const, updatedAt: 1 };
+  const deviceFolder = { deviceId: "paired-device", path: "/home/example/project" };
+  const previous = buildGatewaySessionSnapshot({ sessionRow: { ...sessionRow, deviceFolder } });
+  expect(previous.deviceFolder).toEqual(deviceFolder);
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ deviceFolder: null });
 });

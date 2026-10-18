@@ -3,6 +3,12 @@ import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 
 type AgentRestartRecoveryChannelContext = {
   channel: string;
@@ -14,15 +20,22 @@ type AgentRestartRecoveryChannelContext = {
   sourceTurnId: string;
 };
 
-/** Reconstructs presentation and delivery facts from one exact host-owned recovery claim. */
+/** Reconstructs source policy, presentation, and delivery facts from one exact recovery claim. */
 export function resolveAgentRestartRecoveryContext(params: {
   isRestartRecoveryResumeRun: boolean;
   canUseInternalRuntimeHandoff: boolean;
   expectedExistingSessionId?: string;
   resolvedSessionId?: string;
+  resolvedSessionKey: string | undefined;
   runId: string;
   sessionEntry?: SessionEntry;
-}): { channel?: AgentRestartRecoveryChannelContext; pinnedWidgetAuthoring?: true } | undefined {
+}):
+  | {
+      messageChannel: string;
+      channel?: AgentRestartRecoveryChannelContext;
+      pinnedWidgetAuthoring?: true;
+    }
+  | undefined {
   const expectedSessionId = normalizeOptionalString(params.expectedExistingSessionId);
   const entry = params.sessionEntry;
   if (
@@ -31,20 +44,38 @@ export function resolveAgentRestartRecoveryContext(params: {
     !entry ||
     expectedSessionId !== normalizeOptionalString(params.resolvedSessionId) ||
     expectedSessionId !== normalizeOptionalString(entry.sessionId) ||
+    !normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId) ||
     normalizeOptionalString(entry.restartRecoveryDeliveryRunId) !== params.runId
   ) {
     return undefined;
   }
+  if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
+    return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
+  }
   if (
     params.isRestartRecoveryResumeRun &&
-    entry.restartRecoverySourceIngress === "control-ui" &&
-    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId)
+    entry.restartRecoverySourceIngress === "internal" &&
+    !entry.restartRecoveryDeliveryContext
   ) {
-    return { pinnedWidgetAuthoring: true };
+    // WebChat context lets message tools infer external recipients from session keys.
+    const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
+    return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
+      ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }
+      : undefined;
   }
+  const messageChannel = normalizeMessageChannel(entry.restartRecoveryDeliveryContext?.channel);
+  if (
+    entry.restartRecoverySourceIngress !== "channel" ||
+    !messageChannel ||
+    !isDeliverableMessageChannel(messageChannel)
+  ) {
+    return undefined;
+  }
+  // A missing target removes delivery authority, not the source provider's policy boundary.
   const authority = resolveRestartRecoveryChannelAuthority(entry);
   return authority
     ? {
+        messageChannel,
         channel: {
           channel: authority.deliveryContext.channel,
           currentChannelId: authority.deliveryContext.to,
@@ -58,7 +89,7 @@ export function resolveAgentRestartRecoveryContext(params: {
           sameChannelThreadRequired: entry.restartRecoverySameChannelThreadRequired === true,
         },
       }
-    : undefined;
+    : { messageChannel };
 }
 
 /** Resolve only the private token durably owned by the admitted recovery cycle. */
@@ -77,15 +108,8 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   }
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;
-  if (!stored) {
-    return createExecutionIdentityRecoveryAdmission({
-      retryOnly: params.retryOnly,
-      expectedOperationalRunId: params.runId,
-    });
-  }
-  const token = parseExecutionIdentityAdmissionToken(stored);
   return createExecutionIdentityRecoveryAdmission({
-    token,
+    ...(stored ? { token: parseExecutionIdentityAdmissionToken(stored) } : {}),
     retryOnly: params.retryOnly,
     expectedOperationalRunId: params.runId,
   });

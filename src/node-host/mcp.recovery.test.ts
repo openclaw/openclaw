@@ -1,11 +1,17 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
+import "./mcp-manager.test-support.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { OpenClawStreamableHTTPClientTransport } from "../agents/mcp-http-transport.js";
-import { startNodeHostMcpManager } from "./mcp.js";
+import {
+  McpSseSessionExpiredError,
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "../agents/mcp-http-transport.js";
+
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
 
 function tool(name: string, inputSchema: Tool["inputSchema"] = { type: "object" }): Tool {
   return { name, inputSchema };
@@ -38,16 +44,24 @@ const stdioTransport = {
   requestTimeoutMs: 100,
 };
 
-function httpTransport(sessionId?: string) {
-  const transport = new OpenClawStreamableHTTPClientTransport(
-    new URL("http://127.0.0.1:1/mcp"),
-    sessionId ? { sessionId } : undefined,
-  );
+function httpTransport(
+  sessionId?: string,
+  transportType: "sse" | "streamable-http" = "streamable-http",
+) {
+  const transport =
+    transportType === "sse"
+      ? new OpenClawSSEClientTransport(new URL("http://127.0.0.1:1/sse"))
+      : new OpenClawStreamableHTTPClientTransport(
+          new URL("http://127.0.0.1:1/mcp"),
+          sessionId ? { sessionId } : undefined,
+        );
   transport.close = vi.fn(async () => {});
-  transport.terminateSession = vi.fn(async () => {});
+  if (transport instanceof OpenClawStreamableHTTPClientTransport) {
+    transport.terminateSession = vi.fn(async () => {});
+  }
   return {
     transport,
-    transportType: "streamable-http" as const,
+    transportType,
     connectionTimeoutMs: 100,
     requestTimeoutMs: 100,
   };
@@ -207,7 +221,7 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("redacts Streamable HTTP response bodies from node diagnostics", async () => {
+  it("preserves Streamable HTTP response bodies in tool errors", async () => {
     const client = createClient({
       tools: () => [tool("fail")],
       call: async () => {
@@ -222,8 +236,10 @@ describe("node host MCP live lifecycle", () => {
     const error = await manager
       .callMcpTool({ server: "docs", tool: "fail" })
       .catch((caught: unknown) => caught);
-    expect(String(error)).not.toContain("body-secret");
-    expect(String(error)).toContain("[redacted response body]");
+    expect(error).toMatchObject({
+      code: "MCP_TOOL_ERROR",
+      message: "Streamable HTTP error: Error POSTing to endpoint: bearer=body-secret",
+    });
     await manager.close();
   });
 
@@ -471,90 +487,101 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("recovers only an exact stateful Streamable HTTP 404 and never replays the call", async () => {
-    const replacementReady = createDeferred();
-    const expiredStateful = createClient({
-      tools: () => [tool("run")],
-      call: async () => {
-        throw new StreamableHTTPError(404, "Session not found");
-      },
-    });
-    const clients = {
-      stateful: [
-        expiredStateful,
-        createClient({
-          tools: () => [tool("run")],
-          connect: async () => await replacementReady.promise,
-        }),
-      ],
-      stateless: [
-        createClient({
-          tools: () => [tool("run")],
-          call: async () => {
-            throw new StreamableHTTPError(404, "Not found");
-          },
-        }),
-      ],
-      application: [
-        createClient({
-          tools: () => [tool("run")],
-          call: async () => ({ isError: true, content: [{ type: "text", text: "rejected" }] }),
-        }),
-      ],
-    } as const;
-    const generations = new Map<string, number>();
-    const manager = await startNodeHostMcpManager(
-      {
-        stateful: { url: "http://stateful.invalid/mcp" },
-        stateless: { url: "http://stateless.invalid/mcp" },
-        application: { url: "http://application.invalid/mcp" },
-      },
-      {
-        createClient: (serverName) => {
-          const generation = generations.get(serverName) ?? 0;
-          generations.set(serverName, generation + 1);
-          const client = clients[serverName as keyof typeof clients][generation];
-          if (!client) {
-            throw new Error(`unexpected ${serverName} MCP client generation ${generation}`);
-          }
-          return client;
+  it.each(["sse", "streamable-http"] as const)(
+    "recovers an expired %s session and never replays the call",
+    async (transportType) => {
+      const replacementReady = createDeferred();
+      const expiredStateful = createClient({
+        tools: () => [tool("run")],
+        call: async () => {
+          throw transportType === "sse"
+            ? new McpSseSessionExpiredError("Session not found")
+            : new StreamableHTTPError(404, "Session not found");
         },
-        resolveTransport: (serverName) =>
-          httpTransport(serverName === "stateful" ? "session-1" : undefined),
-        warn: vi.fn(),
-      },
-    );
+      });
+      const clients = {
+        stateful: [
+          expiredStateful,
+          createClient({
+            tools: () => [tool("run")],
+            connect: async () => await replacementReady.promise,
+          }),
+        ],
+        stateless: [
+          createClient({
+            tools: () => [tool("run")],
+            call: async () => {
+              throw new StreamableHTTPError(404, "Not found");
+            },
+          }),
+        ],
+        application: [
+          createClient({
+            tools: () => [tool("run")],
+            call: async () => ({ isError: true, content: [{ type: "text", text: "rejected" }] }),
+          }),
+        ],
+      } as const;
+      const generations = new Map<string, number>();
+      const manager = await startNodeHostMcpManager(
+        {
+          stateful: { url: "http://stateful.invalid/mcp" },
+          stateless: { url: "http://stateless.invalid/mcp" },
+          application: { url: "http://application.invalid/mcp" },
+        },
+        {
+          createClient: (serverName) => {
+            const generation = generations.get(serverName) ?? 0;
+            generations.set(serverName, generation + 1);
+            const client = clients[serverName as keyof typeof clients][generation];
+            if (!client) {
+              throw new Error(`unexpected ${serverName} MCP client generation ${generation}`);
+            }
+            return client;
+          },
+          resolveTransport: (serverName) =>
+            serverName === "stateful" ? httpTransport("session-1", transportType) : httpTransport(),
+          warn: vi.fn(),
+        },
+      );
 
-    await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).rejects.toMatchObject({
-      code: "MCP_TOOL_ERROR",
-    });
-    expect(expiredStateful.callTool).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(generations.get("stateful")).toBe(2));
-    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).not.toContain(
-      "stateful",
-    );
+      await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).rejects.toMatchObject({
+        code: "MCP_TOOL_ERROR",
+      });
+      expect(expiredStateful.callTool).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(generations.get("stateful")).toBe(2));
+      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).not.toContain(
+        "stateful",
+      );
 
-    replacementReady.resolve();
-    await vi.waitFor(() =>
-      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain("stateful"),
-    );
-    await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).resolves.toEqual({
-      content: [{ type: "text", text: "ok" }],
-    });
-    expect(expiredStateful.callTool).toHaveBeenCalledOnce();
+      replacementReady.resolve();
+      await vi.waitFor(() =>
+        expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain(
+          "stateful",
+        ),
+      );
+      await expect(manager.callMcpTool({ server: "stateful", tool: "run" })).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      expect(expiredStateful.callTool).toHaveBeenCalledOnce();
 
-    await expect(manager.callMcpTool({ server: "stateless", tool: "run" })).rejects.toMatchObject({
-      code: "MCP_TOOL_ERROR",
-    });
-    expect(generations.get("stateless")).toBe(1);
-    expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain("stateless");
+      await expect(manager.callMcpTool({ server: "stateless", tool: "run" })).rejects.toMatchObject(
+        {
+          code: "MCP_TOOL_ERROR",
+        },
+      );
+      expect(generations.get("stateless")).toBe(1);
+      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain(
+        "stateless",
+      );
 
-    await expect(
-      manager.callMcpTool({ server: "application", tool: "run" }),
-    ).resolves.toMatchObject({ isError: true });
-    expect(generations.get("application")).toBe(1);
-    await manager.close();
-  });
+      await expect(
+        manager.callMcpTool({ server: "application", tool: "run" }),
+      ).resolves.toMatchObject({ isError: true });
+      expect(generations.get("application")).toBe(1);
+      await manager.close();
+    },
+  );
 
   it("does not retry unsupported restart-scoped transport config", async () => {
     vi.useFakeTimers();
@@ -605,8 +632,17 @@ describe("node host MCP live lifecycle", () => {
     expect(attempts).toBe(attemptsAtClose);
   });
 
-  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async ({
+    onTestFinished,
+  }) => {
     vi.useFakeTimers();
+    // Native AbortSignal deadlines otherwise advance independently of the retry clock.
+    const deadline = vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+      return controller.signal;
+    });
+    onTestFinished(() => deadline.mockRestore());
     let active = 0;
     let maxActive = 0;
     const attemptsByServer = new Map<string, number>();

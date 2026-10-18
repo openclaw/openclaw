@@ -1,21 +1,26 @@
 import { EventEmitter } from "node:events";
-import { Server } from "node:https";
+import { createServer } from "node:https";
 import type { TlsOptions } from "node:tls";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import type { GatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 
 const mocks = vi.hoisted(() => ({ watchFile: vi.fn(), unwatchFile: vi.fn(), load: vi.fn() }));
 vi.mock("node:fs", () => ({ watchFile: mocks.watchFile, unwatchFile: mocks.unwatchFile }));
 vi.mock("../infra/tls/gateway.js", () => ({ loadGatewayTlsServerRuntime: mocks.load }));
 
-function material() {
+function material(ca?: TlsOptions["ca"]) {
   const tlsOptions: TlsOptions = {
     cert: TEST_TLS_CERT_PEM,
     key: TEST_TLS_KEY_PEM,
     minVersion: "TLSv1.3",
+    ...(ca ? { ca } : {}),
   };
   return {
     enabled: true,
@@ -28,64 +33,92 @@ function material() {
 }
 
 function createRenewal() {
+  const clock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(clock.clock);
   const watcher = new EventEmitter();
   mocks.watchFile.mockImplementation((_path, _options, listener) => watcher.on("all", listener));
   mocks.unwatchFile.mockImplementation((_path, listener) => watcher.off("all", listener));
   const runtime = material();
-  const server = new Server(runtime.tlsOptions);
+  const server = createServer(runtime.tlsOptions);
   const publish = vi.spyOn(server, "setSecureContext");
   const onRenewed = vi.fn(async () => {});
   const owner = startGatewayTlsRenewal({
+    scheduler,
     runtime,
     servers: [server],
     enabled: true,
-    isClosing: () => false,
     onRenewed,
     log: { info: vi.fn(), warn: vi.fn() },
   });
   if (!owner) {
     throw new Error("TLS renewal owner was not created");
   }
-  return { owner, runtime, publish, watcher, onRenewed };
+  return { owner, runtime, publish, watcher, onRenewed, clock, scheduler };
+}
+
+function deferNextRead() {
+  const started = createDeferredCore();
+  const loaded = createDeferredCore<GatewayTlsRuntime>();
+  mocks.load.mockImplementationOnce(() => {
+    started.resolve();
+    return loaded.promise;
+  });
+  return { started, loaded };
 }
 
 beforeEach(() => {
-  vi.useFakeTimers();
   mocks.load.mockReset();
   mocks.watchFile.mockReset();
   mocks.unwatchFile.mockReset();
 });
-afterEach(() => vi.useRealTimers());
 
 describe("TLS material renewal lifetime", () => {
-  it("joins a pending read on close without publishing it", async () => {
-    const loaded = createDeferredCore<GatewayTlsRuntime>();
-    mocks.load.mockReturnValue(loaded.promise);
-    const { owner, runtime, publish, onRenewed } = createRenewal();
-    await vi.advanceTimersByTimeAsync(300);
-    expect(mocks.load).toHaveBeenCalledOnce();
-    const stopping = owner.stop();
-    expect(mocks.unwatchFile).toHaveBeenCalledTimes(2);
-    loaded.resolve({ ...material(), fingerprintSha256: "retired" });
-    await stopping;
-    expect(publish).not.toHaveBeenCalled();
-    expect(onRenewed).not.toHaveBeenCalled();
-    expect(runtime.fingerprintSha256).toBe("same-leaf-fingerprint");
-  });
+  it.each(["renewal", "scheduler"] as const)(
+    "joins a pending read on %s close without publishing it",
+    async (closingOwner) => {
+      const { started, loaded } = deferNextRead();
+      const { owner, runtime, publish, watcher, onRenewed, clock, scheduler } = createRenewal();
+      const wake = clock.advanceBy(300);
+      try {
+        await started.promise;
+        expect(mocks.load).toHaveBeenCalledOnce();
+        let stopped = false;
+        const stopping = (closingOwner === "renewal" ? owner.stop() : scheduler.stop()).then(() => {
+          stopped = true;
+        });
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+        loaded.resolve({ ...material(TEST_TLS_CERT_PEM), fingerprintSha256: "retired" });
+        await Promise.all([wake, stopping]);
+        expect(stopped).toBe(true);
+        expect(publish).not.toHaveBeenCalled();
+        expect(onRenewed).not.toHaveBeenCalled();
+        expect(runtime.fingerprintSha256).toBe("same-leaf-fingerprint");
+      } finally {
+        loaded.resolve(material());
+        await Promise.all([wake, owner.stop(), scheduler.stop()]);
+      }
+      expect(watcher.listenerCount("all")).toBe(0);
+    },
+  );
 
-  it("ignores an older read and adopts a complete CA change with the same leaf", async () => {
-    const stale = createDeferredCore<GatewayTlsRuntime>();
-    const next = material();
-    next.tlsOptions = { ...next.tlsOptions, ca: TEST_TLS_CERT_PEM };
-    mocks.load.mockReturnValueOnce(stale.promise).mockResolvedValueOnce(next);
-    const { owner, runtime, publish, watcher, onRenewed } = createRenewal();
+  it("debounces file changes, ignores an older read, and adopts a CA change with the same leaf", async () => {
+    const { started, loaded } = deferNextRead();
+    const next = material(TEST_TLS_CERT_PEM);
+    mocks.load.mockResolvedValueOnce(next);
+    const { owner, runtime, publish, watcher, onRenewed, clock, scheduler } = createRenewal();
     const acceptedOptions = runtime.tlsOptions;
+    const firstWake = clock.advanceBy(300);
     try {
-      await vi.advanceTimersByTimeAsync(300);
+      await started.promise;
       watcher.emit("all", "change", "/synthetic/cert.pem");
-      await vi.advanceTimersByTimeAsync(300);
-      stale.resolve({ ...material(), fingerprintSha256: "stale" });
-      await vi.advanceTimersByTimeAsync(0);
+      await clock.advanceBy(200);
+      watcher.emit("all", "change", "/synthetic/key.pem");
+      loaded.resolve({ ...material([TEST_TLS_CERT_PEM]), fingerprintSha256: "stale" });
+      await firstWake;
+      await clock.advanceBy(299);
+      expect(mocks.load).toHaveBeenCalledOnce();
+      await clock.advanceBy(1);
       expect(mocks.load).toHaveBeenCalledTimes(2);
       expect(publish).toHaveBeenCalledExactlyOnceWith(next.tlsOptions);
       expect(runtime.tlsOptions).toBe(acceptedOptions);
@@ -93,30 +126,33 @@ describe("TLS material renewal lifetime", () => {
       expect(runtime.fingerprintSha256).toBe("same-leaf-fingerprint");
       expect(onRenewed).toHaveBeenCalledOnce();
     } finally {
-      await owner.stop();
+      loaded.resolve(material());
+      await Promise.all([firstWake, owner.stop(), scheduler.stop()]);
     }
   });
 
   it("fences a read when disabled and reconciles on re-enable without another file event", async () => {
-    const stale = createDeferredCore<GatewayTlsRuntime>();
-    const next = material();
-    next.tlsOptions = { ...next.tlsOptions, ca: TEST_TLS_CERT_PEM };
-    mocks.load.mockReturnValueOnce(stale.promise).mockResolvedValueOnce(next);
-    const { owner, publish, watcher, onRenewed } = createRenewal();
+    const { started, loaded } = deferNextRead();
+    const next = material(TEST_TLS_CERT_PEM);
+    mocks.load.mockResolvedValueOnce(next);
+    const { owner, publish, watcher, onRenewed, clock, scheduler } = createRenewal();
+    const firstWake = clock.advanceBy(300);
     try {
-      await vi.advanceTimersByTimeAsync(300);
+      await started.promise;
       owner.setEnabled(false);
-      stale.resolve({ ...material(), fingerprintSha256: "disabled" });
+      loaded.resolve({ ...material([TEST_TLS_CERT_PEM]), fingerprintSha256: "disabled" });
       watcher.emit("all", "change", "/synthetic/key.pem");
-      await vi.advanceTimersByTimeAsync(300);
+      await firstWake;
+      await clock.advanceBy(300);
       expect(publish).not.toHaveBeenCalled();
       expect(mocks.load).toHaveBeenCalledOnce();
       owner.setEnabled(true);
-      await vi.advanceTimersByTimeAsync(300);
+      await clock.advanceBy(300);
       expect(publish).toHaveBeenCalledExactlyOnceWith(next.tlsOptions);
       expect(onRenewed).toHaveBeenCalledOnce();
     } finally {
-      await owner.stop();
+      loaded.resolve(material());
+      await Promise.all([firstWake, owner.stop(), scheduler.stop()]);
     }
   });
 });

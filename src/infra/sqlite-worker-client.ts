@@ -1,34 +1,40 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { Actor, OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
-import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
+import {
+  captureSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
+import { classifyWorkerRequest } from "./worker-request-diagnostics.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
-  client: StoreClient,
+  client: StoreClient | undefined,
   operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
   stateContext: SqliteWorkerStateContext | undefined,
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
+  createAdmission?: SqliteWorkerAdmissionFactory,
 ): Promise<T> {
+  if (!client || client.sealed) {
+    return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
+  }
   const scope: OperationScope = {
+    maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
+    createAdmission,
     assertCurrent,
     active: true,
     pending: new Set(),
-    ...(stateContext
-      ? {
-          stateContext: {
-            environment: { ...stateContext.environment },
-            coordinatorRuntime: { ...stateContext.coordinatorRuntime },
-          },
-        }
-      : {}),
+    ...(stateContext ? { stateContext: captureSqliteWorkerStateContext(stateContext) } : {}),
   };
   const released = createDeferredCore();
   client.scopes.add(released.promise);
@@ -55,19 +61,39 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
 }
 
 export function createSqliteWorkerClient<Operations extends SqliteWorkerOperations>(owner: {
+  actor: Actor;
   isDraining: () => boolean;
   isAvailable: () => boolean;
+  retireIdle?: () => Promise<void> | undefined;
   dispatch: (
-    payload: Buffer,
+    payload: Buffer<ArrayBuffer>,
     signal: AbortSignal | undefined,
     scope: OperationScope | undefined,
     assertCurrent: (() => void) | undefined,
+    createAdmission: SqliteWorkerAdmissionFactory | undefined,
+    requestClass: string,
   ) => Promise<unknown>;
-  release: () => Promise<void>;
+  release: (reclaiming: boolean) => Promise<void>;
 }) {
   let closed: Promise<void> | undefined;
+  let reclaiming = false;
   const pending = new Set<Promise<unknown>>();
   const client: StoreClient = {
+    actor: owner.actor,
+    close: () => store.close(),
+    retireIdle: owner.retireIdle
+      ? () => {
+          if (client.sealed || client.scopes.size || pending.size) {
+            return undefined;
+          }
+          reclaiming = true;
+          try {
+            return owner.retireIdle?.();
+          } finally {
+            reclaiming = false;
+          }
+        }
+      : undefined,
     sealed: owner.isDraining(),
     isAvailable: owner.isAvailable,
     scopes: new Set(),
@@ -80,12 +106,17 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(options.signal.reason, "SQLite worker operation canceled"),
         );
       }
-      let payload: Buffer;
+      let payload: Buffer<ArrayBuffer>;
+      let requestClass: string;
       let assertCurrent: (() => void) | undefined;
+      const admission = scope?.assertCurrent;
+      const createAdmission = scope?.createAdmission;
+      // Queued callbacks run from Worker replies, outside this command's async context.
+      const inCaller = admission || createAdmission ? AsyncLocalStorage.snapshot() : undefined;
       try {
         const commandType = command.type;
-        const admission = scope?.assertCurrent;
-        assertCurrent = admission ? () => admission(commandType) : undefined;
+        requestClass = classifyWorkerRequest(commandType, command.input);
+        assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
         payload = serialize({ type: commandType, input: command.input });
@@ -94,19 +125,23 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
           toErrorObject(error, "SQLite worker command could not be serialized"),
         );
       }
-      const operation = owner.dispatch(payload, options.signal, scope, assertCurrent);
+      const operation = owner.dispatch(
+        payload,
+        options.signal,
+        scope,
+        assertCurrent,
+        createAdmission && inCaller
+          ? (admissionOperation) => inCaller(createAdmission, admissionOperation)
+          : undefined,
+        requestClass,
+      );
       pending.add(operation);
       scope?.pending.add(operation);
-      void operation.then(
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-        () => {
-          pending.delete(operation);
-          scope?.pending.delete(operation);
-        },
-      );
+      const settled = () => {
+        pending.delete(operation);
+        scope?.pending.delete(operation);
+      };
+      void operation.then(settled, settled);
       return operation;
     },
   };
@@ -117,10 +152,12 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
     close: () => {
       if (!closed) {
         client.sealed = true;
+        // The idle owner seals synchronously; carry that close mode through settlement.
+        const reclaimingIdle = reclaiming;
         closed = (async () => {
           await Promise.allSettled(client.scopes);
           await Promise.allSettled(pending);
-          await owner.release();
+          await owner.release(reclaimingIdle);
         })().catch((error: unknown) => {
           closed = undefined;
           throw error;

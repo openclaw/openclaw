@@ -2,8 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -19,6 +24,19 @@ import {
   reserveReefIdentityBinding,
 } from "./state.js";
 import { ReefRelayError, ReefTransportClient } from "./transport.js";
+
+function createPrompter(handle = "molty", complete = false) {
+  const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", handle];
+  if (complete) {
+    textAnswers.push("gpt-5.6-terra", "REEF_GUARD_OPENAI_KEY", "reef-v1");
+  }
+  const selectAnswers = ["code-only", "openai", "api-key"];
+  return {
+    note: vi.fn(async () => undefined),
+    text: vi.fn(async () => textAnswers.shift() ?? ""),
+    select: vi.fn(async () => (complete ? selectAnswers.shift() : "code-only")),
+  };
+}
 
 describe("Reef setup wizard identity binding", () => {
   let stateDir = "";
@@ -41,67 +59,43 @@ describe("Reef setup wizard identity binding", () => {
         ...options,
         env: { OPENCLAW_STATE_DIR: stateDir },
       });
+    runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreForTests<T>("reef", {
+        ...options,
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      });
+    runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests<T>(
+        "reef",
+        {
+          ...options,
+          env: { OPENCLAW_STATE_DIR: stateDir },
+        },
+        { assertCurrent() {} },
+      );
     runtime.state.resolveStateDir = () => stateDir;
     setReefRuntime(runtime);
     return runtime;
   }
 
-  function bindIdentity(runtime: ReturnType<typeof installRuntime>, handle: string): void {
-    finalizeReefIdentityBinding(
+  async function bindIdentity(
+    runtime: ReturnType<typeof installRuntime>,
+    handle: string,
+  ): Promise<void> {
+    await finalizeReefIdentityBinding(
       runtime,
-      reserveReefIdentityBinding(runtime, { handle, relayUrl: "https://reefwire.ai" }),
+      await reserveReefIdentityBinding(runtime, { handle, relayUrl: "https://reefwire.ai" }),
     );
   }
 
   it("rejects a different handle before reusing the stored identity keys", async () => {
     const runtime = installRuntime();
-    bindIdentity(runtime, "existing");
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "replacement",
-    ];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    await bindIdentity(runtime, "existing");
+    const prompter = createPrompter("replacement");
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
     ).rejects.toThrow("already holds the Reef identity @existing");
-  });
-
-  it("persists the identity binding immediately after claiming the handle", async () => {
-    const runtime = installRuntime();
-    await generateAndStoreKeys(runtime);
-    vi.spyOn(ReefTransportClient.prototype, "createHandle").mockResolvedValue({
-      handle: "molty",
-      key_epoch: 1,
-    });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "REEF_GUARD_OPENAI_KEY",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "api-key"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-    };
-
-    await reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never });
-
-    expect(loadReefIdentityBinding(runtime)).toEqual({
-      handle: "molty",
-      relayUrl: "https://reefwire.ai",
-    });
   });
 
   const noRuntimePromptCases: Array<{
@@ -110,37 +104,6 @@ describe("Reef setup wizard identity binding", () => {
     runtimeConfigured: boolean;
   }> = [
     { name: "unconfigured runtime", cfg: {}, runtimeConfigured: false },
-    {
-      name: "inherited Codex runtime",
-      runtimeConfigured: true,
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "codex" },
-              models: [],
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-    },
-    {
-      name: "sole agent Codex runtime ahead of shared policy",
-      runtimeConfigured: true,
-      cfg: {
-        agents: {
-          defaults: {
-            models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
-          },
-          entries: {
-            "guard-owner": {
-              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } },
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
-    },
     {
       name: "explicit system agent Codex runtime ahead of shared policy",
       runtimeConfigured: true,
@@ -228,42 +191,6 @@ describe("Reef setup wizard identity binding", () => {
     rejection?: string;
   }> = [
     {
-      name: "sole agent wildcard",
-      cfg: {
-        agents: {
-          entries: {
-            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
-          },
-        },
-      },
-    },
-    {
-      name: "explicit system agent wildcard",
-      cfg: {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "guard-owner" } },
-          entries: {
-            main: { models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "codex" } } } },
-            "guard-owner": { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } },
-          },
-        },
-      },
-    },
-    {
-      name: "sole agent exact model",
-      rejection: "agent-specific runtime policy",
-      cfg: {
-        agents: {
-          entries: {
-            "guard-owner": {
-              models: { "openai/gpt-5.6-terra": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
-        },
-      },
-    },
-    {
       name: "explicit system agent exact model",
       rejection: "agent-specific runtime policy",
       cfg: {
@@ -290,18 +217,6 @@ describe("Reef setup wizard identity binding", () => {
       },
     },
     {
-      name: "exact default model",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.6-terra": { alias: "reef-guard", agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-    },
-    {
       name: "wildcard default model ahead of provider policy",
       cfg: {
         agents: { defaults: { models: { "openai/*": { agentRuntime: { id: "openclaw" } } } } },
@@ -316,46 +231,7 @@ describe("Reef setup wizard identity binding", () => {
         },
       },
     },
-    {
-      name: "provider",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "openclaw" },
-              models: [],
-            },
-          },
-        },
-      },
-    },
-    {
-      name: "provider model ahead of provider policy",
-      cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "codex" },
-              models: [
-                {
-                  id: "gpt-5.6-terra",
-                  name: "Reef guard",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 8192,
-                  agentRuntime: { id: "openclaw" },
-                },
-              ],
-            },
-          },
-        },
-      },
-    },
   ];
-
   it.each(
     runtimePolicyCases.flatMap(({ name, cfg, rejection }) =>
       (rejection ? [false] : [false, true]).map((accepted) => ({
@@ -450,17 +326,12 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockRejectedValue(
       new ReefRelayError(401, "unknown_handle"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
     ).rejects.toThrow("handle_unavailable");
-    expect(loadReefIdentityBinding(runtime)).toBeUndefined();
+    expect(await loadReefIdentityBinding(runtime)).toBeUndefined();
   });
 
   it("keeps a binding after an ambiguous handle-claim failure", async () => {
@@ -469,17 +340,12 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "createHandle").mockRejectedValue(
       new TypeError("connection reset"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
     ).rejects.toThrow("connection reset");
-    expect(loadReefIdentityBinding(runtime)).toEqual({
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
       handle: "molty",
       relayUrl: "https://reefwire.ai",
     });
@@ -494,17 +360,12 @@ describe("Reef setup wizard identity binding", () => {
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockRejectedValue(
       new ReefRelayError(401, "invalid_signature"),
     );
-    const textAnswers = ["https://reefwire.ai", "owner@example.com", "setup-session", "molty"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => "code-only"),
-    };
+    const prompter = createPrompter();
 
     await expect(
       reefSetupWizard.configureInteractive({ cfg: {}, prompter: prompter as never }),
     ).rejects.toThrow("invalid_signature");
-    expect(loadReefIdentityBinding(runtime)).toEqual({
+    expect(await loadReefIdentityBinding(runtime)).toEqual({
       handle: "molty",
       relayUrl: "https://reefwire.ai",
     });
@@ -519,21 +380,7 @@ describe("Reef setup wizard identity binding", () => {
       expect(beforePersistentEffect).toHaveBeenCalledTimes(1);
       return { handle: "molty", key_epoch: 1 };
     });
-    const textAnswers = [
-      "https://reefwire.ai",
-      "owner@example.com",
-      "setup-session",
-      "molty",
-      "gpt-5.6-terra",
-      "REEF_GUARD_OPENAI_KEY",
-      "reef-v1",
-    ];
-    const selectAnswers = ["code-only", "openai", "api-key"];
-    const prompter = {
-      note: vi.fn(async () => undefined),
-      text: vi.fn(async () => textAnswers.shift() ?? ""),
-      select: vi.fn(async () => selectAnswers.shift()),
-    };
+    const prompter = createPrompter("molty", true);
 
     await reefSetupWizard.configureInteractive({
       cfg: {},

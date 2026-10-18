@@ -1,4 +1,4 @@
-// Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
@@ -6,7 +6,7 @@ import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
-import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
@@ -14,41 +14,27 @@ import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
-import { collectGatewayHealthSnapshot } from "../health/collector.js";
-import type { HealthSummary } from "../health/types.js";
+import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayClient } from "../server-methods/types.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
+let healthDigest: string | undefined;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 type HealthAudience = "public" | "admin";
 type HealthRefreshStrength = "passive" | "probe";
-type HealthRefreshOperation = {
-  generation: number;
-  promise: Promise<HealthSummary>;
-};
-type HealthRefreshState = {
-  nextGeneration: number;
-  committedGeneration: number;
-  inFlight: Record<HealthRefreshStrength, HealthRefreshOperation | null>;
-};
-
-const healthRefreshStates: Record<HealthAudience, HealthRefreshState> = {
-  public: {
-    nextGeneration: 0,
-    committedGeneration: 0,
-    inFlight: { passive: null, probe: null },
-  },
-  admin: {
-    nextGeneration: 0,
-    committedGeneration: 0,
-    inFlight: { passive: null, probe: null },
-  },
+const healthRefreshStates: Record<
+  HealthAudience,
+  Record<HealthRefreshStrength, Promise<HealthSummary> | null>
+> = {
+  public: { passive: null, probe: null },
+  admin: { passive: null, probe: null },
 };
 
 export function buildGatewaySnapshot(opts: {
@@ -56,6 +42,7 @@ export function buildGatewaySnapshot(opts: {
   includeSensitive?: boolean;
   includeUpdateDetails?: boolean;
   revisionProjector: GatewayConfigRevisionProjector;
+  sessionRowProjection?: SessionRowProjection;
 }): Snapshot {
   const cfg = getRuntimeConfig();
   const selection = resolveGatewayAgentSelectionState(cfg);
@@ -64,21 +51,22 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
-  const presence = createPresenceRecipientProjection({ cfg, presence: listSystemPresence() })(
-    opts.client,
-  );
+  const presence = createPresenceRecipientProjection({
+    cfg,
+    presence: listSystemPresence({ includeConnectionId: opts.client?.connId }),
+    projection: opts.sessionRowProjection,
+  })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
-  const includeUpdateDetails = opts?.includeUpdateDetails === true;
+  const includeUpdateDetails = opts.includeUpdateDetails === true;
   const updateAvailable =
     projectUpdateAvailable(getUpdateAvailable(), includeUpdateDetails) ?? undefined;
   const updateSchedule = includeUpdateDetails ? (getUpdateSchedule() ?? undefined) : undefined;
   const appliedConfigHash = getRuntimeConfigAppliedHash();
-  // Health is async; the caller replaces this with the collected snapshot.
-  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
     suspension: { phase: getGatewaySuspendAdmissionPhase() },
     presence,
-    health: emptyHealth,
+    // Health is async; the caller replaces this with the collected snapshot.
+    health: {},
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
     appliedConfigHash: appliedConfigHash
@@ -96,7 +84,7 @@ export function buildGatewaySnapshot(opts: {
     updateAvailable,
     updateSchedule,
   };
-  if (opts?.includeSensitive === true) {
+  if (opts.includeSensitive === true) {
     const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
     snapshot.configPath = createConfigIO().configPath;
@@ -127,12 +115,53 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
   broadcastHealthUpdate = fn;
 }
 
+function healthEventDigest(snap: HealthSummary): string {
+  const channel = ({
+    authAgeMs: _authAgeMs,
+    lastProbeAt: _lastProbeAt,
+    lastInboundAt: _lastInboundAt,
+    lastOutboundAt: _lastOutboundAt,
+    lastTransportActivityAt: _lastTransportActivityAt,
+    lastMessageAt: _lastMessageAt,
+    lastEventAt: _lastEventAt,
+    lastRunActivityAt: _lastRunActivityAt,
+    accounts,
+    ...status
+  }: ChannelHealthSummary): unknown => ({
+    ...status,
+    ...(accounts
+      ? {
+          accounts: Object.fromEntries(
+            Object.entries(accounts).map(([id, value]) => [id, channel(value)]),
+          ),
+        }
+      : {}),
+  });
+  // Keep lifecycle timestamps/errors and plugin-owned status. Sampling noise and
+  // routine activity are diagnostics, not health transitions; tick owns liveness
+  // and session events own session activity. Full diagnostics remain in the cache.
+  return stableStringify({
+    ...snap,
+    ts: undefined,
+    durationMs: undefined,
+    eventLoop: snap.eventLoop
+      ? { degraded: snap.eventLoop.degraded, reasons: snap.eventLoop.reasons }
+      : undefined,
+    channels: Object.fromEntries(
+      Object.entries(snap.channels).map(([id, value]) => [id, channel(value)]),
+    ),
+    agents: snap.agents.map(({ sessions: _sessions, ...agent }) => agent),
+    sessions: undefined,
+  });
+}
+
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
   includeSensitive?: boolean;
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -140,57 +169,49 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   const strength: HealthRefreshStrength = opts?.probe === false ? "passive" : "probe";
   // Passive callers can reuse a stronger probe, but an explicit probe must not
   // inherit a passive refresh that deliberately skipped live channel checks.
-  const existing =
-    strength === "passive"
-      ? (state.inFlight.probe ?? state.inFlight.passive)
-      : state.inFlight.probe;
+  const existing = strength === "passive" ? (state.probe ?? state.passive) : state.probe;
   if (existing) {
-    return existing.promise;
+    return existing;
   }
 
-  const generation = state.nextGeneration + 1;
-  state.nextGeneration = generation;
   const promise = (async () => {
+    const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
     let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
     try {
       runtimeSnapshot = opts?.getRuntimeSnapshot?.();
     } catch {
       runtimeSnapshot = undefined;
     }
-    const eventLoop = opts?.getEventLoopHealth?.();
     const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
     const snap = await collectGatewayHealthSnapshot({
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
-      ...(eventLoop ? { eventLoop } : {}),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
+      ...(opts?.getSessionRowProjection
+        ? { sessionRowProjection: opts.getSessionRowProjection() }
+        : {}),
     });
-    if (
-      strength === "probe" &&
-      state.inFlight.passive &&
-      state.inFlight.passive.generation < generation
-    ) {
-      // Existing passive waiters may finish, but new callers must not join
-      // weaker work after this newer live probe has succeeded.
-      state.inFlight.passive = null;
+    // Channel collection can outlive several sampling windows. Read diagnostics
+    // only when this new snapshot is ready to return, cache, or broadcast.
+    const eventLoop = opts?.getEventLoopHealth?.();
+    if (eventLoop) {
+      snap.eventLoop = eventLoop;
     }
-    // Concurrent passive/probe refreshes can finish out of order. Only a
-    // generation newer than the published cache may advance version/broadcast.
-    if (!includeSensitive && generation > state.committedGeneration) {
-      state.committedGeneration = generation;
+    // Diagnostic snapshots publish in completion order; the next refresh replaces them.
+    if (!includeSensitive) {
+      const digest = healthEventDigest(snap);
       healthCache = snap;
-      healthVersion += 1;
-      if (broadcastHealthUpdate) {
-        broadcastHealthUpdate(snap);
+      if (digest !== healthDigest) {
+        healthDigest = digest;
+        healthVersion += 1;
+        broadcastHealthUpdate?.(snap);
       }
     }
     return snap;
   })().finally(() => {
-    if (state.inFlight[strength]?.generation === generation) {
-      state.inFlight[strength] = null;
-    }
+    state[strength] = null;
   });
-  state.inFlight[strength] = { generation, promise };
+  state[strength] = promise;
   return promise;
 }

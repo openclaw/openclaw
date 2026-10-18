@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Reports dependency ownership, closure, and risk surface from lockfile data.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,16 +11,14 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { collectRootDependencyOwnershipAudit } from "./root-dependency-ownership-audit.mts";
 
 const DEFAULT_OWNERSHIP_PATH = "scripts/lib/dependency-ownership.json";
-const PROD_IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
-const TRANSITIVE_SECTIONS = ["dependencies", "optionalDependencies"];
+const DEPENDENCY_SECTIONS = ["dependencies", "optionalDependencies"];
 const compareStrings = (left: string, right: string) => left.localeCompare(right);
 
 type JsonObject = Record<string, unknown>;
-type ImporterRecord = Record<string, unknown>;
 type Lockfile = {
-  importers?: Record<string, ImporterRecord>;
+  importers?: Record<string, JsonObject>;
   packages?: Record<string, JsonObject>;
-  snapshots?: Record<string, ImporterRecord>;
+  snapshots?: Record<string, JsonObject>;
 };
 type RootDependency = {
   name: string;
@@ -47,9 +44,9 @@ function readJson(filePath: string): JsonObject {
   return value;
 }
 
-function normalizeDependencies(record: ImporterRecord = {}): RootDependency[] {
+function normalizeDependencies(record: JsonObject = {}): RootDependency[] {
   const entries: RootDependency[] = [];
-  for (const section of PROD_IMPORTER_SECTIONS) {
+  for (const section of DEPENDENCY_SECTIONS) {
     const sectionRecord = record[section];
     if (!isRecord(sectionRecord)) {
       continue;
@@ -67,21 +64,14 @@ function normalizeDependencies(record: ImporterRecord = {}): RootDependency[] {
   return entries.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-/**
- * Extracts the package name from a pnpm lockfile package key.
- */
 export function packageNameFromLockKey(lockKey: unknown) {
   if (typeof lockKey !== "string") {
     return lockKey;
   }
   const peerSuffixIndex = lockKey.indexOf("(");
   const baseKey = peerSuffixIndex >= 0 ? lockKey.slice(0, peerSuffixIndex) : lockKey;
-  if (baseKey.startsWith("@")) {
-    const secondAt = baseKey.indexOf("@", 1);
-    return secondAt >= 0 ? baseKey.slice(0, secondAt) : baseKey;
-  }
-  const firstAt = baseKey.indexOf("@");
-  return firstAt >= 0 ? baseKey.slice(0, firstAt) : baseKey;
+  const versionAt = baseKey.indexOf("@", baseKey.startsWith("@") ? 1 : 0);
+  return versionAt >= 0 ? baseKey.slice(0, versionAt) : baseKey;
 }
 
 function lockKeyForDependency(name: string, version: string) {
@@ -100,9 +90,9 @@ function lockKeyForDependency(name: string, version: string) {
   return `${name}@${version}`;
 }
 
-function dependencyEntriesFromSnapshot(snapshot: ImporterRecord = {}) {
+function dependencyEntriesFromSnapshot(snapshot: JsonObject = {}) {
   const entries: Array<{ name: string; version: string }> = [];
-  for (const section of TRANSITIVE_SECTIONS) {
+  for (const section of DEPENDENCY_SECTIONS) {
     const sectionRecord = snapshot[section];
     if (!isRecord(sectionRecord)) {
       continue;
@@ -119,12 +109,8 @@ function dependencyEntriesFromSnapshot(snapshot: ImporterRecord = {}) {
 function collectClosure(lockfile: Lockfile, rootKeys: Array<string | undefined>): Closure {
   const seen = new Set<string>();
   const missing = new Set<string>();
-  const queue = rootKeys.filter((key): key is string => typeof key === "string");
-  while (queue.length > 0) {
-    const key = queue.shift();
-    if (key === undefined) {
-      break;
-    }
+  const queue = rootKeys.filter((key): key is string => Boolean(key));
+  for (const key of queue) {
     if (seen.has(key)) {
       continue;
     }
@@ -208,9 +194,6 @@ function collectReportTarget({
   };
 }
 
-/**
- * Collects dependency ownership and transitive surface metadata.
- */
 export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
@@ -264,18 +247,14 @@ export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {
 
   const rootClosure = collectClosure(
     lockfile,
-    rootDependencies
-      .map((dependency) => lockKeyForDependency(dependency.name, dependency.version))
-      .filter(Boolean),
+    rootDependencies.map((dependency) => lockKeyForDependency(dependency.name, dependency.version)),
   );
   const importerClosures = Object.entries(lockfile.importers ?? {})
     .map(([importer, record]) => {
       const dependencies = normalizeDependencies(record);
       const closure = collectClosure(
         lockfile,
-        dependencies
-          .map((dependency) => lockKeyForDependency(dependency.name, dependency.version))
-          .filter(Boolean),
+        dependencies.map((dependency) => lockKeyForDependency(dependency.name, dependency.version)),
       );
       return {
         importer,
@@ -349,9 +328,6 @@ export function collectDependencyOwnershipSurfaceReport(params: ReportParams = {
 
 type DependencyOwnershipReport = ReturnType<typeof collectDependencyOwnershipSurfaceReport>;
 
-/**
- * Collects policy errors from a dependency ownership surface report.
- */
 export function collectDependencyOwnershipSurfaceCheckErrors(report: DependencyOwnershipReport) {
   return report.ownershipGaps.map(
     (name) => `root dependency '${name}' is missing from ${DEFAULT_OWNERSHIP_PATH}`,
@@ -359,16 +335,7 @@ export function collectDependencyOwnershipSurfaceCheckErrors(report: DependencyO
 }
 
 function renderTargetPackage(target: DependencyOwnershipReport["target"]) {
-  if (!target?.packageName && !target?.packageVersion) {
-    return "unknown";
-  }
-  if (!target.packageName) {
-    return target.packageVersion ?? "unknown";
-  }
-  if (!target.packageVersion) {
-    return target.packageName;
-  }
-  return `${target.packageName}@${target.packageVersion}`;
+  return [target?.packageName, target?.packageVersion].filter(Boolean).join("@") || "unknown";
 }
 
 function markdownCode(value: unknown) {
@@ -379,9 +346,6 @@ function pluralize(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-/**
- * Renders a dependency ownership surface report as Markdown.
- */
 export function renderDependencyOwnershipSurfaceMarkdownReport(
   typedReport: DependencyOwnershipReport,
 ) {
@@ -471,10 +435,6 @@ export function renderDependencyOwnershipSurfaceMarkdownReport(
   }
 
   return `${lines.join("\n")}\n`;
-}
-
-function printTextReport(report: DependencyOwnershipReport) {
-  process.stdout.write(renderDependencyOwnershipSurfaceMarkdownReport(report));
 }
 
 export function parseArgs(argv: string[]): ParseOptions {
@@ -573,7 +533,7 @@ function main(argv: string[] = process.argv.slice(2)) {
     );
     return;
   }
-  printTextReport(report);
+  process.stdout.write(renderDependencyOwnershipSurfaceMarkdownReport(report));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

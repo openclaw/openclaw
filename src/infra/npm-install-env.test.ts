@@ -1,20 +1,33 @@
-// Covers npm install env and freshness bypass args.
 import fsSync from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { createNpmFreshnessBypassArgs, createNpmProjectInstallEnv } from "./npm-install-env.js";
 
 const FROZEN_NOW = new Date("2026-05-18T19:55:00.000Z");
-const EXPECTED_FRESHNESS_ENV = {
+const BEFORE_ARGS = [`--before=${FROZEN_NOW.toISOString()}`];
+
+function writePolicy(file: string, policy = "before=2026-01-01T00:00:00.000Z") {
+  fsSync.mkdirSync(path.dirname(file), { recursive: true });
+  fsSync.writeFileSync(file, `${policy}\n`, "utf-8");
+}
+const EXPECTED_PROJECT_ENV = {
   NPM_CONFIG_BEFORE: "",
   NPM_CONFIG_MIN_RELEASE_AGE: "",
   "NPM_CONFIG_MIN-RELEASE-AGE": "",
   npm_config_before: "",
   "npm_config_min-release-age": "",
   npm_config_min_release_age: "0",
+  npm_config_dry_run: "false",
+  npm_config_fetch_retries: "5",
+  npm_config_fetch_retry_maxtimeout: "120000",
+  npm_config_fetch_retry_mintimeout: "10000",
+  npm_config_fetch_timeout: "300000",
+  npm_config_global: "false",
+  npm_config_location: "project",
+  npm_config_package_lock: "false",
+  npm_config_save: "false",
 };
 
 function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
@@ -22,13 +35,34 @@ function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
   const globalconfig = path.join(dir, "global-npmrc");
   fsSync.mkdirSync(home, { recursive: true });
   fsSync.writeFileSync(globalconfig, "", "utf-8");
-  return {
-    HOME: home,
-    NPM_CONFIG_GLOBALCONFIG: globalconfig,
-  };
+  return { HOME: home, NPM_CONFIG_GLOBALCONFIG: globalconfig };
+}
+
+function withNpmConfig(run: (dir: string, env: NodeJS.ProcessEnv) => void) {
+  return withTempDir("openclaw-npm-config-", async (dir) => {
+    run(dir, createIsolatedNpmConfigEnv(dir));
+  });
+}
+
+function expectBefore(env: NodeJS.ProcessEnv, dir: string, npmConfigPrefix?: string) {
+  expect(
+    createNpmFreshnessBypassArgs(env, FROZEN_NOW, { npmConfigCwd: dir, npmConfigPrefix }),
+  ).toEqual(BEFORE_ARGS);
 }
 
 describe("npm project install env", () => {
+  it.each([["NPM_CONFIG_FETCH_RETRIES", "0"]])(
+    "preserves explicit network config %s without a competing default",
+    (key, value) => {
+      const env = createNpmProjectInstallEnv({ [key]: value }, {}, FROZEN_NOW);
+
+      expect(env[key]).toBe(value);
+      expect(
+        Object.keys(env).filter((candidate) => candidate.toLowerCase() === key.toLowerCase()),
+      ).toEqual([key]);
+    },
+  );
+
   it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
     withMockedPlatform("linux", () => {
       const existsSyncSpy = vi
@@ -36,139 +70,22 @@ describe("npm project install env", () => {
         .mockImplementation((candidate) => candidate === "/bin/sh");
       withRestoredMocks([existsSyncSpy], () => {
         expect(
-          createNpmProjectInstallEnv(
-            {
-              PATH: "/tmp/openclaw-npm-global/bin",
-            },
-            {},
-            FROZEN_NOW,
-          ),
+          createNpmProjectInstallEnv({ PATH: "/tmp/openclaw-npm-global/bin" }, {}, FROZEN_NOW),
         ).toEqual({
-          ...EXPECTED_FRESHNESS_ENV,
+          ...EXPECTED_PROJECT_ENV,
           NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
           PATH: "/tmp/openclaw-npm-global/bin",
-          npm_config_dry_run: "false",
-          npm_config_fetch_retries: "5",
-          npm_config_fetch_retry_maxtimeout: "120000",
-          npm_config_fetch_retry_mintimeout: "10000",
-          npm_config_fetch_timeout: "300000",
-          npm_config_global: "false",
-          npm_config_location: "project",
-          npm_config_package_lock: "false",
-          npm_config_save: "false",
         });
       });
     });
   });
 
-  it("preserves explicit npm script shell config", () => {
+  it.each(["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"])("preserves %s", (key) => {
     withMockedPlatform("linux", () => {
-      expect(
-        createNpmProjectInstallEnv(
-          {
-            NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
-          },
-          {},
-          FROZEN_NOW,
-        ),
-      ).toEqual({
-        ...EXPECTED_FRESHNESS_ENV,
-        NPM_CONFIG_SCRIPT_SHELL: "/custom/sh",
-        npm_config_dry_run: "false",
-        npm_config_fetch_retries: "5",
-        npm_config_fetch_retry_maxtimeout: "120000",
-        npm_config_fetch_retry_mintimeout: "10000",
-        npm_config_fetch_timeout: "300000",
-        npm_config_global: "false",
-        npm_config_location: "project",
-        npm_config_package_lock: "false",
-        npm_config_save: "false",
+      expect(createNpmProjectInstallEnv({ [key]: "/custom/sh" }, {}, FROZEN_NOW)).toEqual({
+        ...EXPECTED_PROJECT_ENV,
+        [key]: "/custom/sh",
       });
-      expect(
-        createNpmProjectInstallEnv(
-          {
-            npm_config_script_shell: "/custom/lower-sh",
-          },
-          {},
-          FROZEN_NOW,
-        ),
-      ).toEqual({
-        ...EXPECTED_FRESHNESS_ENV,
-        npm_config_dry_run: "false",
-        npm_config_fetch_retries: "5",
-        npm_config_fetch_retry_maxtimeout: "120000",
-        npm_config_fetch_retry_mintimeout: "10000",
-        npm_config_fetch_timeout: "300000",
-        npm_config_global: "false",
-        npm_config_location: "project",
-        npm_config_package_lock: "false",
-        npm_config_save: "false",
-        npm_config_script_shell: "/custom/lower-sh",
-      });
-    });
-  });
-
-  it("bypasses npm release-age filters for OpenClaw-managed installs", () => {
-    const env = createNpmProjectInstallEnv(
-      {
-        NPM_CONFIG_BEFORE: "2026-01-01T00:00:00.000Z",
-        NPM_CONFIG_MIN_RELEASE_AGE: "7",
-        "npm_config_min-release-age": "7",
-        npm_config_before: "2026-01-01T00:00:00.000Z",
-        npm_config_min_release_age: "7",
-      },
-      {},
-      FROZEN_NOW,
-    );
-
-    expect(env.NPM_CONFIG_BEFORE).toBe("");
-    expect(env.npm_config_before).toBe("");
-    expect(env.NPM_CONFIG_MIN_RELEASE_AGE).toBe("");
-    expect(env["npm_config_min-release-age"]).toBe("");
-    expect(env.npm_config_min_release_age).toBe("0");
-  });
-
-  it("does not leak parent npm freshness env into explicit child envs", () => {
-    withEnv({ NPM_CONFIG_BEFORE: "2026-01-01T00:00:00.000Z" }, () => {
-      const env = createNpmProjectInstallEnv({}, {}, FROZEN_NOW);
-
-      expect(env.NPM_CONFIG_BEFORE).toBe("");
-      expect(env.npm_config_before).toBe("");
-      expect(env["npm_config_min-release-age"]).toBe("");
-      expect(env.npm_config_min_release_age).toBe("0");
-    });
-  });
-
-  it("uses a current before override for explicit npm before policy", async () => {
-    await withTempDir("openclaw-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
-      const env = createNpmProjectInstallEnv(
-        {
-          ...baseEnv,
-          NPM_CONFIG_USERCONFIG: npmrc,
-        },
-        { npmConfigCwd: dir },
-        FROZEN_NOW,
-      );
-
-      expect(env["npm_config_min-release-age"]).toBe("");
-      expect(env.npm_config_min_release_age).toBe("");
-      expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
-      expect(env.npm_config_before).not.toBe("2026-01-01T00:00:00.000Z");
-
-      const envWithParentAge = createNpmProjectInstallEnv(
-        {
-          ...baseEnv,
-          NPM_CONFIG_USERCONFIG: npmrc,
-          NPM_CONFIG_MIN_RELEASE_AGE: "7",
-        },
-        { npmConfigCwd: dir },
-        FROZEN_NOW,
-      );
-      expect(envWithParentAge.npm_config_min_release_age).toBe("");
-      expect(envWithParentAge.npm_config_before).toBe(FROZEN_NOW.toISOString());
     });
   });
 
@@ -176,216 +93,47 @@ describe("npm project install env", () => {
     expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW)).toEqual(["--min-release-age=0"]);
   });
 
-  it("uses before args for stale npm before policies", async () => {
-    await withTempDir("openclaw-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
-
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            ...baseEnv,
-            NPM_CONFIG_USERCONFIG: npmrc,
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
-    });
-  });
-
-  it("uses before args for expanded npm userconfig paths", async () => {
-    await withTempDir("openclaw-home-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
+  it.each(["~/.npmrc", "${HOME}/.npmrc"])("expands userconfig %s", async (userconfig) => {
+    await withNpmConfig((dir, baseEnv) => {
       // Keep user config outside the project scope so path expansion must succeed.
-      fsSync.writeFileSync(
-        path.join(dir, "home", ".npmrc"),
-        "before=2026-01-01T00:00:00.000Z\n",
-        "utf-8",
-      );
+      writePolicy(path.join(dir, "home", ".npmrc"));
 
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            ...baseEnv,
-            NPM_CONFIG_USERCONFIG: "~/.npmrc",
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            ...baseEnv,
-            NPM_CONFIG_USERCONFIG: "${HOME}/.npmrc",
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
+      expectBefore({ ...baseEnv, NPM_CONFIG_USERCONFIG: userconfig }, dir);
     });
   });
 
   it("uses before args for npm default globalconfig before policies", async () => {
     await withTempDir("openclaw-npm-prefix-", async (dir) => {
       const home = path.join(dir, "home");
-      const npmrcDir = path.join(dir, "etc");
       fsSync.mkdirSync(home, { recursive: true });
-      fsSync.mkdirSync(npmrcDir, { recursive: true });
-      fsSync.writeFileSync(
-        path.join(npmrcDir, "npmrc"),
-        "before=2026-01-01T00:00:00.000Z\n",
-        "utf-8",
-      );
+      writePolicy(path.join(dir, "etc", "npmrc"));
 
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            HOME: home,
-            NPM_CONFIG_PREFIX: dir,
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
+      expectBefore({ HOME: home, NPM_CONFIG_PREFIX: dir }, dir);
     });
   });
 
   it("uses before args for command project npmrc before policies", async () => {
-    await withTempDir("openclaw-project-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
+    await withNpmConfig((dir, baseEnv) => {
+      writePolicy(path.join(dir, ".npmrc"));
 
-      expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, { npmConfigCwd: dir })).toEqual([
-        `--before=${FROZEN_NOW.toISOString()}`,
-      ]);
+      expectBefore(baseEnv, dir);
 
       const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir }, FROZEN_NOW);
-      expect(env.npm_config_min_release_age).toBe("");
-      expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
-    });
-  });
-
-  it("uses before args for the current project npmrc by default", async () => {
-    await withTempDir("openclaw-current-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
-      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(dir);
-      withRestoredMocks([cwdSpy], () => {
-        expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW)).toEqual([
-          `--before=${FROZEN_NOW.toISOString()}`,
-        ]);
+      expect(env).toMatchObject({
+        npm_config_min_release_age: "",
+        npm_config_before: FROZEN_NOW.toISOString(),
       });
     });
   });
 
-  it("uses before args for scoped npm prefix before policies", async () => {
-    await withTempDir("openclaw-prefix-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrcDir = path.join(dir, "etc");
-      fsSync.mkdirSync(npmrcDir, { recursive: true });
-      fsSync.writeFileSync(
-        path.join(npmrcDir, "npmrc"),
-        "before=2026-01-01T00:00:00.000Z\n",
-        "utf-8",
-      );
-
-      expect(
-        createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, {
-          npmConfigCwd: dir,
-          npmConfigPrefix: dir,
-        }),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
-    });
-  });
-
   it("prefers scoped npm prefix policy over parent npm prefix policy", async () => {
-    await withTempDir("openclaw-prefix-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
+    await withNpmConfig((dir, baseEnv) => {
       const scopedPrefix = path.join(dir, "scoped-prefix");
       const parentPrefix = path.join(dir, "parent-prefix");
-      fsSync.mkdirSync(path.join(scopedPrefix, "etc"), { recursive: true });
-      fsSync.mkdirSync(path.join(parentPrefix, "etc"), { recursive: true });
-      fsSync.writeFileSync(
-        path.join(scopedPrefix, "etc", "npmrc"),
-        "before=2026-01-01T00:00:00.000Z\n",
-        "utf-8",
-      );
-      fsSync.writeFileSync(path.join(parentPrefix, "etc", "npmrc"), "min-release-age=7\n", "utf-8");
+      writePolicy(path.join(scopedPrefix, "etc", "npmrc"));
+      writePolicy(path.join(parentPrefix, "etc", "npmrc"), "min-release-age=7");
 
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            ...baseEnv,
-            NPM_CONFIG_PREFIX: parentPrefix,
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir, npmConfigPrefix: scopedPrefix },
-        ),
-      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
-    });
-  });
-
-  it("overrides stale npmrc before config without emitting release-age config", async () => {
-    await withTempDir("openclaw-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
-      const env = createNpmProjectInstallEnv(
-        {
-          ...baseEnv,
-          NPM_CONFIG_USERCONFIG: npmrc,
-        },
-        { npmConfigCwd: dir },
-        FROZEN_NOW,
-      );
-
-      expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
-      expect(env.npm_config_min_release_age).toBe("");
-      expect(env["npm_config_min-release-age"]).toBe("");
-    });
-  });
-
-  it("uses release-age args for project policy over user before policy", async () => {
-    await withTempDir("openclaw-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
-      fsSync.writeFileSync(path.join(dir, ".npmrc"), "min-release-age=7\n", "utf-8");
-
-      expect(
-        createNpmFreshnessBypassArgs(
-          {
-            ...baseEnv,
-            NPM_CONFIG_USERCONFIG: npmrc,
-          },
-          FROZEN_NOW,
-          { npmConfigCwd: dir },
-        ),
-      ).toEqual(["--min-release-age=0"]);
-    });
-  });
-
-  it("overrides npmrc release-age config without emitting before config", async () => {
-    await withTempDir("openclaw-npmrc-", async (dir) => {
-      const baseEnv = createIsolatedNpmConfigEnv(dir);
-      const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "min-release-age=7\n", "utf-8");
-      const env = createNpmProjectInstallEnv(
-        {
-          ...baseEnv,
-          NPM_CONFIG_USERCONFIG: npmrc,
-        },
-        { npmConfigCwd: dir },
-        FROZEN_NOW,
-      );
-
-      expect(env.npm_config_before).toBe("");
-      expect(env.npm_config_min_release_age).toBe("0");
-      expect(env.NPM_CONFIG_BEFORE).toBe("");
-      expect(env["npm_config_min-release-age"]).toBe("");
+      expectBefore({ ...baseEnv, NPM_CONFIG_PREFIX: parentPrefix }, dir, scopedPrefix);
     });
   });
 });

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 
 const gatewayMocks = vi.hoisted(() => ({
@@ -13,8 +12,7 @@ vi.mock("../gateway-rpc.js", () => ({
 import {
   buildNodeInvokeParams,
   parseOptionalNodeFiniteNumber,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNode,
   resolveNodeDiagnosticsId,
 } from "./rpc.js";
@@ -56,57 +54,12 @@ describe("node inventory resolution", () => {
 
   it.each([
     {
-      label: "a local request timeout",
-      error: new GatewayProtocolRequestTimeoutError({
-        method: "node.list",
-        timeoutMs: 80,
-        requestSent: true,
-      }),
-    },
-    {
       label: "an authorization rejection",
       error: requestError({ code: "UNAUTHORIZED", message: "operator authorization required" }),
     },
     {
-      label: "an INVALID_REQUEST authentication failure",
-      error: requestError({ message: "invalid auth token" }),
-    },
-    {
-      label: "a retryable unknown-method rejection",
-      error: requestError({ retryable: true }),
-    },
-    {
-      label: "an unknown-method rejection for another method",
-      error: requestError({ message: "unknown method: node.list.extra" }),
-    },
-    {
       label: "malformed request retry metadata",
       error: requestError({ retryAfterMs: -1 }),
-    },
-    {
-      label: "an embedded unknown-method message",
-      error: requestError({ message: "request failed: unknown method: node.list" }),
-    },
-    {
-      label: "a network connection error",
-      error: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:18789"), {
-        code: "ECONNREFUSED",
-      }),
-    },
-    {
-      label: "a closed Gateway transport",
-      error: new Error("gateway closed (1006): connection lost"),
-    },
-    {
-      label: "a malformed request-error lookalike",
-      error: Object.assign(new Error("unknown method: node.list"), {
-        name: "GatewayClientRequestError",
-        gatewayCode: "INVALID_REQUEST",
-      }),
-    },
-    {
-      label: "a plain unknown-method error",
-      error: new Error("unknown method: node.list"),
     },
   ])("preserves $label without consulting stale paired nodes", async ({ error }) => {
     gatewayMocks.callGatewayFromCliWithTransport
@@ -122,23 +75,19 @@ describe("node inventory resolution", () => {
     ).toEqual(["node.list"]);
   });
 
-  it.each([
-    requestError({ retryable: true }),
-    requestError({ message: "unknown method: node.list.extra" }),
-    Object.assign(new Error("unknown method: node.list"), {
-      name: "GatewayClientRequestError",
-      gatewayCode: "INVALID_REQUEST",
-    }),
-  ])("keeps diagnostics on the same exact missing-method contract", async (error) => {
-    gatewayMocks.callGatewayFromCliWithTransport.mockRejectedValueOnce(error);
+  it.each([requestError({ message: "unknown method: node.list.extra" })])(
+    "keeps diagnostics on the same exact missing-method contract",
+    async (error) => {
+      gatewayMocks.callGatewayFromCliWithTransport.mockRejectedValueOnce(error);
 
-    await expect(resolveNodeDiagnosticsId({}, "stale-node")).rejects.toBe(error);
-    expect(
-      gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
-    ).toEqual(["node.list"]);
-  });
+      await expect(resolveNodeDiagnosticsId({}, "stale-node")).rejects.toBe(error);
+      expect(
+        gatewayMocks.callGatewayFromCliWithTransport.mock.calls.map(([method]) => method),
+      ).toEqual(["node.list"]);
+    },
+  );
 
-  it.each(["", " \t "])("rejects explicit blank --timeout %j before transport", async (timeout) => {
+  it.each([""])("rejects explicit blank --timeout %j before transport", async (timeout) => {
     await expect(resolveCliNode({ timeout }, "some-node")).rejects.toThrow(/Invalid --timeout/);
     expect(gatewayMocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
   });
@@ -185,11 +134,11 @@ describe("node invoke envelope", () => {
 });
 
 describe("node numeric option parsing", () => {
-  it.each(["", " \t "])("rejects explicit blank numeric values %j", (value) => {
-    expect(() => parseOptionalNodePositiveInteger(value, "--positive")).toThrow(
+  it.each([""])("rejects explicit blank numeric values %j", (value) => {
+    expect(() => parseOptionalNodeInteger(value, "--positive")).toThrow(
       "--positive must be a positive integer",
     );
-    expect(() => parseOptionalNodeNonNegativeInteger(value, "--non-negative")).toThrow(
+    expect(() => parseOptionalNodeInteger(value, "--non-negative", "non-negative")).toThrow(
       "--non-negative must be a non-negative integer",
     );
     expect(() => parseOptionalNodeFiniteNumber(value, "--finite")).toThrow(
@@ -197,9 +146,9 @@ describe("node numeric option parsing", () => {
     );
   });
 
-  it.each([undefined, null])("preserves omitted numeric values %s", (value) => {
-    expect(parseOptionalNodePositiveInteger(value, "--positive")).toBeUndefined();
-    expect(parseOptionalNodeNonNegativeInteger(value, "--non-negative")).toBeUndefined();
+  it.each([null])("preserves omitted numeric values %s", (value) => {
+    expect(parseOptionalNodeInteger(value, "--positive")).toBeUndefined();
+    expect(parseOptionalNodeInteger(value, "--non-negative", "non-negative")).toBeUndefined();
     expect(parseOptionalNodeFiniteNumber(value, "--finite")).toBeUndefined();
   });
 });

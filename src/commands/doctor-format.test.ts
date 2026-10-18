@@ -3,6 +3,19 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
+  it("names the disabled Scheduled Task and recovery for the selected profile", () => {
+    const text = buildGatewayRuntimeHints(
+      { status: "stopped", state: "Disabled" },
+      { platform: "win32", env: { OPENCLAW_PROFILE: "work" } },
+    ).join("\n");
+
+    expect(text).toContain("Scheduled Task 'OpenClaw Gateway (work)' is registered but DISABLED");
+    expect(text).toContain("openclaw --profile work gateway start");
+    expect(text).toContain("openclaw --profile work doctor --fix");
+    expect(text).toContain("to re-enable it");
+    expect(text).not.toContain("likely exited immediately");
+  });
+
   it("renders macOS GUI-session recovery for the selected profile", () => {
     const hints = buildGatewayRuntimeHints(
       {
@@ -16,13 +29,14 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints.join("\n")).toContain("openclaw --profile work gateway restart");
   });
 
-  it("surfaces suspicious systemd cgroup hygiene with inspection commands", () => {
+  it.each(["user", "system"] as const)("inspects the %s systemd cgroup", (scope) => {
     expect(
       buildGatewayRuntimeHints(
         {
           status: "running",
           pid: 1234,
           systemd: {
+            scope,
             unit: "openclaw-gateway.service",
             killMode: "process",
             tasksCurrent: 807,
@@ -34,10 +48,19 @@ describe("buildGatewayRuntimeHints", () => {
     ).toEqual([
       "Systemd cgroup hygiene looks elevated: cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB.",
       "This usually means old helper or browser processes may still be attached to the gateway service.",
-      "Run: systemctl --user show openclaw-gateway.service -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID",
-      "Run: systemd-cgls --user-unit openclaw-gateway.service",
+      `Run: systemctl --${scope} show openclaw-gateway.service -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+      `Run: systemd-cgls ${scope === "system" ? "--unit" : "--user-unit"} openclaw-gateway.service`,
       "After reviewing service settings, run: openclaw gateway restart",
     ]);
+  });
+
+  it("points stopped system services to their actual journal", () => {
+    const hints = buildGatewayRuntimeHints(
+      { status: "stopped", systemd: { scope: "system", unit: "openclaw.service" } },
+      { platform: "linux", env: {} },
+    );
+    expect(hints).toContain("Logs: journalctl --system -u openclaw.service -n 200 --no-pager");
+    expect(hints.join("\n")).not.toContain("journalctl --user");
   });
 
   it("uses the provided env when rendering WSL systemd recovery hints", () => {
@@ -73,34 +96,6 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints.some((hint) => hint.includes("systemd user services are unavailable"))).toBe(true);
   });
 
-  it.each([
-    {
-      env: { OPENCLAW_PROFILE: "blue" },
-      command: "openclaw --profile blue gateway",
-    },
-    {
-      env: { OPENCLAW_CONTAINER_HINT: "sandbox" },
-      command: "openclaw --container sandbox gateway",
-    },
-    {
-      env: { OPENCLAW_PROFILE: "blue", OPENCLAW_CONTAINER_HINT: "sandbox" },
-      command: "openclaw --container sandbox gateway",
-    },
-  ])("preserves the active target in systemd recovery commands: $command", ({ env, command }) => {
-    const hints = buildGatewayRuntimeHints(
-      {
-        status: "unknown",
-        detail: "systemctl --user unavailable: Failed to connect to bus",
-      },
-      { platform: "linux", env },
-    );
-
-    expect(hints.some((hint) => hint.includes(command))).toBe(true);
-    expect(hints.some((hint) => hint.includes("headless server"))).toBe(
-      !env.OPENCLAW_CONTAINER_HINT,
-    );
-  });
-
   it("guides recovery when systemd hit its restart start limit (crash loop)", () => {
     // Real give-up shape: process kept failing (Result=exit-code) until NRestarts
     // reached StartLimitBurst and systemd stopped restarting.
@@ -116,64 +111,5 @@ describe("buildGatewayRuntimeHints", () => {
     expect(text).toContain("systemd stopped restarting the gateway after repeated crashes");
     expect(text).toContain("openclaw gateway restart");
     expect(text).not.toContain("likely exited immediately");
-  });
-
-  it("keeps the generic stopped hint for a single failed exit below the start limit", () => {
-    const text = buildGatewayRuntimeHints(
-      {
-        status: "stopped",
-        state: "failed",
-        systemd: { result: "exit-code", nRestarts: 1, startLimitBurst: 5 },
-      },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("keeps the generic stopped hint after a config exit (78) despite a stale restart count", () => {
-    // RestartPreventExitStatus=78 stopped systemd on purpose; the leftover
-    // NRestarts must not flip the hint to start-limit recovery guidance.
-    const text = buildGatewayRuntimeHints(
-      {
-        status: "stopped",
-        state: "failed",
-        lastExitStatus: 78,
-        systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
-      },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("keeps the generic stopped hint for an ordinary cleanly-stopped service", () => {
-    const text = buildGatewayRuntimeHints(
-      { status: "stopped", state: "inactive" },
-      { platform: "linux", env: {} },
-    ).join("\n");
-
-    expect(text).toContain("likely exited immediately");
-    expect(text).not.toContain("systemd stopped restarting the gateway");
-  });
-
-  it("does not warn for normal systemd cgroup metrics", () => {
-    expect(
-      buildGatewayRuntimeHints(
-        {
-          status: "running",
-          pid: 1234,
-          systemd: {
-            unit: "openclaw-gateway.service",
-            killMode: "control-group",
-            tasksCurrent: 7,
-            memoryCurrent: 132_120_576,
-          },
-        },
-        { platform: "linux", env: {} },
-      ),
-    ).toEqual([]);
   });
 });

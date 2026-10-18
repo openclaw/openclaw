@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -10,6 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ClawHubPackageSecurityResponse } from "../infra/clawhub-packages.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { captureEnv } from "../test-utils/env.js";
+import { readRequestBody, spawnOpenClaw } from "./clawhub-install.test-support.js";
 
 const PACKAGE_NAME = "@openclaw/telemetry-demo";
 const PACKAGE_VERSION = "1.0.0";
@@ -17,39 +18,6 @@ const PLUGIN_ID = "telemetry-demo";
 const ENCODED_PACKAGE_NAME = encodeURIComponent(PACKAGE_NAME);
 const PACKAGE_API_PATH = `/api/v1/packages/${ENCODED_PACKAGE_NAME}`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-async function spawnOpenClaw(
-  args: string[],
-  options: { cwd: string; env: NodeJS.ProcessEnv },
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["openclaw.mjs", ...args], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", reject);
-    child.on("close", (status) => resolve({ status, stdout, stderr }));
-  });
-}
 
 async function buildPluginZip(): Promise<Buffer> {
   const zip = new JSZip();
@@ -222,24 +190,14 @@ function buildEnv(stateDir: string, registry: string): NodeJS.ProcessEnv {
 }
 
 async function readPersistedInstallRecord(stateDir: string) {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   try {
     const records = await loadInstalledPluginIndexInstallRecords();
     return records[PLUGIN_ID];
   } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
+    previousEnv.restore();
   }
 }
 
@@ -250,12 +208,7 @@ describe("openclaw plugins install ClawHub E2E", () => {
     try {
       const env = buildEnv(stateDir, testServer.registry);
       const first = await spawnOpenClaw(
-        [
-          "plugins",
-          "install",
-          `clawhub:${PACKAGE_NAME}@${PACKAGE_VERSION}`,
-          "--accept-capabilities",
-        ],
+        ["plugins", "install", `${PACKAGE_NAME}@${PACKAGE_VERSION}`, "--accept-capabilities"],
         { cwd: process.cwd(), env },
       );
       expect(first.status, first.stderr || first.stdout).toBe(0);

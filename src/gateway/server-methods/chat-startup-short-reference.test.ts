@@ -1,43 +1,81 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createTranscriptUpdateBroadcastHandler } from "../server-session-events.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   roleClient,
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../session-sharing.test-utils.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import type { RespondFn } from "./types.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
+
+async function seed(sessionId: string, entry: Partial<SessionEntry>, text?: string) {
+  const scope = { agentId: "main", sessionKey: key, sessionId };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1, ...entry });
+  if (text) {
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: text, timestamp: 1 },
+    });
+  }
+  return scope;
+}
+
+async function startup(
+  context: GatewayRequestHandlerOptions["context"],
+  client: GatewayRequestHandlerOptions["client"] = null,
+  shortId = "12345678",
+  limit?: number,
+) {
+  const respond = vi.fn<RespondFn>();
+  const handler = expectDefined(chatHistoryHandlers["chat.startup"], "startup handler");
+  await handler({
+    params: { shortId, agentId: "main", ...(limit === undefined ? {} : { limit }) },
+    context,
+    client,
+    respond,
+    req: { type: "req", id: "short", method: "chat.startup" },
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
 
 describe("chat.startup short references", () => {
   it.each([true, false])(
     "establishes observation before reading only for a live connection (%s)",
     async (live) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-        const scope = { agentId: "main", sessionKey: key, sessionId: "observation-startup" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-        });
-        await appendTranscriptMessage(scope, {
-          message: { role: "user", content: "Snapshot history", timestamp: 1 },
-        });
+        setRuntimeConfigSnapshot({});
+        const scope = await seed(
+          "observation-startup",
+          { visibility: "shared" },
+          "Snapshot history",
+        );
         const client = {
           ...sharingPolicyClient({ scopes: ["operator.read"] }),
           connId: "short-startup-observer",
         };
         const subscribers = createSessionEventSubscriberRegistry(() => live);
         const broadcastToConnIds = vi.fn();
+        const context = createDirectChatContext({
+          subscribeSessionEvents: subscribers.subscribe,
+          getSessionEventSubscriberConnIds: subscribers.getAll,
+        });
+        await initializeSessionReadContext(context);
         const emit = createTranscriptUpdateBroadcastHandler({
+          getSessionRowProjection: () => getSessionRowProjection(context),
           broadcastToConnIds,
           sessionEventSubscribers: subscribers,
           sessionMessageSubscribers: { get: () => new Set() },
@@ -54,22 +92,8 @@ describe("chat.startup short references", () => {
           });
           return undefined;
         });
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.startup"],
-          "startup handler",
-        )({
-          params: { shortId: "12345678", agentId: "main" },
-          context: createDirectChatContext({
-            subscribeSessionEvents: subscribers.subscribe,
-            getSessionEventSubscriberConnIds: subscribers.getAll,
-            readChatStartupProjection,
-          }),
-          req: { type: "req", id: "observer", method: "chat.startup" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
-        });
+        context.readChatStartupProjection = readChatStartupProjection;
+        const respond = await startup(context, client);
         if (live) {
           expect(broadcastToConnIds).toHaveBeenCalledWith(
             "session.message",
@@ -78,6 +102,10 @@ describe("chat.startup short references", () => {
               message: expect.objectContaining({ content: lateMessage.content }),
             }),
             new Set([client.connId]),
+            {
+              sessionEventSubscriptionKeys: [key],
+              prepareSessionProjection: expect.any(Function),
+            },
           );
           expect(broadcastToConnIds.mock.invocationCallOrder[0]).toBeLessThan(
             respond.mock.invocationCallOrder[0]!,
@@ -103,61 +131,27 @@ describe("chat.startup short references", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = rolePolicyConfig();
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         const client = roleClient(visibility === "foreign" ? "none" : "view");
-        await upsertSessionEntryCore(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001",
-          },
-          {
-            sessionId: "hidden-short-startup",
-            updatedAt: 1,
-            visibility: visibility === "draft" ? "draft" : "shared",
-            ...(visibility === "incognito" ? { incognito: true } : {}),
-          },
-        );
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          chatHistoryHandlers["chat.startup"],
-          "startup handler",
-        )({
-          params: { shortId: "12345678", agentId: "main" },
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-          req: { type: "req", id: "hidden", method: "chat.startup" },
-          client,
-          isWebchatConnect: () => false,
-          respond,
+        await seed("hidden-short-startup", {
+          visibility: visibility === "draft" ? "draft" : "shared",
+          ...(visibility === "incognito" ? { incognito: true } : {}),
         });
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, { resolution: { ok: false } });
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        await initializeSessionReadContext(context);
+        expect(await startup(context, client)).toHaveBeenCalledExactlyOnceWith(true, {
+          resolution: { ok: false },
+        });
       });
     },
   );
   it("returns canonical history and bounded ambiguity through the existing resolver", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const key = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-      const scope = { agentId: "main", sessionKey: key, sessionId: "short-startup" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        displayName: "Selected conversation",
-      });
-      await appendTranscriptMessage(scope, {
-        message: { role: "user", content: "The selected history", timestamp: 1 },
-      });
-      const handler = expectDefined(chatHistoryHandlers["chat.startup"], "startup handler");
+      setRuntimeConfigSnapshot({});
+      await seed("short-startup", { displayName: "Selected conversation" }, "The selected history");
       const context = createDirectChatContext();
-      const call = async (shortId: string) => {
-        const respond = vi.fn<RespondFn>();
-        await handler({
-          params: { shortId, agentId: "main", limit: 80 },
-          context,
-          req: { type: "req", id: "short", method: "chat.startup" },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        return respond;
-      };
+      await initializeSessionReadContext(context);
+      const call = (shortId: string) => startup(context, null, shortId, 80);
       expect(await call("12345678")).toHaveBeenCalledWith(
         true,
         expect.objectContaining({

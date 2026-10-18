@@ -1,27 +1,32 @@
 import fs from "node:fs";
 import path from "node:path";
 import { vi } from "vitest";
+import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import {
   resolveSessionStorePathCore,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { noteStateIntegrity as noteStateIntegrityRaw } from "./doctor-state-integrity.js";
 
 export const noteMock = vi.fn();
 
-export function withMainAgentRoster(cfg: OpenClawConfig): OpenClawConfig {
-  if (cfg.agents?.entries || cfg.agents?.list) {
+export function withMainAgentRoster(
+  cfg: OpenClawConfigWithLegacyRoster,
+): OpenClawConfigWithLegacyRoster {
+  if (readAgentRosterProperty(cfg)) {
     return cfg;
   }
   return {
     ...cfg,
-    agents: { ...cfg.agents, entries: { main: { default: true } } },
+    agents: { ...cfg.agents, entries: { main: {} } },
   };
 }
 
 export async function noteStateIntegrity(
-  cfg: OpenClawConfig,
+  cfg: OpenClawConfigWithLegacyRoster,
   prompter: Parameters<typeof noteStateIntegrityRaw>[1],
   configPath?: string,
 ) {
@@ -78,12 +83,13 @@ export function writeSessionStore(
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
   agentId = "main",
 ) {
+  openOpenClawStateDatabase({ env: process.env });
   setupSessionState(cfg, process.env, process.env.HOME ?? "", agentId);
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
 }
 
-export async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
+export async function runStateIntegrityText(cfg: OpenClawConfigWithLegacyRoster): Promise<string> {
   await noteStateIntegrity(withMainAgentRoster(cfg), {
     confirmRuntimeRepair: vi.fn(async () => false),
     note: noteMock,

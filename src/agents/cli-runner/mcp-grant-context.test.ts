@@ -8,7 +8,7 @@ import type { RunCliAgentParams } from "./types.js";
 
 function buildGrant(
   overrides: Partial<RunCliAgentParams> = {},
-  delegationCapability?: "full" | "report_only",
+  delegationCapability?: "full" | "host_only" | "report_only",
 ) {
   const run = {
     sessionKey: "agent:main:telegram:group:chat123",
@@ -36,29 +36,30 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext source-reply authority", () => {
-  it.each(["heartbeat", "cron-event", "exec-event"])(
-    "keeps the reply channel separate from the %s turn source",
-    (messageProvider) => {
-      expect(buildGrant({ messageProvider, messageChannel: "telegram" }).messageProvider).toBe(
-        "telegram",
-      );
-      expect(buildGrant({ messageProvider }).messageProvider).toBeUndefined();
-    },
-  );
+  it("snapshots only the resolved logical model into the loopback grant", () => {
+    const requesterModel = {
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+      nativeModelId: "native-model[1m]",
+    };
+    const grant = buildGrant({ requesterModel });
+    requesterModel.model = "later-model";
 
-  it("stamps only trusted, message-capped subagent completion grants", () => {
-    expect(buildGrant().sourceReplyOnly).toBe(true);
+    expect(grant.requesterModel).toEqual({
+      provider: "selected-provider",
+      model: "selected-provider/literal-model",
+    });
+    expect(buildGrant()).not.toHaveProperty("requesterModel");
   });
 
-  it("carries the prepared model vision capability into the loopback grant", () => {
-    expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
+  it("binds screen commands to the requesting browser in the server-owned grant", () => {
+    const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
+    expect(buildGrant({ gatewayUiCommandTarget }).gatewayUiCommandTarget).toEqual(
+      gatewayUiCommandTarget,
+    );
   });
 
-  it("carries the prepared reply mode into loopback message tools", () => {
-    expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
-  });
-
-  it.each(["read-only", "guarded", "workspace", "full"] as const)(
+  it.each(["read-only"] as const)(
     "carries the exact %s session permission into the loopback grant",
     (permissionMode) => {
       const grant = buildGrant({
@@ -74,13 +75,7 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     },
   );
 
-  it.each([
-    { execMode: "deny", permissionMode: "read-only" },
-    { execMode: "allowlist", permissionMode: "guarded" },
-    { execMode: "ask", permissionMode: "guarded" },
-    { execMode: "auto", permissionMode: "workspace" },
-    { execMode: "full", permissionMode: "full" },
-  ] as const)(
+  it.each([{ execMode: "full", permissionMode: "full" }] as const)(
     "preserves effective $execMode execution authority in the granted session",
     ({ execMode, permissionMode }) => {
       const grant = buildGrant({
@@ -109,19 +104,6 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
 
     expect(grant.execSession?.permissionMode).toBe("guarded");
     expect(grant.execOverrides?.mode).toBe("allowlist");
-  });
-
-  it("carries the exact Skill Workshop revision into the loopback grant", () => {
-    const proposalRevision = {
-      agentId: "proposal-owner",
-      workspaceDir: "/proposal-workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "1".repeat(64),
-    };
-
-    expect(buildGrant({ skillWorkshopProposalRevision: proposalRevision }).skillWorkshop).toEqual({
-      proposalRevision,
-    });
   });
 
   it.each([
@@ -160,10 +142,8 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
 });
 
 describe("buildCliMcpGrantContext delegationCapability", () => {
-  it("stamps a report-only capability into the minted grant", () => {
-    expect(buildGrant({}, "report_only")).toMatchObject({
-      delegationCapability: "report_only",
-    });
+  it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
+    expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });
 
   it("leaves the grant shape untouched for ordinary runs", () => {

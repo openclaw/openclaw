@@ -1,57 +1,22 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import {
+  PANE_SESSION_HANDOFF_TTL_MS,
+  paneSessionHandoffs,
+  removePaneSessionHandoffs,
+  type PaneSessionHandoff,
+  type PendingPaneSessionHandoff,
+} from "./chat-pane-handoff-lifecycle.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
-export type ChatPageContext = ApplicationContext;
 export type PaneSessionChangeOptions = { replace?: boolean };
-export type PaneSessionHandoff = {
-  goalMode?: ChatGoalDraftMode;
-  attachments: ChatAttachment[];
-  composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
-  draft: string;
-  mentions?: readonly HumanMention[];
-  restore?: boolean;
-  send?: boolean;
-  storageFailed?: boolean;
-};
-type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
-// A retained pane owns one session for life, so creation/fork adoption crosses
-// component instances. The application context scopes that one-shot transfer.
-const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
-const paneSessionHandoffs = new WeakMap<
-  ApplicationContext<RouteId>,
-  Map<string, PendingPaneSessionHandoff[]>
->();
-
-function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
-  if (!handoff.restore) {
-    return;
-  }
-  releaseChatAttachmentPayloads([
-    ...handoff.attachments,
-    ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
-  ]);
-}
-
-function removePaneSessionHandoffs(
-  pending: PendingPaneSessionHandoff[] | undefined,
-  matches: (handoff: PendingPaneSessionHandoff) => boolean,
-): void {
-  for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
-    if (matches(pending![index]!)) {
-      discardPaneSessionHandoff(pending!.splice(index, 1)[0]!);
-    }
-  }
-}
 
 function paneHandoffs(
   context: ApplicationContext,
@@ -85,9 +50,15 @@ export function preparePaneSessionHandoff(
   removePaneSessionHandoffs(pending, (candidate) =>
     areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
+  const owner = context.gateway.snapshot.client;
+  const sameConnection = capturePlacementStartupConnection(context.gateway, {
+    gatewayUrl: context.gateway.connection.gatewayUrl,
+    recoveryScope: owner?.recoveryScope || undefined,
+  });
   const stored = {
     sessionKey,
-    ...handoff,
+    value: { ...handoff },
+    isCurrent: () => context.gateway.snapshot.client === owner && sameConnection(),
     expiresAt: Date.now() + PANE_SESSION_HANDOFF_TTL_MS,
   };
   pending.push(stored);
@@ -95,7 +66,7 @@ export function preparePaneSessionHandoff(
     paneHandoffs(context, paneId, false);
   }, PANE_SESSION_HANDOFF_TTL_MS);
   while (pending.length > PANE_SESSION_HANDOFF_LIMIT) {
-    discardPaneSessionHandoff(pending.shift()!);
+    pending.shift();
   }
 }
 
@@ -105,15 +76,14 @@ export function consumePaneSessionHandoff(
   sessionKey: string,
 ): PaneSessionHandoff | null {
   const pending = paneHandoffs(context, paneId, false);
-  const index = pending?.findIndex((candidate) =>
-    areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
+  const index = pending?.findIndex(
+    (candidate) =>
+      candidate.isCurrent() && areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
   );
   if (!pending || index === undefined || index < 0) {
     return null;
   }
-  const handoff = pending.splice(index, 1)[0]!;
-  const { expiresAt: _expiresAt, sessionKey: _sessionKey, ...value } = handoff;
-  return value;
+  return pending.splice(index, 1)[0]!.value;
 }
 
 export function clearPaneSessionHandoff(
@@ -126,34 +96,11 @@ export function clearPaneSessionHandoff(
   );
 }
 
-export function retireSessionPaneHandoffs(
-  context: ApplicationContext<RouteId>,
-  targets: readonly { key: string; retireBeforeRevision: number }[],
-): void {
-  for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {
-    removePaneSessionHandoffs(pending, (handoff) =>
-      targets.some(
-        ({ key, retireBeforeRevision }) =>
-          areUiSessionKeysEquivalent(handoff.sessionKey, key) &&
-          handoff.expiresAt - PANE_SESSION_HANDOFF_TTL_MS < retireBeforeRevision,
-      ),
-    );
-  }
-}
-
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane) {
+  if (!byPane?.delete(paneId)) {
     return;
   }
-  const pending = byPane.get(paneId);
-  if (!pending) {
-    return;
-  }
-  for (const handoff of pending) {
-    discardPaneSessionHandoff(handoff);
-  }
-  byPane.delete(paneId);
   if (byPane.size === 0) {
     paneSessionHandoffs.delete(context);
   }
@@ -174,9 +121,6 @@ export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-export const CHAT_HISTORY_TOUCH_INTENT_PX = 8;
-export const CHAT_HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
-export const headerPlatformByClient = new WeakMap<GatewayBrowserClient, Promise<string | null>>();
 
 export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
   const record = catalogRawRecord(raw);
@@ -193,27 +137,21 @@ export function catalogRawString(raw: unknown, keys: readonly string[]): string 
 }
 export function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
   try {
-    const text = JSON.stringify(result);
-    return text || null;
+    return JSON.stringify(result) || null;
   } catch {
     return null;
   }
 }
 
 export type ChatPaneConnectionScope = {
-  context: ChatPageContext;
+  context: ApplicationContext;
   state: ChatPageHost;
   client: GatewayBrowserClient;
   generation: number;
   headerOutcomeOwner: string;
-  sessions: ChatPageContext["sessions"];
+  sessions: ApplicationContext["sessions"];
 };
-export const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
 export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
@@ -230,13 +168,14 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
-
 // Shortcut menus own only advertised, enabled keys; every other printable key
 // can still transfer to the composer through the normal browser input pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
+  // Browser menu DOM owns shortcut admission across independently rendered surfaces.
   return (
     /^[a-z0-9]$/iu.test(key) &&
-    target.matches("wa-dropdown, [data-chat-autotype-shortcuts][open]") &&
+    (target.matches("[data-chat-autotype-shortcuts][open]") ||
+      (target.matches('[role="menu"][popover]') && target.matches(":popover-open"))) &&
     target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
   );
 }
@@ -261,10 +200,11 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
 }
 
 function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
+  // Portaled menus can belong to any surface in the containing app.
   const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
-  return [...surface.querySelectorAll<HTMLElement & { open?: boolean }>("wa-dropdown")].some(
+  return [...surface.querySelectorAll<HTMLElement>('[role="menu"][popover]')].some(
     (dropdown) =>
-      dropdown.open === true &&
+      dropdown.matches(":popover-open") &&
       !dropdown.closest("[inert]") &&
       (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
   );
@@ -274,6 +214,7 @@ export function focusChatComposerFromPrintableKeydown(
   root: ParentNode,
   event: KeyboardEvent,
 ): void {
+  // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||

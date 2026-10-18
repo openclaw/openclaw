@@ -1,4 +1,3 @@
-// Deepinfra plugin module adapts its text embedding runtime to the generic provider contract.
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import {
   embeddingProviderOwnsDestination,

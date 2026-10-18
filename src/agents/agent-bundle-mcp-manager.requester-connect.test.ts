@@ -12,38 +12,52 @@ import {
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
+const authorizationUrl = "https://auth.example/authorize?state=opaque";
+const request = {
+  sessionId: "session-connect",
+  workspaceDir: "/workspace",
+  requesterSenderId: "alice",
+  cfg: {
+    mcp: {
+      servers: {
+        calendar: {
+          url: "https://mcp.example/rpc",
+          transport: "streamable-http" as const,
+          auth: "oauth" as const,
+          oauth: { identity: "per-requester" as const },
+        },
+      },
+    },
+  },
+};
+
+function runConnect(tools: Parameters<typeof applyCodeModeCatalog>[0]["tools"], code: string) {
+  const harness = createCodeModeHarness();
+  applyCodeModeCatalog({ ...harness, tools: [...harness.tools, ...tools] });
+  return runUntilCompleted({ execTool: harness.tools[0]!, waitTool: harness.tools[1]!, code });
+}
+
+function guestText(text: string, isError = false) {
+  return { content: [{ type: "text", text: expect.stringContaining(text) }], isError };
+}
 
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: oauthStatus,
+  readMcpOAuthCredentialsStatuses: oauthStatus,
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
 function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
-  const includesCalendar = params.includeServerNames?.has("calendar") === true;
-  const catalog: McpToolCatalog = includesCalendar
-    ? {
-        version: 1,
-        generatedAt: 1,
-        servers: {
-          calendar: {
-            serverName: "calendar",
-            safeServerName: "calendar",
-            launchSummary: "calendar",
-            toolCount: 1,
-          },
-        },
-        tools: [
-          {
-            serverName: "calendar",
-            safeServerName: "calendar",
-            toolName: "events",
-            description: "List events",
-            fallbackDescription: "List events",
-            inputSchema: { type: "object", properties: {} },
-          },
-        ],
-      }
-    : { version: 1, generatedAt: 1, servers: {}, tools: [] };
+  const server = { serverName: "calendar", safeServerName: "calendar" };
+  const catalog: McpToolCatalog = { version: 1, generatedAt: 1, servers: {}, tools: [] };
+  if (params.includeServerNames?.has("calendar")) {
+    catalog.servers.calendar = { ...server, launchSummary: "calendar", toolCount: 1 };
+    catalog.tools.push({
+      ...server,
+      toolName: "events",
+      fallbackDescription: "List events",
+      inputSchema: { type: "object", properties: {} },
+    });
+  }
   let lastUsedAt = Date.now();
   return {
     sessionId: params.sessionId,
@@ -76,13 +90,8 @@ describe("requester MCP connect runtime", () => {
   const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
-    oauthStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
-    startAuthorization.mockReset().mockResolvedValue({
-      status: "redirect",
-      authorizationUrl: "https://auth.example/authorize?state=opaque",
-      redirectUrl: "https://gateway.example/oauth/mcp/callback",
-      state: "opaque",
-    });
+    oauthStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
+    startAuthorization.mockReset().mockResolvedValue({ status: "redirect", authorizationUrl });
     created.length = 0;
     manager = createSessionMcpRuntimeManager({
       createRuntime: (params) => {
@@ -94,84 +103,43 @@ describe("requester MCP connect runtime", () => {
 
   afterEach(async () => {
     await manager.disposeAll();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {
-    const request = {
-      sessionId: "session-connect",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
+    const input = {
+      ...request,
       messageChannel: "telegram",
       agentAccountId: "bot",
-      cfg: {
-        gateway: { publicOrigin: "https://gateway.example" },
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              transport: "streamable-http" as const,
-              auth: "oauth" as const,
-              oauth: { identity: "per-requester" as const },
-            },
-          },
-        },
-      },
+      cfg: { ...request.cfg, gateway: { publicOrigin: "https://gateway.example" } },
     };
-
-    const disconnectedRuntime = await manager.getOrCreate(request);
-    const disconnected = await materializeBundleMcpToolsForRun({
-      runtime: disconnectedRuntime,
-    });
+    const disconnectedRuntime = await manager.getOrCreate(input);
+    const disconnected = await materializeBundleMcpToolsForRun({ runtime: disconnectedRuntime });
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
     expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
-    await expect(disconnected.tools[0]!.execute("connect", {})).resolves.toMatchObject({
-      details: {
-        mcpConnect: {
-          serverName: "calendar",
-          authorizationUrl: "https://auth.example/authorize?state=opaque",
-        },
-      },
+    const connecting = disconnected.tools[0]!.execute("connect", {});
+    expect(startAuthorization).toHaveBeenCalledOnce();
+    await expect(connecting).resolves.toMatchObject({
+      details: { mcpConnect: { serverName: "calendar", authorizationUrl } },
     });
     startAuthorization
-      .mockResolvedValueOnce({
-        status: "redirect",
-        authorizationUrl: "https://auth.example/authorize?state=opaque",
-      })
+      .mockResolvedValueOnce({ status: "redirect", authorizationUrl })
       .mockResolvedValueOnce({ status: "authorized" });
-    const codeMode = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeMode.tools, ...disconnected.tools],
-      config: codeMode.config,
-      catalogRef: codeMode.catalogRef,
-    });
-    const guest = await runUntilCompleted({
-      execTool: codeMode.tools[0]!,
-      waitTool: codeMode.tools[1]!,
-      code: "return { signIn: await MCP.calendar.connect(), connected: await MCP.calendar.connect() };",
-    });
+    const guest = await runConnect(
+      disconnected.tools,
+      "return { signIn: await MCP.calendar.connect(), connected: await MCP.calendar.connect() };",
+    );
     expect(guest.status, JSON.stringify(guest)).toBe("completed");
     expect(guest.value).toEqual({
-      signIn: {
-        content: [
-          {
-            type: "text",
-            text: expect.stringContaining("https://auth.example/authorize?state=opaque"),
-          },
-        ],
-        isError: false,
-      },
-      connected: {
-        content: [{ type: "text", text: expect.stringContaining('"calendar" is connected') }],
-        isError: false,
-      },
+      signIn: guestText(authorizationUrl),
+      connected: guestText('"calendar" is connected'),
     });
     expect(disconnected.tools[0]?.resultContentSource).toBe("network");
     await disconnected.dispose();
 
-    oauthStatus.mockResolvedValue({ state: "authorized" });
-    const connectedRuntime = await manager.getOrCreate(request);
+    oauthStatus.mockResolvedValue([{ state: "authorized" }]);
+    const connectedRuntime = await manager.getOrCreate(input);
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 
     expect(connected.tools.map((tool) => tool.name)).toEqual(["calendar__events"]);
@@ -183,42 +151,17 @@ describe("requester MCP connect runtime", () => {
 
   it("returns requester connection configuration failures as failed MCP guest results", async () => {
     const runtime = await manager.getOrCreate({
+      ...request,
       sessionId: "session-connect-missing-origin",
-      workspaceDir: "/workspace",
-      requesterSenderId: "alice",
-      cfg: {
-        mcp: {
-          servers: {
-            calendar: {
-              url: "https://mcp.example/rpc",
-              transport: "streamable-http",
-              auth: "oauth",
-              oauth: { identity: "per-requester" },
-            },
-          },
-        },
-      },
     });
     const materialized = await materializeBundleMcpToolsForRun({ runtime });
     const direct = await materialized.tools[0]!.execute("connect-direct", {});
     expect(direct.details).toMatchObject({ status: "error", mcpServer: "calendar" });
+    expect(startAuthorization).not.toHaveBeenCalled();
 
-    const codeMode = createCodeModeHarness();
-    applyCodeModeCatalog({
-      tools: [...codeMode.tools, ...materialized.tools],
-      config: codeMode.config,
-      catalogRef: codeMode.catalogRef,
-    });
-    const guest = await runUntilCompleted({
-      execTool: codeMode.tools[0]!,
-      waitTool: codeMode.tools[1]!,
-      code: "return await MCP.calendar.connect();",
-    });
+    const guest = await runConnect(materialized.tools, "return await MCP.calendar.connect();");
     expect(guest.status, JSON.stringify(guest)).toBe("completed");
-    expect(guest.value).toEqual({
-      content: [{ type: "text", text: expect.stringContaining("gateway.publicOrigin") }],
-      isError: true,
-    });
+    expect(guest.value).toEqual(guestText("gateway.publicOrigin", true));
     expect(guest.value).not.toHaveProperty("details");
     await materialized.dispose();
   });

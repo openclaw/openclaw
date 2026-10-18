@@ -1,4 +1,3 @@
-// LongCat API module exposes the plugin public contract.
 export {
   LONGCAT_BASE_URL,
   LONGCAT_DEFAULT_MODEL_ID,

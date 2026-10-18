@@ -86,6 +86,21 @@ describe("extractCanvasFromText", () => {
 });
 
 describe("extractCanvasShortcodes", () => {
+  it("extracts only selected previews while preserving other embeds and code examples", () => {
+    const selected = '[embed ref="cv_owned" /]';
+    const other = '[embed ref="cv_other" /]';
+    const literal = `\`${selected}\``;
+    expect(
+      extractCanvasShortcodes(
+        `Before ${selected} between ${other} after ${literal}`,
+        (preview) => preview.viewId === "cv_owned",
+      ),
+    ).toMatchObject({
+      text: `Before  between ${other} after ${literal}`,
+      previews: [{ viewId: "cv_owned" }],
+    });
+  });
+
   it("does not let a self-closing embed start a greedy block match", () => {
     // Regression: the block regex used to greedily swallow the span from a
     // self-closing "[embed ... /]" open tag up to a later stray "[/embed]",
@@ -101,23 +116,13 @@ describe("extractCanvasShortcodes", () => {
     expect(text).toBe(" keep me [/embed]");
   });
 
-  it("still extracts a normal block embed and strips only the shortcode span", () => {
-    const input = 'before [embed ref="doc1"] hi [/embed] after';
-    const { text, previews } = extractCanvasShortcodes(input);
-
-    expect(previews).toHaveLength(1);
-    expect(previews[0]?.viewId).toBe("doc1");
-    expect(text).toBe("before  after");
-  });
-
-  it("still extracts a plain self-closing embed and keeps surrounding text", () => {
-    const input = 'see [embed url="https://b.com" /] end';
-    const { text, previews } = extractCanvasShortcodes(input);
-
-    expect(previews).toHaveLength(1);
-    expect(previews[0]?.url).toBe("https://b.com");
-    expect(text).toBe("see  end");
-  });
+  it.each([["inline code", '`[embed url="https://example.com/image.png" /]`']])(
+    "preserves literal embed examples in %s",
+    (_kind, example) => {
+      const input = `Before the example.\n\n${example}\n\nAfter the example.`;
+      expect(extractCanvasShortcodes(input)).toEqual({ text: input, previews: [] });
+    },
+  );
 });
 
 it("removes a shortcode without rewriting surrounding literal whitespace", () => {

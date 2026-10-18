@@ -8,10 +8,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import * as codexPluginModule from "../../extensions/codex/index.js";
 import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { prepareModelCatalogView } from "../../src/agents/model-catalog-view.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../src/agents/prepared-model-catalog.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { waitForCatalogPublication } from "../../src/gateway/server-methods/models-auth-catalog.test-support.js";
 import {
   listModels,
   WITHOUT_OPENAI_ENV_AUTH,
@@ -20,7 +20,6 @@ import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../src/gateway/test-helpers.e2e.js";
-import { loadManifestMetadataSnapshot } from "../../src/plugins/manifest-contract-eligibility.js";
 import * as pluginModuleLoader from "../../src/plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import {
@@ -34,6 +33,31 @@ import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.
 describe("models.list native account catalog", () => {
   afterEach(() => vi.restoreAllMocks());
   it("models.list selects a native user-home API-key catalog through the prepared Gateway owner", async (ctx) => {
+    let stage = "isolated state setup";
+    const startedAt = performance.now();
+    const stages = [{ stage, startedAtMs: 0 }];
+    const requests: string[] = [];
+    let lastCatalog:
+      | (Pick<ModelsListResult, "pendingProviders"> & {
+          models: Pick<ModelsListResult["models"][number], "id" | "available">[];
+        })
+      | undefined;
+    const reportStage = () =>
+      console.error(`[native-catalog-test] aborted while awaiting ${stage}`, {
+        elapsedMs: Math.round(performance.now() - startedAt),
+        stages: stages.slice(-16),
+        requests: requests.slice(-32),
+        lastCatalog,
+      });
+    const markStage = (next: string) => {
+      stage = next;
+      stages.push({ stage, startedAtMs: Math.round(performance.now() - startedAt) });
+      if (ctx.signal.aborted) {
+        reportStage();
+      }
+    };
+    ctx.signal.addEventListener("abort", reportStage, { once: true });
+    ctx.onTestFinished(() => ctx.signal.removeEventListener("abort", reportStage));
     await withOpenClawTestState(
       { layout: "state-only", prefix: "native-catalog-" },
       async (state) => {
@@ -60,6 +84,7 @@ describe("models.list native account catalog", () => {
             const httpServer = createServer();
             const server = new WebSocketServer({ server: httpServer });
             ctx.onTestFinished(async () => {
+              markStage("native app-server cleanup");
               for (const socket of server.clients) {
                 socket.terminate();
               }
@@ -71,7 +96,6 @@ describe("models.list native account catalog", () => {
               });
               await rm(socketDir, { recursive: true, force: true });
             });
-            const requests: string[] = [];
             let account: Record<string, unknown> | null = { type: "apiKey" };
             server.on("connection", (socket) => {
               socket.on("message", (data) => {
@@ -115,6 +139,7 @@ describe("models.list native account catalog", () => {
               });
             });
             httpServer.listen(socketPath);
+            markStage("native app-server listening");
             await once(server, "listening");
             const token = "native-catalog-gateway-token";
             let config: OpenClawConfig = {
@@ -165,7 +190,9 @@ describe("models.list native account catalog", () => {
                 };
               },
             );
+            markStage("config write");
             await state.writeConfig(config);
+            markStage("Gateway start and client connection");
             const gateway = await startGatewayWithClient({
               cfg: config,
               configPath: state.configPath,
@@ -173,6 +200,7 @@ describe("models.list native account catalog", () => {
               scopes: ["operator.admin"],
             });
             try {
+              markStage("Gateway startupSettled");
               await gateway.server.startupSettled;
               const registeredList = (refresh = false) =>
                 gateway.client.request<ModelsListResult>("models.list", {
@@ -181,19 +209,33 @@ describe("models.list native account catalog", () => {
                   refresh,
                   ...(refresh ? { provider: "openai" } : {}),
                 });
-              await expect
-                .poll(
-                  async () =>
-                    (await registeredList()).models.find((row) => row.id === "synthetic-opaque")
-                      ?.available,
-                  { timeout: 15_000 },
-                )
-                .toBe(true);
-              await expect
-                .poll(async () => (await registeredList()).pendingProviders ?? [], {
-                  timeout: 15_000,
-                })
-                .not.toContain("openai");
+              // Cold catalog preparation and native discovery are host-dependent; wake on owner
+              // publications instead of timing the first demanded read.
+              const nativeCatalogSettled = (available: boolean) => {
+                const phase = stage;
+                return waitForCatalogPublication({
+                  signal: ctx.signal,
+                  read: async () => {
+                    markStage(`${phase}: models.list request`);
+                    const result = await registeredList();
+                    lastCatalog = {
+                      pendingProviders: result.pendingProviders,
+                      models: result.models
+                        .filter((row) => row.id === "synthetic-opaque")
+                        .map((row) => ({ id: row.id, available: row.available })),
+                    };
+                    markStage(`${phase}: publication wait`);
+                    return result;
+                  },
+                  ready: (result) =>
+                    !result.pendingProviders?.includes("openai") &&
+                    result.models.find((row) => row.id === "synthetic-opaque")?.available ===
+                      available,
+                });
+              };
+              markStage("initial native catalog publication");
+              await nativeCatalogSettled(true);
+              markStage("published catalog assertions");
               const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
                 agentId: "main",
                 config: getRuntimeConfig(),
@@ -282,28 +324,17 @@ describe("models.list native account catalog", () => {
                 ]) {
                   account = observed.value;
                   const beforeModels = requests.filter((method) => method === "model/list").length;
+                  markStage("native account catalog refresh");
                   await registeredList(true);
+                  markStage("native model/list request");
                   await expect
                     .poll(() => requests.filter((method) => method === "model/list").length, {
                       timeout: 15_000,
                     })
                     .toBeGreaterThan(beforeModels);
-                  await expect
-                    .poll(async () => (await registeredList()).pendingProviders ?? [], {
-                      timeout: 15_000,
-                    })
-                    .not.toContain("openai");
-                  await expect
-                    .poll(() => readiness(), { timeout: 15_000 })
-                    .toEqual(observed.readiness);
-                  await expect
-                    .poll(
-                      async () =>
-                        (await registeredList()).models.find((row) => row.id === "synthetic-opaque")
-                          ?.available,
-                      { timeout: 15_000 },
-                    )
-                    .toBe(observed.available);
+                  markStage("refreshed native catalog publication");
+                  await nativeCatalogSettled(observed.available);
+                  expect(readiness()).toEqual(observed.readiness);
                 }
                 const hostRoutes: OpenClawConfig["models"][] = [
                   {
@@ -346,6 +377,7 @@ describe("models.list native account catalog", () => {
                 ];
                 for (const [routeIndex, models] of hostRoutes.entries()) {
                   const hostConfig = { ...config, models };
+                  markStage(`host route ${routeIndex} catalog load`);
                   await loadCatalog({ ...scope, config: hostConfig });
                   const host = await listModels({
                     ...scope,
@@ -362,35 +394,12 @@ describe("models.list native account catalog", () => {
                   expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
                 }
                 expect(requests).not.toContain("account/login/start");
+                markStage("native disconnect publication");
                 for (const socket of server.clients) {
                   socket.close();
                 }
                 await expect.poll(() => readiness()).toBeUndefined();
                 expect((await configured()).models[0]?.available).toBe(false);
-                const snapshot = { entries: rows, routeVariants: rows };
-                const nativeView = prepareModelCatalogView({
-                  ...scope,
-                  cfg: config,
-                  snapshot,
-                  metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
-                });
-                expect(
-                  nativeView.evaluateNative(rows[0]!, {
-                    availability: true,
-                    selectedAuthMode: "oauth",
-                    evidence: "runtime",
-                    routeResolution: null,
-                  }).availability,
-                ).toBe(false);
-                const hostRow = { ...rows[0]! };
-                delete hostRow.nativeRuntime;
-                const hostEvidence = {
-                  availability: true,
-                  selectedAuthMode: "oauth",
-                  evidence: "runtime" as const,
-                  routeResolution: null,
-                };
-                expect(nativeView.evaluateNative(hostRow, hostEvidence)).toBe(hostEvidence);
                 const replacement = createEmptyPluginRegistry();
                 setActivePluginRegistry(replacement);
                 expect((await configured()).models[0]?.available).toBe(false);
@@ -398,8 +407,11 @@ describe("models.list native account catalog", () => {
                 restoreActivePluginRegistrySnapshot(previous);
               }
             } finally {
+              markStage("Gateway client disconnect");
               await disconnectGatewayClient(gateway.client);
+              markStage("Gateway server close");
               await gateway.server.close();
+              markStage("environment and isolated state cleanup");
             }
           },
         );

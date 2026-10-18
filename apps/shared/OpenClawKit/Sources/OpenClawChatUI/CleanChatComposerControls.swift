@@ -8,6 +8,8 @@ import UIKit
 #endif
 
 struct CleanChatComposerSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
@@ -24,7 +26,9 @@ struct CleanChatComposerSurface: ViewModifier {
         content
             .background(
                 RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
-                    .fill(OpenClawChatTheme.composerField))
+                    .fill(self.isDesktopLayout
+                        ? AnyShapeStyle(OpenClawChatTheme.desktopComposer(in: self.colorScheme))
+                        : OpenClawChatTheme.composerField))
         #else
         if #available(iOS 26.0, *) {
             content
@@ -114,6 +118,66 @@ struct CleanChatContextUsageLabel: View {
     }
 }
 
+@MainActor
+public struct OpenClawChatContextUsageControl: View {
+    private let usage: OpenClawChatContextUsage
+    private let canCompact: Bool
+    private let controlSize: CGFloat
+    private let onCompact: @MainActor () -> Void
+
+    public init(
+        usage: OpenClawChatContextUsage,
+        canCompact: Bool,
+        controlSize: CGFloat = 28,
+        onCompact: @escaping @MainActor () -> Void)
+    {
+        self.usage = usage
+        self.canCompact = canCompact
+        self.controlSize = controlSize
+        self.onCompact = onCompact
+    }
+
+    public var body: some View {
+        Menu {
+            Text(self.tokensLine)
+                .font(OpenClawChatTypography.body)
+            if let cost = self.usage.totalCost {
+                Text(verbatim: String(
+                    format: String(localized: "Thread cost %@"),
+                    ChatContextUsageFormatter.cost(cost)))
+                    .font(OpenClawChatTypography.body)
+            }
+            Divider()
+            Button(action: self.onCompact) {
+                Text("Compact Thread")
+                    .font(OpenClawChatTypography.body)
+            }
+            .disabled(!self.canCompact)
+        } label: {
+            CleanChatContextUsageLabel(usage: self.usage, controlSize: self.controlSize)
+        }
+        .menuIndicator(.hidden)
+        #if os(macOS)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .fixedSize()
+        #endif
+        .help(self.tokensLine)
+        .accessibilityIdentifier("chat-context-usage")
+    }
+
+    private var tokensLine: String {
+        let used = ChatContextUsageFormatter.tokens(self.usage.usedTokens)
+        guard let window = self.usage.contextWindowTokens else {
+            return String(format: String(localized: "%@ tokens used"), used)
+        }
+        return String(
+            format: String(localized: "%@ of %@ tokens used"),
+            used,
+            ChatContextUsageFormatter.tokens(window))
+    }
+}
+
 struct OpenClawChatAttachmentsStrip: View {
     let attachments: [OpenClawPendingAttachment]
     let onRemove: @MainActor (OpenClawPendingAttachment.ID) -> Void
@@ -129,26 +193,31 @@ struct OpenClawChatAttachmentsStrip: View {
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        } else if attachment.mimeType.hasPrefix("audio/") {
-                            Image(systemName: "waveform")
+                        } else {
+                            Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
+                                mimeType: attachment.mimeType,
+                                fileName: attachment.fileName))
+                                .accessibilityHidden(true)
+                        }
+
+                        if attachment.mimeType.hasPrefix("audio/"), let duration = attachment.durationSeconds {
                             Text("Voice note")
                                 .font(OpenClawChatTypography.caption)
-                            if let duration = attachment.durationSeconds {
-                                Text(openClawVoiceNoteDurationLabel(duration))
+                            Text(openClawVoiceNoteDurationLabel(duration))
+                                .font(OpenClawChatTypography.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(attachment.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: 180)
+                            if !attachment.mimeType.hasPrefix("image/") {
+                                Text(ByteCountFormatter.string(
+                                    fromByteCount: Int64(attachment.data.count), countStyle: .file))
                                     .font(OpenClawChatTypography.caption)
                                     .foregroundStyle(.secondary)
                             }
-                        } else {
-                            Image(systemName: "photo")
-                            Text(attachment.fileName)
-                                .font(OpenClawChatTypography.caption)
-                                .lineLimit(1)
-                        }
-
-                        if attachment.preview != nil {
-                            Text(attachment.fileName)
-                                .font(OpenClawChatTypography.caption)
-                                .lineLimit(1)
                         }
 
                         Button {
@@ -157,11 +226,15 @@ struct OpenClawChatAttachmentsStrip: View {
                             Image(systemName: "xmark.circle.fill")
                         }
                         .buttonStyle(.plain)
+                        .help("Remove attachment")
+                        .accessibilityLabel(String(
+                            format: String(localized: "Remove attachment: %@"), attachment.fileName))
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(OpenClawChatTheme.accent.opacity(0.08))
                     .clipShape(Capsule())
+                    .help(attachment.fileName)
                 }
             }
         }
@@ -169,81 +242,6 @@ struct OpenClawChatAttachmentsStrip: View {
 }
 
 #if !os(macOS)
-struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
-    @Binding var showsPhotoPicker: Bool
-    @Binding var showsFileImporter: Bool
-    @Binding var showsCameraPicker: Bool
-    let isAttachmentInputEnabled: Bool
-    let extraItems: ExtraItems
-
-    init(
-        showsPhotoPicker: Binding<Bool>,
-        showsFileImporter: Binding<Bool>,
-        showsCameraPicker: Binding<Bool>,
-        isAttachmentInputEnabled: Bool,
-        @ViewBuilder extraItems: () -> ExtraItems)
-    {
-        self._showsPhotoPicker = showsPhotoPicker
-        self._showsFileImporter = showsFileImporter
-        self._showsCameraPicker = showsCameraPicker
-        self.isAttachmentInputEnabled = isAttachmentInputEnabled
-        self.extraItems = extraItems()
-    }
-
-    var body: some View {
-        Menu {
-            Button {
-                self.showsPhotoPicker = true
-            } label: {
-                Label {
-                    Text("Photo Library")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "photo.on.rectangle")
-                }
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            #if canImport(UIKit)
-            Button {
-                self.showsCameraPicker = true
-            } label: {
-                Label {
-                    Text("Camera")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "camera")
-                }
-            }
-            .disabled(
-                !self.isAttachmentInputEnabled ||
-                    !UIImagePickerController.isSourceTypeAvailable(.camera))
-            #endif
-
-            Button {
-                self.showsFileImporter = true
-            } label: {
-                Label {
-                    Text("Choose Media File")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "folder")
-                }
-            }
-            .disabled(!self.isAttachmentInputEnabled)
-
-            Divider()
-            self.extraItems
-        } label: {
-            CompactChatAttachmentLabel()
-        }
-        .help("Composer options")
-        .accessibilityLabel("Composer options")
-        .accessibilityIdentifier("chat-attachment-picker")
-        .buttonStyle(.plain)
-    }
-}
-
 #if canImport(UIKit)
 struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
     let onImage: @MainActor (UIImage) -> Void
@@ -356,8 +354,8 @@ struct OpenClawChatMicButton: View {
     private func performDictationAction() {
         guard let dictationControl else { return }
         switch Self.dictationPrimaryAction(
-            isPending: self.isDictationPending,
-            isActive: dictationControl.isActive)
+            isPending: self.isDictationPending || dictationControl.isActive,
+            isActive: dictationControl.phase == .listening)
         {
         case .finish:
             dictationControl.finish()
@@ -451,19 +449,20 @@ private struct UnifiedChatMicMetadata: ViewModifier {
     }
 
     private var accessibilityLabel: Text {
-        if self.control.isActive { return Text("Finish dictation") }
-        if self.isPending { return Text("Cancel") }
+        if self.control.phase == .listening { return Text("Finish dictation") }
+        if self.isPending || self.control.isActive { return Text("Cancel dictation") }
         return Text("Dictate message")
     }
 
     private var accessibilityValue: Text {
-        if self.control.isActive { return Text("Listening") }
-        return Text("Not listening")
+        Text((self.isPending && self.control.phase == .idle
+                ? OpenClawChatDictationControl.Phase.starting
+                : self.control.phase).statusText)
     }
 
     private var helpText: Text {
-        if self.control.isActive { return Text("Finish dictation") }
-        if self.isPending { return Text("Cancel") }
+        if self.control.phase == .listening { return Text("Finish dictation") }
+        if self.isPending || self.control.isActive { return Text("Cancel dictation") }
         return Text("Transcribe speech into the message")
     }
 }

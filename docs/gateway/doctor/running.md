@@ -9,6 +9,33 @@ read_when:
 Run `openclaw doctor` to repair and migrate an OpenClaw install. This page covers the
 command, its automation flags, and the read-only lint mode.
 
+You can run Doctor after an update without first starting the Gateway. Plugin
+health checks use the runtime config prepared by Doctor.
+
+Database migrations use the [efficient integrity-check default](/install/updating#migration-integrity-checks):
+whole-database `quick_check`, full checks of tables the migration rewrites or
+re-indexes, and foreign-key checks. Use `openclaw doctor --fix --full-integrity-check`
+to check all tables and indexes during migration. Explicit verification,
+recovery, and compaction keep their existing checks.
+
+When the System agent runs Doctor, it uses a separate process from the same
+OpenClaw installation. Bulk diagnostic checks can then run without blocking the
+Gateway's event loop. This uses the existing `--non-interactive` behavior,
+including its safe migrations; it does not enable additional repairs. Once
+started, Doctor finishes and releases its resources before a cancelled caller
+settles, so cancellation cannot abandon an in-progress migration.
+
+Doctor can run while the Gateway owns a current profile: completed daemon
+runtime-pin migrations do not request offline ownership again. Fresh profiles
+record this completion during setup or Gateway startup when no legacy pins exist, so their first live Doctor run needs no runtime-pin migration. A pending
+runtime-pin migration still needs exclusive ownership, including during
+`--non-interactive` diagnosis. Stop the Gateway and other state owners for that
+profile, run `openclaw doctor --fix` with the same profile/state/config, then
+restart the Gateway. Doctor preserves the pending migration and reports that
+next step rather than taking ownership from a live Gateway. Use `doctor --lint`
+or `doctor --json` for read-only diagnostics when offline migrations cannot be
+completed yet.
+
 ## Quick start
 
 ```bash
@@ -23,7 +50,7 @@ openclaw doctor
     openclaw doctor --yes
     ```
 
-    Accept default non-service repairs without prompting and enter maintenance while preserving the installed gateway service definition.
+    Accept default non-service repairs without prompting and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--fix">
@@ -31,7 +58,7 @@ openclaw doctor
     openclaw doctor --fix
     ```
 
-    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance while preserving the installed gateway service definition.
+    Apply recommended non-service repairs without prompting (`--repair` is an alias) and enter maintenance under the [service-preservation and installation-drift rules](/cli/doctor/recovery#gateway-service-recovery).
 
   </Tab>
   <Tab title="--lint">
@@ -49,7 +76,7 @@ openclaw doctor
     openclaw doctor --fix --force
     ```
 
-    Apply aggressive config/state repairs too. Repair maintenance preserves the installed service definition; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
+    Apply aggressive config/state repairs too. Repair maintenance uses the same service-preservation and installation-drift rules; use `openclaw gateway install --force` from the intended installation to replace its launcher and managed environment.
 
   </Tab>
   <Tab title="--non-interactive">
@@ -66,6 +93,11 @@ openclaw doctor
     another live owner must stop before repair can proceed. Malformed or
     conflicting retained files require the manual recovery named in the error.
 
+    When the shared database is already current, preparation leaves the running
+    Gateway's worker environments available. Actual schema repairs retire the old
+    database resources before later maintenance continues, including when repair
+    cleanup fails.
+
   </Tab>
   <Tab title="--deep">
     ```bash
@@ -76,6 +108,14 @@ openclaw doctor
 
   </Tab>
 </Tabs>
+
+If a plugin cannot load because its source capture runs out of disk space,
+Doctor reports `ENOSPC` with the underlying filesystem error. Free space on the
+affected filesystem and rerun Doctor. Standalone `--non-interactive` Doctor
+exits with code `1`; update-invoked Doctor records the problem as a warning so
+the update can continue while keeping the diagnostic visible.
+
+With `OPENCLAW_GATEWAY_STARTUP_TRACE=1`, Doctor prints per-phase timings (`doctor.*` and `cli.bootstrap.*` lines) to stderr.
 
 To review changes before writing, open the config file first:
 
@@ -128,6 +168,7 @@ openclaw doctor --lint --only core/doctor/gateway-config --json
 
 JSON output fields:
 
+- `schemaVersion`: version of the machine-readable lint envelope; branch on this before parsing other fields
 - `ok`: whether any finding met the selected severity threshold
 - `checksRun` / `checksSkipped`: counts (skipped by profile, `--only`, or `--skip`)
 - `findings`: structured diagnostics with `checkId`, `severity`, `message`, and optional `path`, `line`, `column`, `ocPath`, `source`, `target`, `requirement`, `fixHint`
@@ -141,6 +182,11 @@ Exit codes:
 | `2`  | command/runtime failure before findings could be emitted |
 
 These threshold-based exit codes belong to explicit `--lint` mode, with or without `--json`. Bare `openclaw doctor --json` preserves ordinary Doctor's advisory exit `0` after producing its payload; machine consumers should read `ok` and `findings`. Fatal errors before output remain nonzero.
+
+During `openclaw update`, failure to remove Doctor's disposable lint snapshot is
+recorded as an update warning and does not block the update. Standalone
+`doctor --lint` still reports that cleanup failure as an error. The update keeps
+the checks' actual findings; cleanup warnings do not hide other failures.
 
 Flags:
 

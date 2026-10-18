@@ -2,382 +2,260 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import * as outputFiles from "./output-files.js";
+import { observeOutputWriteSettlement } from "./output-files.test-support.js";
+import {
+  createDownloadCaptureForPage,
+  type BrowserDownloadCaptureOptions,
+} from "./pw-download-capture.js";
+
+const pendingOr = <T>(outcome: Promise<T>) => Promise.race([outcome, Promise.resolve("pending")]);
+
+function makeCapture({
+  timeout = 1_000,
+  download = {},
+  ...options
+}: BrowserDownloadCaptureOptions & {
+  timeout?: number;
+  download?: {
+    filename?: string;
+    url?: string;
+    saveAs?: (tempPath: string) => Promise<void>;
+    cancel?: () => Promise<void>;
+  };
+} = {}) {
+  const page = new EventEmitter();
+  const state = { downloadWaiterDepth: 0 };
+  const saveAs = vi.fn(download.saveAs ?? (async () => {}));
+  const cancel = vi.fn(download.cancel ?? (async () => {}));
+  const capture = createDownloadCaptureForPage(page, state, timeout, options);
+  const outcome = capture.promise.catch((error: unknown) => error);
+  return {
+    capture,
+    outcome,
+    saveAs,
+    cancel,
+    emit: () =>
+      page.emit("download", {
+        url: () => download.url ?? "https://example.com/export.csv",
+        suggestedFilename: () => download.filename ?? "export.csv",
+        saveAs,
+        cancel,
+      }),
+    expectReleased: () => {
+      expect(state.downloadWaiterDepth).toBe(0);
+      expect(page.listenerCount("download")).toBe(0);
+    },
+  };
+}
 
 describe("Playwright download capture cancellation", () => {
   it("awaits cancellation when owned download admission rejects", async () => {
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
     const rejection = new Error("download destination blocked by policy");
-    const cancelGate = createDeferred<void>();
-    const cancel = vi.fn(async () => await cancelGate.promise);
-    const saveAs = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 1_000, {
+    const cancelGate = Promise.withResolvers<void>();
+    const f = makeCapture({
       mode: "explicit",
       beforeSave: async () => {
         throw rejection;
       },
       cancelOnBeforeSaveError: () => true,
+      download: {
+        url: "http://169.254.169.254/latest/meta-data/",
+        filename: "metadata.bin",
+        cancel: async () => await cancelGate.promise,
+      },
     });
-    const outcome = capture.promise.then(
-      () => "resolved" as const,
-      (error: unknown) => error,
-    );
-
-    page.emit("download", {
-      url: () => "http://169.254.169.254/latest/meta-data/",
-      suggestedFilename: () => "metadata.bin",
-      saveAs,
-      cancel,
-    });
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
-    await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toBe("pending");
+    f.emit();
+    await vi.waitFor(() => expect(f.cancel).toHaveBeenCalledOnce());
+    await expect(pendingOr(f.outcome)).resolves.toBe("pending");
     cancelGate.resolve();
 
-    await expect(outcome).resolves.toBe(rejection);
-    expect(saveAs).not.toHaveBeenCalled();
-    expect(state.downloadWaiterDepth).toBe(0);
-    expect(page.listenerCount("download")).toBe(0);
+    await expect(f.outcome).resolves.toBe(rejection);
+    expect(f.saveAs).not.toHaveBeenCalled();
+    f.expectReleased();
   });
 
-  it.each(["explicit", "passive"] as const)(
-    "enforces the %s download deadline after its event arrives",
+  it.each(["explicit", "passive", "caller cancellation"] as const)(
+    "prevents saving after %s interrupts delayed validation",
     async (mode) => {
-      vi.useFakeTimers();
-      const page = new EventEmitter();
-      const state = { downloadWaiterDepth: 0 };
+      const deadline = mode !== "caller cancellation";
+      if (deadline) {
+        vi.useFakeTimers();
+      }
       const controller = new AbortController();
-      const validation = createDeferred<void>();
-      const saveAs = vi.fn(async () => {});
-      const cancel = vi.fn(async () => {});
+      const reason = new Error("download request aborted");
+      const validation = Promise.withResolvers<void>();
+      const beforeSave = vi.fn(async () => {
+        await validation.promise;
+      });
       const timeoutMessage =
         mode === "passive"
           ? "Timeout waiting for navigation download"
           : "Timeout waiting for download";
-      const capture = createDownloadCaptureForPage(page, state, 25, {
-        mode,
+      const f = makeCapture({
+        mode: deadline ? mode : undefined,
         signal: controller.signal,
         timeoutMessage,
-        beforeSave: async () => {
-          await validation.promise;
-        },
+        beforeSave,
+        timeout: deadline ? 25 : 1_000,
       });
-      const outcome = capture.promise.then(
-        () => "resolved" as const,
-        (error: unknown) => error,
-      );
 
       try {
-        page.emit("download", {
-          url: () => "https://example.com/export.csv",
-          suggestedFilename: () => "export.csv",
-          saveAs,
-          cancel,
-        });
-        await vi.advanceTimersByTimeAsync(25);
-
-        await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toMatchObject({
-          message: timeoutMessage,
-        });
-        expect(cancel).toHaveBeenCalledOnce();
+        f.emit();
+        expect(beforeSave).toHaveBeenCalledOnce();
+        if (deadline) {
+          await vi.advanceTimersByTimeAsync(25);
+          await expect(pendingOr(f.outcome)).resolves.toMatchObject({ message: timeoutMessage });
+        } else {
+          controller.abort(reason);
+          await nextTurn();
+          expect(await pendingOr(f.outcome)).toBe(reason);
+        }
+        expect(f.cancel).toHaveBeenCalledOnce();
         validation.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-
-        expect(saveAs).not.toHaveBeenCalled();
-        expect(state.downloadWaiterDepth).toBe(0);
-        expect(page.listenerCount("download")).toBe(0);
+        await (deadline ? vi.advanceTimersByTimeAsync(0) : nextTurn());
+        expect(f.saveAs).not.toHaveBeenCalled();
+        f.expectReleased();
       } finally {
         controller.abort(new Error("download test cleanup"));
         validation.resolve();
-        await outcome;
+        await f.outcome;
         vi.useRealTimers();
       }
     },
   );
 
-  it("cancels a captured download before delayed validation can save bytes", async () => {
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const controller = new AbortController();
-    const reason = new Error("download request aborted");
-    const validation = createDeferred<void>();
-    const beforeSave = vi.fn(async () => {
-      await validation.promise;
-    });
-    const saveAs = vi.fn(async () => {});
-    const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 1_000, {
-      beforeSave,
-      signal: controller.signal,
-    });
-    const outcome = capture.promise.then(
-      () => "resolved" as const,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/export.csv",
-        suggestedFilename: () => "export.csv",
-        saveAs,
-        cancel,
-      });
-      expect(beforeSave).toHaveBeenCalledOnce();
-      controller.abort(reason);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe(reason);
-      validation.resolve();
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      expect(saveAs).not.toHaveBeenCalled();
-      expect(state.downloadWaiterDepth).toBe(0);
-      expect(page.listenerCount("download")).toBe(0);
-    } finally {
-      validation.resolve();
-      await outcome;
-    }
-  });
-
-  it("cancels an in-progress download without publishing staged output", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-cancel-"));
-    const outputPath = path.join(outputRoot, "cancelled.bin");
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const controller = new AbortController();
-    const reason = new Error("download request aborted");
-    const saveGate = createDeferred<void>();
-    const saveStarted = createDeferred<string>();
-    const saveAs = vi.fn(async (tempPath: string) => {
-      await fs.writeFile(tempPath, "cancelled partial contents", "utf8");
-      saveStarted.resolve(tempPath);
-      await saveGate.promise;
-    });
-    const cancel = vi.fn(async () => {
-      saveGate.resolve();
-    });
-    const capture = createDownloadCaptureForPage(page, state, 1_000, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-      signal: controller.signal,
-    });
-    const outcome = capture.promise.then(
-      () => "resolved" as const,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/cancelled.bin",
-        suggestedFilename: () => "cancelled.bin",
-        saveAs,
-        cancel,
-      });
-      const partialPath = await saveStarted.promise;
-      await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("cancelled partial contents");
-
-      controller.abort(reason);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      expect(cancel).toHaveBeenCalledOnce();
-      await expect(outcome).resolves.toBe(reason);
-      await vi.waitFor(async () => {
-        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
-      });
-      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(state.downloadWaiterDepth).toBe(0);
-      expect(page.listenerCount("download")).toBe(0);
-    } finally {
-      saveGate.resolve();
-      await outcome;
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("cancels a timed-out in-progress download without publishing staged output", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-timeout-"));
-    const outputPath = path.join(outputRoot, "timed-out.bin");
-    vi.useFakeTimers();
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const saveGate = createDeferred<void>();
-    const saveStarted = createDeferred<string>();
-    const saveAs = vi.fn(async (tempPath: string) => {
-      await fs.writeFile(tempPath, "timed-out partial contents", "utf8");
-      saveStarted.resolve(tempPath);
-      await saveGate.promise;
-    });
-    const cancel = vi.fn(async () => {
-      saveGate.resolve();
-    });
-    const capture = createDownloadCaptureForPage(page, state, 25, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-    });
-    const outcome = capture.promise.then(
-      () => "resolved" as const,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/timed-out.bin",
-        suggestedFilename: () => "timed-out.bin",
-        saveAs,
-        cancel,
-      });
-      const partialPath = await saveStarted.promise;
-      await vi.advanceTimersByTimeAsync(25);
-
-      await expect(Promise.race([outcome, Promise.resolve("pending")])).resolves.toMatchObject({
-        message: "Timeout waiting for download",
-      });
-      expect(cancel).toHaveBeenCalledOnce();
-      await vi.waitFor(async () => {
-        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
-      });
-      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      saveGate.resolve();
-      await outcome;
-      vi.useRealTimers();
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("finishes atomic publication when cancellation arrives after its commit boundary", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
-    const outputPath = path.join(outputRoot, "published.bin");
-    const renameStarted = createDeferred<void>();
-    const releaseRename = createDeferred<void>();
-    const renameFinished = createDeferred<void>();
-    const originalRename = fs.rename.bind(fs);
-    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (String(destination).endsWith(`${path.sep}published.bin`)) {
-        renameStarted.resolve();
-        await releaseRename.promise;
+  it.for(["caller cancellation", "download deadline"] as const)(
+    "discards an in-progress staged download on %s",
+    async (interruption, { signal }) => {
+      const controller = new AbortController();
+      const reason = new Error("download request aborted");
+      const deadline = interruption === "download deadline";
+      const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-"));
+      const outputPath = path.join(outputRoot, "cancelled.bin");
+      const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
+      const saveGate = Promise.withResolvers<void>();
+      const saveStarted = Promise.withResolvers<string>();
+      if (deadline) {
+        vi.useFakeTimers();
       }
-      try {
-        await originalRename(source, destination);
-      } finally {
-        renameFinished.resolve();
-      }
-    });
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const controller = new AbortController();
-    const reason = new Error("download aborted during publication");
-    const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 1_000, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-      signal: controller.signal,
-    });
-    const outcome = capture.promise.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
-
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/published.bin",
-        suggestedFilename: () => "published.bin",
-        saveAs: async (tempPath: string) => {
-          await fs.writeFile(tempPath, "completed download", "utf8");
+      const f = makeCapture({
+        mode: "explicit",
+        outputPath,
+        outputRoot,
+        signal: controller.signal,
+        timeout: deadline ? 25 : 1_000,
+        download: {
+          filename: "cancelled.bin",
+          url: "https://example.com/cancelled.bin",
+          saveAs: async (tempPath) => {
+            await fs.writeFile(tempPath, "cancelled partial contents", "utf8");
+            saveStarted.resolve(tempPath);
+            await saveGate.promise;
+          },
+          cancel: async () => {
+            saveGate.resolve();
+          },
         },
-        cancel,
       });
-      await renameStarted.promise;
-      controller.abort(reason);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-
-      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
-      expect(cancel).not.toHaveBeenCalled();
-      releaseRename.resolve();
-
-      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
-      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
-      expect(state.downloadWaiterDepth).toBe(0);
-    } finally {
-      releaseRename.resolve();
-      await renameFinished.promise;
-      await outcome;
-      rename.mockRestore();
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("finishes atomic publication after its download deadline retires", async () => {
-    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-deadline-"));
-    const outputPath = path.join(outputRoot, "published.bin");
-    vi.useFakeTimers();
-    const renameStarted = createDeferred<void>();
-    const releaseRename = createDeferred<void>();
-    const renameFinished = createDeferred<void>();
-    const originalRename = fs.rename.bind(fs);
-    const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
-      if (String(destination).endsWith(`${path.sep}published.bin`)) {
-        renameStarted.resolve();
-        await releaseRename.promise;
-      }
       try {
-        await originalRename(source, destination);
+        f.emit();
+        const partialPath = await withinTest(saveStarted.promise, signal);
+        await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("cancelled partial contents");
+        if (deadline) {
+          await vi.advanceTimersByTimeAsync(25);
+          await expect(pendingOr(f.outcome)).resolves.toMatchObject({
+            message: "Timeout waiting for download",
+          });
+        } else {
+          controller.abort(reason);
+          await nextTurn();
+          await expect(f.outcome).resolves.toBe(reason);
+        }
+        expect(f.cancel).toHaveBeenCalledOnce();
+        // Capture rejection precedes staging cleanup; join that exact writer.
+        await withinTest(writeSettled.promise, signal);
+        await expect(fs.access(partialPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+        f.expectReleased();
       } finally {
-        renameFinished.resolve();
+        saveGate.resolve();
+        await f.outcome;
+        // Teardown joins admitted writes even after the test signal aborts.
+        if (write.mock.calls.length > 0) {
+          await writeSettled.promise;
+        }
+        write.mockRestore();
+        vi.useRealTimers();
+        await fs.rm(outputRoot, { recursive: true, force: true });
       }
-    });
-    const page = new EventEmitter();
-    const state = { downloadWaiterDepth: 0 };
-    const cancel = vi.fn(async () => {});
-    const capture = createDownloadCaptureForPage(page, state, 25, {
-      mode: "explicit",
-      outputPath,
-      outputRoot,
-    });
-    const outcome = capture.promise.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
+    },
+  );
 
-    try {
-      page.emit("download", {
-        url: () => "https://example.com/published.bin",
-        suggestedFilename: () => "published.bin",
-        saveAs: async (tempPath: string) => {
-          await fs.writeFile(tempPath, "completed download", "utf8");
-        },
-        cancel,
+  it.each(["caller cancellation", "download deadline"] as const)(
+    "finishes atomic publication when %s arrives after its commit boundary",
+    async (interruption) => {
+      const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-publish-"));
+      const outputPath = path.join(outputRoot, "published.bin");
+      const renameStarted = Promise.withResolvers<void>();
+      const releaseRename = Promise.withResolvers<void>();
+      const renameFinished = Promise.withResolvers<void>();
+      const originalRename = fs.rename.bind(fs);
+      const rename = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+        if (String(destination).endsWith(`${path.sep}published.bin`)) {
+          renameStarted.resolve();
+          await releaseRename.promise;
+        }
+        try {
+          await originalRename(source, destination);
+        } finally {
+          renameFinished.resolve();
+        }
       });
-      await renameStarted.promise;
-      await vi.advanceTimersByTimeAsync(25);
+      vi.useFakeTimers();
+      const controller = new AbortController();
+      const f = makeCapture({
+        mode: "explicit",
+        outputPath,
+        outputRoot,
+        signal: controller.signal,
+        timeout: interruption === "caller cancellation" ? 1_000 : 25,
+        download: {
+          url: "https://example.com/published.bin",
+          filename: "published.bin",
+          saveAs: async (tempPath: string) => {
+            await fs.writeFile(tempPath, "completed download", "utf8");
+          },
+        },
+      });
+      try {
+        f.emit();
+        await renameStarted.promise;
+        if (interruption === "caller cancellation") {
+          controller.abort(new Error("download aborted during publication"));
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(25);
+        }
 
-      expect(await Promise.race([outcome, Promise.resolve("pending")])).toBe("pending");
-      expect(cancel).not.toHaveBeenCalled();
-      releaseRename.resolve();
+        expect(await pendingOr(f.outcome)).toBe("pending");
+        expect(f.cancel).not.toHaveBeenCalled();
+        releaseRename.resolve();
 
-      await expect(capture.promise).resolves.toMatchObject({ path: outputPath });
-      await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
-    } finally {
-      releaseRename.resolve();
-      await renameFinished.promise;
-      await outcome;
-      rename.mockRestore();
-      vi.useRealTimers();
-      await fs.rm(outputRoot, { recursive: true, force: true });
-    }
-  });
+        await expect(f.capture.promise).resolves.toMatchObject({ path: outputPath });
+        await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("completed download");
+        f.expectReleased();
+      } finally {
+        releaseRename.resolve();
+        await renameFinished.promise;
+        await f.outcome;
+        rename.mockRestore();
+        vi.useRealTimers();
+        await fs.rm(outputRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });

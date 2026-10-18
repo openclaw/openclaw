@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile, type Validator } from "typebox/compile";
+import { Compile, type Validator } from "typebox/schema";
 import {
   SessionParticipantIdentitySchema,
   type SessionParticipantIdentity,
@@ -8,9 +8,7 @@ import {
 export type { SessionParticipantIdentity };
 
 // Compile only decoded own-property records; raw sender objects have different inherited-key semantics.
-let identityValidator:
-  | Validator<Record<string, never>, typeof SessionParticipantIdentitySchema>
-  | undefined;
+let identityValidator: Validator<typeof SessionParticipantIdentitySchema> | undefined;
 
 export function participantIdentityNamespace(identity: SessionParticipantIdentity): string {
   if (identity.type === "profile" || identity.type === "agent") {

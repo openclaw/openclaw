@@ -1,11 +1,8 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import {
-  avoidTrailingHighSurrogateBreak,
-  chunkTextForOutbound,
-  findCodeRegions,
-} from "openclaw/plugin-sdk/text-chunking";
+import { chunkTextForOutbound, findCodeRegions } from "openclaw/plugin-sdk/text-chunking";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 
 type ChunkDiscordTextOpts = {
   /** Max characters per Discord message. Default: 2000. */
@@ -33,10 +30,6 @@ const FENCE_RE = /^( {0,3})(`{3,}|~{3,})(.*)$/;
 
 function hasReasoningItalics(text: string): boolean {
   return /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(text) && text.trimEnd().endsWith("_");
-}
-
-function resolveDiscordChunkLimit(value: unknown, fallback: number) {
-  return resolveIntegerOption(value, fallback, { min: 1 });
 }
 
 function countLines(text: string) {
@@ -70,8 +63,8 @@ function closesFence(open: OpenFence, close: OpenFence): boolean {
 
 type DiscordFrame = { start: number; end: number };
 function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string[] {
-  const hardMaxChars = resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS);
-  const maxLines = resolveDiscordChunkLimit(opts.maxLines, DEFAULT_MAX_LINES);
+  const hardMaxChars = resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 });
+  const maxLines = resolveIntegerOption(opts.maxLines, DEFAULT_MAX_LINES, { min: 1 });
   if (!text) {
     return [];
   }
@@ -88,9 +81,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   let consumed = 0;
   let lineStart = 0;
   // Keep existing soft breaks based on source bytes; render measures the full payload.
-  const raw = (frame: DiscordFrame) => {
+  const raw = (frame: DiscordFrame, body = text.slice(frame.start, frame.end)) => {
     const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const body = text.slice(frame.start, frame.end);
     return prefix + (prefix ? "\n" : "") + body;
   };
   const render = (frame: DiscordFrame) => {
@@ -98,8 +90,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     if (body === undefined) {
       return undefined;
     }
-    const prefix = ranges.fenceAt(frame.start)?.reopenLine ?? "";
-    const result = prefix + (prefix ? "\n" : "") + body;
+    const result = raw(frame, body);
     const close = ranges.fenceAt(frame.end);
     return close?.reopenLine
       ? result + (result.endsWith("\n") ? "" : "\n") + close.closeLine
@@ -204,7 +195,7 @@ export function chunkDiscordTextWithMode(
   }
   const lineChunks = chunkByParagraph(
     text,
-    resolveDiscordChunkLimit(opts.maxChars, DEFAULT_MAX_CHARS),
+    resolveIntegerOption(opts.maxChars, DEFAULT_MAX_CHARS, { min: 1 }),
     { splitLongParagraphs: false },
   );
   return lineChunks.flatMap((line) => {
@@ -386,25 +377,64 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
   if (!fence) {
     collect(source.length);
   }
-  const overlaps = (start: number, end: number) =>
-    spans.some((span) => span.start < end && span.end > start);
-  const joins = (end: number, start: number) =>
-    end <= start && spans.some((span) => span.start < end && end < span.end && start < span.end);
-  const boundary = (start: number, end: number) => {
-    let safe = avoidTrailingHighSurrogateBreak(source, start, end);
-    for (const span of spans) {
-      const prefix = span.code.prefix;
-      if (span.base + prefix.start < safe && safe < span.base + prefix.end) {
-        return span.base + prefix.start;
+  const firstMatchingIndex = (length: number, before: (index: number) => boolean) => {
+    let low = 0;
+    let high = length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (before(middle)) {
+        low = middle + 1;
+      } else {
+        high = middle;
       }
-      if (span.start < safe && safe < span.end) {
-        if (source[safe - 1] === "\r" && source[safe] === "\n") {
+    }
+    return low;
+  };
+  // The parser emits disjoint inline spans in source order.
+  const firstSpanEndingAfter = (position: number) =>
+    firstMatchingIndex(
+      spans.length,
+      (index) => expectDefined(spans[index], "Discord inline span").end <= position,
+    );
+  // Spans in the same container can share a prefix; prefix ends remain ordered.
+  const firstPrefixEndingAfter = (position: number) =>
+    spans[
+      firstMatchingIndex(spans.length, (index) => {
+        const span = expectDefined(spans[index], "Discord inline span");
+        return span.base + span.code.prefix.end <= position;
+      })
+    ];
+  const overlaps = (start: number, end: number) => {
+    const span = spans[firstSpanEndingAfter(start)];
+    return Boolean(span && span.start < end);
+  };
+  const joins = (end: number, start: number) => {
+    if (end > start) {
+      return false;
+    }
+    const span = spans[firstSpanEndingAfter(end)];
+    return Boolean(span && span.start < end && start < span.end);
+  };
+  const boundary = (start: number, end: number) => {
+    let safe = findGraphemeChunkEnd(source, start, end);
+    // CRLF is one grapheme cluster, but this line loop already owns CRLF pairs: segments end
+    // in `\r` and flush keeps the pair with the unconsumed source. Keep the historical cut
+    // between them here; the code-span branch below still rejoins the pair inside code.
+    if (safe === end - 1 && source[end - 1] === "\r" && source[end] === "\n") {
+      safe = end;
+    }
+    const prefixSpan = firstPrefixEndingAfter(safe);
+    if (prefixSpan && prefixSpan.base + prefixSpan.code.prefix.start < safe) {
+      return prefixSpan.base + prefixSpan.code.prefix.start;
+    }
+    const span = spans[firstSpanEndingAfter(safe)];
+    if (span && span.start < safe) {
+      if (source[safe - 1] === "\r" && source[safe] === "\n") {
+        safe -= 1;
+      }
+      if (span.atomicTicks) {
+        while (source[safe - 1] === "`" && source[safe] === "`") {
           safe -= 1;
-        }
-        if (span.atomicTicks) {
-          while (source[safe - 1] === "`" && source[safe] === "`") {
-            safe -= 1;
-          }
         }
       }
     }
@@ -413,9 +443,10 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
   const render = (start: number, end: number) => {
     let cursor = start,
       text = "";
-    for (const span of spans) {
-      if (span.end <= start || span.start >= end) {
-        continue;
+    for (let index = firstSpanEndingAfter(start); index < spans.length; index += 1) {
+      const span = expectDefined(spans[index], "Discord inline span");
+      if (span.start >= end) {
+        break;
       }
       const prefix = span.code.prefix;
       const prefixStart = span.base + prefix.start;
@@ -444,21 +475,14 @@ function createDiscordRanges(source: string, maxChars: number, maxLines: number)
     }
     return text + source.slice(cursor, end);
   };
-  const fenceEndingAtOrAfter = (position: number) => {
-    let low = 0;
-    let high = fences.length;
-    // The scanner emits disjoint fences in source order, including an open final fence.
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      const range = expectDefined(fences[middle], "Discord fence range");
-      if (range.end < position) {
-        low = middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-    return fences[low];
-  };
+  // The scanner emits disjoint fences in source order, including an open final fence.
+  const fenceEndingAtOrAfter = (position: number) =>
+    fences[
+      firstMatchingIndex(
+        fences.length,
+        (index) => expectDefined(fences[index], "Discord fence range").end < position,
+      )
+    ];
   // A partial closing line is still inside the fence until its original text is consumed.
   const fenceAt = (position: number) => {
     const range = fenceEndingAtOrAfter(position);

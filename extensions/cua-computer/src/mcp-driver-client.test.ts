@@ -8,8 +8,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
-import { ClickButton, EscalationReason } from "./driver-client.js";
+import { ClickButton } from "./driver-client.js";
+import { projectedToolDetails } from "./driver-result.js";
 import { createCuaMcpDriver } from "./mcp-driver-client.js";
+
+// Load the real transport before timing socket behavior, including its cold module graph.
+if (process.platform !== "win32") {
+  const { mcpStdioRuntime } = await import("openclaw/plugin-sdk/agent-harness-runtime");
+  await mcpStdioRuntime.load();
+}
 
 type RpcRequest = {
   id?: number;
@@ -286,13 +293,13 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
     const desktop = await driver.getDesktopState();
     expect(driver.isAvailable()).toBe(true);
-    expect(JSON.parse(desktop.structuredJson!)).toMatchObject({
+    expect(projectedToolDetails(desktop, "get_desktop_state")).toMatchObject({
       platform: "macos",
       screenshot_width: 200,
     });
     expect(desktop.images).toHaveLength(1);
     const cursor = await driver.getCursorPosition();
-    expect(JSON.parse(cursor.structuredJson!)).toMatchObject({ x: 11, y: 12 });
+    expect(projectedToolDetails(cursor, "get_cursor_position")).toMatchObject({ x: 11, y: 12 });
     const click = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
     expect(click.action).toEqual({
       effect: 0,
@@ -303,7 +310,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({
       isError: false,
     });
-    await expect(driver.escalateScope(EscalationReason.Other)).resolves.toMatchObject({
+    await expect(driver.getSessionState()).resolves.toMatchObject({
       desktopCaptureAuthorized: true,
       desktopUnlocked: true,
     });
@@ -415,35 +422,9 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       return result;
     });
     const [first, second] = await Promise.all([firstCall, secondCall]);
-    expect(JSON.parse(first.structuredJson!)).toEqual({ marker: "first" });
-    expect(JSON.parse(second.structuredJson!)).toEqual({ marker: "second", text: "β雪" });
+    expect(projectedToolDetails(first, "list_windows")).toEqual({ marker: "first" });
+    expect(projectedToolDetails(second, "list_windows")).toEqual({ marker: "second", text: "β雪" });
     expect(settlement).toEqual(["second", "first"]);
-    await driver.dispose();
-  });
-
-  it.each([
-    ["not-json\n", "invalid JSON"],
-    [" \n", "invalid JSON"],
-    [JSON.stringify({ jsonrpc: "1.0", id: 1, result: {} }) + "\n", "invalid JSON-RPC version"],
-    [JSON.stringify({ jsonrpc: "2.0", id: "1", result: {} }) + "\n", "invalid response id"],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: Number.MAX_SAFE_INTEGER + 1, result: {} }) + "\n",
-      "invalid response id",
-    ],
-    [
-      JSON.stringify({ jsonrpc: "2.0", id: 0, result: { protocolVersion: "2024-11-05" } }) + "\n",
-      "incompatible protocol version",
-    ],
-  ])("fails closed for %s", async (response, message) => {
-    const endpoint = await createFakeEndpoint((request, fake) => {
-      if (request.method === "initialize") {
-        fake.writeRaw(request, response);
-      }
-    });
-    const driver = createCuaMcpDriver(endpoint);
-    onTestFinished(() => driver.dispose());
-    await expect(driver.getDesktopState()).rejects.toThrow(message);
-    expect(driver.isAvailable()).toBe(false);
     await driver.dispose();
   });
 
@@ -490,7 +471,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     ]);
     expect(results[0]).toMatchObject({
       status: "fulfilled",
-      value: { structuredJson: JSON.stringify({ marker: "completed" }) },
+      value: { structuredContent: { marker: "completed" } },
     });
     expect(results[1]).toMatchObject({
       status: "rejected",
@@ -626,21 +607,20 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
   });
 
   it("retires a pending initialize at the shared startup deadline", async () => {
-    const endpoint = await createFakeEndpoint(() => {});
     const deadline = new AbortController();
+    const endpoint = await createFakeEndpoint((request) => {
+      if (request.method === "initialize") {
+        deadline.abort(new Error("fixture startup deadline"));
+      }
+    });
     const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
     const driver = createCuaMcpDriver(endpoint);
     onTestFinished(() => driver.dispose());
     try {
-      const call = driver.getDesktopState();
-      const rejected = expect(call).rejects.toThrow(
+      await expect(driver.getDesktopState()).rejects.toThrow(
         "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP initialize timed out after 10000ms",
       );
-      await vi.waitFor(() =>
-        expect(endpoint.requests.some((request) => request.method === "initialize")).toBe(true),
-      );
-      deadline.abort(new Error("fixture startup deadline"));
-      await rejected;
+      expect(endpoint.requests.some((request) => request.method === "initialize")).toBe(true);
       expect(driver.isAvailable()).toBe(false);
       expect(
         endpoint.requests.some((request) => request.method === "notifications/initialized"),

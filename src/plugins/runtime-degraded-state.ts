@@ -2,6 +2,21 @@ import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 
 /** Boot-stable quarantine state for configured plugins whose payload failed verification. */
 
+export const PLUGIN_AVAILABILITY_POLICY = {
+  state: "configured-unavailable",
+  severity: "warning",
+  repairCommand: "openclaw doctor --fix",
+} as const;
+
+/** Availability findings share one disposition across startup and Doctor lint. */
+export function describePluginAvailabilityFailure(pluginId: string, detail: string) {
+  return {
+    source: pluginId,
+    severity: PLUGIN_AVAILABILITY_POLICY.severity,
+    message: `Plugin "${pluginId}" is unavailable: ${detail} Run \`${PLUGIN_AVAILABILITY_POLICY.repairCommand}\`.`,
+  };
+}
+
 export type PluginVerificationFailureReason =
   | "missing-install-path"
   | "missing-package-dir"
@@ -28,11 +43,11 @@ type PublicPluginVerificationDiagnostic = Pick<
 
 export type DegradedPlugin = {
   pluginId: string;
-  state: "configured-unavailable";
+  state: typeof PLUGIN_AVAILABILITY_POLICY.state;
   diagnostic: PluginVerificationDiagnostic;
 };
 
-type PluginVerificationFailure = {
+export type PluginVerificationFailure = {
   pluginId: string;
   installPath?: string;
   reason: PluginVerificationFailureReason;
@@ -61,7 +76,7 @@ export function buildDegradedPluginsFromVerificationFailures(
     }
     degraded.set(failure.pluginId, {
       pluginId: failure.pluginId,
-      state: "configured-unavailable",
+      state: PLUGIN_AVAILABILITY_POLICY.state,
       diagnostic: {
         kind: "plugin-verification",
         reason: failure.reason,

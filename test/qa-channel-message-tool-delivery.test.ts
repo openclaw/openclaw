@@ -13,6 +13,7 @@ import { buildThreadingToolContext } from "../src/auto-reply/reply/agent-runner-
 import { resolveReplyToMode } from "../src/auto-reply/reply/reply-threading.js";
 import * as bootstrapRegistry from "../src/channels/plugins/bootstrap-registry.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
@@ -65,12 +66,13 @@ async function withQaMessageTool(
     });
     try {
       const config = {
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
         session: { dmScope: "per-channel-peer" },
         channels: {
           "qa-channel": { baseUrl: bus.baseUrl, accounts: { secondary: {} } },
         },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(config);
       // External-plugin canonicalization would hide a kind lost by the QA
       // producer. Match the bundled runtime's authorization path.
       setActivePluginRegistry(
@@ -302,7 +304,8 @@ describe("QA message-tool current conversation delivery", () => {
             { target: root },
             { to: root },
             { channelId: root },
-            ...(threadId ? [{ target: `${thread}/${threadId}` }, { threadId }] : []),
+            // Read-capable actions use the host-owned root plus explicit thread identity.
+            ...(threadId ? [{ threadId }] : []),
           ]) {
             const result = await tool.execute(`own-${args.action}`, {
               ...args,

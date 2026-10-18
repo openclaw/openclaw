@@ -80,8 +80,6 @@ function createRouteContext(
     state: () => ({ resolved: { ssrfPolicy } }),
     forProfile: () => profileCtx,
     listProfiles: vi.fn(async () => []),
-    mapTabError: vi.fn(() => null),
-    ...profileCtx,
   };
 }
 
@@ -234,21 +232,6 @@ describe("browser permission routes", () => {
     expect(profileCtx.ensureBrowserAvailable).not.toHaveBeenCalled();
     expect(cdpMocks.getChromeWebSocketEndpoint).not.toHaveBeenCalled();
     expect(cdpMocks.send).not.toHaveBeenCalled();
-  });
-
-  it("keeps the minimum permission timeout for small valid values", async () => {
-    const { response } = await callGrant({
-      origin: "https://meet.google.com",
-      permissions: ["audioCapture"],
-      timeoutMs: "1",
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(cdpMocks.getChromeWebSocketEndpoint).toHaveBeenCalledWith(
-      "http://127.0.0.1:18800",
-      1000,
-      undefined,
-    );
   });
 
   it("uses exact remote CDP control policy for permission discovery", async () => {

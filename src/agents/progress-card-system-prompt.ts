@@ -4,11 +4,11 @@ import {
 } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../infra/device-pairing.js";
-import { shouldIncludeProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
+import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 const PROGRESS_CARD_SYSTEM_PROMPT =
-  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.";
+  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. For measurable work with a known total, prefer a leading progress bar labeled with what is measured and observed completed/total counts; never invent percentages. Update or clear existing cards as needed.";
 
 function isAgentMainSession(params: {
   agentId: string;
@@ -46,8 +46,11 @@ export async function appendProgressCardSystemPrompt(params: {
   sessionKey?: string;
   toolsAllow?: string[];
 }): Promise<string | undefined> {
+  if (isAgentMainSession(params)) {
+    return params.extraSystemPrompt;
+  }
   // Registration includes subagent policy; group, sender, sandbox, and inherited layers resolve later.
-  const progressCardToolAvailable = shouldIncludeProgressCardToolForOpenClawTools({
+  const progressCardToolAvailable = await prepareProgressCardToolForOpenClawTools({
     agentId: params.agentId,
     agentSessionKey: params.sessionKey,
     config: params.config,
@@ -55,11 +58,7 @@ export async function appendProgressCardSystemPrompt(params: {
     modelProvider: params.provider,
     runtimeToolAllowlist: params.toolsAllow,
   });
-  if (
-    !progressCardToolAvailable ||
-    isAgentMainSession(params) ||
-    !(await hasPairedCardRenderer())
-  ) {
+  if (!progressCardToolAvailable || !(await hasPairedCardRenderer())) {
     return params.extraSystemPrompt;
   }
   const provider = params.provider.trim().toLowerCase();

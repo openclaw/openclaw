@@ -1,10 +1,8 @@
-import { nothing, render } from "lit";
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import { resetChatThreadState } from "../chat-thread.ts";
-import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { resetThreadPresentation, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 export const observedElements = new Set<Element>();
 export const resizeObservers = new Set<RecordingResizeObserver>();
@@ -93,8 +91,20 @@ export function threadProps(
   };
 }
 
+export function requireElement(container: ParentNode, selector: string): HTMLElement {
+  return expectDefined(container.querySelector<HTMLElement>(selector), selector);
+}
+
 export function transcriptRows(container: HTMLElement): HTMLElement[] {
   return [...container.querySelectorAll<HTMLElement>(".chat-virtual-row")];
+}
+
+export function transcriptSize(container: ParentNode): number {
+  const extent = expectDefined(
+    container.querySelector<HTMLElement>(".chat-thread-inner--virtual"),
+    "transcript extent",
+  );
+  return Number.parseFloat(extent.style.height);
 }
 
 export async function flushDeferredRowPrune(): Promise<void> {
@@ -109,13 +119,15 @@ export function installTranscriptDomMocks(): void {
   transcriptDomState.measuredRowHeight = 100;
   transcriptDomState.detachedRowHeight = 100;
   vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
-    function (this: HTMLElement) {
-      return this.isConnected
-        ? transcriptDomState.measuredRowHeight
-        : transcriptDomState.detachedRowHeight;
-    },
-  );
+  // These geometry fixtures publish native offsets and observer receipts explicitly.
+  vi.spyOn(Element.prototype, "scrollTo").mockImplementation(() => {});
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.isConnected
+      ? transcriptDomState.measuredRowHeight
+      : transcriptDomState.detachedRowHeight;
+  });
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
     x: 0,
     y: 0,
@@ -138,38 +150,3 @@ export function resetTranscriptTestDom(): void {
 }
 
 export type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
-
-export async function mountTestTranscript(
-  paneId: string,
-  initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(),
-) {
-  const container = document.body.appendChild(document.createElement("div"));
-  let currentSession: ChatTranscriptSession;
-  container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
-  container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
-  const renderRows = (rows: readonly TestContentRow[]) => {
-    const view = transcript.renderSession(paneId, `agent:main:${paneId}`, (session) => {
-      currentSession = session;
-      return session.render(
-        rows,
-        (row) => (row.kind === "content" ? row.content : nothing),
-        null,
-        false,
-      );
-    });
-    render(view, container);
-    transcript.hostUpdated();
-  };
-  transcript.hostConnected();
-  renderRows(initialRows);
-  await flushDeferredRowPrune();
-  return {
-    container,
-    renderRows,
-    transcript,
-    get session() {
-      return currentSession;
-    },
-  };
-}

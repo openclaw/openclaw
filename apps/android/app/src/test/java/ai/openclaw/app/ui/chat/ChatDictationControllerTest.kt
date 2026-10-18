@@ -2,11 +2,13 @@ package ai.openclaw.app.ui.chat
 
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,12 +68,23 @@ class ChatDictationControllerTest {
 
       val result = async { controller.start() }
       runCurrent()
+      assertEquals(ChatDictationState.Starting, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
       assertEquals(ChatDictationState.Listening, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.PartialTranscript(" hello "))
+      assertEquals("hello", controller.partialTranscript.value)
+      assertFalse(result.isCompleted)
+      recognizer.emit(ChatDictationRecognitionEvent.EndOfSpeech)
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
+      assertEquals(0, released)
 
       recognizer.emit(ChatDictationRecognitionEvent.Transcript("  hello world  "))
 
       assertEquals("hello world", result.await())
       assertEquals(ChatDictationState.Idle, controller.state.value)
+      assertEquals("", controller.partialTranscript.value)
       assertEquals(1, acquired)
       assertEquals(1, released)
     }
@@ -103,11 +116,44 @@ class ChatDictationControllerTest {
       val result = async { controller.start() }
       runCurrent()
 
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
       controller.finish()
+      assertEquals(ChatDictationState.Transcribing, controller.state.value)
       recognizer.emit(ChatDictationRecognitionEvent.Transcript("done"))
 
       assertEquals(1, recognizer.finishCount)
       assertEquals("done", result.await())
+    }
+
+  @Test
+  fun cancellingFinalizationClearsPreviewAndRejectsLateCallbacksAfterRestart() =
+    runTest {
+      val recognizer = FakeRecognizer()
+      var released = 0
+      val controller = controller(recognizer, releaseMic = { released += 1 })
+      val cancelled = async { controller.start() }
+      runCurrent()
+      val oldListener = requireNotNull(recognizer.listener)
+      recognizer.emit(ChatDictationRecognitionEvent.Ready)
+      recognizer.emit(ChatDictationRecognitionEvent.PartialTranscript("old draft"))
+      controller.finish()
+      assertNull(controller.start())
+      assertEquals(1, recognizer.startCount)
+      controller.finish()
+      assertNull(cancelled.await())
+      assertEquals("", controller.partialTranscript.value)
+      assertEquals(1, released)
+
+      val restarted = async { controller.start() }
+      runCurrent()
+      oldListener(ChatDictationRecognitionEvent.Ready)
+      oldListener(ChatDictationRecognitionEvent.PartialTranscript("stale draft"))
+      oldListener(ChatDictationRecognitionEvent.Transcript("stale result"))
+      assertEquals(ChatDictationState.Starting, controller.state.value)
+      assertEquals("", controller.partialTranscript.value)
+      recognizer.emit(ChatDictationRecognitionEvent.Transcript("new result"))
+      assertEquals("new result", restarted.await())
+      assertEquals(2, released)
     }
 
   @Test
@@ -209,6 +255,47 @@ class ChatDictationControllerTest {
 
       assertEquals("replacement", replacementAttempt.await())
       assertEquals(ChatDictationState.Idle, controller.state.value)
+    }
+
+  @Test
+  fun lateCoroutineCancellationCannotStopReplacementDictation() =
+    runTest {
+      for (waitingForPermission in listOf(true, false)) {
+        val recognizer = FakeRecognizer()
+        val permission = CompletableDeferred<Boolean>()
+        var permissionRequests = 0
+        var released = 0
+        val controller =
+          controller(
+            recognizer = recognizer,
+            requestPermission = {
+              permissionRequests += 1
+              if (waitingForPermission && permissionRequests == 1) permission.await() else true
+            },
+            releaseMic = { released += 1 },
+          )
+        try {
+          val retired = async { controller.start() }
+          runCurrent()
+          controller.cancel()
+          retired.cancel()
+
+          // Admit the replacement before dispatching the old coroutine's cancellation.
+          val replacement = async(start = CoroutineStart.UNDISPATCHED) { controller.start() }
+          recognizer.emit(ChatDictationRecognitionEvent.Ready)
+          runCurrent()
+
+          assertTrue(retired.isCancelled)
+          assertEquals(ChatDictationState.Listening, controller.state.value)
+          assertFalse(replacement.isCompleted)
+          assertEquals(if (waitingForPermission) 0 else 1, released)
+          recognizer.emit(ChatDictationRecognitionEvent.Transcript("replacement"))
+          assertEquals("replacement", replacement.await())
+          assertEquals(if (waitingForPermission) 1 else 2, released)
+        } finally {
+          controller.destroy()
+        }
+      }
     }
 
   @Test

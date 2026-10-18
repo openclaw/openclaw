@@ -1,153 +1,158 @@
-// Verifies outbound text/media send-unit planning, chunking, captions, and
-// single-use implicit reply consumption.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { chunkMarkdownText, chunkText } from "../../auto-reply/chunk.js";
 import { planOutboundMediaMessageUnits, planOutboundTextMessageUnits } from "./message-plan.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
 
-describe("outbound message planning", () => {
-  it("plans text chunks with one implicit reply in single-use modes", () => {
-    const policy = createReplyToDeliveryPolicy({
-      replyToId: "reply-1",
-      replyToMode: "first",
-    });
-    const reply = policy.resolveCurrentReplyTo({});
-    const units = planOutboundTextMessageUnits({
-      text: "abcd",
-      textLimit: 2,
-      chunker: (text, limit) => [text.slice(0, limit), text.slice(limit)],
-      overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
-    });
+type TextPlan = Parameters<typeof planOutboundTextMessageUnits>[0];
+const expectedUnit = (text: string, overrides: TextPlan["overrides"], index = 0, count = 1) => ({
+  text,
+  overrides: { ...overrides, deliveryPartIndex: index, deliveryPartCount: count },
+});
+const planCase = (
+  name: string,
+  text: string,
+  textLimit: number,
+  expected: readonly string[],
+  options: Partial<TextPlan> = {},
+) => ({
+  name,
+  expected,
+  params: {
+    text,
+    textLimit,
+    chunker: chunkMarkdownText,
+    chunkerMode: "markdown" as const,
+    chunkMode: "length" as const,
+    ...options,
+  },
+});
+const replyPlan = (replyToMode: "first" | "batched" = "first") => {
+  const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode });
+  const reply = policy.resolveCurrentReplyTo({});
+  return {
+    overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
+    consumeReplyTo: policy.applyReplyToConsumption,
+  };
+};
+const fencedChunks = ["```txt\naa\nbb\n```", "```txt\ncc\n```"];
 
-    expect(
-      units.map((unit) =>
-        unit.kind === "text" ? [unit.kind, unit.text, unit.overrides.replyToId] : [unit.kind],
+it.each([
+  planCase("plain text", "aa bb cc dd", 6, ["aa bb", "cc dd"], {
+    chunker: chunkText,
+    chunkerMode: "text",
+  }),
+  planCase("unfenced Markdown", "aa bb\ncc dd\nee ff gg hh", 6, [
+    "aa bb",
+    "cc dd",
+    "ee ff",
+    "gg hh",
+  ]),
+  planCase("Markdown paragraphs", "first\n\nsecond", 6, ["first", "second"], {
+    chunkMode: "newline",
+  }),
+  ...(["\u2028", "\u2029"] as const).flatMap((separator) =>
+    (
+      [
+        ["fenced JSON", `\`\`\`json\n{"separator":"first${separator}second"}\n\`\`\``],
+        ["inline code", `Copy \`first${separator}second\` exactly.`],
+      ] as const
+    ).flatMap(([codeName, text]) =>
+      (["length", "newline"] as const).map((chunkMode) =>
+        planCase(
+          `${separator.charCodeAt(0).toString(16)} in ${codeName} in ${chunkMode} mode`,
+          text,
+          4000,
+          [text],
+          {
+            chunkMode,
+          },
+        ),
       ),
-    ).toEqual([
-      ["text", "ab", "reply-1"],
-      ["text", "cd", undefined],
-    ]);
-    expect(units.map((unit) => unit.overrides.deliveryPartCount)).toEqual([2, 2]);
-  });
-
-  it.each([
-    { label: "default", chunkMode: undefined },
-    { label: "length", chunkMode: "length" as const },
-    { label: "newline", chunkMode: "newline" as const },
-  ])("preserves nonempty text when a $label chunker returns nothing", ({ chunkMode }) => {
-    const policy = createReplyToDeliveryPolicy({ replyToId: "reply-1", replyToMode: "first" });
-    const reply = policy.resolveCurrentReplyTo({});
-    const units = planOutboundTextMessageUnits({
-      text: "visible reply",
-      textLimit: 64,
-      chunkMode,
-      chunker: () => [],
-      overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
-    });
-
-    expect(units).toEqual([
-      {
-        kind: "text",
-        text: "visible reply",
-        overrides: {
-          replyToId: "reply-1",
-          replyToIdSource: "implicit",
-          deliveryPartIndex: 0,
-          deliveryPartCount: 1,
-        },
-      },
-    ]);
-  });
-
-  it("keeps explicit text replies from consuming the implicit slot", () => {
-    const policy = createReplyToDeliveryPolicy({
-      replyToId: "implicit-reply",
-      replyToMode: "first",
-    });
-    const explicit = policy.resolveCurrentReplyTo({ replyToId: "explicit-reply" });
-    const firstUnits = planOutboundTextMessageUnits({
-      text: "explicit",
-      overrides: { replyToId: explicit.replyToId, replyToIdSource: explicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
-    });
-    const implicit = policy.resolveCurrentReplyTo({});
-    const secondUnits = planOutboundTextMessageUnits({
-      text: "implicit",
-      overrides: { replyToId: implicit.replyToId, replyToIdSource: implicit.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
-    });
-
-    expect(firstUnits[0]?.overrides.replyToId).toBe("explicit-reply");
-    expect(secondUnits[0]?.overrides.replyToId).toBe("implicit-reply");
-  });
-
-  it("plans media sends with one implicit reply and a leading caption", () => {
-    const policy = createReplyToDeliveryPolicy({
-      replyToId: "reply-1",
-      replyToMode: "batched",
-    });
-    const reply = policy.resolveCurrentReplyTo({});
-    const units = planOutboundMediaMessageUnits({
-      caption: "caption",
-      mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
-      overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
-      consumeReplyTo: (overrides) =>
-        policy.applyReplyToConsumption(overrides, {
-          consumeImplicitReply: overrides.replyToIdSource === "implicit",
-        }),
-    });
-
-    expect(
-      units.map((unit) =>
-        unit.kind === "media"
-          ? [
-              unit.kind,
-              unit.caption,
-              unit.mediaUrl,
-              unit.overrides.replyToId,
-              unit.overrides.deliveryPartIndex,
-              unit.overrides.deliveryPartCount,
-            ]
-          : [unit.kind],
+    ),
+  ),
+  ...[0, -1].map((limit) =>
+    planCase(
+      `Markdown paragraphs with disabled limit ${limit}`,
+      "```txt\ncontent\n```\n\nafter",
+      limit,
+      ["```txt\ncontent\n```\n\nafter"],
+      { chunkMode: "newline" },
+    ),
+  ),
+  planCase("fenced Markdown", "```txt\naa\nbb\ncc\n```", 16, fencedChunks),
+  planCase(
+    "long fenced paragraphs with a text-mode chunker",
+    "intro\n\n```txt\naa\nbb\ncc\n```",
+    16,
+    ["intro", ...fencedChunks],
+    { chunkerMode: "text", chunkMode: "newline" },
+  ),
+  ...([undefined, "newline"] as const).map((chunkMode) =>
+    planCase(
+      `${chunkMode ?? "default"} empty chunker fallback`,
+      "visible reply",
+      64,
+      ["visible reply"],
+      { chunkMode, chunkerMode: undefined, chunker: () => [] },
+    ),
+  ),
+])("plans $name with one implicit reply", ({ params, expected }) => {
+  expect(planOutboundTextMessageUnits({ ...params, ...replyPlan() })).toEqual(
+    expected.map((text, index) =>
+      expectedUnit(
+        text,
+        { replyToId: index === 0 ? "reply-1" : undefined, replyToIdSource: "implicit" },
+        index,
+        expected.length,
       ),
-    ).toEqual([
-      ["media", "caption", "https://example.com/1.png", "reply-1", 0, 2],
-      ["media", undefined, "https://example.com/2.png", undefined, 1, 2],
-    ]);
+    ),
+  );
+});
+
+it("keeps explicit text replies from consuming the implicit slot", () => {
+  const policy = createReplyToDeliveryPolicy({ replyToId: "implicit", replyToMode: "first" });
+  const planReply = (text: string, replyToId?: string) => {
+    const reply = policy.resolveCurrentReplyTo({ replyToId });
+    return planOutboundTextMessageUnits({
+      text,
+      overrides: { replyToId: reply.replyToId, replyToIdSource: reply.source },
+      consumeReplyTo: policy.applyReplyToConsumption,
+    })[0]?.overrides.replyToId;
+  };
+  expect([planReply("explicit", "explicit-reply"), planReply("implicit")]).toEqual([
+    "explicit-reply",
+    "implicit",
+  ]);
+});
+
+it("plans media sends with one implicit reply and a leading caption", () => {
+  const units = planOutboundMediaMessageUnits({
+    caption: "caption",
+    mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+    ...replyPlan("batched"),
   });
 
-  it("adds formatting overrides only to chunked text units", () => {
-    const units = planOutboundTextMessageUnits({
-      text: "**bold**",
-      textLimit: 4000,
-      chunker: () => ["<b>bold</b>"],
-      chunkedTextFormatting: { parseMode: "HTML" },
-      overrides: {},
-    });
+  expect(
+    units.map(({ caption, mediaUrl, overrides }) => [
+      caption,
+      mediaUrl,
+      overrides.replyToId,
+      overrides.deliveryPartIndex,
+      overrides.deliveryPartCount,
+    ]),
+  ).toEqual([
+    ["caption", "https://example.com/1.png", "reply-1", 0, 2],
+    [undefined, "https://example.com/2.png", undefined, 1, 2],
+  ]);
+});
 
-    expect(units).toEqual([
-      {
-        kind: "text",
-        text: "<b>bold</b>",
-        overrides: {
-          formatting: { parseMode: "HTML" },
-          deliveryPartIndex: 0,
-          deliveryPartCount: 1,
-        },
-      },
-    ]);
+it("adds formatting overrides only to chunked text units", () => {
+  const units = planOutboundTextMessageUnits({
+    text: "**bold**",
+    textLimit: 4000,
+    chunker: () => ["<b>bold</b>"],
+    chunkedTextFormatting: { parseMode: "HTML" },
+    overrides: {},
   });
+  expect(units).toEqual([expectedUnit("<b>bold</b>", { formatting: { parseMode: "HTML" } })]);
 });

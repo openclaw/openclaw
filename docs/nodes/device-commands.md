@@ -135,6 +135,10 @@ Available families:
 - `callLog.search` — Android only.
 - `motion.activity`, `motion.pedometer` — iOS, Android; capability-gated by available sensors.
 
+The `nodes` agent tool's `invoke` action accepts `invokeTimeoutMs` for the node
+invocation. Unless `timeoutMs` is explicitly set, Gateway transport receives that
+budget plus 30 seconds for forwarding and the response.
+
 Example invokes:
 
 ```bash

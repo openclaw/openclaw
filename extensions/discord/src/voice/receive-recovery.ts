@@ -1,6 +1,5 @@
-// Discord plugin module implements receive recovery behavior.
 import { OpusError } from "libopus-wasm";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 export const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
@@ -18,14 +17,6 @@ export type VoiceReceiveRecoveryState = {
   decryptRecoveryInFlight: boolean;
 };
 
-type VoiceReceiveErrorAnalysis = {
-  message: string;
-  isAbortLike: boolean;
-  isDecodeCorruption: boolean;
-  shouldAttemptPassthrough: boolean;
-  countsAsDecryptFailure: boolean;
-};
-
 type DavePassthroughTarget = {
   guildId: string;
   channelId: string;
@@ -38,7 +29,7 @@ type DavePassthroughTarget = {
           dave?: {
             lastTransitionId?: number;
             reinitializing?: boolean;
-            recoverFromInvalidTransition?: (transitionId: number) => void;
+            recoverFromInvalidTransition: (transitionId: number) => void;
             session?: {
               setPassthroughMode: (passthrough: boolean, expirySeconds: number) => void;
             };
@@ -59,26 +50,12 @@ type DavePassthroughSdk = {
   };
 };
 
-export function createVoiceReceiveRecoveryState(): VoiceReceiveRecoveryState {
-  return {
-    decryptFailureCount: 0,
-    lastDecryptFailureAt: 0,
-    decryptRecoveryInFlight: false,
-  };
-}
-
 function isAbortLikeReceiveError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  const name =
-    "name" in err && typeof (err as { name?: unknown }).name === "string"
-      ? (err as { name: string }).name
-      : "";
-  const message =
-    "message" in err && typeof (err as { message?: unknown }).message === "string"
-      ? (err as { message: string }).message
-      : "";
+  const name = "name" in err && typeof err.name === "string" ? err.name : "";
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
   return (
     name === "AbortError" ||
     message === "Premature close" ||
@@ -108,7 +85,7 @@ function isOpusDecodeInvalidPacketError(err: unknown): boolean {
   );
 }
 
-export function analyzeVoiceReceiveError(err: unknown): VoiceReceiveErrorAnalysis {
+export function analyzeVoiceReceiveError(err: unknown) {
   const message = formatErrorMessage(err);
   const normalizedMessage = message.toLowerCase();
   const shouldAttemptPassthrough = message.includes(DAVE_PASSTHROUGH_DISABLED_MARKER);
@@ -128,10 +105,7 @@ export function analyzeVoiceReceiveError(err: unknown): VoiceReceiveErrorAnalysi
 export function noteVoiceDecryptFailure(
   state: VoiceReceiveRecoveryState,
   now: number = Date.now(),
-): {
-  firstFailure: boolean;
-  shouldRecover: boolean;
-} {
+) {
   if (now - state.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
     state.decryptFailureCount = 0;
   }
@@ -154,10 +128,6 @@ export function resetVoiceReceiveRecoveryState(state: VoiceReceiveRecoveryState)
   state.lastDecryptFailureAt = 0;
 }
 
-export function finishVoiceDecryptRecovery(state: VoiceReceiveRecoveryState): void {
-  state.decryptRecoveryInFlight = false;
-}
-
 function isDaveReinitializing(session: { reinitializing?: boolean }): boolean {
   return session.reinitializing === true;
 }
@@ -174,8 +144,7 @@ export function recoverDaveZeroTransition(params: {
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
     networkingState?.code !== sdk.NetworkingStatusCode.Ready ||
     daveSession?.lastTransitionId !== 0 ||
-    daveSession.reinitializing !== false ||
-    typeof daveSession.recoverFromInvalidTransition !== "function"
+    daveSession.reinitializing !== false
   ) {
     return "not-attempted";
   }
@@ -184,9 +153,9 @@ export function recoverDaveZeroTransition(params: {
     // The upstream DAVE recovery guard treats transition zero as falsy.
     daveSession.recoverFromInvalidTransition(0);
     return "recovered";
-  } catch (err) {
+  } catch {
     onWarn(
-      `discord voice: failed to recover DAVE transition 0 guild=${target.guildId} channel=${target.channelId}: ${formatErrorMessage(err)}`,
+      `discord voice: failed to recover DAVE transition 0 guild=${target.guildId} channel=${target.channelId}`,
     );
     // Upstream marks the session reinitializing before gateway/native work can fail.
     return isDaveReinitializing(daveSession) ? "failed" : "not-attempted";
@@ -198,10 +167,9 @@ export function enableDaveReceivePassthrough(params: {
   sdk: DavePassthroughSdk;
   reason: string;
   expirySeconds: number;
-  onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 }): boolean {
-  const { target, sdk, reason, expirySeconds, onVerbose, onWarn } = params;
+  const { target, sdk, reason, expirySeconds, onWarn } = params;
   const networkingState = target.connection.state.networking?.state;
   if (
     target.connection.state.status !== sdk.VoiceConnectionStatus.Ready ||
@@ -217,13 +185,10 @@ export function enableDaveReceivePassthrough(params: {
   }
   try {
     daveSession.setPassthroughMode(true, expirySeconds);
-    onVerbose(
-      `enabled DAVE receive passthrough: guild ${target.guildId} channel ${target.channelId} expiry=${expirySeconds}s reason=${reason}`,
-    );
     return true;
-  } catch (err) {
+  } catch {
     onWarn(
-      `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}: ${formatErrorMessage(err)}`,
+      `discord voice: failed to enable DAVE passthrough guild=${target.guildId} channel=${target.channelId} reason=${reason}`,
     );
     return false;
   }

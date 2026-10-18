@@ -1,16 +1,19 @@
 import Darwin
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 struct ExecHostCwdTests {
     @Test(.execApprovalsStateIsolated, arguments: ["/tmp", "/private/tmp"])
     func `native full execution uses the physical temporary directory`(cwd: String) async throws {
-        var snapshot = ExecApprovalsStore.readSnapshot()
-        snapshot.file.defaults = ExecApprovalsDefaults(security: .full, ask: .off)
-        guard case .saved = ExecApprovalsStore.saveFile(snapshot.file, ifBaseHash: snapshot.hash) else {
-            Issue.record("Could not seed the test-owned exec policy")
-            return
+        let stateDirectoryURL = ExecApprovalsStore.databaseURL()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ExecApprovalsSQLiteStore.withImmediateTransaction(stateDirectoryURL: stateDirectoryURL) { record in
+            var file = record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            file.defaults = ExecApprovalsDefaults(security: .full, ask: .off)
+            return ExecApprovalsSQLiteMutation(value: (), documentToWrite: file)
         }
         let response = await ExecHostExecutor.handle(ExecHostRequest(
             command: ["/bin/pwd", "-P"],

@@ -1,17 +1,10 @@
-/**
- * Logs redacted failover decisions for embedded-agent attempts.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { sanitizeForConsole } from "../../console-sanitize.js";
-import {
-  buildApiErrorObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
-} from "../../embedded-agent-error-observation.js";
-import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { buildApiErrorObservationFields } from "../../embedded-agent-error-observation.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { log } from "../logger.js";
 
-/** Structured fields emitted whenever embedded run failover chooses an action. */
 type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision:
@@ -39,14 +32,9 @@ type FailoverDecisionLoggerInput = {
   attemptCount?: number;
 };
 
-/** Stable context captured before a concrete failover decision is known. */
 type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
-/**
- * Captures sanitized failover context and returns a decision logger. The closure
- * keeps prompt/assistant failover branches consistent while still allowing the
- * final decision and HTTP status to be supplied at the action point.
- */
+/** Capture sanitized attempt context before the decision and status are known. */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
@@ -77,15 +65,6 @@ export function createFailoverDecisionLogger(
       return;
     }
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
-    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    // Some provider/runtime failure kinds already have normalized detail fields.
-    // Repeating the raw suffix there makes the console line noisier without
-    // adding actionable failover evidence.
-    const rawErrorConsoleSuffix =
-      safeRawErrorPreview &&
-      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
-        ? ` rawError=${safeRawErrorPreview}`
-        : "";
     const retryCount = extra?.retryCount ?? normalizedBase.retryCount;
     const profileRotationCount = extra?.profileRotationCount ?? normalizedBase.profileRotationCount;
     log[level]("embedded run failover decision", {
@@ -108,13 +87,18 @@ export function createFailoverDecisionLogger(
       retryCount,
       profileRotationCount,
       attemptCount: normalizedBase.attemptCount,
-      ...observedError,
+      rawErrorHash: observedError.rawErrorHash,
+      rawErrorFingerprint: observedError.rawErrorFingerprint,
+      httpCode: observedError.httpCode,
+      providerRuntimeFailureKind: observedError.providerRuntimeFailureKind,
+      providerErrorType: observedError.providerErrorType,
+      requestIdHash: observedError.requestIdHash,
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
         `reason=${reasonText} attempt=${normalizedBase.attemptCount ?? "-"} ` +
         `retry=${retryCount ?? "-"} rotations=${profileRotationCount ?? "-"} ` +
         `from=${safeSourceProvider}/${safeSourceModel}` +
-        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
+        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}`,
     });
   };
 }

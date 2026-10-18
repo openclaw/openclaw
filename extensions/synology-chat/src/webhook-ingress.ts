@@ -1,4 +1,3 @@
-// Synology Chat plugin owns raw webhook durable admission and draining.
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
@@ -34,7 +33,7 @@ export const SynologyIngressPermanentError = createChannelIngressError<
 >("SynologyIngressPermanentError", { withReason: true });
 export type SynologyIngressPermanentError = InstanceType<typeof SynologyIngressPermanentError>;
 
-function firstNonEmptyString(value: unknown): string | undefined {
+export function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
       const normalized = firstNonEmptyString(item);
@@ -145,7 +144,7 @@ export function createSynologyIngressMonitor(options: {
         getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
           accountId: options.accountId,
         })),
-    inspect: (rawEvent) => inspectSynologyIngressEvent(rawEvent),
+    inspect: inspectSynologyIngressEvent,
     payload: {
       serialize: serializeForIngress,
       deserialize: (rawEvent, { claim }) => deserializeSynologyIngressEvent(rawEvent, claim.id),
@@ -157,7 +156,7 @@ export function createSynologyIngressMonitor(options: {
             : `Synology Chat ingress row ${claim.id} has invalid message identity.`,
         ),
     },
-    deliver: (rawEvent, lifecycle) => options.dispatch(rawEvent, lifecycle),
+    deliver: options.dispatch,
     pollIntervalMs: options.pollIntervalMs,
     // Synology has no published retry horizon; keep the conservative 30-day / 20k cap.
     drain: {

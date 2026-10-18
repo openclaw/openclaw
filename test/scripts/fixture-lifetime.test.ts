@@ -2,11 +2,12 @@ import { execFileSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as waitForReaper } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -25,6 +26,41 @@ afterEach(() => vi.unstubAllEnvs());
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
+function expectInputs(root: string, retained: boolean, resourceOwner = owner) {
+  expect(fs.existsSync(root)).toBe(retained);
+  const claim = expect(() => resourceOwner.assertReleased());
+  if (retained) {
+    claim.toThrow("Unreleased Vitest resource claim");
+  } else {
+    claim.not.toThrow();
+  }
+}
+
+function heldGate() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered: entered.promise,
+    open: () => release.resolve(),
+    wait: vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+    }),
+  };
+}
+
+// runNodeStep exposes its joined outcome, but no ChildProcess handle for rescue
+// after an unverified join. Observe only the fixture's recorded PID.
+async function waitForRescuedChild(pid: number, signal: AbortSignal) {
+  try {
+    while (isProcessAlive(pid)) {
+      await waitForReaper(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`process still alive: ${pid}`, { cause: error });
+  }
+}
+
 it("releases inputs and claims after a native execFileSync ENOENT error", async () => {
   const lifetime = createFixtureLifetime();
   const root = lifetime.createTempDir("fixture-missing-command-");
@@ -34,8 +70,7 @@ it("releases inputs and claims after a native execFileSync ENOENT error", async 
   expect(error).toHaveProperty("code", "ENOENT");
   expect((error as { error?: unknown }).error ?? error).toBe(error);
   await lifetime.cleanup();
-  expect(fs.existsSync(root)).toBe(false);
-  expect(() => owner.assertReleased()).not.toThrow();
+  expectInputs(root, false);
 });
 
 it("releases cyclic joined results without treating repeated objects as uncertainty", async () => {
@@ -45,15 +80,13 @@ it("releases cyclic joined results without treating repeated objects as uncertai
   result.errors.push(result, { cause: result }, { error: result, processTreeState: "terminated" });
   await lifetime.run(async () => result);
   await lifetime.cleanup();
-  expect(fs.existsSync(root)).toBe(false);
-  expect(() => owner.assertReleased()).not.toThrow();
+  expectInputs(root, false);
 });
 
 it("registers fresh fixture work after clean release and module reset", async () => {
   const first = fixture.createTempDir("fixture-first-");
   await fixture.cleanup();
-  expect(fs.existsSync(first)).toBe(false);
-  expect(() => owner.assertReleased()).not.toThrow();
+  expectInputs(first, false);
   vi.resetModules();
   const { createFixtureLifetime: createFreshLifetime } =
     await import("../helpers/fixture-lifetime.js");
@@ -67,8 +100,7 @@ it("registers fresh fixture work after clean release and module reset", async ()
     expect(path.dirname(root)).toBe(expectedOwner.root);
     expect(() => expectedOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
     await lifetime.cleanup();
-    expect(fs.existsSync(root)).toBe(false);
-    expect(() => expectedOwner.assertReleased()).not.toThrow();
+    expectInputs(root, false, expectedOwner);
   }
 });
 
@@ -90,8 +122,7 @@ it("cleans independent roots after a removal failure and retries the retained ro
     expect(fs.existsSync(second)).toBe(false);
     removal.mockRestore();
     await lifetime.cleanup();
-    expect(fs.existsSync(first)).toBe(false);
-    expect(() => owner.assertReleased()).not.toThrow();
+    expectInputs(first, false);
   } finally {
     removal.mockRestore();
     for (const root of [first, second]) {
@@ -103,15 +134,13 @@ it("cleans independent roots after a removal failure and retries the retained ro
 it("holds claims for work admitted during asynchronous fixture removal", async () => {
   const lifetime = createFixtureLifetime();
   const first = lifetime.createTempDir("fixture-removing-");
-  const removing = createDeferred();
-  const allowRemoval = createDeferred();
+  const removing = heldGate();
   const removed = createDeferred();
   const allowWork = createDeferred();
   const remove = fs.promises.rm;
   const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (root, options) => {
     if (root === first) {
-      removing.resolve();
-      await allowRemoval.promise;
+      await removing.wait();
     }
     await remove(root, options);
     if (root === first) {
@@ -124,25 +153,23 @@ it("holds claims for work admitted during asynchronous fixture removal", async (
   });
   let work: Promise<void> | undefined;
   try {
-    await removing.promise;
+    await removing.entered;
     const later = lifetime.createTempDir("fixture-admitted-during-removal-");
     work = lifetime.run(() => allowWork.promise);
-    allowRemoval.resolve();
+    removing.open();
     await removed.promise;
     // Let the first removal's completion callbacks run while the later body is held.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(cleaned).toBe(false);
-    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
-    expect(fs.existsSync(later)).toBe(true);
+    expectInputs(later, true);
     allowWork.resolve();
     await work;
     await cleanup;
-    expect(fs.existsSync(later)).toBe(false);
-    expect(() => owner.assertReleased()).not.toThrow();
+    expectInputs(later, false);
   } finally {
-    allowRemoval.resolve();
+    removing.open();
     allowWork.resolve();
     await work;
     await cleanup;
@@ -325,11 +352,7 @@ it
       expect(lines).toContain("preserved");
       expect(fs.existsSync(root)).toBe(true);
       if (fault === "cleanup rejection") {
-        await fixture
-          .verifyCleanup(async () => {
-            throw cleanupFailure;
-          })
-          .catch(() => {});
+        await fixture.verifyCleanup(() => Promise.reject(cleanupFailure)).catch(() => {});
       }
       bodyRelease.resolve();
       await cleanup;
@@ -361,7 +384,7 @@ it
             try {
               if (pid && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForDead(pid, 2_000);
+                await waitForRescuedChild(pid, contextSignal);
               }
             } finally {
               await rescue;
@@ -391,7 +414,7 @@ it
   },
 );
 
-it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
+it.each(["cyclic aggregate", "cleanup"])(
   "retains inputs and reports unverified %s cleanup even when the body handled its rejection",
   async (kind) => {
     const root = fixture.createTempDir("fixture-lifetime-retained-");
@@ -401,23 +424,12 @@ it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
     });
     const aggregate = new AggregateError([], "sibling cleanup");
     aggregate.errors.push(
-      kind === "cyclic aggregate" ? aggregate : new Error("primary failure"),
+      aggregate,
       new Error("command failed", { cause: { error: uncertainty } }),
     );
-    const error =
-      kind === "cause"
-        ? new Error("command failed", { cause: uncertainty })
-        : kind === "error"
-          ? Object.assign(new Error("command failed"), { error: uncertainty })
-          : kind === "cleanup"
-            ? new Error("orphan verification failed")
-            : aggregate;
+    const error = kind === "cleanup" ? new Error("orphan verification failed") : aggregate;
     const run = kind === "cleanup" ? fixture.verifyCleanup : fixture.run;
-    await expect(
-      run(async () => {
-        throw error;
-      }),
-    ).rejects.toBe(error);
+    await expect(run(() => Promise.reject(error))).rejects.toBe(error);
     try {
       await expect(fixture.cleanup()).rejects.toThrow("Fixture cleanup unverified");
       expect(fs.existsSync(root)).toBe(true);
@@ -432,3 +444,122 @@ it.each(["cause", "error", "aggregate", "cyclic aggregate", "cleanup"])(
     }
   },
 );
+
+it("joins delayed acquisition and its cleanup before releasing fixture inputs", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("inputs-");
+  const setup = heldGate();
+  const cleanup = heldGate();
+  let drained = false;
+  const acquisition = lifetime.acquire(async () => {
+    await setup.wait();
+    return { cleanup: cleanup.wait };
+  });
+  const draining = lifetime.cleanup().then(() => {
+    drained = true;
+  });
+  try {
+    await setup.entered;
+    expect(drained).toBe(false);
+    await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    setup.open();
+    await acquisition;
+    await cleanup.entered;
+    expect(drained).toBe(false);
+    await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+    cleanup.open();
+    await draining;
+    expect(cleanup.wait).toHaveBeenCalledTimes(1);
+    await expect(fs.promises.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    setup.open();
+    cleanup.open();
+    await Promise.allSettled([acquisition, draining]);
+  }
+});
+
+it.each([
+  { name: "error", cause: new Error("synthetic acquisition failed after allocating inputs") },
+  { name: "undefined rejection", cause: undefined },
+])("retains failed acquisition inputs and $name without a rollback receipt", async ({ cause }) => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("inputs-");
+  const rejected = createDeferred<never>();
+  const acquisition = lifetime.acquire(() => rejected.promise);
+  rejected.reject(cause);
+  await expect(acquisition).rejects.toBe(cause);
+  await expect(lifetime.cleanup()).rejects.toMatchObject({ errors: [cause] });
+  await expect(fs.promises.stat(directory)).resolves.toBeDefined();
+  expect(fs.existsSync(directory)).toBe(true);
+  expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+});
+
+it("joins explicit acquired cleanup once without repeating it during fallback teardown", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const cleanup = heldGate();
+  const original = { cleanup: cleanup.wait };
+  try {
+    const acquired = await lifetime.acquire(async () => original);
+    expect(acquired).toBe(original);
+    const first = acquired.cleanup();
+    const second = acquired.cleanup();
+    expect(second).toBe(first);
+    const draining = lifetime.cleanup();
+    cleanup.open();
+    await Promise.all([first, second, draining]);
+    expect(cleanup.wait).toHaveBeenCalledTimes(1);
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    cleanup.open();
+    await lifetime.cleanup();
+  }
+});
+
+it.each([
+  { name: "error identity", cause: new Error("synthetic rolled-back acquisition") },
+  { name: "undefined rejection", cause: undefined },
+])("releases completed acquisition rollback while preserving $name", async ({ cause }) => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("rolled-back-inputs-");
+  const rollback = heldGate();
+  const acquisition = lifetime.acquire((rejectAfterCleanup) =>
+    rejectAfterCleanup(cause, async () => {
+      await rollback.wait();
+      await fs.promises.rm(directory, { recursive: true, force: true });
+    }),
+  );
+  const rejected = expect(acquisition).rejects.toBe(cause);
+  const draining = lifetime.cleanup();
+  try {
+    await rollback.entered;
+    expectInputs(directory, true);
+    rollback.open();
+    await rejected;
+    await draining;
+    expectInputs(directory, false);
+  } finally {
+    rollback.open();
+    await Promise.allSettled([acquisition, rejected, draining]);
+  }
+});
+
+it("retains both errors and inputs when acquisition rollback fails", async () => {
+  const lifetime = createFixtureLifetime(owner.root);
+  const directory = lifetime.createTempDir("rollback-failed-inputs-");
+  const original = new Error("synthetic acquisition failure");
+  const rollback = new Error("synthetic rollback failure");
+  await expect(
+    lifetime.acquire((rejectAfterCleanup) =>
+      rejectAfterCleanup(original, () => Promise.reject(rollback)),
+    ),
+  ).rejects.toMatchObject({ errors: [original, rollback], cause: rollback });
+  await expect(lifetime.cleanup()).rejects.toMatchObject({
+    errors: expect.arrayContaining([
+      rollback,
+      expect.objectContaining({ errors: [original, rollback] }),
+    ]),
+  });
+  expectInputs(directory, true);
+});

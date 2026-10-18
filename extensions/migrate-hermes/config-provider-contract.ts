@@ -1,14 +1,15 @@
-// Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  MCP_ENV_REFERENCE_RE,
-  mcpValueHasEnvReferences,
-  normalizeHermesEnvReferenceName,
-  resolveMcpEnvReferences,
-} from "./config-env.js";
-import { childRecord } from "./helpers.js";
-import { normalizeHermesCustomProviderId, normalizeHermesProviderId } from "./model.js";
+  asNonArrayRecord,
+  isRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeHermesEnvReferenceName, resolveMcpEnvReferences } from "./config-env.js";
+import {
+  normalizeHermesCustomProviderId,
+  normalizeHermesProviderId,
+  readHermesBaseUrl,
+} from "./model.js";
 
 type OpenClawModelApi =
   | "anthropic-messages"
@@ -16,12 +17,7 @@ type OpenClawModelApi =
   | "openai-responses"
   | "openai-chatgpt-responses";
 
-type HermesModelConfig = {
-  id: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  supportsVision?: boolean;
-};
+type HermesModelConfig = ReturnType<typeof readModelMetadata> & { id: string };
 
 export type HermesProviderConfig = {
   id: string;
@@ -130,18 +126,17 @@ const HERMES_API_KEY_ENV_VARS: Record<string, string> = {
   zai: "ZAI_API_KEY",
 };
 
-function resolveHermesProviderEnvValue(
+export function resolveHermesProviderBaseUrlEnv(
   providerId: string | undefined,
   env: Record<string, string>,
-  special: Record<string, readonly string[]>,
-  canonical: Record<string, readonly string[]>,
 ): string | undefined {
   if (!providerId) {
     return undefined;
   }
   const sourceProvider = normalizeHermesCustomProviderId(providerId);
   const provider = normalizeHermesProviderId(sourceProvider);
-  const names = special[sourceProvider] ?? canonical[provider] ?? [];
+  const names =
+    HERMES_SPECIAL_BASE_URL_ENV_VARS[sourceProvider] ?? HERMES_BASE_URL_ENV_VARS[provider] ?? [];
   for (const name of names) {
     const value = env[name]?.trim();
     if (value) {
@@ -149,18 +144,6 @@ function resolveHermesProviderEnvValue(
     }
   }
   return undefined;
-}
-
-export function resolveHermesProviderBaseUrlEnv(
-  providerId: string | undefined,
-  env: Record<string, string>,
-): string | undefined {
-  return resolveHermesProviderEnvValue(
-    providerId,
-    env,
-    HERMES_SPECIAL_BASE_URL_ENV_VARS,
-    HERMES_BASE_URL_ENV_VARS,
-  );
 }
 
 export function resolveHermesProviderApiKeyEnv(providerId: string | undefined): string | undefined {
@@ -186,8 +169,6 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export { readPositiveNumber };
-
 export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,
@@ -201,20 +182,10 @@ export function resolveProviderApi(
     return HERMES_TRANSPORTS[transport];
   }
   const provider = sourceProvider ? normalizeHermesProviderId(sourceProvider) : "";
-  const baseUrl =
-    normalizeOptionalString(raw.base_url) ??
-    normalizeOptionalString(raw.baseUrl) ??
-    normalizeOptionalString(raw.url) ??
-    normalizeOptionalString(raw.api);
-  let hostname = "";
-  let pathname = "";
-  try {
-    const parsed = baseUrl ? new URL(baseUrl) : undefined;
-    hostname = parsed?.hostname.toLowerCase() ?? "";
-    pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
-  } catch {
-    // Provider identity still supplies the protocol for templated endpoints.
-  }
+  const baseUrl = readHermesBaseUrl(raw);
+  const parsed = URL.parse(baseUrl ?? "");
+  const hostname = parsed?.hostname.toLowerCase() ?? "";
+  const pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
   // Hermes honors an explicit Responses mode for named providers. Plain
   // `custom` is the exception: endpoint detection rejects stale Responses state.
   if (transport === "codex_responses" && sourceProvider !== "custom") {
@@ -245,18 +216,14 @@ export function resolveProviderApi(
 }
 
 function normalizeProviderBaseUrl(baseUrl: string, api: OpenClawModelApi): string {
-  if (api !== "anthropic-messages") {
+  const parsed = api === "anthropic-messages" ? URL.parse(baseUrl) : null;
+  if (!parsed) {
     return baseUrl;
   }
-  try {
-    const parsed = new URL(baseUrl);
-    // The Anthropic SDK appends /v1/messages. Store the canonical base so
-    // imported proxy paths do not repeat the version segment.
-    parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
-    return parsed.toString().replace(/\/$/u, "");
-  } catch {
-    return baseUrl;
-  }
+  // The Anthropic SDK appends /v1/messages. Store the canonical base so
+  // imported proxy paths do not repeat the version segment.
+  parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
+  return parsed.toString().replace(/\/$/u, "");
 }
 
 export function readEnvReference(value: unknown): string | undefined {
@@ -277,20 +244,17 @@ export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | un
 }
 
 export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefined {
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    return hostname === "openai.com" ||
+  const hostname = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return hostname &&
+    (hostname === "openai.com" ||
       hostname.endsWith(".openai.com") ||
       hostname === "openai.azure.com" ||
-      hostname.endsWith(".openai.azure.com")
-      ? "OPENAI_API_KEY"
-      : undefined;
-  } catch {
-    return undefined;
-  }
+      hostname.endsWith(".openai.azure.com"))
+    ? "OPENAI_API_KEY"
+    : undefined;
 }
 
-function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {
+function readModelMetadata(raw: Record<string, unknown>) {
   const contextWindow =
     readPositiveNumber(raw.context_length) ??
     readPositiveNumber(raw.contextLength) ??
@@ -319,7 +283,7 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
             ] as const)
           : ([normalizeOptionalString(model), {}] as const),
       )
-    : Object.entries(childRecord(raw, "models")).filter(
+    : Object.entries(asNonArrayRecord(raw.models)).filter(
         ([id]) => !["__discovered_model_catalog__", "__explicit_model_allowlist__"].includes(id),
       );
   for (const [modelId, metadata] of entries) {
@@ -344,32 +308,25 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
   return [...models.values()];
 }
 
-function modelDefinition(
-  model: HermesModelConfig,
-  entry: HermesProviderConfig,
-): Record<string, unknown> {
-  const baseUrl = normalizeProviderBaseUrl(entry.baseUrl, entry.api);
-  return {
-    id: model.id,
-    name: model.id,
-    api: entry.api,
-    reasoning: false,
-    input: model.supportsVision ? ["text", "image"] : ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: model.contextWindow ?? 128_000,
-    maxTokens: model.maxTokens ?? 8192,
-    baseUrl,
-    metadataSource: "models-add",
-  };
-}
-
 export function providerConfig(entry: HermesProviderConfig): Record<string, unknown> {
   const models = entry.models.length > 0 ? entry.models : [{ id: "default" }];
+  const baseUrl = normalizeProviderBaseUrl(entry.baseUrl, entry.api);
   return {
-    baseUrl: normalizeProviderBaseUrl(entry.baseUrl, entry.api),
+    baseUrl,
     api: entry.api,
     ...(entry.headers ? { headers: entry.headers } : {}),
-    models: models.map((model) => modelDefinition(model, entry)),
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.id,
+      api: entry.api,
+      reasoning: false,
+      input: model.supportsVision ? ["text", "image"] : ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.contextWindow ?? 128_000,
+      maxTokens: model.maxTokens ?? 8192,
+      baseUrl,
+      metadataSource: "models-add",
+    })),
   };
 }
 
@@ -377,24 +334,14 @@ export function readProviderBaseUrl(
   raw: Record<string, unknown>,
   env: Record<string, string>,
 ): { baseUrl?: string; sensitive: boolean; unresolved: boolean } {
-  const value =
-    normalizeOptionalString(raw.base_url) ??
-    normalizeOptionalString(raw.baseUrl) ??
-    normalizeOptionalString(raw.url) ??
-    normalizeOptionalString(raw.api);
+  const value = readHermesBaseUrl(raw);
   if (!value) {
     return { sensitive: false, unresolved: false };
   }
-  const sensitive = MCP_ENV_REFERENCE_RE.test(value);
-  MCP_ENV_REFERENCE_RE.lastIndex = 0;
-  if (!sensitive) {
-    return { baseUrl: value, sensitive: false, unresolved: false };
-  }
   const resolved = resolveMcpEnvReferences(value, env);
   return {
-    baseUrl:
-      !resolved.unresolved && typeof resolved.value === "string" ? resolved.value : undefined,
-    sensitive: true,
+    baseUrl: !resolved.unresolved ? resolved.value : undefined,
+    sensitive: resolved.referenced,
     unresolved: resolved.unresolved,
   };
 }
@@ -432,32 +379,17 @@ export function readProviderHeaders(
       continue;
     }
     const value = String(rawValue);
-    const envName = readEnvReference(value);
-    const hasReference = mcpValueHasEnvReferences(value);
     if (!includeSecrets) {
       blocked = true;
       continue;
     }
     sensitive = true;
-    if (envName) {
-      const resolved = env[envName];
-      if (resolved === undefined) {
-        unresolved = true;
-        continue;
-      }
-      headers[name] = resolved;
+    const resolved = resolveMcpEnvReferences(value, env);
+    if (resolved.unresolved) {
+      unresolved = true;
       continue;
     }
-    if (hasReference) {
-      const resolved = resolveMcpEnvReferences(value, env);
-      if (resolved.unresolved || typeof resolved.value !== "string") {
-        unresolved = true;
-        continue;
-      }
-      headers[name] = resolved.value;
-      continue;
-    }
-    headers[name] = value;
+    headers[name] = resolved.value;
   }
   return {
     blocked,

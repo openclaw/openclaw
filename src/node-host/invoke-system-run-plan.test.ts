@@ -12,6 +12,10 @@ import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
+import {
+  canMutateNativeBinaryFixturePath,
+  resolveNativeBinaryFixturePath,
+} from "./system-run-native-binary.test-helpers.js";
 
 type PathTokenSetup = {
   expected: string;
@@ -24,7 +28,6 @@ type HardeningCase = {
   shellCommand?: string | null;
   withPathToken?: boolean;
   expectedArgv: (ctx: { pathToken: PathTokenSetup | null }) => string[];
-  expectedArgvChanged?: boolean;
   expectedCmdText?: string;
   checkRawCommandMatchesArgv?: boolean;
   expectedCommandPreview?: string | null;
@@ -65,22 +68,6 @@ function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
 
 function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
-function canWritePathSync(targetPath: string): boolean {
-  try {
-    fs.accessSync(targetPath, fs.constants.W_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
-  const realPath = fs.realpathSync(binaryPath);
-  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
-    canWritePathSync(entry),
-  );
 }
 
 function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
@@ -175,25 +162,6 @@ function uniqueRuntimeBinNames(
   ];
 }
 
-let cachedNativeBinaryFixturePath: string | undefined;
-
-function resolveNativeBinaryFixturePath(): string {
-  if (cachedNativeBinaryFixturePath) {
-    return cachedNativeBinaryFixturePath;
-  }
-  for (const candidate of ["/bin/ls", "/usr/bin/ls", "/bin/echo", "/usr/bin/printf"]) {
-    try {
-      if (fs.statSync(candidate).isFile()) {
-        cachedNativeBinaryFixturePath = candidate;
-        return candidate;
-      }
-    } catch {
-      continue;
-    }
-  }
-  throw new Error("expected a native binary fixture path");
-}
-
 function expectShellPayloadApprovalDenied(params: {
   tmpPrefix: string;
   fileName: string;
@@ -252,10 +220,10 @@ function withScriptOperandPlanFixture<T>(
   return run(fixture, tmp);
 }
 
-const DENIED_RUNTIME_APPROVAL = {
+const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
-  message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-} as const;
+  reason: "unsupported-command-shape",
+});
 
 function runNamedCase(name: string, run: () => void) {
   try {
@@ -411,7 +379,6 @@ describe("hardenApprovedExecutionPaths", () => {
       argv: ["env", "tr", "a", "b"],
       shellCommand: null,
       expectedArgv: () => ["env", "tr", "a", "b"],
-      expectedArgvChanged: false,
     },
     {
       name: "pins direct PATH-token executable during approval hardening",
@@ -420,7 +387,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: ({ pathToken }) => [requirePathToken(pathToken).expected, "SAFE"],
-      expectedArgvChanged: true,
     },
     {
       name: "preserves env-wrapper PATH-token argv during approval hardening",
@@ -429,7 +395,6 @@ describe("hardenApprovedExecutionPaths", () => {
       shellCommand: null,
       withPathToken: true,
       expectedArgv: () => ["env", "poccmd", "SAFE"],
-      expectedArgvChanged: false,
     },
     {
       name: "rawCommand matches hardened argv after executable path pinning",
@@ -491,9 +456,6 @@ describe("hardenApprovedExecutionPaths", () => {
             throw new Error("unreachable");
           }
           expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-          if (typeof testCase.expectedArgvChanged === "boolean") {
-            expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
-          }
         };
 
         if (testCase.withPathToken) {

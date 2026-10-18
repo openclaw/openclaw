@@ -12,6 +12,7 @@ import {
 } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectorySync } from "../infra/sqlite-private-directory.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 const ORPHAN_PREDICATE =
@@ -131,6 +132,7 @@ export function recoverOrphanTaskDeliveryRows(database: DatabaseSync, pathname: 
   ) {
     return [];
   }
+  assertOpenClawStateDatabaseOwner(database, { pathname });
   assertRecoveryShape(database);
   const count = assertKnownOrphanIntegrity(database);
   if (!database.isTransaction) {

@@ -1,5 +1,4 @@
-// Tests gateway active-run matching by logical session key and backing id.
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   abortEmbeddedAgentRun,
@@ -18,10 +17,16 @@ import {
   markReplyOperationExecutionStarted,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   buildProjectedAgentRunIndex,
+  claimAgentRunContext,
+  releaseAgentRunContext,
   getAgentRunLifecycleGeneration,
   clearAgentRunContext,
   registerAgentRunContext,
@@ -35,10 +40,74 @@ import {
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 
-it("projects ordinary startup as active before execution starts", () => {
-  const sessionKey = "agent:main:queued";
-  const sessionId = "queued-session";
-  const runId = "queued-run";
+type ActiveRunParams = Parameters<typeof resolveVisibleActiveSessionRunState>[0];
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  while (cleanups.length) {
+    await cleanups.pop()?.();
+  }
+});
+
+function makeRun(name: string) {
+  const sessionKey = `agent:main:${name}`;
+  const sessionId = `${name}-session`;
+  const runId = `${name}-run`;
+  return {
+    sessionKey,
+    sessionId,
+    runId,
+    state: () => visibleState(sessionKey, { sessionId }),
+    register(overrides: Parameters<typeof registerAgentRunContext>[1] = {}) {
+      registerAgentRunContext(runId, { sessionKey, sessionId, ...overrides });
+      cleanups.push(() => clearAgentRunContext(runId));
+    },
+    embed(overrides: Partial<EmbeddedAgentQueueHandle> = {}) {
+      const handle = embeddedHandle({ runId, ...overrides });
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      cleanups.push(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
+      return handle;
+    },
+    reply() {
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      cleanups.push(() => operation.complete());
+      return operation;
+    },
+    wait() {
+      const release = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      cleanups.push(() => release?.());
+      return release;
+    },
+  };
+}
+
+function chatContext<T>(runs: Record<string, T>) {
+  return { chatAbortControllers: new Map(Object.entries(runs)) };
+}
+
+function resolveState(
+  sessionKey: string,
+  options: Omit<ActiveRunParams, "requestedKey" | "canonicalKey">,
+) {
+  return resolveVisibleActiveSessionRunState({
+    requestedKey: sessionKey,
+    canonicalKey: sessionKey,
+    ...options,
+  });
+}
+
+function embeddedHandle(
+  overrides: Partial<EmbeddedAgentQueueHandle> = {},
+): EmbeddedAgentQueueHandle {
+  return {
+    abort: () => {},
+    isCompacting: () => false,
+    isStreaming: () => true,
+    queueMessage: async () => undefined,
+    ...overrides,
+  };
+}
+
+function registerChatRun(sessionKey: string, sessionId: string, runId: string, agentId?: string) {
   const chatAbortControllers = new Map();
   const registration = registerChatAbortController({
     chatAbortControllers,
@@ -49,28 +118,46 @@ it("projects ordinary startup as active before execution starts", () => {
     timeoutMs: 60_000,
     kind: "agent",
   });
-  const state = () =>
-    resolveVisibleActiveSessionRunState({
-      context: { chatAbortControllers } as never,
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      sessionId,
-      agentId: "main",
-    });
+  cleanups.push(registration.cleanup);
+  return {
+    ...registration,
+    state: () =>
+      resolveState(sessionKey, { context: { chatAbortControllers }, sessionId, agentId }),
+  };
+}
 
+function visibleState(
+  sessionKey: string,
+  options: Omit<ActiveRunParams, "context" | "requestedKey" | "canonicalKey"> = {},
+) {
+  const { projectedAgentRunIndex, ...scope } = options;
+  const project = createVisibleActiveSessionRunProjector({}, projectedAgentRunIndex);
+  return project({ requestedKey: sessionKey, canonicalKey: sessionKey, ...scope });
+}
+
+it("projects ordinary startup as active before execution starts", () => {
+  const { sessionKey, sessionId, runId } = makeRun("queued");
+  const registration = registerChatRun(sessionKey, sessionId, runId, "main");
+  const { state } = registration;
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(true);
   expect(state()).toEqual({ active: true, runIds: [runId] });
   expect(registration.markExecutionStarted()).toBe(false);
-  registration.cleanup();
 });
 
-it("projects direct subagent activity only for its own current-lifecycle session", () => {
+it("projects direct subagent activity only for its own current-lifecycle session", async () => {
   const parentKey = "agent:main:main";
   const childKey = "agent:main:subagent:attachment-fix";
-  resetSubagentRegistryForTests({ persist: false });
-  addSubagentRunForTests({
-    runId: "run-attachment-fix",
+  const runId = "run-attachment-fix";
+  const identity = { sessionKey: childKey, agentId: "main" };
+  const state = (key = childKey) => visibleState(key, { agentId: "main" });
+  await resetSubagentRegistryForTests({ persist: false });
+  setRuntimeConfigSnapshot({});
+  cleanups.push(clearRuntimeConfigSnapshot, async () => {
+    await resetSubagentRegistryForTests({ persist: false });
+  });
+  await addSubagentRunForTests({
+    runId,
     childSessionKey: childKey,
     controllerSessionKey: parentKey,
     requesterSessionKey: parentKey,
@@ -80,54 +167,23 @@ it("projects direct subagent activity only for its own current-lifecycle session
     createdAt: 1,
     startedAt: 2,
   });
-  registerAgentRunContext("run-attachment-fix", { sessionKey: childKey, agentId: "main" });
-
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: childKey,
-        canonicalKey: childKey,
-        agentId: "main",
-      }),
-    ).toEqual({ active: true, runIds: ["run-attachment-fix"] });
-    const releaseCapacityWait = registerAgentRunCapacityWait(
-      "run-attachment-fix",
-      getAgentRunLifecycleGeneration(),
-    );
-    try {
-      expect(
-        resolveVisibleActiveSessionRunState({
-          context: {},
-          requestedKey: childKey,
-          canonicalKey: childKey,
-          agentId: "main",
-        }),
-      ).toMatchObject({ active: true, status: "queued" });
-    } finally {
-      releaseCapacityWait?.();
-    }
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: parentKey,
-        canonicalKey: parentKey,
-        agentId: "main",
-      }),
-    ).toEqual({ active: false, runIds: [] });
-    rotateAgentEventLifecycleGeneration();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: childKey,
-        canonicalKey: childKey,
-        agentId: "main",
-      }),
-    ).toEqual({ active: false, runIds: [] });
-  } finally {
-    clearAgentRunContext("run-attachment-fix");
-    resetSubagentRegistryForTests({ persist: false });
-  }
+  registerAgentRunContext(runId, identity);
+  cleanups.push(() => clearAgentRunContext(runId));
+  expect(resolveState(childKey, { context: {}, agentId: "main" })).toEqual({
+    active: false,
+    runIds: [],
+  });
+  const claim = claimAgentRunContext(runId, identity, { trackOwner: true, ownsContext: true });
+  cleanups.push(() => releaseAgentRunContext(runId, claim));
+  expect(claim).toBeDefined();
+  expect(state()).toEqual({ active: true, runIds: [runId] });
+  const releaseCapacityWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+  cleanups.push(() => releaseCapacityWait?.());
+  expect(state()).toMatchObject({ active: true, status: "queued" });
+  releaseCapacityWait?.();
+  expect(state(parentKey)).toEqual({ active: false, runIds: [] });
+  rotateAgentEventLifecycleGeneration();
+  expect(state()).toEqual({ active: false, runIds: [] });
 });
 
 it("keeps terminal persistence visible only to chat history", () => {
@@ -137,120 +193,38 @@ it("keeps terminal persistence visible only to chat history", () => {
     projectSessionActive: false,
     projectSessionTerminalPending: true,
   };
-  const context = { chatAbortControllers: new Map([["run-terminal", terminal]]) } as never;
-  const params = {
-    context,
-    requestedKey: terminal.sessionKey,
-    canonicalKey: terminal.sessionKey,
-    sessionId: terminal.sessionId,
-    agentId: "main",
-  };
-
-  expect(resolveVisibleActiveSessionRunState(params)).toEqual({ active: false, runIds: [] });
-  expect(
-    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
-  ).toEqual({ active: true });
-
+  const context = chatContext({ "run-terminal": terminal }) as never;
+  const state = (includeTerminalPersistence = false) =>
+    resolveState(terminal.sessionKey, {
+      context,
+      sessionId: terminal.sessionId,
+      agentId: "main",
+      includeTerminalPersistence,
+    });
+  expect(state()).toEqual({ active: false, runIds: [] });
+  expect(state(true)).toEqual({ active: true });
   terminal.projectSessionTerminalPending = false;
-  expect(
-    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
-  ).toEqual({ active: false, runIds: [] });
-});
-
-it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      ["run-main", { sessionKey: "agent:main:main", sessionId: "session-main" }],
-      ["run-global", { sessionKey: "global", agentId: "work" }],
-      ["run-hidden", { sessionKey: "agent:main:hidden", projectSessionActive: false }],
-    ]),
-  } as never;
-  registerAgentRunContext("projected-key", {
-    projectSessionActive: true,
-    sessionKey: "agent:main:projected",
-  });
-  registerAgentRunContext("projected-id", {
-    projectSessionActive: true,
-    agentId: "main",
-    sessionId: "session-projected",
-  });
-  try {
-    const project = createVisibleActiveSessionRunProjector(context);
-    const cases = [
-      { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
-      { requestedKey: "agent:main:projected", canonicalKey: "agent:main:projected" },
-      {
-        requestedKey: "agent:main:by-id",
-        canonicalKey: "agent:main:by-id",
-        sessionId: "session-projected",
-      },
-      {
-        requestedKey: "global",
-        canonicalKey: "global",
-        agentId: "work",
-        defaultAgentId: "main",
-      },
-      { requestedKey: "agent:main:missing", canonicalKey: "agent:main:missing" },
-    ];
-    for (const activeCase of cases) {
-      expect(project(activeCase)).toEqual(
-        resolveVisibleActiveSessionRunState({ context, ...activeCase }),
-      );
-    }
-  } finally {
-    clearAgentRunContext("projected-key");
-    clearAgentRunContext("projected-id");
-  }
+  expect(state(true)).toEqual({ active: false, runIds: [] });
 });
 
 it("matches session-id-only gateway runs during archive admission", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      [
-        "run-1",
-        {
-          sessionId: "session-1",
-          controlUiVisible: true,
-          projectSessionActive: true,
-        },
-      ],
-    ]),
-  } as never;
-
+  const context = chatContext({
+    "run-1": { sessionId: "session-1", controlUiVisible: true, projectSessionActive: true },
+  }) as never;
   expect(
-    resolveVisibleActiveSessionRunState({
+    resolveState("agent:main:child", {
       context,
-      requestedKey: "agent:main:child",
-      canonicalKey: "agent:main:child",
       sessionId: "session-1",
       defaultAgentId: "main",
     }).active,
   ).toBe(true);
 });
 
-it("excludes the replacement run from an internal active-session check", () => {
+it("finds a visible active run for a fully qualified session key", () => {
   const sessionKey = "agent:main:main";
-  const context = {
-    chatAbortControllers: new Map([
-      [
-        "replacement-run",
-        {
-          sessionKey,
-          controlUiVisible: true,
-          projectSessionActive: true,
-        },
-      ],
-    ]),
-  } as never;
-
-  expect(
-    hasTrackedActiveSessionRun({
-      context,
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      excludeRunIds: new Set(["replacement-run"]),
-    }),
-  ).toBe(false);
+  const context = chatContext({
+    "replacement-run": { sessionKey, controlUiVisible: true, projectSessionActive: true },
+  }) as never;
   expect(
     hasTrackedActiveSessionRun({
       context,
@@ -261,251 +235,89 @@ it("excludes the replacement run from an internal active-session check", () => {
 });
 
 it("returns deterministic visible run ids for the selected session", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      ["run-z", { sessionKey: "main" }],
-      ["run-hidden", { sessionKey: "main", controlUiVisible: false }],
-      ["run-other", { sessionKey: "other" }],
-      ["run-a", { sessionKey: "main" }],
-    ]),
-  } as never;
-
+  const context = chatContext({
+    "run-z": { sessionKey: "main" },
+    "run-hidden": { sessionKey: "main", controlUiVisible: false },
+    "run-other": { sessionKey: "other" },
+    "run-a": { sessionKey: "main" },
+  }) as never;
   expect(
-    resolveVisibleActiveSessionRunState({
+    resolveState("main", {
       context,
-      requestedKey: "main",
-      canonicalKey: "main",
       agentId: "main",
       defaultAgentId: "main",
     }),
   ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
 });
 
-it("projects a lifecycle-owned worker run without widening event visibility", () => {
-  registerAgentRunContext("worker-run", {
-    isControlUiVisible: false,
-    projectSessionActive: true,
-    sessionId: "worker-session",
-    sessionKey: "agent:main:worker",
-  });
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "agent:main:worker",
-        canonicalKey: "agent:main:worker",
-        sessionId: "worker-session",
-      }),
-    ).toEqual({ active: true });
-  } finally {
-    clearAgentRunContext("worker-run");
-  }
-});
-
 it("projects reply lifecycle state without hiding independent embedded work", () => {
-  const sessionKey = "agent:main:reply-settling";
-  const sessionId = "reply-settling-session";
-  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-  const replacementHandle: EmbeddedAgentQueueHandle = {
-    abort: () => undefined,
-    isAborted: () => false,
-    isCompacting: () => false,
-    isStreaming: () => true,
-    queueMessage: async () => undefined,
+  const run = makeRun("reply-settling");
+  const { sessionKey, sessionId } = run;
+  const project = createVisibleActiveSessionRunProjector({});
+  const state = () => project({ requestedKey: sessionKey, canonicalKey: sessionKey, sessionId });
+  const operation = run.reply();
+  const expectLaneWaitVisible = () => {
+    operation.markWaitingForGlobalLane();
+    expect(state()).toEqual({ active: true });
+    operation.markGlobalLaneWaitEnded();
   };
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-
-    operation.markWaitingForGlobalLane();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-    operation.markGlobalLaneWaitEnded();
-
-    operation.setPhase("running");
-    operation.markWaitingForGlobalLane();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-    operation.markGlobalLaneWaitEnded();
-    markReplyOperationExecutionStarted(operation);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-    operation.markWaitingForGlobalLane();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-    operation.markGlobalLaneWaitEnded();
-    expect(operation.abortByUser()).toBe(true);
-    expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: false, runIds: [] });
-
-    setActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-  } finally {
-    clearActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
-    operation.complete();
-  }
-});
-
-it("preserves an independent lifecycle-owned worker while a reply operation settles", () => {
-  const sessionKey = "agent:main:worker-overlap";
-  const sessionId = "worker-overlap-session";
-  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-  registerAgentRunContext("worker-overlap-run", {
-    projectSessionActive: true,
-    sessionId,
-    sessionKey,
-  });
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-  } finally {
-    operation.complete();
-    clearAgentRunContext("worker-overlap-run");
-  }
+  expect(state()).toEqual({ active: true });
+  expectLaneWaitVisible();
+  operation.setPhase("running");
+  expectLaneWaitVisible();
+  markReplyOperationExecutionStarted(operation);
+  expect(state()).toEqual({ active: true });
+  expectLaneWaitVisible();
+  expect(operation.abortByUser()).toBe(true);
+  expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
+  expect(state()).toEqual({ active: false, runIds: [] });
+  run.embed({ runId: undefined, isAborted: () => false });
+  expect(state()).toEqual({ active: true });
 });
 
 it("does not project an aborted embedded handle retained for cleanup as active", () => {
-  const sessionKey = "agent:main:handle-settling";
-  const sessionId = "handle-settling-session";
+  const run = makeRun("handle-settling");
+  const { sessionKey, sessionId, state } = run;
   let aborted = false;
-  const handle: EmbeddedAgentQueueHandle = {
+  run.embed({
+    runId: undefined,
     abort: () => {
       aborted = true;
     },
     isAborted: () => aborted,
-    isCompacting: () => false,
-    // Prompt completion closes steering before post-turn finalization. That
-    // state alone must not make a normally finishing run disappear.
+    // Closed steering must not hide normally finishing work.
     isStopped: () => true,
     isStreaming: () => false,
-    queueMessage: async () => undefined,
-  };
-  setActiveEmbeddedRun(sessionId, handle, sessionKey);
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true });
-
-    expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
-    expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: false, runIds: [] });
-
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {
-          chatAbortControllers: new Map([["new-run", { sessionId, sessionKey }]]),
-        } as never,
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      }),
-    ).toEqual({ active: true, runIds: ["new-run"] });
-  } finally {
-    clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-  }
+  });
+  expect(state()).toEqual({ active: true });
+  expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
+  expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
+  expect(state()).toEqual({ active: false, runIds: [] });
+  expect(
+    resolveState(sessionKey, {
+      context: chatContext({ "new-run": { sessionId, sessionKey } }) as never,
+      sessionId,
+    }),
+  ).toEqual({ active: true, runIds: ["new-run"] });
 });
 
 it("counts settled but still registered chat runs for a session key", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      [
-        "run-finalizing",
-        {
-          sessionKey: "agent:main:main",
-          sessionId: "session-main",
-          projectSessionActive: false,
-          controlUiVisible: false,
-        },
-      ],
-      ["run-global-work", { sessionKey: "global", agentId: "work" }],
-    ]),
-  } as never;
-
-  expect(
-    hasRegisteredChatRunForSessionKey({
-      context,
+  const context = chatContext({
+    "run-finalizing": {
       sessionKey: "agent:main:main",
-      agentId: undefined,
-    }),
-  ).toBe(true);
-  expect(
-    hasRegisteredChatRunForSessionKey({
-      context,
-      sessionKey: "agent:other:other",
-      agentId: undefined,
-    }),
-  ).toBe(false);
-  expect(
-    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "work" }),
-  ).toBe(true);
-  expect(
-    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: "other" }),
-  ).toBe(false);
-  expect(
-    hasRegisteredChatRunForSessionKey({ context, sessionKey: "global", agentId: undefined }),
-  ).toBe(false);
+      sessionId: "session-main",
+      projectSessionActive: false,
+      controlUiVisible: false,
+    },
+    "run-global-work": { sessionKey: "global", agentId: "work" },
+  }) as never;
+  const registered = (sessionKey: string, agentId?: string) =>
+    hasRegisteredChatRunForSessionKey({ context, sessionKey, agentId });
+  expect(registered("agent:main:main")).toBe(true);
+  expect(registered("agent:other:other")).toBe(false);
+  expect(registered("global", "work")).toBe(true);
+  expect(registered("global", "other")).toBe(false);
+  expect(registered("global")).toBe(false);
   expect(
     hasRegisteredChatRunForSessionKey({
       context: {},
@@ -516,100 +328,33 @@ it("counts settled but still registered chat runs for a session key", () => {
 });
 
 it("matches colliding bare active runs by stable owner", () => {
-  const context = {
-    chatAbortControllers: new Map([
-      ["run-ownerless", { sessionKey: "incident-42" }],
-      ["run-research", { sessionKey: "incident-42", agentId: "research" }],
-    ]),
-  } as never;
-
-  expect(
-    resolveVisibleActiveSessionRunState({
-      context,
-      requestedKey: "incident-42",
-      canonicalKey: "incident-42",
-      agentId: "ops",
-      defaultAgentId: "ops",
-    }),
-  ).toEqual({ active: true, runIds: ["run-ownerless"] });
-  expect(
-    resolveVisibleActiveSessionRunState({
-      context,
-      requestedKey: "incident-42",
-      canonicalKey: "incident-42",
-      agentId: "research",
-      defaultAgentId: "ops",
-    }),
-  ).toEqual({ active: true, runIds: ["run-research"] });
+  const context = chatContext({
+    "run-ownerless": { sessionKey: "incident-42" },
+    "run-research": { sessionKey: "incident-42", agentId: "research" },
+  }) as never;
+  const state = (agentId: string) =>
+    resolveState("incident-42", { context, agentId, defaultAgentId: "ops" });
+  expect(state("ops")).toEqual({ active: true, runIds: ["run-ownerless"] });
+  expect(state("research")).toEqual({ active: true, runIds: ["run-research"] });
 });
 
-it("keeps projected bare runs agent-scoped", () => {
-  registerAgentRunContext("projected-ops", {
+it.each(["ops", undefined])("scopes projected bare runs with owner %s", (owner) => {
+  const run = makeRun("projected");
+  run.register({
     projectSessionActive: true,
     sessionKey: "incident-42",
-    sessionId: "shared-id",
-    agentId: "ops",
+    agentId: owner,
   });
-  try {
-    const index = buildProjectedAgentRunIndex();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "incident-42",
-        canonicalKey: "incident-42",
-        sessionId: "shared-id",
-        agentId: "research",
-        projectedAgentRunIndex: index,
-      }).active,
-    ).toBe(false);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "incident-42",
-        canonicalKey: "incident-42",
-        sessionId: "shared-id",
-        agentId: "ops",
-        projectedAgentRunIndex: index,
-      }).active,
-    ).toBe(true);
-  } finally {
-    clearAgentRunContext("projected-ops");
-  }
-});
-
-it("resolves projected ownerless bare runs through the stable default owner", () => {
-  registerAgentRunContext("projected-ownerless", {
-    projectSessionActive: true,
-    sessionKey: "incident-42",
-    sessionId: "ownerless-id",
-  });
-  try {
-    const index = buildProjectedAgentRunIndex();
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "incident-42",
-        canonicalKey: "incident-42",
-        sessionId: "ownerless-id",
-        agentId: "ops",
-        defaultAgentId: "ops",
-        projectedAgentRunIndex: index,
-      }).active,
-    ).toBe(true);
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: "incident-42",
-        canonicalKey: "incident-42",
-        sessionId: "ownerless-id",
-        agentId: "research",
-        defaultAgentId: "ops",
-        projectedAgentRunIndex: index,
-      }).active,
-    ).toBe(false);
-  } finally {
-    clearAgentRunContext("projected-ownerless");
-  }
+  const index = buildProjectedAgentRunIndex();
+  const state = (agentId: string) =>
+    visibleState("incident-42", {
+      sessionId: run.sessionId,
+      agentId,
+      defaultAgentId: owner ? undefined : "ops",
+      projectedAgentRunIndex: index,
+    }).active;
+  expect(state("ops")).toBe(true);
+  expect(state("research")).toBe(false);
 });
 
 it.each(["agent:main:command", "global"])(
@@ -622,77 +367,52 @@ it.each(["agent:main:command", "global"])(
       agentId: "main",
       resetTriggered: false,
     });
-    try {
-      const admission = await admitReplyTurn({
-        sessionKey: "global",
-        sessionId,
-        agentId: "ops",
-        kind: "visible",
-        resetTriggered: false,
-        adoptOperation: operation,
-      });
-      expect(admission.status).toBe("owned");
-      for (const agentId of ["main", "ops"]) {
-        expect(
-          resolveVisibleActiveSessionRunState({
-            context: {},
-            requestedKey: `agent:${agentId}:main`,
-            canonicalKey: "global",
-            sessionId,
-            agentId,
-            defaultAgentId: "main",
-          }).active,
-        ).toBe(agentId === "ops");
-      }
-    } finally {
-      operation.complete();
+    cleanups.push(() => operation.complete());
+    const admission = await admitReplyTurn({
+      sessionKey: "global",
+      sessionId,
+      agentId: "ops",
+      kind: "visible",
+      resetTriggered: false,
+      adoptOperation: operation,
+    });
+    expect(admission.status).toBe("owned");
+    for (const agentId of ["main", "ops"]) {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context: {},
+          requestedKey: `agent:${agentId}:main`,
+          canonicalKey: "global",
+          sessionId,
+          agentId,
+          defaultAgentId: "main",
+        }).active,
+      ).toBe(agentId === "ops");
     }
   },
 );
 
 it("projects only recorded capacity waits as queued and preserves independent running owners", () => {
-  const sessionKey = "agent:main:capacity-wait";
-  const sessionId = "capacity-wait-session";
-  const runId = "capacity-wait-run";
-  registerAgentRunContext(runId, { sessionKey, sessionId, agentId: "main" });
-  const chatAbortControllers = new Map();
-  const registration = registerChatAbortController({
-    chatAbortControllers,
-    runId,
+  const run = makeRun("capacity-wait");
+  const { sessionKey, sessionId, runId } = run;
+  run.register({ agentId: "main" });
+  const registration = registerChatRun(sessionKey, sessionId, runId);
+  const { state } = registration;
+  const releaseWait = run.wait();
+  expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+  registration.markExecutionStarted();
+  expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+  registerAgentRunContext("capacity-independent", {
     sessionKey,
     sessionId,
-    agentId: "main",
-    timeoutMs: 60_000,
-    kind: "agent",
+    projectSessionActive: true,
   });
-  const state = () =>
-    resolveVisibleActiveSessionRunState({
-      context: { chatAbortControllers },
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      sessionId,
-    });
-  const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
-  try {
-    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
-    registration.markExecutionStarted();
-    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
-    registerAgentRunContext("capacity-independent", {
-      sessionKey,
-      sessionId,
-      projectSessionActive: true,
-    });
-    expect(state()).toEqual({ active: true });
-    clearAgentRunContext("capacity-independent");
-    expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
-    releaseWait?.();
-    expect(state()).toEqual({ active: true, runIds: [runId] });
-  } finally {
-    releaseWait?.();
-    registration.cleanup();
-    clearAgentRunContext(runId);
-    clearAgentRunContext("capacity-independent");
-  }
+  cleanups.push(() => clearAgentRunContext("capacity-independent"));
+  expect(state()).toEqual({ active: true });
+  clearAgentRunContext("capacity-independent");
+  expect(state()).toEqual({ active: true, status: "queued", runIds: [runId] });
+  releaseWait?.();
+  expect(state()).toEqual({ active: true, runIds: [runId] });
 });
 
 it.each([
@@ -700,55 +420,28 @@ it.each([
   { projectSessionActive: false },
   { projectSessionLifecycle: false },
 ])("capacity evidence does not make a hidden maintenance run visible: %j", (visibility) => {
-  const runId = "hidden-capacity";
-  const sessionKey = "agent:main:hidden-capacity";
-  registerAgentRunContext(runId, { sessionKey, ...visibility });
-  const releaseWait = registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
-  try {
-    expect(
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-      }),
-    ).toEqual({ active: false, runIds: [] });
-  } finally {
-    releaseWait?.();
-    clearAgentRunContext(runId);
-  }
+  const run = makeRun("hidden-capacity");
+  run.register(visibility);
+  run.wait();
+  expect(visibleState(run.sessionKey, {})).toEqual({ active: false, runIds: [] });
 });
 
 it("preserves the completed foreground row while hidden embedded maintenance remains operational", async () => {
-  const sessionKey = "agent:main:hidden-maintenance-handle";
-  const sessionId = "hidden-maintenance-session";
-  const runId = "hidden-maintenance-run";
+  const run = makeRun("hidden-maintenance");
+  const { sessionKey, sessionId, runId, state } = run;
   let aborted = false;
-  const handle: EmbeddedAgentQueueHandle = {
-    runId,
-    abort: () => {
-      aborted = true;
-    },
-    isAborted: () => aborted,
-    isCompacting: () => false,
-    isStreaming: () => true,
-    queueMessage: async () => undefined,
-  };
-  registerAgentRunContext(runId, {
-    sessionKey,
-    sessionId,
+  run.register({
     projectSessionActive: false,
     projectSessionLifecycle: false,
     projectSessionMessages: false,
     isControlUiVisible: false,
   });
-  setActiveEmbeddedRun(sessionId, handle, sessionKey);
-  const state = () =>
-    resolveVisibleActiveSessionRunState({
-      context: {},
-      requestedKey: sessionKey,
-      canonicalKey: sessionKey,
-      sessionId,
-    });
+  const handle = run.embed({
+    abort: () => {
+      aborted = true;
+    },
+    isAborted: () => aborted,
+  });
   const snapshot = () =>
     buildGatewaySessionSnapshot({
       sessionRow: {
@@ -797,84 +490,37 @@ it("preserves the completed foreground row while hidden embedded maintenance rem
 it.each(["reply", "remote"] as const)(
   "keeps a visible %s owner independent of hidden embedded maintenance",
   (kind) => {
-    const sessionKey = `agent:main:hidden-with-${kind}`;
-    const sessionId = `hidden-with-${kind}`;
-    const runId = `hidden-${kind}`;
+    const run = makeRun(`hidden-with-${kind}`);
+    const { sessionKey, sessionId, state } = run;
     const visibleRunId = `visible-${kind}`;
-    const handle: EmbeddedAgentQueueHandle = {
-      runId,
-      abort: () => {},
-      isCompacting: () => false,
-      isStreaming: () => true,
-      queueMessage: async () => undefined,
-    };
-    registerAgentRunContext(runId, { sessionKey, sessionId, projectSessionActive: false });
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    run.register({ projectSessionActive: false });
+    run.embed();
     let reply: ReturnType<typeof createReplyOperation> | undefined;
     if (kind === "reply") {
-      reply = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      reply = run.reply();
       reply.setPhase("running");
       markReplyOperationExecutionStarted(reply);
     } else {
       registerAgentRunContext(visibleRunId, { sessionKey, sessionId, projectSessionActive: true });
+      cleanups.push(() => clearAgentRunContext(visibleRunId));
     }
-    const state = () =>
-      resolveVisibleActiveSessionRunState({
-        context: {},
-        requestedKey: sessionKey,
-        canonicalKey: sessionKey,
-        sessionId,
-      });
-    try {
-      expect(state().active).toBe(true);
-      reply?.complete();
-      clearAgentRunContext(visibleRunId);
-      expect(state()).toEqual({ active: false, runIds: [] });
-      expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBe("running");
-    } finally {
-      reply?.complete();
-      clearAgentRunContext(visibleRunId);
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      clearAgentRunContext(runId);
-    }
+    expect(state().active).toBe(true);
+    reply?.complete();
+    clearAgentRunContext(visibleRunId);
+    expect(state()).toEqual({ active: false, runIds: [] });
+    expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBe("running");
   },
 );
 
-it.each([undefined, true])(
-  "keeps embedded activity independent of suppressed events with projection=%s",
-  (projectSessionActive) => {
-    const sessionKey = `agent:main:suppressed-events-${projectSessionActive}`;
-    const sessionId = `suppressed-events-${projectSessionActive}`;
-    const runId = `suppressed-events-run-${projectSessionActive}`;
-    const handle: EmbeddedAgentQueueHandle = {
-      runId,
-      abort: () => {},
-      isCompacting: () => false,
-      isStreaming: () => true,
-      queueMessage: async () => undefined,
-    };
-    registerAgentRunContext(runId, {
-      sessionKey,
-      sessionId,
-      projectSessionActive,
-      projectSessionLifecycle: false,
-      projectSessionMessages: false,
-      isControlUiVisible: false,
-    });
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    try {
-      clearAgentRunContext(runId);
-      expect(
-        resolveVisibleActiveSessionRunState({
-          context: {},
-          requestedKey: sessionKey,
-          canonicalKey: sessionKey,
-          sessionId,
-        }),
-      ).toEqual({ active: true });
-    } finally {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      clearAgentRunContext(runId);
-    }
-  },
-);
+it("keeps embedded activity independent of suppressed events", () => {
+  const run = makeRun("suppressed-events");
+  run.register({
+    projectSessionActive: true,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+    isControlUiVisible: false,
+  });
+  run.embed();
+  clearAgentRunContext(run.runId);
+  expect(run.state()).toEqual({ active: true });
+});

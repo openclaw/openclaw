@@ -1,53 +1,26 @@
-// Feishu plugin module implements bot content behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuConversationId } from "./conversation-id.js";
+import {
+  buildFeishuConversationId,
+  resolveConfiguredFeishuGroupSessionScope,
+} from "./conversation-id.js";
+import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
-
-type FeishuMention = {
-  key: string;
-  id: {
-    open_id?: string;
-    user_id?: string;
-    union_id?: string;
-  };
-  name: string;
-  tenant_key?: string;
-};
+import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
 
 type FeishuMessageLike = {
-  message: {
-    content: string;
-    message_type: string;
-    mentions?: FeishuMention[];
-    chat_id: string;
-    root_id?: string;
-    parent_id?: string;
-    thread_id?: string;
-    message_id: string;
-  };
-  sender: {
-    sender_id: {
-      open_id?: string;
-      user_id?: string;
-    };
-  };
+  message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
 };
 
-type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
-type ResolvedFeishuGroupSession = {
-  peerId: string;
-  parentPeer: { kind: "group"; id: string } | null;
-  groupSessionScope: GroupSessionScope;
-  replyInThread: boolean;
-  threadReply: boolean;
-};
+type FeishuGroupSessionConfig = Pick<
+  FeishuConfig,
+  "groupSessionScope" | "topicSessionMode" | "replyInThread"
+>;
 
 export function resolveFeishuGroupSession(params: {
   chatId: string;
@@ -56,17 +29,9 @@ export function resolveFeishuGroupSession(params: {
   rootId?: string;
   threadId?: string;
   chatType?: FeishuChatType;
-  groupConfig?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-}): ResolvedFeishuGroupSession {
+  groupConfig?: FeishuGroupSessionConfig;
+  feishuCfg?: FeishuGroupSessionConfig;
+}) {
   const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
     params;
   const normalizedThreadId = threadId?.trim();
@@ -75,12 +40,7 @@ export function resolveFeishuGroupSession(params: {
   const replyInThread =
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
-  const legacyTopicSessionMode =
-    groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-  const groupSessionScope: GroupSessionScope =
-    groupConfig?.groupSessionScope ??
-    feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+  const groupSessionScope = resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg });
   const normalizedTopicGroupThreadId =
     chatType === "topic_group" ? (normalizedThreadId ?? normalizedRootId) : undefined;
   const topicScope =
@@ -91,38 +51,19 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId;
-  switch (groupSessionScope) {
-    case "group_sender":
-      peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    case "group_topic":
-      peerId = topicScope
-        ? buildFeishuConversationId({ chatId, scope: "group_topic", topicId: topicScope })
-        : chatId;
-      break;
-    case "group_topic_sender":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic_sender",
-            topicId: topicScope,
-            senderOpenId,
-          })
-        : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    default:
-      peerId = chatId;
-      break;
-  }
+  const peerId =
+    groupSessionScope === "group_sender" || groupSessionScope === "group_topic_sender" || topicScope
+      ? buildFeishuConversationId({
+          chatId,
+          scope: groupSessionScope,
+          senderOpenId,
+          topicId: topicScope ?? undefined,
+        })
+      : chatId;
 
   return {
     peerId,
-    parentPeer:
-      topicScope &&
-      (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
-        ? { kind: "group", id: chatId }
-        : null,
+    parentPeer: topicScope ? { kind: "group" as const, id: chatId } : null,
     groupSessionScope,
     replyInThread,
     threadReply,
@@ -148,14 +89,13 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
         const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };
-        if (typeof share.body === "string" && share.body.trim()) {
-          return share.body.trim();
+        const text = normalizeOptionalString(share.body) ?? normalizeOptionalString(share.summary);
+        if (text) {
+          return text;
         }
-        if (typeof share.summary === "string" && share.summary.trim()) {
-          return share.summary.trim();
-        }
-        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim()) {
-          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        const sharedChatId = normalizeOptionalString(share.share_chat_id);
+        if (sharedChatId) {
+          return `[Forwarded message: ${sharedChatId}]`;
         }
       }
       return "[Forwarded message]";
@@ -192,36 +132,7 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   return false;
 }
 
-export function normalizeMentions(
-  text: string,
-  mentions?: FeishuMention[],
-  botStripId?: string,
-): string {
-  if (!mentions || mentions.length === 0) {
-    return text;
-  }
-  const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const replacements = new Map<string, string>();
-  for (const mention of mentions) {
-    const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
-    replacements.set(mention.key, replacement);
-  }
-  // Longest keys win; a single pass keeps placeholder-like display names literal.
-  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escaped);
-  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
-}
-
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  if (!text) {
-    return "";
-  }
   return text
     .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
     .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
@@ -229,33 +140,24 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-function parseMediaKeys(
+function parseMediaResource(
   content: string,
   messageType: string,
-): { imageKey?: string; fileKey?: string; fileName?: string } {
+): { key?: string; fileName?: string } {
   try {
     const parsed = JSON.parse(content);
     const imageKey = normalizeFeishuExternalKey(parsed.image_key);
     const fileKey = normalizeFeishuExternalKey(parsed.file_key);
-    switch (messageType) {
-      case "image":
-        return { imageKey, fileName: parsed.file_name };
-      case "file":
-      case "audio":
-        return { fileKey, fileName: parsed.file_name };
-      case "video":
-      case "media":
-        return { fileKey, imageKey, fileName: parsed.file_name };
-      default:
-        return {};
-    }
+    const key =
+      messageType === "image"
+        ? imageKey
+        : messageType === "video" || messageType === "media"
+          ? fileKey || imageKey
+          : fileKey;
+    return { key, fileName: parsed.file_name };
   } catch {
     return {};
   }
-}
-
-function toMessageResourceType(messageType: string): "image" | "file" {
-  return messageType === "image" ? "image" : "file";
 }
 
 function resolveFeishuMediaKind(messageType: string): FeishuMediaInfo["kind"] {
@@ -290,7 +192,13 @@ export async function resolveFeishuMediaList(params: {
     return [];
   }
 
-  const out: FeishuMediaInfo[] = [];
+  const resources: Array<{
+    key: string;
+    type: "image" | "file";
+    fileName?: string;
+    kind: FeishuMediaInfo["kind"];
+    label: string;
+  }> = [];
   if (messageType === "post") {
     const { attachments } = parsePostContent(content);
     if (attachments.length === 0) {
@@ -304,64 +212,51 @@ export async function resolveFeishuMediaList(params: {
         continue;
       }
       seenAttachments.add(identity);
-      const fileName = attachment.kind === "file" ? attachment.fileName : undefined;
-      const mediaKind = attachment.kind === "image" ? "image" : "video";
-      try {
-        const { saved } = await saveMessageResourceFeishu({
-          cfg,
-          messageId,
-          fileKey: attachment.key,
-          type: attachment.kind,
-          accountId,
-          maxBytes,
-          ...(fileName ? { originalFilename: fileName } : {}),
-        });
-        out.push({
-          path: saved.path,
-          contentType: saved.contentType,
-          kind: mediaKind,
-        });
-        log?.(
-          `feishu: downloaded embedded ${attachment.kind} ${attachment.key}, saved to ${saved.path}`,
-        );
-      } catch (err) {
-        out.push({ kind: mediaKind });
-        log?.(
-          `feishu: failed to download embedded ${attachment.kind} ${attachment.key}: ${String(err)}`,
-        );
-      }
+      resources.push({
+        key: attachment.key,
+        type: attachment.kind,
+        fileName: attachment.kind === "file" ? attachment.fileName : undefined,
+        kind:
+          attachment.kind === "image"
+            ? "image"
+            : attachment.origin === "top-level"
+              ? "document"
+              : "video",
+        label: `embedded ${attachment.kind} ${attachment.key}`,
+      });
     }
-    return out;
-  }
-
-  const mediaKeys = parseMediaKeys(content, messageType);
-  if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
-    return [{ kind: resolveFeishuMediaKind(messageType) }];
-  }
-
-  try {
-    const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
-    if (!fileKey) {
+  } else {
+    const resource = parseMediaResource(content, messageType);
+    if (!resource.key) {
       return [{ kind: resolveFeishuMediaKind(messageType) }];
     }
-    const { saved } = await saveMessageResourceFeishu({
-      cfg,
-      messageId,
-      fileKey,
-      type: toMessageResourceType(messageType),
-      accountId,
-      maxBytes,
-      originalFilename: mediaKeys.fileName,
-    });
-    out.push({
-      path: saved.path,
-      contentType: saved.contentType,
+    resources.push({
+      key: resource.key,
+      type: messageType === "image" ? "image" : "file",
+      fileName: resource.fileName,
       kind: resolveFeishuMediaKind(messageType),
+      label: `${messageType} media`,
     });
-    log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
-  } catch (err) {
-    out.push({ kind: resolveFeishuMediaKind(messageType) });
-    log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
+  }
+
+  const out: FeishuMediaInfo[] = [];
+  for (const resource of resources) {
+    try {
+      const { saved } = await saveMessageResourceFeishu({
+        cfg,
+        messageId,
+        fileKey: resource.key,
+        type: resource.type,
+        accountId,
+        maxBytes,
+        originalFilename: resource.fileName,
+      });
+      out.push({ path: saved.path, contentType: saved.contentType, kind: resource.kind });
+      log?.(`feishu: downloaded ${resource.label}, saved to ${saved.path}`);
+    } catch (err) {
+      out.push({ kind: resource.kind });
+      log?.(`feishu: failed to download ${resource.label}: ${String(err)}`);
+    }
   }
   return out;
 }

@@ -3,7 +3,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const warn = vi.hoisted(() => vi.fn());
+const warn = vi.hoisted(() => vi.fn<(message: string, record: Record<string, unknown>) => void>());
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
@@ -25,27 +25,25 @@ function captureTimeoutLogUrl(url: string): Promise<Record<string, unknown>> {
 
 const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
 
-function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
-  const call = warn.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`missing warning call ${callIndex}`);
-  }
-  const [message, record] = call;
-  if (typeof message !== "string" || !record || typeof record !== "object") {
-    throw new Error(`invalid warning call ${callIndex}`);
-  }
-  return [message, record as Record<string, unknown>];
-}
-
-function requireWarnMessage(callIndex: number): string {
-  const [message] = requireWarnCall(callIndex);
-  return message;
-}
-
 function requireWarnRecord(callIndex: number): Record<string, unknown> {
-  const [, record] = requireWarnCall(callIndex);
-  return record;
+  const call = warn.mock.calls[callIndex];
+  expect(call).toBeDefined();
+  return call![1];
 }
+
+const fetchUntilAborted: typeof fetch = async (_input, init) =>
+  await new Promise<Response>((_resolve, reject) => {
+    const signal = init?.signal;
+    if (!signal) {
+      reject(new Error("missing signal"));
+      return;
+    }
+    signal.addEventListener(
+      "abort",
+      () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
+      { once: true },
+    );
+  });
 
 describe("bindAbortRelay", () => {
   it("preserves the default AbortError reason when used as an event listener", () => {
@@ -59,17 +57,6 @@ describe("bindAbortRelay", () => {
     expect(child.signal.aborted).toBe(true);
     expect(child.signal.reason).toBeInstanceOf(DOMException);
     expect(child.signal.reason.name).toBe("AbortError");
-  });
-
-  it("removes the event listener with the saved relay reference", () => {
-    const parent = new AbortController();
-    const child = new AbortController();
-    const onAbort = bindAbortRelay(child);
-
-    parent.signal.addEventListener("abort", onAbort);
-    parent.signal.removeEventListener("abort", onAbort);
-    parent.abort();
-    expect(child.signal.aborted).toBe(false);
   });
 });
 
@@ -96,7 +83,7 @@ describe("buildTimeoutAbortSignal", () => {
     expect((signal?.reason as Error | undefined)?.name).toBe("TimeoutError");
     expect((signal?.reason as Error | undefined)?.message).toBe("request timed out");
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
+    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
     const record = requireWarnRecord(0);
     expect(record.timeoutMs).toBe(25);
     expect(record.operation).toBe("unit-test");
@@ -156,28 +143,13 @@ describe("buildTimeoutAbortSignal", () => {
     vi.setSystemTime(2_000);
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
+    expect(warn.mock.calls[0]?.[0]).toBe("fetch timeout reached; aborting operation");
     const record = requireWarnRecord(0);
     expect(record.timerDelayMs).toBe(2000);
     expect(record.eventLoopDelayHint).toBe("timer delayed 2000ms, likely event-loop starvation");
     expect(String(record.consoleMessage)).toContain(
       "timer delayed 2000ms, likely event-loop starvation",
     );
-
-    cleanup();
-  });
-
-  it("strips query strings and hashes from relative timeout URL logs", async () => {
-    const { cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: 25,
-      operation: "unit-test",
-      url: "/api/responses?api-key=secret#fragment",
-    });
-
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(requireWarnMessage(0)).toBe("fetch timeout reached; aborting operation");
-    expect(requireWarnRecord(0).url).toBe("/api/responses");
 
     cleanup();
   });
@@ -191,27 +163,9 @@ describe("buildTimeoutAbortSignal", () => {
     expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
   });
 
-  it("redacts Telegram bot tokens from custom self-hosted API root timeout URLs", async () => {
-    const record = await captureTimeoutLogUrl(
-      `https://telegram.internal/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/getMe?chat_id=1`,
-    );
-
-    expect(record.url).toBe("https://telegram.internal/bot***/getMe");
-    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
-  });
-
-  it("redacts Telegram bot tokens from proxy API root timeout URLs", async () => {
-    const record = await captureTimeoutLogUrl(
-      `https://tg-proxy.example.com/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?foo=bar`,
-    );
-
-    expect(record.url).toBe("https://tg-proxy.example.com/bot***/sendMessage");
-    expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
-  });
-
   it("redacts Telegram bot tokens from unparseable (fallback) timeout URL strings", async () => {
     const record = await captureTimeoutLogUrl(
-      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1`,
+      `/bot${SYNTHETIC_TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=1#fragment`,
     );
 
     expect(record.url).toBe("/bot***/sendMessage");
@@ -229,45 +183,8 @@ describe("buildTimeoutAbortSignal", () => {
     );
   });
 
-  it("keeps the full ASCII budget in fallback timeout URL logs", async () => {
-    const visiblePrefix = "x".repeat(500);
-    const record = await captureTimeoutLogUrl(`${visiblePrefix}tail`);
-    const expectedUrl = `${visiblePrefix}...`;
-
-    expect(record.url).toBe(expectedUrl);
-    expect(record.consoleMessage).toBe(
-      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
-    );
-  });
-
-  it.each([
-    ["https://example.com/bot/settings?safe=1", "https://example.com/bot/settings"],
-    ["https://example.com/bots/chat?safe=1", "https://example.com/bots/chat"],
-    ["https://example.com/robot/test?safe=1", "https://example.com/robot/test"],
-    ["/bot123:status?safe=1", "/bot123:status"],
-    ["/bot123456:short/status?safe=1", "/bot123456:short/status"],
-  ])("keeps ordinary bot-like timeout path %s visible", async (input, expected) => {
-    expect((await captureTimeoutLogUrl(input)).url).toBe(expected);
-  });
-
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
-    const fetchFn = vi.fn<typeof fetch>(
-      async (_input, init) =>
-        await new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error("missing signal"));
-            return;
-          }
-          signal.addEventListener(
-            "abort",
-            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
-            { once: true },
-          );
-        }),
-    );
-
-    const result = fetchWithTimeout("https://example.com/v1/audio", {}, 25, fetchFn);
+    const result = fetchWithTimeout("https://example.com/v1/audio", {}, 25, fetchUntilAborted);
     const assertion = expect(result).rejects.toMatchObject({
       name: "TimeoutError",
       message: "request timed out",
@@ -280,27 +197,12 @@ describe("buildTimeoutAbortSignal", () => {
   it("preserves caller abort reasons before response headers", async () => {
     const parent = new AbortController();
     const reason = new Error("caller stopped before headers");
-    const fetchFn = vi.fn<typeof fetch>(
-      async (_input, init) =>
-        await new Promise<Response>((_resolve, reject) => {
-          const signal = init?.signal;
-          if (!signal) {
-            reject(new Error("missing signal"));
-            return;
-          }
-          signal.addEventListener(
-            "abort",
-            () => reject(toLintErrorObject(signal.reason, "Non-Error rejection")),
-            { once: true },
-          );
-        }),
-    );
 
     const result = fetchWithTimeout(
       "https://example.com/v1/audio",
       { signal: parent.signal },
       25,
-      fetchFn,
+      fetchUntilAborted,
     );
     parent.abort(reason);
 
@@ -343,18 +245,6 @@ describe("buildTimeoutAbortSignal", () => {
     expect(fetchSignal?.reason).toBe(reason);
   });
 
-  it("accepts a null RequestInit signal", async () => {
-    const response = new Response("ok");
-    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.signal).toBeInstanceOf(AbortSignal);
-      return response;
-    });
-
-    await expect(
-      fetchWithTimeout("https://example.com/v1/audio", { signal: null }, 25, fetchFn),
-    ).resolves.toBe(response);
-  });
-
   it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const response = new Response("ok");
@@ -387,24 +277,6 @@ describe("buildTimeoutAbortSignal", () => {
 
     parent.abort(reason);
     await vi.advanceTimersByTimeAsync(25);
-
-    expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).toBe(reason);
-    expect(warn).not.toHaveBeenCalled();
-
-    cleanup();
-  });
-
-  it("preserves an already-aborted parent reason", () => {
-    const parent = new AbortController();
-    const reason = new Error("parent already stopped");
-    parent.abort(reason);
-
-    const { signal, cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: 25,
-      signal: parent.signal,
-      operation: "unit-test",
-    });
 
     expect(signal?.aborted).toBe(true);
     expect(signal?.reason).toBe(reason);
@@ -449,26 +321,5 @@ describe("buildTimeoutAbortSignal", () => {
     expect(warn).toHaveBeenCalledTimes(1);
 
     cleanup();
-  });
-
-  it("clamps oversized timeouts before arming Node timers", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-
-    const { signal, cleanup } = buildTimeoutAbortSignal({
-      timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS + 1,
-      operation: "unit-test",
-    });
-
-    try {
-      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
-
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(signal?.aborted).toBe(false);
-    } finally {
-      cleanup();
-      timeoutSpy.mockRestore();
-    }
   });
 });

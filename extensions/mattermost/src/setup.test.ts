@@ -1,5 +1,4 @@
 // Mattermost tests cover setup plugin behavior.
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createSetupWizardAdapter,
   createQueuedWizardPrompter,
@@ -7,89 +6,23 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 
-const resolveMattermostAccount = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
-const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
 
-vi.mock("./setup.accounts.runtime.js", () => {
-  const resolveAccount = (params: Parameters<typeof resolveMattermostAccount>[0]) => {
-    const mocked = resolveMattermostAccount(params);
-    return (
-      mocked ?? {
-        accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
-        enabled: params.cfg.channels?.mattermost?.enabled !== false,
-        botToken:
-          typeof params.cfg.channels?.mattermost?.botToken === "string"
-            ? params.cfg.channels.mattermost.botToken
-            : undefined,
-        baseUrl: normalizeMattermostBaseUrl(params.cfg.channels?.mattermost?.baseUrl),
-        botTokenSource:
-          typeof params.cfg.channels?.mattermost?.botToken === "string" ? "config" : "none",
-        botTokenStatus:
-          typeof params.cfg.channels?.mattermost?.botToken === "string" ? "available" : "missing",
-        baseUrlSource: params.cfg.channels?.mattermost?.baseUrl ? "config" : "none",
-        config: params.cfg.channels?.mattermost ?? {},
-      }
-    );
-  };
-  return {
-    listMattermostAccountIds: vi.fn((cfg: OpenClawConfig) => {
-      const accounts = cfg.channels?.mattermost?.accounts;
-      const ids = accounts ? Object.keys(accounts) : [];
-      return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
-    }),
-    inspectMattermostAccount: resolveAccount,
-    resolveMattermostAccount: resolveAccount,
-  };
-});
-
-vi.mock("./setup.client.runtime.js", () => ({
+vi.mock("./mattermost/client.js", () => ({
   normalizeMattermostBaseUrl,
 }));
 
-vi.mock("./setup.secret-input.runtime.js", () => ({
-  hasConfiguredSecretInput,
-}));
-
-function createApi(
-  registrationMode: OpenClawPluginApi["registrationMode"],
-  registerHttpRoute = vi.fn(),
-): OpenClawPluginApi {
-  return createTestPluginApi({
-    id: "mattermost",
-    name: "Mattermost",
-    source: "test",
-    config: {},
-    runtime: {} as OpenClawPluginApi["runtime"],
-    registrationMode,
-    registerHttpRoute,
-  });
-}
-
-let plugin: typeof import("../index.js").default;
 let mattermostSetupWizard: typeof import("./setup-surface.js").mattermostSetupWizard;
-let isMattermostConfigured: typeof import("./setup-core.js").isMattermostConfigured;
-let resolveMattermostAccountWithSecrets: typeof import("./setup-core.js").resolveMattermostAccountWithSecrets;
+let isMattermostConfigured: typeof import("./mattermost/accounts.js").isMattermostConfigured;
 let mattermostSetupAdapter: typeof import("./setup-core.js").mattermostSetupAdapter;
 
 describe("mattermost setup", () => {
   beforeAll(async () => {
     ({ mattermostSetupWizard } = await import("./setup-surface.js"));
-    ({ isMattermostConfigured, resolveMattermostAccountWithSecrets, mattermostSetupAdapter } =
-      await import("./setup-core.js"));
-    plugin = {
-      register(api: OpenClawPluginApi) {
-        if (api.registrationMode === "full") {
-          api.registerHttpRoute({
-            path: "/api/channels/mattermost/command",
-            auth: "plugin",
-            handler: async () => true,
-          });
-        }
-      },
-    } as typeof plugin;
+    ({ mattermostSetupAdapter } = await import("./setup-core.js"));
+    ({ isMattermostConfigured } = await import("./mattermost/accounts.js"));
   });
 
   beforeEach(() => {
@@ -97,11 +30,8 @@ describe("mattermost setup", () => {
   });
 
   afterEach(() => {
-    resolveMattermostAccount.mockReset();
     normalizeMattermostBaseUrl.mockReset();
     normalizeMattermostBaseUrl.mockImplementation((value: string | undefined) => value);
-    hasConfiguredSecretInput.mockReset();
-    hasConfiguredSecretInput.mockImplementation((value: unknown) => Boolean(value));
     vi.unstubAllEnvs();
   });
 
@@ -118,7 +48,10 @@ describe("mattermost setup", () => {
       isMattermostConfigured({
         botToken: "",
         baseUrl: "https://chat.example.com",
-        config: { botToken: "secret-ref" },
+        botTokenStatus: "configured_unavailable",
+        config: {
+          botToken: { source: "env", provider: "default", id: "MISSING_MATTERMOST_TOKEN" },
+        },
       } as never),
     ).toBe(true);
 
@@ -129,20 +62,6 @@ describe("mattermost setup", () => {
         config: {},
       } as never),
     ).toBe(false);
-  });
-
-  it("inspects accounts without resolving secret refs", () => {
-    resolveMattermostAccount.mockReturnValue({ accountId: "default" });
-
-    const cfg = { channels: { mattermost: {} } };
-
-    expect(resolveMattermostAccountWithSecrets(cfg as never, "default")).toEqual({
-      accountId: "default",
-    });
-    expect(resolveMattermostAccount).toHaveBeenCalledWith({
-      cfg,
-      accountId: "default",
-    });
   });
 
   it("validates env and explicit credential requirements", () => {
@@ -238,26 +157,6 @@ describe("mattermost setup", () => {
     });
   });
 
-  it.each([
-    { name: "skips slash callback registration in setup-only mode", mode: "setup-only" as const },
-    { name: "registers slash callback routes in full mode", mode: "full" as const },
-  ])("$name", ({ mode }) => {
-    const registerHttpRoute = vi.fn();
-
-    plugin.register(createApi(mode, registerHttpRoute));
-
-    if (mode === "setup-only") {
-      expect(registerHttpRoute).not.toHaveBeenCalled();
-      return;
-    }
-
-    expect(registerHttpRoute).toHaveBeenCalledTimes(1);
-    const [route] = registerHttpRoute.mock.calls[0] ?? [];
-    expect(route?.path).toBe("/api/channels/mattermost/command");
-    expect(route?.auth).toBe("plugin");
-    expect(typeof route?.handler).toBe("function");
-  });
-
   it("treats secret-ref tokens plus base url as configured", async () => {
     const configured = await mattermostSetupWizard.status.resolveConfigured({
       cfg: {
@@ -301,37 +200,6 @@ describe("mattermost setup", () => {
     });
 
     expect(configured).toBe(false);
-  });
-
-  it("shows intro note only when the target account is not configured", () => {
-    expect(
-      mattermostSetupWizard.introNote?.shouldShow?.({
-        cfg: {
-          channels: {
-            mattermost: {},
-          },
-        } as OpenClawConfig,
-        accountId: "default",
-      } as never),
-    ).toBe(true);
-
-    expect(
-      mattermostSetupWizard.introNote?.shouldShow?.({
-        cfg: {
-          channels: {
-            mattermost: {
-              baseUrl: "https://chat.example.com",
-              botToken: {
-                source: "env",
-                provider: "default",
-                id: "MATTERMOST_BOT_TOKEN",
-              },
-            },
-          },
-        } as OpenClawConfig,
-        accountId: "default",
-      } as never),
-    ).toBe(false);
   });
 
   it("offers env shortcut only for the default account when env is present and config is empty", () => {

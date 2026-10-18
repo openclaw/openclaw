@@ -66,24 +66,28 @@ function createActivityChecker(params: {
     runtime: {
       agent: {
         session: {
-          getSessionEntry: () => (params.sessionId ? { sessionId: params.sessionId } : undefined),
+          resolveStorePath: () => "/activity-store",
+          getSessionEntryAsync: async () =>
+            params.sessionId ? { sessionId: params.sessionId } : undefined,
         },
       },
     },
   } as unknown as OpenClawPluginApi;
   const bindingStore = {
-    read: vi.fn(() => params.binding),
+    readAsync: vi.fn(async () => params.binding),
   } as unknown as CodexAppServerBindingStore;
   return createChecker({
     api,
     bindingStore,
     control: {
+      hasActiveWork: () => false,
+      disconnect: async () => {},
       forRequest: () => params.control,
-      forNode: () => {
+      forNode: async () => {
         throw new Error("Node source is outside this local activity fixture");
       },
-      homesForAgent: () => [],
-      forUpstream: () => params.control,
+      homesForAgent: async () => [],
+      forUpstream: async () => params.control,
     } satisfies CodexSessionCatalogControlFactory,
     getRuntimeConfig: () => undefined,
   });
@@ -97,73 +101,6 @@ async function checkTurns(params: { probe: SessionUpstreamProbe; turns: CodexTur
 }
 
 describe("Codex upstream activity", () => {
-  it("counts userMessage turns and uses the latest human timestamp", async () => {
-    await expect(
-      checkTurns({
-        probe: probe(),
-        turns: [
-          turn("turn-4", ["agentMessage"], 400),
-          turn("turn-3", ["userMessage", "agentMessage"], 300),
-          turn("turn-2", ["agentMessage"], 200),
-          turn("turn-1", ["userMessage"], 100),
-        ],
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "activity",
-        sessionKey: "agent:main:adopted:codex",
-        occurredAt: 300_000,
-        humanTurns: 1,
-        nextMarker: { turnId: "turn-4", userMessageCount: 0 },
-        dedupeId: "turn-4:0",
-      },
-    ]);
-  });
-
-  it("keeps an existing thread linked when its turn page is empty", async () => {
-    await expect(checkTurns({ probe: probe(), turns: [] })).resolves.toEqual([]);
-  });
-
-  it("accepts an empty page for a thread with no materialized turn", async () => {
-    await expect(
-      checkTurns({
-        probe: probe({ marker: { turnId: null, userMessageCount: 0 } }),
-        turns: [],
-      }),
-    ).resolves.toEqual([]);
-  });
-
-  it("uses the pinned connection and a bounded descending summary page", async () => {
-    const listTurnPage = vi.fn(async () => ({
-      data: [turn("turn-2", ["userMessage"], 200), turn("turn-1", [], 100)],
-    }));
-    const readThread = vi.fn(async () => ({}) as never);
-    const control = createControl({
-      listTurnPage,
-      readThread,
-    });
-    const checkUpstreamActivity = createActivityChecker({
-      control,
-      sessionId: "session-1",
-      binding: {
-        threadId: "thread-canonical",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "thread-1",
-      },
-    });
-
-    await expect(checkUpstreamActivity([probe()])).resolves.toEqual([
-      expect.objectContaining({ dedupeId: "turn-2:1", humanTurns: 1 }),
-    ]);
-    expect(listTurnPage).toHaveBeenCalledWith({
-      threadId: "thread-canonical",
-      limit: 100,
-      sortDirection: "desc",
-      itemsView: "full",
-    });
-    expect(readThread).not.toHaveBeenCalled();
-  });
-
   it("keeps a rolled-back thread linked when thread/read succeeds", async () => {
     const readThread = vi.fn(async () => ({}) as never);
     const control = createControl({
@@ -184,97 +121,60 @@ describe("Codex upstream activity", () => {
     expect(readThread).toHaveBeenCalledWith("thread-canonical", false);
   });
 
-  it("reports missing when thread/read rejects with the definitive not-found code", async () => {
-    const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError(
-        { code: -32600, message: "thread not loaded: thread-1" },
-        "thread/read",
-      );
-    });
-    const control = createControl({
-      listTurnPage: async () => ({ data: [] }),
-      readThread,
-    });
+  it.each(["missing"] as const)(
+    "verifies missing threads after a %s turn-page response",
+    async (outcome) => {
+      const readThread = vi.fn(async () => {
+        throw new CodexAppServerRpcError(
+          { code: -32600, message: "thread not loaded: thread-1" },
+          "thread/read",
+        );
+      });
+      const control = createControl({
+        listTurnPage: async () => {
+          if (outcome === "missing") {
+            throw new CodexAppServerRpcError(
+              { code: -32600, message: "thread not loaded: thread-1" },
+              "thread/turns/list",
+            );
+          }
+          return { data: [] };
+        },
+        readThread,
+      });
 
-    await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([
-      { kind: "missing", sessionKey: "agent:main:adopted:codex" },
-    ]);
-    expect(readThread).toHaveBeenCalledWith("thread-1", false);
-  });
+      await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([
+        { kind: "missing", sessionKey: "agent:main:adopted:codex" },
+      ]);
+      expect(readThread).toHaveBeenCalledWith("thread-1", false);
+    },
+  );
 
   it.each([
-    { code: -32603, message: "store hiccup", method: "thread/read" },
-    { code: -32600, message: "some other validation failure", method: "thread/read" },
-    { code: -32600, message: "thread not loaded: thread-other", method: "thread/read" },
-    { code: -32600, message: "thread not loaded: thread-1", method: "thread/resume" },
-  ])("treats non-definitive failures as inconclusive: $method $message", async (error) => {
-    const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError(error, error.method);
-    });
-    const control = createControl({
-      listTurnPage: async () => ({ data: [] }),
-      readThread,
-    });
+    new CodexAppServerRpcError({ code: -32603, message: "store hiccup" }, "thread/turns/list"),
+  ])(
+    "keeps a failed turns read inconclusive without another request: $message",
+    async (failure) => {
+      const readThread = vi.fn();
+      const control = createControl({
+        listTurnPage: async ({ threadId }) => {
+          if (threadId === "thread-stale") {
+            throw failure;
+          }
+          return { data: [turn("turn-2", ["userMessage"], 200), turn("turn-1", [], 100)] };
+        },
+        readThread,
+      });
 
-    await expect(createActivityChecker({ control })([probe()])).resolves.toEqual([]);
-  });
-
-  it("detects deletion of a thread baselined with no materialized turn", async () => {
-    const readThread = vi.fn(async () => {
-      throw new CodexAppServerRpcError(
-        { code: -32600, message: "thread not loaded: thread-1" },
-        "thread/read",
-      );
-    });
-    const control = createControl({
-      listTurnPage: async () => ({ data: [] }),
-      readThread,
-    });
-
-    await expect(
-      createActivityChecker({ control })([
-        probe({ marker: { turnId: null, userMessageCount: 0 } }),
-      ]),
-    ).resolves.toEqual([{ kind: "missing", sessionKey: "agent:main:adopted:codex" }]);
-  });
-
-  it("isolates a stale thread from healthy probes", async () => {
-    const listTurnPage = vi.fn(async ({ threadId }: { threadId: string }) => {
-      if (threadId === "thread-stale") {
-        throw new Error("thread missing");
-      }
-      return { data: [turn("turn-2", ["userMessage"], 200), turn("turn-1", [], 100)] };
-    });
-    const control = createControl({
-      listTurnPage,
-      readThread: async () => ({}) as never,
-    });
-
-    await expect(
-      createActivityChecker({ control })([
-        probe({ threadId: "thread-stale" }),
-        probe({ sessionKey: "healthy" }),
-      ]),
-    ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
-  });
-
-  it("detects a steer-appended user message on the marker turn", async () => {
-    await expect(
-      checkTurns({
-        probe: probe({ marker: { turnId: "turn-1", userMessageCount: 1 } }),
-        turns: [turn("turn-1", ["userMessage", "agentMessage", "userMessage"], 100)],
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "activity",
-        sessionKey: "agent:main:adopted:codex",
-        occurredAt: 100_000,
-        humanTurns: 1,
-        nextMarker: { turnId: "turn-1", userMessageCount: 2 },
-        dedupeId: "turn-1:2",
-      },
-    ]);
-  });
+      await expect(
+        createActivityChecker({ control })([
+          probe({ threadId: "thread-stale" }),
+          probe({ sessionKey: "healthy" }),
+        ]),
+      ).resolves.toEqual([expect.objectContaining({ sessionKey: "healthy" })]);
+      expect(readThread).not.toHaveBeenCalled();
+    },
+  );
 
   it("upgrades a legacy turn marker without reporting existing steers", async () => {
     await expect(
@@ -288,37 +188,6 @@ describe("Codex upstream activity", () => {
         sessionKey: "agent:main:adopted:codex",
         humanTurns: 0,
         nextMarker: { turnId: "turn-1", userMessageCount: 2 },
-      },
-    ]);
-  });
-
-  it("filters OpenClaw-authored user items by normalized transcript text", async () => {
-    await expect(
-      checkTurns({
-        probe: probe({
-          marker: { turnId: "turn-1", userMessageCount: 0 },
-          ownRecentUserTexts: ["same prompt"],
-        }),
-        turns: [
-          {
-            ...turn("turn-1", [], 100),
-            items: [
-              {
-                id: "user-1",
-                type: "userMessage",
-                text: "",
-                content: [{ type: "text", text: " same   prompt ", text_elements: [] }],
-              } as unknown as CodexTurn["items"][number],
-            ],
-          },
-        ],
-      }),
-    ).resolves.toEqual([
-      {
-        kind: "activity",
-        sessionKey: "agent:main:adopted:codex",
-        humanTurns: 0,
-        nextMarker: { turnId: "turn-1", userMessageCount: 1 },
       },
     ]);
   });

@@ -3,10 +3,12 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObject } from "../config/validation.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { registerPolicyDoctorChecks } = await loadBundledPluginFacade<{
@@ -17,6 +19,7 @@ it.each(["token", "password"] as const)(
   "preserves policy rate limits while isolating %s authentication",
   async (mode) => {
     const root = tempDirs.make("candidate-policy-");
+    await materializeUpdateCandidateStateWorker(root);
     const policyPath = path.join(root, "policy.jsonc");
     await fs.writeFile(
       policyPath,
@@ -57,6 +60,7 @@ it.each(["token", "password"] as const)(
       stateDir: path.join(root, "source"),
       candidateRoot: root,
       env: {
+        ...process.env,
         OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
         OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
       },
@@ -84,8 +88,78 @@ it.each(["token", "password"] as const)(
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);
+      const refused = new Error("cleanup authority retired");
+      await expect(
+        rehearsal.cleanup(() => {
+          throw refused;
+        }),
+      ).rejects.toBe(refused);
+      expect(await fs.readFile(rehearsal.configPath, "utf8")).toBeTruthy();
     } finally {
-      await rehearsal.cleanup();
+      const checked: string[] = [];
+      await rehearsal.cleanup((directory) => {
+        checked.push(directory);
+      });
+      expect(checked).toEqual([rehearsal.stateDir, ...rehearsal.cleanupDirectories]);
     }
   },
 );
+
+it("keeps workspace-confined avatars as valid as the serving config", async () => {
+  const root = tempDirs.make("candidate-avatar-");
+  await materializeUpdateCandidateStateWorker(root);
+  const workspace = (id: string) => path.join(root, "workspaces", id);
+  const config: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: {
+        main: { workspace: workspace("main"), identity: { avatar: `${workspace("main")}/a.png` } },
+        relative: { workspace: workspace("relative"), identity: { avatar: "avatars/a.png" } },
+        // Explicit local syntax must not be rewritten into a home or URI-like value.
+        tilde: { workspace: workspace("tilde"), identity: { avatar: "./~a.png" } },
+        colon: { workspace: workspace("colon"), identity: { avatar: "./custom:a.png" } },
+        absoluteTilde: {
+          workspace: workspace("absoluteTilde"),
+          identity: { avatar: `${workspace("absoluteTilde")}/~a.png` },
+        },
+        remote: { identity: { avatar: "https://example.invalid/a.png" } },
+        escaped: { workspace: workspace("escaped"), identity: { avatar: `${root}/a.png` } },
+        // The candidate names workspaces by id, so ../<id> would land back inside it.
+        renamed: {
+          workspace: workspace("other"),
+          identity: { avatar: `${workspace("renamed")}/a.png` },
+        },
+        aliased: { workspace: workspace("main"), identity: { avatar: "../main/a.png" } },
+        climbed: {
+          workspace: workspace("climbed"),
+          identity: { avatar: "../../workspaces/climbed/a.png" },
+        },
+        relativeRenamed: {
+          workspace: workspace("other"),
+          identity: { avatar: "../relativeRenamed/a.png" },
+        },
+      },
+    },
+  };
+  const issuePaths = (cfg: unknown) => {
+    const result = validateConfigObject(cfg);
+    return result.ok ? [] : result.issues.map((issue) => issue.path);
+  };
+  expect(issuePaths(config)).toEqual([
+    "agents.entries.escaped.identity.avatar",
+    "agents.entries.renamed.identity.avatar",
+    "agents.entries.relativeRenamed.identity.avatar",
+  ]);
+
+  const rehearsal = await prepareUpdateCandidateRehearsal({
+    config,
+    stateDir: path.join(root, "source"),
+    candidateRoot: root,
+  });
+  try {
+    const copied: unknown = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8"));
+    expect(issuePaths(copied)).toEqual(issuePaths(config));
+  } finally {
+    await rehearsal.cleanup();
+  }
+});

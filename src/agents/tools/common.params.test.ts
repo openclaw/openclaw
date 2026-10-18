@@ -8,7 +8,9 @@ import {
   readPositiveIntegerParam,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
+  ToolInputError,
 } from "./common.js";
 
 type TestActions = {
@@ -39,6 +41,58 @@ describe("readStringOrNumberParam", () => {
   it("trims strings", () => {
     const params = { chatId: "  abc  " };
     expect(readStringOrNumberParam(params, "chatId")).toBe("abc");
+  });
+});
+
+describe("readStringArrayParam", () => {
+  it.each([
+    { value: "  alpha  ", expected: ["alpha"] },
+    { value: [" beta ", "", 7, null, "alpha", "beta"], expected: ["beta", "alpha", "beta"] },
+    { value: [], expected: undefined },
+    { value: [" ", false, {}], expected: undefined },
+    { value: " ", expected: undefined },
+    { value: undefined, expected: undefined },
+    { value: null, expected: undefined },
+    { value: 7, expected: undefined },
+  ])("normalizes $value without coercing nonstrings", ({ value, expected }) => {
+    expect(readStringArrayParam({ itemIds: value }, "itemIds")).toEqual(expected);
+  });
+
+  it("preserves direct-key precedence over snake-case aliases", () => {
+    expect(readStringArrayParam({ item_ids: [" first ", "second"] }, "itemIds")).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(readStringArrayParam({ itemIds: ["direct"], item_ids: ["alias"] }, "itemIds")).toEqual([
+      "direct",
+    ]);
+    expect(
+      readStringArrayParam({ itemIds: undefined, item_ids: ["alias"] }, "itemIds"),
+    ).toBeUndefined();
+  });
+
+  it("keeps required errors and custom labels after normalization", () => {
+    expect(() => readStringArrayParam({}, "itemIds", { required: true })).toThrow(
+      new ToolInputError("itemIds required"),
+    );
+    expect(() =>
+      readStringArrayParam({ itemIds: [" ", 7] }, "itemIds", {
+        required: true,
+        label: "items",
+      }),
+    ).toThrow(new ToolInputError("items required"));
+    expect(readStringArrayParam({ itemIds: " first " }, "itemIds", { required: true })).toEqual([
+      "first",
+    ]);
+  });
+
+  it("always trims and drops blanks despite scalar-string options", () => {
+    expect(
+      readStringArrayParam({ itemIds: [" first ", " "] }, "itemIds", {
+        trim: false,
+        allowEmpty: true,
+      }),
+    ).toEqual(["first"]);
   });
 });
 

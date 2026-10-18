@@ -65,7 +65,6 @@ const TOP_LEVEL_KEYS = new Set([
 ]);
 const ITEM_KEYS = new Set(["type", "text"]);
 const SOURCE_MODEL_KEYS = new Set(["provider", "model"]);
-const ITEM_TYPES = new Set<BeamTranscriptItem["type"]>(["userMessage", "agentMessage", "other"]);
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -153,8 +152,9 @@ export function parseBeamUpload(
       return { ok: false, error: "each transcript item must be a closed object" };
     }
     if (
-      typeof rawItem.type !== "string" ||
-      !ITEM_TYPES.has(rawItem.type as BeamTranscriptItem["type"])
+      rawItem.type !== "userMessage" &&
+      rawItem.type !== "agentMessage" &&
+      rawItem.type !== "other"
     ) {
       return { ok: false, error: "transcript item type is invalid" };
     }
@@ -165,7 +165,7 @@ export function parseBeamUpload(
         error: `transcript item text must be 1-${BEAM_MAX_ITEM_CHARS} characters`,
       };
     }
-    items.push({ type: rawItem.type as BeamTranscriptItem["type"], text });
+    items.push({ type: rawItem.type, text });
   }
 
   return {

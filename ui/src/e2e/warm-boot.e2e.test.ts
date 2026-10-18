@@ -2,21 +2,47 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI warm reload",
   trackBrowserContexts: true,
 });
-const sessionKey = "agent:main:main";
+// A literal conversation can restore before hello; the shorthand main route needs live defaults.
+const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
+const reloadProfiles = [
+  "matching",
+  "different",
+  "device-token",
+  "trusted-proxy",
+  "legacy-rail",
+  "large",
+  "short-tail",
+  "imported",
+];
 
-async function waitForPersistedWarmState(page: Page, eligible = true): Promise<void> {
+async function expectOwnMessageAlignment(page: Page): Promise<void> {
+  const own = page.locator(".chat-group.user", { hasText: "Morgan's saved message." });
+  await expect
+    .poll(() =>
+      own.evaluate((row) => ({
+        peer: row.classList.contains("chat-group--peer"),
+        alignment: getComputedStyle(row).justifyContent,
+      })),
+    )
+    .toEqual({ peer: false, alignment: "end" });
+}
+
+async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -48,16 +74,24 @@ async function waitForPersistedWarmState(page: Page, eligible = true): Promise<v
           });
         }
         const [rosters, snapshots] = await Promise.all([
-          readRecords("openclaw-session-roster", "rosters"),
+          readRecords("openclaw-chat-snapshots", "sidebarSnapshots"),
           readRecords("openclaw-chat-snapshots", "snapshots"),
         ]);
         return {
           bootRecord: hasBootRecord,
           roster: rosters.some((record) => {
-            if (typeof record !== "object" || record === null || !("result" in record)) {
+            if (typeof record !== "object" || record === null || !("model" in record)) {
               return false;
             }
-            const result = record.result;
+            const model = record.model;
+            if (typeof model !== "object" || model === null || !("roster" in model)) {
+              return false;
+            }
+            const roster = model.roster;
+            if (typeof roster !== "object" || roster === null || !("result" in roster)) {
+              return false;
+            }
+            const result = roster.result;
             return (
               typeof result === "object" &&
               result !== null &&
@@ -85,28 +119,64 @@ async function waitForPersistedWarmState(page: Page, eligible = true): Promise<v
         };
       }),
     )
-    .toEqual({ bootRecord: eligible, roster: eligible, transcript: true });
+    .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
 suite.define(() => {
-  it.each(["matching", "different", "device-token", "trusted-proxy"])(
+  it.each(reloadProfiles)(
     "reconciles the cached shell, roster, and transcript with a %s profile",
     async (profile) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const timestamp = Date.now();
+        const imported = profile === "imported";
+        const shortTail = profile === "short-tail";
+        const olderMessages =
+          profile === "large" || shortTail || imported
+            ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
+                role: shortTail && index >= 1_020 ? "toolResult" : index % 2 ? "assistant" : "user",
+                content: `Older history ${index + 1}`,
+                ...(shortTail && index >= 1_020
+                  ? { toolCallId: `older-tool-${index}`, toolName: "read" }
+                  : {}),
+                __openclaw: {
+                  id: `older-${index + 1}`,
+                  ...(imported ? { importedFrom: "claude-cli" } : { seq: index + 1 }),
+                },
+              }))
+            : [];
+        const rememberedMessage = {
+          role: "assistant",
+          content: transcriptText,
+          openclawResponsesInputReplay: { items: ["retained for reconciliation identity"] },
+          __openclaw: {
+            id: "cached-message",
+            ...(imported ? { importedFrom: "claude-cli" } : { seq: olderMessages.length + 1 }),
+          },
+        };
         const currentRow = {
           key: sessionKey,
           sessionId: "warm-reload-session",
           kind: "direct" as const,
           label: "Warm reload conversation",
+          owner: { actor: { type: "human" as const, id: "profile-a" } },
           updatedAt: timestamp,
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
+          assistantName: "Observatory",
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
           authMode: profile === "trusted-proxy" ? "trusted-proxy" : "token",
-          presenceUsers: [{ id: "profile-a", self: true }],
+          presenceUsers: [
+            {
+              id: "profile-a",
+              self: true,
+              ...(profile === "matching"
+                ? { identity: { type: "profile" as const, id: "profile-a" } }
+                : {}),
+            },
+          ],
           sessions: [
             currentRow,
             {
@@ -114,29 +184,82 @@ suite.define(() => {
               sessionId: "cached-only-session",
               kind: "direct",
               label: "Cached only session",
+              owner: { actor: { type: "human", id: "profile-a" } },
               updatedAt: timestamp - 1,
             },
           ],
           methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { includeOwnerSessionCounts: true },
+                  response: {
+                    ts: timestamp,
+                    path: "",
+                    count: 0,
+                    sessions: [],
+                    defaults: { model: null, modelProvider: null, contextTokens: null },
+                    ownerSessionCounts: [],
+                  },
+                },
+              ],
+            },
             "chat.startup": {
               sessionId: "warm-reload-session",
               sessionInfo: currentRow,
               messages: [
-                {
-                  role: "assistant",
-                  content: transcriptText,
-                  __openclaw: { id: "cached-message", seq: 1 },
-                },
+                ...olderMessages,
+                rememberedMessage,
+                ...(profile === "matching"
+                  ? [
+                      {
+                        role: "user",
+                        content: "Morgan's saved message.",
+                        __openclaw: {
+                          id: "own-message",
+                          seq: 2,
+                          senderId: "profile-a",
+                          senderIdentity: { type: "profile", id: "profile-a" },
+                          senderName: "Morgan",
+                        },
+                      },
+                    ]
+                  : []),
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
+              ...(olderMessages.length ? { totalMessages: olderMessages.length + 1 } : {}),
               metadata: { models: [] },
             },
           },
         });
+        // Observe the mock's real wire response, without reading renderer-owned runtime fields.
+        await page.addInitScript(() => {
+          window.WebSocket = new Proxy(window.WebSocket, {
+            construct(Target, args) {
+              const socket = Reflect.construct(Target, args) as WebSocket;
+              socket.addEventListener("message", (event: MessageEvent) => {
+                if (typeof event.data !== "string") {
+                  return;
+                }
+                const frame = JSON.parse(event.data) as {
+                  type?: string;
+                  payload?: { type?: string };
+                };
+                if (frame.type === "res" && frame.payload?.type === "hello-ok") {
+                  sessionStorage.setItem(
+                    "openclaw.warm-boot-proof.hello",
+                    JSON.stringify(frame.payload),
+                  );
+                }
+              });
+              return socket;
+            },
+          });
+        });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
-            (profile === "device-token" ? "" : "#token=test-token"),
+            (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
@@ -146,44 +269,159 @@ suite.define(() => {
         const transcript = page.locator(".chat-thread-inner");
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
-        await waitForPersistedWarmState(page, profile !== "trusted-proxy");
-        const hello = await page.evaluate(() => {
-          const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-            "openclaw-app",
-          );
-          const snapshot = app?.runtime?.context.gateway.snapshot;
-          if (snapshot?.selfUser?.id !== "profile-a" || !snapshot.hello) {
-            throw new Error("Expected the first connection to belong to profile-a");
-          }
-          return snapshot.hello;
-        });
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+        }
+        await waitForPersistedWarmState(page);
+        const hello: unknown = await page.evaluate(() =>
+          JSON.parse(sessionStorage.getItem("openclaw.warm-boot-proof.hello") ?? "null"),
+        );
+        if (!isRecord(hello) || !isRecord(hello.auth) || !isRecord(hello.snapshot)) {
+          throw new Error("Expected the mock Gateway's first hello response");
+        }
+        expect(hello.snapshot.presence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ user: expect.objectContaining({ id: "profile-a" }) }),
+          ]),
+        );
 
-        await page.reload();
-        const connect = await gateway.waitForRequest("connect");
-        if (profile === "trusted-proxy") {
-          await page.locator(".connect-splash").waitFor();
-          expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-          expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
-          expect(await transcript.getByText(transcriptText, { exact: true }).count()).toBe(0);
+        if (profile === "legacy-rail") {
+          const records = await page.evaluate(async () => {
+            const open = indexedDB.open("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const request = database
+              .transaction("sidebarSnapshots")
+              .objectStore("sidebarSnapshots")
+              .getAll();
+            const saved = await new Promise<Array<{ model: { entries: string[] } }>>(
+              (resolve, reject) => {
+                request.addEventListener("success", () => resolve(request.result));
+                request.addEventListener("error", () =>
+                  reject(request.error ?? new Error("Snapshot read failed")),
+                );
+              },
+            );
+            database.close();
+            for (const record of saved) {
+              record.model.entries = ["route:usage", "route:cron"];
+            }
+            return saved;
+          });
+          expect(records.length).toBeGreaterThan(0);
+          const url = page.url();
+          await page.goto("about:blank");
+          const modules = await holdModuleResponse(page, /\/assets\/.*\.js(?:\?|$)/u);
+          await page.goto(url, { waitUntil: "commit" });
+          await modules.request;
+          await page.evaluate(async (saved) => {
+            const deleted = indexedDB.deleteDatabase("openclaw-chat-snapshots");
+            await new Promise<void>((resolve, reject) => {
+              deleted.addEventListener("success", () => resolve());
+              deleted.addEventListener("error", () =>
+                reject(deleted.error ?? new Error("Snapshot deletion failed")),
+              );
+              deleted.addEventListener("blocked", () =>
+                reject(new Error("Old snapshot database remained open")),
+              );
+            });
+            const open = indexedDB.open("openclaw-chat-snapshots", 6);
+            open.addEventListener("upgradeneeded", () => {
+              for (const name of ["snapshots", "snapshotMetadata", "sidebarSnapshots"]) {
+                open.result.createObjectStore(name, { keyPath: "sessionKey" });
+              }
+            });
+            await new Promise<void>((resolve, reject) => {
+              open.addEventListener("success", () => resolve());
+              open.addEventListener("error", () =>
+                reject(open.error ?? new Error("Legacy snapshot open failed")),
+              );
+            });
+            const database = open.result;
+            const transaction = database.transaction("sidebarSnapshots", "readwrite");
+            for (const record of saved) {
+              transaction.objectStore("sidebarSnapshots").put(record);
+            }
+            await new Promise<void>((resolve, reject) => {
+              transaction.addEventListener("complete", () => resolve());
+              transaction.addEventListener("error", () =>
+                reject(transaction.error ?? new Error("Legacy snapshot write failed")),
+              );
+            });
+            database.close();
+          }, records);
+          modules.release();
+          await gateway.waitForRequest("connect");
+          await sidebar.locator("aside.sidebar").waitFor();
+          expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+          expect(await sidebar.locator("aside.sidebar").getAttribute("data-snapshot-state")).toBe(
+            "live",
+          );
           expect(await gateway.getRequests("sessions.list")).toEqual([]);
-          expect(await gateway.getRequests("chat.startup")).toEqual([]);
-          await waitForPersistedWarmState(page, false);
-          await page.screenshot({ path: path.join(suite.artifactDir, "proxy-before-hello.png") });
           await gateway.resolveDeferred("connect");
           await transcript.getByText(transcriptText, { exact: true }).waitFor();
-          await waitForPersistedWarmState(page, false);
           return;
         }
-        await sidebar.locator(".nav-item--home").waitFor();
+
+        let bootstrapRequests = 0;
+        if (profile === "trusted-proxy") {
+          const documentPath = new URL(page.url()).pathname;
+          await page.route(
+            (url) => url.pathname === documentPath,
+            async (route) => {
+              const response = await route.fetch();
+              const config = {
+                basePath: "",
+                assistantAgentId: "main",
+                assistantName: "Observatory",
+                assistantAvatar: "🔭",
+                terminalEnabled: false,
+                pluginAssetsRequireAuth: true,
+                pluginFrameGrants: [],
+              };
+              await route.fulfill({
+                response,
+                body: (await response.text()).replace(
+                  "<html",
+                  `<html ${CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE}="${escapeHtml(JSON.stringify(config))}"`,
+                ),
+              });
+            },
+          );
+          page.on("request", (request) => {
+            if (new URL(request.url()).pathname.endsWith("/control-ui-config.json")) {
+              bootstrapRequests++;
+            }
+          });
+        }
+        await page.reload();
+        const connect = await gateway.waitForRequest("connect");
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        if (profile === "trusted-proxy") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "bootstrap-before-hello.png"),
+          });
+          expect(bootstrapRequests).toBe(0);
+          await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
+        }
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+        }
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-before-hello.png`),
         });
 
         await gateway.setSessionsListResponse({
+          ownerSessionCounts: [],
           ts: timestamp + 1,
           path: "",
           count: 2,
@@ -195,6 +433,9 @@ suite.define(() => {
               sessionId: "live-only-session",
               kind: "direct",
               label: "Live only session",
+              owner: {
+                actor: { type: "human", id: profile === "different" ? "profile-b" : "profile-a" },
+              },
               updatedAt: timestamp,
             },
           ],
@@ -214,6 +455,8 @@ suite.define(() => {
           await gateway.deferNext("chat.startup");
           await gateway.resolveDeferred("connect", {
             ...hello,
+            // Presence attribution alone does not change the authenticated storage owner.
+            auth: { ...hello.auth, recoveryScope: "e2e-profile-b-recovery-scope" },
             snapshot: {
               ...(typeof hello.snapshot === "object" && hello.snapshot !== null
                 ? hello.snapshot
@@ -245,18 +488,105 @@ suite.define(() => {
           expect(startup.params).toMatchObject({ sessionKey, cursor: "warm-reload-cursor" });
         }
         await gateway.waitForRequest("sessions.list");
-        await sidebar.locator(".nav-item--home").waitFor();
+        await sidebar.locator(".sidebar-footer-bar__home").waitFor();
         await sidebar.getByText("Live only session", { exact: true }).waitFor();
         expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
         await transcript
           .getByText(
             profile === "different" ? "This is profile B's conversation." : transcriptText,
-            { exact: true },
+            {
+              exact: true,
+            },
           )
           .waitFor();
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
+        if (profile === "large" || shortTail || imported) {
+          await waitForChatScrollIdle(page);
+          expect(await gateway.getRequests("chat.history")).toEqual([]);
+          const messages = [
+            ...olderMessages,
+            {
+              ...rememberedMessage,
+              __openclaw: {
+                ...rememberedMessage["__openclaw"],
+                senderProfileAvatarUrl: "/api/users/synthetic/avatar?v=2",
+              },
+            },
+          ];
+          const pageSize = imported ? 50 : 1_000;
+          const firstPage = messages.slice(-pageSize);
+          const hasMore = messages.length > firstPage.length;
+          await gateway.setMethodResponse("chat.history", {
+            cases: [
+              {
+                match: { offset: 0 },
+                response: {
+                  messages: firstPage,
+                  sessionId: currentRow.sessionId,
+                  totalMessages: messages.length,
+                  hasMore,
+                  ...(hasMore ? { nextOffset: pageSize } : {}),
+                },
+              },
+              {
+                match: { offset: pageSize },
+                response: {
+                  messages: messages.slice(0, -pageSize),
+                  sessionId: currentRow.sessionId,
+                  totalMessages: messages.length,
+                  hasMore: false,
+                },
+              },
+            ],
+          });
+          const messageCount = () =>
+            page
+              .locator(".chat-pane-cache__pane--active")
+              .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          const history = await gateway.waitForRequest("chat.history", { match: { offset: 0 } });
+          expect(history.params).toMatchObject({ offset: 0 });
+          await expect.poll(messageCount).toBe(firstPage.length);
+          await page
+            .getByText(
+              `Older history ${Math.max(messages.length - pageSize + 1, olderMessages.length - 79)}`,
+              { exact: true },
+            )
+            .waitFor({ state: "attached" });
+          await waitForChatScrollIdle(page);
+          await page.mouse.wheel(0, -1_000_000);
+          if (hasMore) {
+            const older = await gateway.waitForRequest("chat.history", {
+              match: { offset: pageSize },
+            });
+            expect(older.params).toMatchObject({ offset: pageSize });
+            await expect.poll(messageCount).toBe(messages.length);
+            await page
+              .getByText(`Older history ${messages.length - pageSize}`, { exact: true })
+              .waitFor({ state: "attached" });
+            await page
+              .getByText(`Older history ${messages.length - pageSize + 1}`, { exact: true })
+              .waitFor();
+          } else {
+            await page.getByText("Older history 1", { exact: true }).waitFor();
+          }
+        }
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+          const connectCount = (await gateway.getRequests("connect")).length;
+          const startupCount = (await gateway.getRequests("chat.startup")).length;
+          await gateway.deferNext("connect");
+          await gateway.closeLatest(1001, "Own-message alignment reconnect");
+          await gateway.waitForRequest("connect", { after: connectCount });
+          await expectOwnMessageAlignment(page);
+          await gateway.resolveDeferred("connect");
+          await gateway.waitForRequest("chat.startup", { after: startupCount });
+          await expectOwnMessageAlignment(page);
+        }
       });
     },
   );

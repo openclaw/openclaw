@@ -1,20 +1,32 @@
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
+import {
+  normalizeMediaReferenceForComparison,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readItemString } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
+type GeneratedImageResult = {
+  itemId: string;
+  result: string;
+  revisedPrompt?: string;
+  source: "native" | "raw";
+};
+
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
-  private readonly urlsByItemId = new Map<string, string>();
+  private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
 
@@ -22,7 +34,7 @@ export class CodexGeneratedMediaProjection {
     private readonly config: EmbeddedRunAttemptParams["config"],
     private readonly remote?: {
       remoteWorkspaceRoot?: string;
-      readFile?: CodexRemoteWorkspaceFileReader;
+      readFile?: RemoteWorkspaceFileReader;
       requestTimeoutMs?: number;
       signal?: AbortSignal;
     },
@@ -39,17 +51,20 @@ export class CodexGeneratedMediaProjection {
     // Image generation is already a billable side effect even if its remote
     // artifact cannot be transferred into this gateway's media store.
     this.itemIds.add(item.id);
-    const result = readItemString(item, "result");
+    const savedPath = readString(item, "savedPath")?.trim();
+    if (savedPath) {
+      this.mediaByItemId.set(item.id, { ...this.mediaByItemId.get(item.id), savedPath });
+    }
+    const result = readString(item, "result");
     if (result) {
       await this.recordImage({
         itemId: item.id,
         result,
-        revisedPrompt: readItemString(item, "revisedPrompt"),
+        revisedPrompt: readString(item, "revisedPrompt"),
         source: "native",
       });
       return;
     }
-    const savedPath = readItemString(item, "savedPath")?.trim();
     if (savedPath) {
       if (this.remote?.remoteWorkspaceRoot) {
         if (!this.remote.readFile) {
@@ -59,13 +74,13 @@ export class CodexGeneratedMediaProjection {
           return;
         }
         try {
-          const response = await this.remote.readFile({
+          const bytes = await this.remote.readFile({
             path: savedPath,
             maxBytes: resolveGeneratedMediaMaxBytes(this.config, "image"),
             signal: this.remote.signal,
             timeoutMs: this.remote.requestTimeoutMs,
           });
-          if (!response || typeof response.dataBase64 !== "string" || !response.dataBase64) {
+          if (!bytes.length) {
             embeddedAgentLog.warn("codex remote image file returned no inline bytes", {
               itemId: item.id,
             });
@@ -73,8 +88,8 @@ export class CodexGeneratedMediaProjection {
           }
           await this.recordImage({
             itemId: item.id,
-            result: response.dataBase64,
-            revisedPrompt: readItemString(item, "revisedPrompt"),
+            result: bytes.toString("base64"),
+            revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
         } catch (error) {
@@ -85,7 +100,10 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
-      this.recordUrl({ itemId: item.id, mediaUrl: savedPath });
+      const existing = this.mediaByItemId.get(item.id);
+      if (!existing?.mediaUrl) {
+        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+      }
     }
   }
 
@@ -106,12 +124,7 @@ export class CodexGeneratedMediaProjection {
     });
   }
 
-  private async recordImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async recordImage(params: GeneratedImageResult): Promise<void> {
     this.itemIds.add(params.itemId);
     if (this.gatewayMaterializedItemIds.has(params.itemId)) {
       return;
@@ -138,15 +151,10 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  private async materializeImage(params: {
-    itemId: string;
-    result: string;
-    revisedPrompt?: string;
-    source: "native" | "raw";
-  }): Promise<void> {
+  private async materializeImage(params: GeneratedImageResult): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
-    if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
+    if (estimatedDecodedBytes > maxBytes) {
       embeddedAgentLog.warn(
         `codex app-server ${params.source} image generation result exceeds media limit`,
         {
@@ -176,12 +184,11 @@ export class CodexGeneratedMediaProjection {
         asset.fileName,
       );
       this.gatewayMaterializedItemIds.add(params.itemId);
-      this.recordUrl({
-        itemId: params.itemId,
+      // Both Codex event shapes can carry a DevBox-local savedPath; channel
+      // delivery must always use the copy materialized on this gateway.
+      this.mediaByItemId.set(params.itemId, {
+        ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
-        // Both Codex event shapes can carry a DevBox-local savedPath; channel
-        // delivery must always use the copy materialized on this gateway.
-        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -194,58 +201,61 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  buildToolMediaUrls(params: {
+  projectDelivery(params: {
     toolMediaUrls?: string[];
-    messagingToolSentMediaUrls?: string[];
-  }): string[] | undefined {
-    const mediaUrls = new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []);
-    if ((params.messagingToolSentMediaUrls?.length ?? 0) === 0) {
-      for (const mediaUrl of this.urlsByItemId.values()) {
-        mediaUrls.add(mediaUrl);
+    messagingToolSentMediaUrls: string[];
+    messagingToolSentTargets: MessagingToolSend[];
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
+  }) {
+    const generatedUrls = new Set<string>();
+    const generatedUrlBySource = new Map<string, string>();
+    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
+      if (!mediaUrl) {
+        continue;
+      }
+      generatedUrls.add(mediaUrl);
+      generatedUrlBySource.set(normalizeMediaReferenceForComparison(mediaUrl), mediaUrl);
+      if (savedPath) {
+        generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
       }
     }
-    return mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls;
-  }
-
-  buildHostOwnedMediaUrls(params: { messagingToolSentMediaUrls?: string[] }): string[] | undefined {
-    if ((params.messagingToolSentMediaUrls?.length ?? 0) > 0) {
-      return undefined;
+    const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
+    const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
+    for (const delivery of params.confirmedMediaDeliveries ?? []) {
+      for (const sourceUrl of delivery.sourceUrls) {
+        const generatedUrl = generatedUrlBySource.get(
+          normalizeMediaReferenceForComparison(sourceUrl),
+        );
+        if (!generatedUrl) {
+          continue;
+        }
+        if (delivery.kind === "sourceReply") {
+          // The source reply already owns its real attachment and transcript mirror.
+          generatedUrls.delete(generatedUrl);
+        } else {
+          const targetUrls = generatedUrlsByTarget.get(delivery.target) ?? new Set<string>();
+          targetUrls.add(generatedUrl);
+          generatedUrlsByTarget.set(delivery.target, targetUrls);
+          sentMediaUrls.add(generatedUrl);
+        }
+      }
     }
-    const mediaUrls = [...this.urlsByItemId.values()];
-    return mediaUrls.length > 0 ? mediaUrls : undefined;
-  }
-
-  private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    if (this.urlsByItemId.has(params.itemId) && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
-      return;
+    const mediaUrls = new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []);
+    for (const mediaUrl of generatedUrls) {
+      mediaUrls.add(mediaUrl);
     }
-    this.urlsByItemId.set(params.itemId, params.mediaUrl);
-    this.itemIds.add(params.itemId);
+    return {
+      toolMediaUrls: mediaUrls.size > 0 ? [...mediaUrls] : params.toolMediaUrls,
+      hostOwnedToolMediaUrls: generatedUrls.size > 0 ? [...generatedUrls] : undefined,
+      messagingToolSentMediaUrls: [...sentMediaUrls],
+      messagingToolSentTargets: params.messagingToolSentTargets.map((target) => {
+        const aliases = generatedUrlsByTarget.get(target);
+        return aliases
+          ? { ...target, mediaUrls: [...new Set([...(target.mediaUrls ?? []), ...aliases])] }
+          : target;
+      }),
+    };
   }
-}
-
-function estimateBase64DecodedBytes(base64: string): number | undefined {
-  let nonWhitespaceLength = 0;
-  let previousCode = -1;
-  let lastCode = -1;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (isBase64WhitespaceCode(code)) {
-      continue;
-    }
-    nonWhitespaceLength += 1;
-    previousCode = lastCode;
-    lastCode = code;
-  }
-  if (nonWhitespaceLength === 0) {
-    return undefined;
-  }
-  const equalsCode = "=".charCodeAt(0);
-  const padding = lastCode === equalsCode ? (previousCode === equalsCode ? 2 : 1) : 0;
-  return Math.max(0, Math.floor((nonWhitespaceLength * 3) / 4) - padding);
-}
-
-function isBase64WhitespaceCode(code: number): boolean {
-  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
 }

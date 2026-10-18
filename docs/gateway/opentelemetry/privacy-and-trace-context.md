@@ -50,9 +50,10 @@ tool source, tool owner, skill name/source) and never include prompt text,
 response text, tool inputs, tool outputs, skill file paths, or session keys.
 Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
-records keep severity, logger, code location, trusted trace context, and
+records keep severity, logger, available code locations, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
-when `diagnostics.otel.captureContent` is `true`. Talk metrics export only
+when `diagnostics.otel.captureContent` is `true`. Subsystem `info` records omit code
+locations to avoid capturing a stack for each routine message. Talk metrics export only
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.
@@ -72,6 +73,19 @@ inputs, tool outputs, tool definitions, and OTLP log bodies. System prompts
 remain excluded. Provider-internal `thinking` and `redacted_thinking` payloads
 are also excluded: compatibility attributes retain only a redacted structural
 marker, while GenAI message attributes omit those parts.
+
+The same setting also exports the bounded, redacted turn prompt and the model's
+final answer as `input.value` and `output.value` on `openclaw.message.processed`,
+`openclaw.harness.run`, and `openclaw.run` spans. Operators who already enable
+`captureContent` receive these attributes after upgrading; see the
+[upgrade note](/gateway/opentelemetry/spans-and-events).
+
+Completed assistant commentary uses the same setting. With content capture
+off, commentary events contain timing, sequence, harness, and text-length
+metadata only. With it on, each event can include up to 16,384 characters of
+visible commentary through the existing redacted output-message attributes.
+Commentary text never enters ordinary diagnostic logs or public diagnostic
+events.
 
 `toolInputs`/`toolOutputs` content is captured for the built-in agent
 runtime's tool executions (`openclaw.content.tool_input` and

@@ -201,19 +201,27 @@ struct CameraControllerCancellationTests {
     @Test func `cancellation before did-start requests one stop`() async {
         let probe = CameraCancellationProbe()
         let started = AsyncStream<Void>.makeStream()
+        let stopped = AsyncStream<Void>.makeStream()
         let recording = CameraMovieRecordingOperation(
             startAction: { _ in
                 probe.startMovie()
                 started.continuation.yield()
                 started.continuation.finish()
             },
-            stopAction: { probe.stopMovie() })
+            stopAction: {
+                probe.stopMovie()
+                stopped.continuation.yield()
+                stopped.continuation.finish()
+            })
         let task = Task { try await recording.run() }
         for await _ in started.stream {
             break
         }
 
         recording.cancel()
+        for await _ in stopped.stream {
+            break
+        }
         #expect(probe.counts().movieStops == 1)
         recording.recordingDidStart()
         recording.cancel()

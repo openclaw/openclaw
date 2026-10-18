@@ -1,25 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { assignSessionOwner, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { isSessionCreatorProfile } from "./session-creator.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
-  canReceiveSessionEvent,
   createSessionListEntryFilter,
-  invalidateSessionSharingSnapshot,
-  resolveSessionMutationAuthorization,
   resolveSessionSharingRole,
-  resolveSessionSharingTarget,
+  resolveSessionSharingTargetAsync,
 } from "./session-sharing.js";
+import { canReceivePreparedSessionEvent } from "./session-sharing.test-utils.js";
 
 describe("creator namespace authorization", () => {
   it("reuses caller alias facts across rows and refreshes them after a real merge", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const caller = ensureProfileForEmail("cached-caller@example.test");
       const other = ensureProfileForEmail("cached-other@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const actor = { type: "human", source: "profile", id: other.id } as const;
       const db = openOpenClawStateDatabase().db;
       const prepare = vi.spyOn(db, "prepare");
@@ -27,15 +30,15 @@ describe("creator namespace authorization", () => {
         expect(isSessionCreatorProfile({ ...actor, source: "channel" }, caller.id)).toBe(false);
         expect(prepare).not.toHaveBeenCalled();
         expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
-        const coldQueries = prepare.mock.calls.length;
-        expect(coldQueries).toBeGreaterThan(0);
         for (let row = 0; row < 100; row++) {
           expect(isSessionCreatorProfile(actor, caller.id)).toBe(false);
         }
-        expect(prepare).toHaveBeenCalledTimes(coldQueries);
+        expect(prepare).not.toHaveBeenCalled();
         linkEmail("cached-other@example.test", caller.id);
+        prepare.mockClear();
         expect(isSessionCreatorProfile(actor, caller.id)).toBe(true);
         expect(isSessionCreatorProfile({ ...actor, source: "unknown" }, caller.id)).toBe(false);
+        expect(prepare).not.toHaveBeenCalled();
       } finally {
         prepare.mockRestore();
       }
@@ -43,8 +46,9 @@ describe("creator namespace authorization", () => {
   });
 
   it("never turns matching attribution or responsibility into a profile creator grant", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("creator@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.read", "operator.write"] },
         authenticatedUserProfile: { profileId: profile.id },
@@ -63,6 +67,7 @@ describe("creator namespace authorization", () => {
           },
         },
       };
+      setRuntimeConfigSnapshot(cfg);
       const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
       const actors = [
         { type: "human", source: "profile" },
@@ -88,7 +93,7 @@ describe("creator namespace authorization", () => {
             assignedBy: { type: "human", id: profile.id },
           },
         );
-        const target = resolveSessionSharingTarget({ cfg, sessionKey });
+        const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey });
         if (!target) {
           throw new Error("missing persisted session");
         }
@@ -105,13 +110,17 @@ describe("creator namespace authorization", () => {
         for (let pass = 0; pass < 2; pass++) {
           expect
             .soft(
-              canReceiveSessionEvent({ cfg, client: client as never, sessionKeys: [sessionKey] }),
+              await canReceivePreparedSessionEvent({
+                cfg,
+                client: client as never,
+                sessionKeys: [sessionKey],
+              }),
               sessionKey,
             )
             .toBe(isCreator);
         }
         for (const method of ["sessions.get", "sessions.patch"]) {
-          const result = resolveSessionMutationAuthorization({
+          const result = await resolveSessionMutationAuthorizationAsync({
             client,
             method,
             requestParams: { key: sessionKey },
@@ -120,14 +129,15 @@ describe("creator namespace authorization", () => {
           expect.soft(result.error === null, `${sessionKey}: ${method}`).toBe(isCreator);
         }
       }
-      invalidateSessionSharingSnapshot();
     });
   });
 
   it("resolves profile tombstones after warming event snapshots without rewriting creators", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      setRuntimeConfigSnapshot({});
       const old = ensureProfileForEmail("old@example.test");
       const current = ensureProfileForEmail("current@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = {
         connect: { scopes: ["operator.read"] },
         authenticatedUserProfile: { profileId: current.id },
@@ -143,19 +153,22 @@ describe("creator namespace authorization", () => {
           createdActor: { type: "human", source: "profile", id: old.id },
         },
       );
-      const receive = () =>
-        canReceiveSessionEvent({ cfg: {}, client: client as never, sessionKeys: [sessionKey] });
-      expect(receive()).toBe(false);
+      const receive = async () =>
+        await canReceivePreparedSessionEvent({
+          cfg: {},
+          client: client as never,
+          sessionKeys: [sessionKey],
+        });
+      expect(await receive()).toBe(false);
       linkEmail("old@example.test", current.id);
-      expect(receive()).toBe(true);
-      const target = resolveSessionSharingTarget({ cfg: {}, sessionKey });
+      expect(await receive()).toBe(true);
+      const target = await resolveSessionSharingTargetAsync({ cfg: {}, sessionKey });
       if (!target) {
         throw new Error("missing merged creator session");
       }
       expect(target.entry.createdActor?.id).toBe(old.id);
       expect(resolveSessionSharingRole({ client, target, isMember: false })).toBe("owner");
       expect(createSessionListEntryFilter({ client })?.(sessionKey, target.entry)).toBe(true);
-      invalidateSessionSharingSnapshot();
     });
   });
 });

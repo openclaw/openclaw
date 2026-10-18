@@ -6,6 +6,17 @@ import type { Mock } from "vitest";
 import { createChatRunState, type ChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
+type TestChatRunRecord =
+  ReturnType<typeof createChatRunState>["runs"] extends Map<string, infer Record> ? Record : never;
+
+export function createAbortTestRunState(entries: Array<[string, Partial<TestChatRunRecord>]>) {
+  const state = createChatRunState();
+  for (const [runId, record] of entries) {
+    Object.assign(state.getOrCreate(runId), record);
+  }
+  return state;
+}
+
 export function createActiveRun(
   sessionKey: string,
   params: {
@@ -42,7 +53,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   agentRunSeq: Map<string, number>;
   broadcast: (...args: unknown[]) => void;
   nodeSendToSession: (...args: unknown[]) => void;
-  logGateway: { warn: (...args: unknown[]) => void };
+  logGateway: { info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void };
 };
 
 type ChatAbortRespondMock = Mock<RespondFn>;
@@ -66,7 +77,7 @@ export function createChatAbortContext(
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
-    logGateway: { warn: vi.fn() },
+    logGateway: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
   } as ChatAbortTestContext;
   return context;
@@ -80,6 +91,7 @@ export async function invokeChatAbortHandler(params: {
     agentId?: string;
     runId?: string;
     preserveSideRuns?: boolean;
+    discardPendingInput?: boolean;
   };
   client?: {
     connId?: string;

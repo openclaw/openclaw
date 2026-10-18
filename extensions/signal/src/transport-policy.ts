@@ -1,4 +1,3 @@
-// Signal transport policy centralizes local endpoint collision handling.
 import type { SignalTransportConfig } from "./account-types.js";
 import { normalizeSignalTransportUrl } from "./transport-url.js";
 
@@ -27,6 +26,38 @@ function isSignalLocalEndpointHost(hostname: string): boolean {
 
 export function isValidSignalManagedNativePort(value: unknown): value is number {
   return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= 65_535;
+}
+
+// Runtime and setup choose different accounts; share only endpoint reservations.
+// A true result leaves the caller to allocate an implicit managed bind in account order.
+export function reserveSignalTransportPorts(
+  transport: SignalTransportConfig | undefined,
+  reservedPorts: Set<number>,
+): boolean {
+  if (transport?.kind === "managed-native") {
+    if (transport.socketPath !== undefined) {
+      return false;
+    }
+    const httpPort = transport.httpPort;
+    if (httpPort !== undefined) {
+      reservedPorts.add(httpPort);
+    }
+    if (transport.url && !isSignalManagedNativeConnectionUrlForBind(transport)) {
+      const localConnectionPort = resolveLocalSignalTransportPort(transport.url);
+      if (localConnectionPort !== undefined) {
+        reservedPorts.add(localConnectionPort);
+      }
+    }
+    return httpPort === undefined;
+  }
+  if (transport?.kind === "external-native" || transport?.kind === "container") {
+    const localPort = resolveLocalSignalTransportPort(transport.url);
+    if (localPort !== undefined) {
+      reservedPorts.add(localPort);
+    }
+    return false;
+  }
+  return true;
 }
 
 export function allocateSignalManagedNativePort(params: {

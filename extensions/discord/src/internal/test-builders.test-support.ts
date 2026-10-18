@@ -4,7 +4,8 @@ import { vi, type Mock } from "vitest";
 import { Client } from "./client.js";
 import type { DiscordCommand } from "./commands.js";
 import type { RawInteraction } from "./interactions.js";
-import type { RequestClient, RequestData } from "./rest.js";
+import type { RequestData } from "./rest-body.js";
+import type { RequestClient } from "./rest.js";
 
 type ClientOptions = ConstructorParameters<typeof Client>[0];
 type RequestQuery = Parameters<RequestClient["get"]>[1];
@@ -25,7 +26,6 @@ type FakeRestCall = {
 
 type FakeRestClient = RequestClient & {
   calls: FakeRestCall[];
-  enqueueResponse: (value: unknown) => void;
 };
 
 export function createJsonResponse(body: unknown, init?: ResponseInit): Response {
@@ -60,9 +60,7 @@ export function createInternalTestClient(
 ): Client {
   return new Client(
     {
-      baseUrl: "http://localhost",
       clientId: "app1",
-      publicKey: "public",
       token: "token",
       ...options,
     },
@@ -101,9 +99,6 @@ export function createFakeRestClient(responses: unknown[] = []): FakeRestClient 
   };
   return {
     calls,
-    enqueueResponse: (value: unknown) => {
-      queued.push(value);
-    },
     get: async (path, query) => await request("GET", path, undefined, query),
     post: async (path, data, query) => await request("POST", path, data, query),
     patch: async (path, data, query) => await request("PATCH", path, data, query),

@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "../llm/types.js";
 
 export const ASSISTANT_DISPLAY_CONTENT_FIELD = "openclawDisplayContent";
@@ -37,12 +37,7 @@ export function readAssistantDisplayContent(message: unknown): Record<string, un
   }
   const display = record[ASSISTANT_DISPLAY_CONTENT_FIELD];
   const content = Array.isArray(display) ? display : record.content;
-  return Array.isArray(content)
-    ? content.flatMap((block) => {
-        const entry = asOptionalRecord(block);
-        return entry ? [entry] : [];
-      })
-    : [];
+  return Array.isArray(content) ? content.filter(isRecord) : [];
 }
 
 export function projectAssistantDisplayContent(

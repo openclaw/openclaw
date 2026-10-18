@@ -1,15 +1,22 @@
-import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripCompactionReplayCheckpoint } from "../../../../ai/src/transports/provider-compaction-checkpoint.js";
+import { getOpenClawSystemUpdateKind } from "../../operator-messages.js";
 import type { AgentMessage } from "../../types.js";
 import {
-  asAgentMessage,
   createBranchSummaryMessage,
   createCompactionSummaryMessage,
   createCustomMessage,
 } from "../messages.js";
 import type { SessionContext, SessionTreeEntry } from "../types.js";
 import { selectResetKeptEntries } from "./tool-result-pairing.js";
+import { isTranscriptArtifactProvider } from "./transcript-model.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+function isExcludedCustomMessage(entry: Extract<SessionTreeEntry, { type: "custom_message" }>) {
+  // Existing failure receipts predate the generic context exclusion marker.
+  return entry.excludeFromContext === true || entry.customType === "run-failed-before-reply";
+}
 
 /** The same semantic cut is used before payload acquisition and when building messages. */
 function resolveSessionContextWindow(
@@ -37,23 +44,20 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
         ? undefined
         : entry.message;
     case "custom_message":
-      return asAgentMessage(
-        createCustomMessage(
-          entry.customType,
-          entry.content,
-          entry.display,
-          entry.details,
-          entry.timestamp,
-        ),
+      if (isExcludedCustomMessage(entry)) {
+        return undefined;
+      }
+      return createCustomMessage(
+        entry.customType,
+        entry.content,
+        entry.display,
+        entry.details,
+        entry.timestamp,
       );
     case "branch_summary":
-      return asAgentMessage(
-        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
-      );
+      return createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp);
     case "compaction":
-      return asAgentMessage(
-        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-      );
+      return createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp);
     default:
       return undefined;
   }
@@ -64,6 +68,16 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
 ): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
   const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
+  // A rebuilt prefix retires prompt overrides; retained turns still own their runtime facts.
+  const operatorBoundaryIndex = Math.max(
+    boundaryIndex,
+    pathEntries.findLastIndex(
+      (entry) =>
+        entry.type === "custom" &&
+        entry.customType === "openclaw.system-prompt" &&
+        asOptionalRecord(entry.data)?.restart === true,
+    ),
+  );
   const boundary = pathEntries[boundaryIndex];
   const resetKept =
     boundary?.type === "reset"
@@ -72,12 +86,17 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   if (boundary) {
     yield { entry: boundary, context: "current" };
   }
-  for (const [index, entry] of pathEntries.entries()) {
+  let index = -1;
+  for (const entry of pathEntries) {
+    index += 1;
     const retained = index < boundaryIndex;
     if (
       index === boundaryIndex ||
       (retained && (index < firstKeptIndex || (resetKept && !resetKept.has(entry))))
     ) {
+      continue;
+    }
+    if (index < operatorBoundaryIndex && getOpenClawSystemUpdateKind(entry) === "prompt-update") {
       continue;
     }
     const hasMessage =
@@ -86,6 +105,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
       entry.type === "branch_summary";
     if (
       !hasMessage ||
+      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
       (!resetKept?.has(entry) &&
         entry.type === "message" &&
         "excludeFromContext" in entry.message &&
@@ -141,9 +161,13 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
   for (const entry of pathEntries) {
     if (entry.type === "thinking_level_change") {
       thinkingLevel = entry.thinkingLevel;
-    } else if (entry.type === "model_change") {
+    } else if (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) {
       model = { provider: entry.provider, modelId: entry.modelId };
-    } else if (entry.type === "message" && entry.message.role === "assistant") {
+    } else if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !isTranscriptArtifactProvider(entry.message.provider)
+    ) {
       model = { provider: entry.message.provider, modelId: entry.message.model };
     }
   }

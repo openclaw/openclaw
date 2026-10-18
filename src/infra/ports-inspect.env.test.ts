@@ -47,6 +47,8 @@ async function checkDiagnostics(family: "single" | "batch" | "connections", fall
     ? `0 0 127.0.0.1:${port} 127.0.0.1:54321 users:(("node",pid=424242,fd=1))\n`
     : `LISTEN 0 128 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=424242,fd=1))\n`;
   try {
+    // TMPDIR can live inside an ESM checkout; these executable fixtures use require.
+    await writeFile(path.join(root, "package.json"), '{"type":"commonjs"}');
     for (const command of ["lsof", "ss", "ps"]) {
       await writeFile(
         path.join(root, command),
@@ -75,7 +77,7 @@ if (command === 'lsof') {
         );
         expect(result.code).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
-          present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, true])),
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, true])),
           routingPreserved: true,
         });
       };
@@ -106,7 +108,7 @@ if (command === 'lsof') {
       for (const entry of reports) {
         expect(entry, `${entry.command} inherited canary presence`).toEqual({
           command: entry.command,
-          present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
           routingPreserved: true,
         });
       }

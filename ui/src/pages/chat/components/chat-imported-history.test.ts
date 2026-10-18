@@ -1,24 +1,27 @@
-import { nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { projectImportedMessageForDisplay } from "../../../lib/chat/imported-message-display.ts";
+import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { renderGroupedMessage } from "./chat-message-bubble.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
-  renderMessageActionButtons,
+  MessageActions,
   resolveMessageActionDetails,
-} from "./chat-message-markdown.ts";
-import { resolveMessageDisplayMarkdown } from "./chat-message-text.ts";
+} from "./chat-message-markdown-view.tsx";
 
 const importKey = "example-catalog:thread:item";
 const wrap = (text: string) =>
   wrapExternalContent(text, { source: "unknown", includeWarning: false }).trim();
 const container = document.createElement("div");
+let root: ReturnType<typeof mountSolid> | undefined;
 
 afterEach(() => {
-  render(nothing, container);
+  root?.unmount();
+  root = undefined;
   vi.unstubAllGlobals();
 });
 
@@ -64,12 +67,14 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
   it("renders the body as Markdown and uses it for reply and copy actions", async () => {
     const body = "Imported **answer**\n\n~~~ts\nconst answer = 42;\n~~~";
     const message = { role, content: wrap(body), __openclaw: { idempotencyKey: importKey } };
-    render(
-      renderGroupedMessage(prepareChatMessageRender(message), "imported", {
-        isStreaming: false,
-        showReasoning: false,
-      }),
-      container,
+    root = mountSolid(
+      () =>
+        createComponent(GroupedMessage, {
+          preparation: prepareChatMessageRender(message),
+          messageKey: "imported",
+          options: { isStreaming: false, showReasoning: false },
+        }),
+      { container },
     );
     expect(container.querySelector(".chat-text strong")?.textContent).toBe("answer");
     expect(container.querySelector("pre code")?.textContent?.trimEnd()).toBe("const answer = 42;");
@@ -87,11 +92,30 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       const writeText = vi.fn().mockResolvedValue(undefined);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       expect(details?.markdown).toBe(body);
-      render(renderMessageActionButtons(details!, { onReply }), container);
+      root.unmount();
+      root = mountSolid(() => createComponent(MessageActions, { details, options: { onReply } }), {
+        container,
+      });
       container.querySelector<HTMLButtonElement>(".chat-copy-btn")!.click();
       await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(body));
     }
   });
+
+  it("preserves CRLF body whitespace while removing only framing", () => {
+    const body = "  First\r\n\r\nSecond  ";
+    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
+    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
+    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
+    // Assistant media parsing already trims trailing whitespace; retain that display contract.
+    expect(normalizeMessage(message).content).toEqual(
+      normalizeMessage({ role, content: body }).content,
+    );
+    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
+  });
+});
+
+describe("imported history framing", () => {
+  const role = "assistant";
 
   it.each([
     ["fenced example", (text: string) => "~~~text\n" + text + "\n~~~"],
@@ -115,18 +139,6 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     expect(displayed(message)).toBe(content);
   });
 
-  it("preserves CRLF body whitespace while removing only framing", () => {
-    const body = "  First\r\n\r\nSecond  ";
-    const content = wrap(body).replaceAll("\n", "\r\n").replaceAll("\r\r\n", "\r\n");
-    const message = { role, content, __openclaw: { idempotencyKey: importKey } };
-    expect(projectImportedMessageForDisplay(message)).toEqual({ ...message, content: body });
-    // Assistant media parsing already trims trailing whitespace; retain that display contract.
-    expect(normalizeMessage(message).content).toEqual(
-      normalizeMessage({ role, content: body }).content,
-    );
-    expect(displayed(message)).toBe(role === "assistant" ? "  First\r\n\r\nSecond" : body);
-  });
-
   it.each(["\n", "\r\n", "Thinking\n\n\n"])(
     "preserves extra leading separators %j instead of treating them as import framing",
     (prefix) => {
@@ -135,9 +147,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
       const message = { role, content, __openclaw: { idempotencyKey: importKey } };
       expect(projectImportedMessageForDisplay(message)).toEqual(message);
       // Assistant display removes leading blank lines, without unwrapping an ineligible frame.
-      expect(displayed(message)).toBe(
-        role === "assistant" && (prefix === "\n" || prefix === "\r\n") ? framed : content,
-      );
+      expect(displayed(message)).toBe(prefix === "\n" || prefix === "\r\n" ? framed : content);
       expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     },
   );
@@ -147,7 +157,7 @@ describe.each(["user", "assistant"])("imported %s history presentation", (role) 
     const content = framed + suffix;
     const message = { role, content, __openclaw: { idempotencyKey: importKey } };
     expect(projectImportedMessageForDisplay(message)).toEqual(message);
-    expect(displayed(message)).toBe(role === "assistant" ? framed : content);
+    expect(displayed(message)).toBe(framed);
     expect(extractText(message)).toContain("EXTERNAL_UNTRUSTED_CONTENT");
   });
 

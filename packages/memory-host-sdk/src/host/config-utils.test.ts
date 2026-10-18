@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfigWithLegacyRoster } from "../../../../src/config/legacy.roster.js";
 import {
   normalizeConfiguredMemoryExtraPaths,
   resolveMemoryHostAgentWorkspaceDir,
@@ -190,7 +191,7 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     }
   });
 
-  it("preserves legacy state precedence for secondary agents without moving the default workspace", async () => {
+  it("uses canonical workspaces even when only the legacy state directory exists", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-state-"));
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, support: {} } } };
     const env = { HOME: home };
@@ -199,7 +200,7 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     try {
       await fs.mkdir(legacy);
       expect(resolveMemoryHostAgentWorkspaceDir(cfg, "support", env)).toBe(
-        path.join(legacy, "workspace-support"),
+        path.join(current, "workspace-support"),
       );
       expect(resolveMemoryHostAgentWorkspaceDir(cfg, "main", env)).toBe(
         path.join(current, "workspace"),
@@ -226,6 +227,22 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
     }
   });
 
+  it("preserves marked legacy default workspace inheritance", () => {
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        list: [{ id: "first" }, { id: "support", default: true }],
+        defaults: { workspace: "~/shared" },
+      },
+    };
+    const env = { HOME: "/home/fixture" };
+    expect(resolveMemoryHostAgentWorkspaceDir(cfg, "support", env)).toBe(
+      path.resolve("/home/fixture/shared"),
+    );
+    expect(resolveMemoryHostAgentWorkspaceDir(cfg, "first", env)).toBe(
+      path.resolve("/home/fixture/shared/first"),
+    );
+  });
+
   it.each<{
     name: string;
     agents: NonNullable<OpenClawConfig["agents"]>;
@@ -237,13 +254,16 @@ describe("resolveMemoryHostAgentWorkspaceDir", () => {
       expected: { main: "shared", support: "shared/support" },
     },
     {
-      name: "marked legacy default",
-      agents: { list: [{ id: "first" }, { id: "support", default: true }] },
+      name: "explicit secondary workspace ownership",
+      agents: {
+        ownership: "explicit",
+        entries: { first: {}, support: { workspace: "~/shared" } },
+      },
       expected: { first: "shared/first", support: "shared" },
     },
     {
-      name: "optional legacy list id and explicit workspace",
-      agents: { list: [{ workspace: "~/anonymous" }, { id: "support" }] },
+      name: "explicit main workspace",
+      agents: { entries: { main: { workspace: "~/anonymous" }, support: {} } },
       expected: { main: "anonymous", support: "shared/support" },
     },
   ])("preserves $name", ({ agents, expected }) => {

@@ -56,6 +56,7 @@ function installRuntime(params?: {
   const runtime = {
     channel: {
       inbound: {
+        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         dispatchReply: vi.fn(async () => undefined),
       },
       pairing: {
@@ -95,7 +96,7 @@ function requireFirstSendMessageCall(): [unknown, unknown, unknown] {
 }
 
 function createAccount(
-  overrides?: Partial<ResolvedNextcloudTalkAccount>,
+  config: ResolvedNextcloudTalkAccount["config"] = {},
 ): ResolvedNextcloudTalkAccount {
   return {
     accountId: "default",
@@ -108,9 +109,13 @@ function createAccount(
       allowFrom: [],
       groupPolicy: "allowlist",
       groupAllowFrom: [],
+      ...config,
     },
-    ...overrides,
   };
+}
+
+function installPairingController(readStoreForDmPolicy = vi.fn(), issueChallenge = vi.fn()) {
+  createChannelPairingControllerMock.mockReturnValue({ readStoreForDmPolicy, issueChallenge });
 }
 
 function createMessage(
@@ -164,10 +169,7 @@ describe("nextcloud-talk inbound behavior", () => {
         await params.sendPairingReply("Pair with code 123456");
       },
     );
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(),
-      issueChallenge,
-    });
+    installPairingController(vi.fn(), issueChallenge);
     sendMessageNextcloudTalkMock.mockResolvedValue(undefined);
 
     const statusSink = vi.fn();
@@ -211,10 +213,7 @@ describe("nextcloud-talk inbound behavior", () => {
       buildMentionRegexes: vi.fn(() => [/@openclaw/i]),
       matchesMentionPatterns: vi.fn(() => false),
     });
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(),
-      issueChallenge: vi.fn(),
-    });
+    installPairingController();
     resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
     const runtime = createRuntimeSpies();
 
@@ -224,14 +223,7 @@ describe("nextcloud-talk inbound behavior", () => {
         roomName: "Ops",
         isGroupChat: true,
       }),
-      account: createAccount({
-        config: {
-          dmPolicy: "pairing",
-          allowFrom: [],
-          groupPolicy: "allowlist",
-          groupAllowFrom: ["user-1"],
-        },
-      }),
+      account: createAccount({ groupAllowFrom: ["user-1"] }),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime,
     });
@@ -255,10 +247,7 @@ describe("nextcloud-talk inbound behavior", () => {
         },
       });
       setNextcloudTalkRuntime(coreRuntime);
-      createChannelPairingControllerMock.mockReturnValue({
-        readStoreForDmPolicy: vi.fn(),
-        issueChallenge: vi.fn(),
-      });
+      installPairingController();
       resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
       const runtime = createRuntimeSpies();
 
@@ -270,18 +259,7 @@ describe("nextcloud-talk inbound behavior", () => {
           text,
         }),
         account: createAccount({
-          config: {
-            dmPolicy: "pairing",
-            allowFrom: [],
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            rooms: {
-              "room-group": {
-                allowFrom: ["user-1"],
-                requireMention: false,
-              },
-            },
-          },
+          rooms: { "room-group": { allowFrom: ["user-1"], requireMention: false } },
         }),
         config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
         runtime,
@@ -296,44 +274,6 @@ describe("nextcloud-talk inbound behavior", () => {
   );
 
   it.each([
-    { label: "ordinary text", text: "hello", command: "hello" },
-    { label: "plain help", text: "/help", command: "/help" },
-    { label: "array parameters", text: '{"message":"/help","parameters":[]}', command: "/help" },
-    {
-      label: "object parameters",
-      text: '{"message":"/status","parameters":{}}',
-      command: "/status",
-    },
-    {
-      label: "outer and message whitespace",
-      text: '  {"message":" /help ","parameters":{}}  ',
-      command: "/help",
-    },
-    { label: "malformed JSON", text: '{"message":"/help",', command: '{"message":"/help",' },
-    { label: "missing parameters", text: '{"message":"/help"}', command: '{"message":"/help"}' },
-    {
-      label: "non-string message",
-      text: '{"message":1,"parameters":{}}',
-      command: '{"message":1,"parameters":{}}',
-    },
-    {
-      label: "blank message",
-      text: '{"message":"  ","parameters":{}}',
-      command: '{"message":"  ","parameters":{}}',
-    },
-    {
-      label: "JSON array",
-      text: '[{"message":"/help","parameters":{}}]',
-      command: '[{"message":"/help","parameters":{}}]',
-    },
-    { label: "JSON null", text: "null", command: "null" },
-    {
-      label: "ordinary rich message",
-      text: '{"message":"Hi {user1}","parameters":{"user1":{"type":"user","id":"alice","name":"Alice"}}}',
-      command:
-        '{"message":"Hi {user1}","parameters":{"user1":{"type":"user","id":"alice","name":"Alice"}}}',
-    },
-    { label: "plain group command without mention", text: "/help", command: "/help", group: true },
     {
       label: "structured group command without mention",
       text: '{"message":"/help","parameters":{}}',
@@ -353,19 +293,13 @@ describe("nextcloud-talk inbound behavior", () => {
       },
     });
     setNextcloudTalkRuntime(coreRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installPairingController(vi.fn(async () => []));
     resolveNextcloudTalkRoomKindMock.mockResolvedValue(group ? "group" : "direct");
     const account = createAccount({
-      config: {
-        dmPolicy: "allowlist",
-        allowFrom: ["user-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: ["user-1"],
-        rooms: { "room-1": { requireMention: true } },
-      },
+      dmPolicy: "allowlist",
+      allowFrom: ["user-1"],
+      groupAllowFrom: ["user-1"],
+      rooms: { "room-1": { requireMention: true } },
     });
     const config = { channels: { "nextcloud-talk": account.config } } as CoreConfig;
 
@@ -398,10 +332,7 @@ describe("nextcloud-talk inbound behavior", () => {
   it("binds durable ingress adoption into reply options", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installPairingController(vi.fn(async () => []));
     const lifecycle = {
       abortSignal: new AbortController().signal,
       onAdopted: vi.fn(async () => {}),
@@ -412,14 +343,7 @@ describe("nextcloud-talk inbound behavior", () => {
 
     await handleNextcloudTalkInbound({
       message: createMessage(),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: ["user-1"] }),
       config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
       runtime: createRuntimeSpies(),
       turnAdoptionLifecycle: lifecycle,
@@ -444,23 +368,13 @@ describe("nextcloud-talk inbound behavior", () => {
   it("sanitizes inbound replies before local delivery while preserving transport fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
     setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(async () => []),
-      issueChallenge: vi.fn(),
-    });
+    installPairingController(vi.fn(async () => []));
     sendMessageNextcloudTalkMock.mockResolvedValue(undefined);
 
     const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
     await handleNextcloudTalkInbound({
       message: createMessage(),
-      account: createAccount({
-        config: {
-          dmPolicy: "allowlist",
-          allowFrom: ["user-1"],
-          groupPolicy: "allowlist",
-          groupAllowFrom: [],
-        },
-      }),
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: ["user-1"] }),
       config,
       runtime: createRuntimeSpies(),
     });

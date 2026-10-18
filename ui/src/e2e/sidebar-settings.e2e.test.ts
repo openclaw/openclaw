@@ -1,10 +1,13 @@
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
   captureSidebarUiProof,
@@ -16,7 +19,7 @@ const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocke
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    {
+    compactCronJobFixture({
       id: "failed-settings-transition",
       name: "Failed settings transition",
       enabled: true,
@@ -27,7 +30,7 @@ const FAILED_CRON_RESPONSE = {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "test" },
       state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    },
+    }),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -59,6 +62,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,
@@ -142,7 +146,7 @@ suite.define(() => {
     }
   });
 
-  it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -167,6 +171,10 @@ suite.define(() => {
         }
       });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await gateway.deferNext("models.authStatus");
       await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       await gateway.waitForRequest("models.authStatus", { after: 1 });
@@ -190,6 +198,8 @@ suite.define(() => {
       }
       await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
     } finally {
@@ -274,13 +284,17 @@ suite.define(() => {
       const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
       const selectedValue = await selected.getAttribute("data-value");
+      const selectedLabel = await picker.locator(".picker-select__trigger").textContent();
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
       await expect
         .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
         .toBe("false");
+      expect(await picker.locator(".picker-select__trigger").textContent()).toBe(selectedLabel);
+      await picker.locator(".picker-select__trigger").click();
       expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+      await page.keyboard.press("Escape");
       expect(
         await picker
           .locator(".picker-select__trigger")
@@ -313,14 +327,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       if (testCase.collapseSidebar) {
-        await page.locator(".sidebar-brand__collapse").click();
+        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await page.locator(".shell--nav-collapsed").waitFor();
       }
-      const chatInbox = page.locator(
-        testCase.collapseSidebar
-          ? ".sidebar-attention--floating .sidebar-issues-button"
-          : "openclaw-app-sidebar .sidebar-issues-button",
-      );
+      const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
       await chatInbox.waitFor({ state: "visible" });
 
       await page.keyboard.press("Control+Shift+,");
@@ -353,10 +363,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-      await page.locator(".sidebar-brand__collapse").click();
-      const floatingInbox = page.locator(".sidebar-attention--floating");
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+      const railInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
       await expect
-        .poll(() => floatingInbox.locator(".sidebar-issues-button__count").textContent())
+        .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
         .toBe("2");
 
       await page.keyboard.press("Control+Shift+,");
@@ -365,8 +375,8 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      const restoredInbox = page.locator(".sidebar-attention--floating");
-      await restoredInbox.waitFor({ state: "visible" });
+      const restoredInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
+      await restoredInbox.locator(".sidebar-issues-button").waitFor({ state: "visible" });
       expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
 
       await gateway.setMethodResponse("cron.list", {
@@ -384,27 +394,24 @@ suite.define(() => {
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
       await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
-        .poll(() =>
-          page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
-          }),
-        )
+        .poll(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase))
         .toBe("connected");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+      await page
+        .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
+        .waitFor();
       expect(
-        await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").count(),
+        await page
+          .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count")
+          .count(),
       ).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("keeps one attention badge across expanded and collapsed presenters", async () => {
+  it("keeps one rail attention badge across expanded and collapsed navigation", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -425,9 +432,13 @@ suite.define(() => {
         .poll(() => page.locator("openclaw-app-sidebar .sidebar-issues-button__count").count())
         .toBe(0);
 
-      await page.locator(".sidebar-brand__collapse").click();
-      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
-      await page.locator(".shell-chrome-controls__nav-toggle").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+      await page
+        .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
+        .waitFor();
+      expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
+      expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
+      await page.locator('[data-navigation-view="sessions"]').click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
       await gateway.setMethodResponse("cron.list", FAILED_CRON_RESPONSE);
@@ -447,10 +458,14 @@ suite.define(() => {
       await gateway.deferNext("cron.list");
       await gateway.deferNext("cron.status");
       await gateway.deferNext("models.authStatus");
-      await page.locator(".sidebar-brand__collapse").click();
+      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
       await expect
         .poll(() =>
-          page.locator(".sidebar-attention--floating .sidebar-issues-button__count").textContent(),
+          page
+            .locator(
+              ".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count",
+            )
+            .textContent(),
         )
         .toBe("1");
     } finally {
@@ -466,12 +481,23 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      awaitInitialRoster: false,
       featureMethods: ["system.info"],
       methodResponses: { "system.info": deviceSystemInfo },
     });
 
     try {
+      const routeModule = await holdModuleResponse(
+        page,
+        /\/assets\/connection-page-[^/]+\.js(?:\?|$)/u,
+      );
       await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await routeModule.request;
+      await page.bringToFront();
+      await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe("visible");
+      // The route must start diagnostics even when connection and focus precede its mount.
+      await gateway.waitForRequest("connect");
+      routeModule.release();
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
       const credential = page.getByLabel("Gateway secret", { exact: true });
@@ -495,7 +521,39 @@ suite.define(() => {
       expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
-      await gateway.waitForRequest("system.info");
+      try {
+        await gateway.waitForRequest("system.info");
+      } catch (error) {
+        try {
+          const [browser, systemInfoRequestCount, heartbeatRequestCount] = await withTimeout(
+            Promise.all([
+              page.evaluate(() => {
+                const host = document.querySelector("openclaw-connection-page");
+                const systemInfoSection = host?.querySelector("#settings-connection-host");
+                return {
+                  visibilityState: document.visibilityState,
+                  hasFocus: document.hasFocus(),
+                  connectionHostPresent: host !== null,
+                  connectionHostConnected: host?.isConnected ?? null,
+                  systemInfoSectionPresent: Boolean(systemInfoSection),
+                  systemInfoSectionBusy: systemInfoSection?.getAttribute("aria-busy") === "true",
+                };
+              }),
+              gateway.getRequests("system.info").then((requests) => requests.length),
+              gateway.getRequests("last-heartbeat").then((requests) => requests.length),
+            ]),
+            5_000,
+            "connection system.info failure diagnostics",
+          );
+          console.error(
+            "[sidebar-settings] initial system.info wait failed",
+            JSON.stringify({ ...browser, systemInfoRequestCount, heartbeatRequestCount }),
+          );
+        } catch {
+          console.error("[sidebar-settings] initial system.info diagnostics unavailable");
+        }
+        throw error;
+      }
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");

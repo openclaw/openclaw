@@ -1,136 +1,85 @@
-// Diagnostic session context helpers capture session metadata for support bundles.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  loadSessionEntryReadOnly,
-  readLatestTranscriptAssistantText,
-} from "../config/sessions/session-accessor.js";
-import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
+import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import {
   isIncognitoSessionKey,
   isValidAgentId,
   parseAgentSessionKey,
-  type ParsedAgentSessionKey,
 } from "../routing/session-key.js";
-
-const MAX_QUOTED_FIELD_CHARS = 140;
+import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 
 type SessionDiagnosticContext = {
-  agentId?: string;
   cronJobId?: string;
   cronRunId?: string;
   cronJobName?: string;
-  lastAssistant?: string;
 };
 
-function quoteLogField(value: string): string {
-  const oneLine = value.replace(/\s+/g, " ").trim();
-  const truncated =
-    oneLine.length > MAX_QUOTED_FIELD_CHARS
-      ? `${truncateUtf16Safe(oneLine, Math.max(0, MAX_QUOTED_FIELD_CHARS - 3))}...`
-      : oneLine;
-  return `"${truncated.replace(/["\\]/g, "\\$&")}"`;
-}
-
-function parseCronRunSessionKey(parsed: ParsedAgentSessionKey): {
-  cronJobId?: string;
-  cronRunId?: string;
-} {
-  const parts = parsed.rest.split(":");
-  if (parts[0] !== "cron" || !parts[1]) {
-    return {};
-  }
-  const runIndex = parts.indexOf("run", 2);
-  return {
-    cronJobId: parts[1],
-    cronRunId: runIndex >= 0 ? parts[runIndex + 1] : undefined,
-  };
-}
-
-function readCronJobName(cronJobId: string | undefined): string | undefined {
-  if (!cronJobId) {
-    return undefined;
-  }
-  try {
-    const store = loadCronJobsStoreSync(resolveCronJobsStorePath());
-    const job = store.jobs.find((entry) => entry.id === cronJobId);
-    return typeof job?.name === "string" && job.name.trim() ? job.name.trim() : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function resolveCronSessionDiagnosticContext(params: {
+type SessionDiagnosticTarget = {
   sessionKey?: string;
-  activeSessionId?: string;
-}): SessionDiagnosticContext {
+};
+
+async function withSessionDiagnosticContext(
+  params: SessionDiagnosticTarget,
+  consume: (context: SessionDiagnosticContext) => void,
+): Promise<void> {
   const sessionKey = params.sessionKey?.trim();
-  // Incognito transcripts live only in memory; copying their replies into
-  // durable operator logs would bypass both persistence and sharing boundaries.
-  if (isIncognitoSessionKey(sessionKey)) {
-    return {};
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (
+    !sessionKey ||
+    !parsed ||
+    !isValidAgentId(parsed.agentId) ||
+    isIncognitoSessionKey(sessionKey)
+  ) {
+    consume({});
+    return;
   }
-  const parsedAgent = parseAgentSessionKey(sessionKey);
-  if (!sessionKey || !parsedAgent || !isValidAgentId(parsedAgent.agentId)) {
-    return {};
-  }
-  const cron = parseCronRunSessionKey(parsedAgent);
-  const context: SessionDiagnosticContext = {
-    agentId: parsedAgent.agentId,
-    ...cron,
-    ...(cron.cronJobId ? { cronJobName: readCronJobName(cron.cronJobId) } : {}),
-  };
-  const activeSessionId = params.activeSessionId?.trim();
-  if (!activeSessionId) {
-    return context;
-  }
-
-  try {
-    const sessionScope = { agentId: parsedAgent.agentId, sessionKey };
-    // The read-only owner proves both identity and existence before transcript
-    // access, preventing rotated-session leaks and phantom agent databases.
-    if (loadSessionEntryReadOnly(sessionScope)?.sessionId === activeSessionId) {
-      context.lastAssistant = readLatestTranscriptAssistantText({
-        ...sessionScope,
-        sessionId: activeSessionId,
-      })?.text;
-    }
-  } catch {
-    // Session context is best-effort and must not interrupt diagnostics.
-  }
-  return context;
-}
-
-export function formatCronSessionDiagnosticFields(context: SessionDiagnosticContext): string {
-  const fields: string[] = [];
+  const [kind, cronJobId, ...rest] = parsed.rest.split(":");
+  const runIndex = rest.indexOf("run");
+  const context: SessionDiagnosticContext =
+    kind === "cron" && cronJobId
+      ? { cronJobId, cronRunId: runIndex >= 0 ? rest[runIndex + 1] : undefined }
+      : {};
   if (context.cronJobId) {
-    fields.push(`cronJobId=${context.cronJobId}`);
+    try {
+      const resolveName = await prepareCronJobNameResolver([context.cronJobId]);
+      context.cronJobName = resolveName(context.cronJobId);
+    } catch {
+      // Display enrichment is optional, including a retired resolver.
+    }
   }
-  if (context.cronRunId) {
-    fields.push(`cronRunId=${context.cronRunId}`);
-  }
-  if (context.cronJobName) {
-    fields.push(`cronJob=${quoteLogField(context.cronJobName)}`);
-  }
-  if (context.lastAssistant) {
-    fields.push(`lastAssistant=${quoteLogField(context.lastAssistant)}`);
-  }
-  return fields.join(" ");
+  consume(context);
 }
 
-export function formatStoppedCronSessionDiagnosticFields(
+function formatSessionDiagnosticFields(
   context: SessionDiagnosticContext,
+  cronNameLabel: "cronJob" | "stopped" = "cronJob",
 ): string {
-  const fields: string[] = [];
-  if (context.cronJobName) {
-    fields.push(`stopped=${quoteLogField(context.cronJobName)}`);
+  const quote = (value: string) => {
+    const oneLine = value.replace(/\s+/g, " ").trim();
+    const bounded = oneLine.length > 140 ? `${truncateUtf16Safe(oneLine, 137)}...` : oneLine;
+    return `"${bounded.replace(/["\\]/g, "\\$&")}"`;
+  };
+  return [
+    context.cronJobId ? `cronJobId=${context.cronJobId}` : "",
+    context.cronRunId ? `cronRunId=${context.cronRunId}` : "",
+    context.cronJobName ? `${cronNameLabel}=${quote(context.cronJobName)}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Recovery and event publication never wait for optional display enrichment. */
+export function logWithSessionDiagnosticContext(
+  params: SessionDiagnosticTarget & {
+    level: "debug" | "warn";
+    format: (fields: string) => string;
+    cronNameLabel?: "cronJob" | "stopped";
+  },
+): Promise<void> | undefined {
+  if (!areDiagnosticsEnabledForProcess() || !diag.isEnabled(params.level)) {
+    return undefined;
   }
-  const rest = formatCronSessionDiagnosticFields({
-    cronJobId: context.cronJobId,
-    cronRunId: context.cronRunId,
-    lastAssistant: context.lastAssistant,
+  return withSessionDiagnosticContext(params, (context) => {
+    diag[params.level](params.format(formatSessionDiagnosticFields(context, params.cronNameLabel)));
   });
-  if (rest) {
-    fields.push(rest);
-  }
-  return fields.join(" ");
 }

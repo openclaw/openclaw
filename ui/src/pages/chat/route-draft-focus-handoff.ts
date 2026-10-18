@@ -19,7 +19,9 @@ export type ChatPaneElement = HTMLElement & {
   discardStagedAttachments?: () => void;
   paneId?: string;
   prepareForEviction?: () => void;
+  hasQueuedMessageEdit?: boolean;
   presented?: boolean;
+  captureNavigationFace?: () => BoardFace | undefined;
   routeFace?: BoardFace;
   sessionKey?: string;
   transcriptLoading?: boolean;
@@ -45,12 +47,9 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 }
 
 export class RouteDraftComposerFocus {
-  private timer: number | undefined;
-  private readonly host: HTMLElement;
+  private cancelMaintenance: (() => void) | undefined;
 
-  constructor(host: HTMLElement) {
-    this.host = host;
-  }
+  constructor(private readonly host: HTMLElement) {}
 
   rendered(
     data: SessionChatRouteData | undefined,
@@ -102,18 +101,36 @@ export class RouteDraftComposerFocus {
   }
 
   private maintain(sessionKey: string): void {
-    if (this.timer !== undefined) {
-      window.clearTimeout(this.timer);
-      this.timer = undefined;
-    }
+    this.cancelMaintenance?.();
     const deadline = Date.now() + MAINTENANCE_MS;
     let ownedComposer: HTMLTextAreaElement | undefined;
+    let timer: number | undefined;
+    const doc = this.host.ownerDocument;
+    const cancel = () => {
+      window.clearTimeout(timer);
+      doc.removeEventListener("pointerdown", cancel, true);
+      doc.removeEventListener("keydown", cancel, true);
+      doc.removeEventListener("focusin", onFocus, true);
+      this.cancelMaintenance = undefined;
+    };
+    const onFocus = (event: FocusEvent) => {
+      if (event.target !== ownedComposer) {
+        cancel();
+      }
+    };
+    // A brief menu interaction can return focus to body between maintenance ticks.
+    // Once the user takes focus, this handoff must not reclaim it.
+    doc.addEventListener("pointerdown", cancel, true);
+    doc.addEventListener("keydown", cancel, true);
+    doc.addEventListener("focusin", onFocus, true);
+    this.cancelMaintenance = cancel;
 
     const focusCurrentComposer = () => {
       if (!this.host.isConnected) {
-        this.timer = undefined;
+        cancel();
         return;
       }
+      // Route replacement remounts pane bridges; resolve their current composer for this handoff.
       const pane = [...this.host.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
         (candidate) =>
           candidate.active &&
@@ -128,17 +145,17 @@ export class RouteDraftComposerFocus {
         (activeElement instanceof HTMLElement && !activeElement.isConnected);
 
       if (composer && (!ownedComposer || focusStillOwned)) {
-        composer.focus({ preventScroll: true });
         ownedComposer = composer;
+        composer.focus({ preventScroll: true });
       } else if (ownedComposer && !focusStillOwned) {
-        this.timer = undefined;
+        cancel();
         return;
       }
 
       if (Date.now() < deadline) {
-        this.timer = window.setTimeout(focusCurrentComposer, RETRY_MS);
+        timer = window.setTimeout(focusCurrentComposer, RETRY_MS);
       } else {
-        this.timer = undefined;
+        cancel();
       }
     };
 
