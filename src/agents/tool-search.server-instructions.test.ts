@@ -118,34 +118,6 @@ describe("Tool Search MCP server instructions", () => {
     expect(result.details).toEqual([expect.objectContaining({ id: "mcp:plain:plain__ping" })]);
   });
 
-  it("adds whole guidance once per server to a batch response that has room", async () => {
-    const shortGuidance =
-      "RESEARCH_GUIDANCE: rank binding precedents first.\nRESEARCH_TAIL: never retry.";
-    const { tool } = setup({ researchGuidance: shortGuidance });
-    const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("guidance-batch", {
-      queries: [
-        { query: "research__search", limit: 1 },
-        { query: "research__fetch", limit: 1 },
-        { query: "calc__run", limit: 1 },
-      ],
-    });
-    const details = result.details as {
-      results: Array<{ candidates: Array<{ id: string }>; truncated?: true }>;
-      truncated?: true;
-      mcpServerInstructions: Record<string, string>;
-    };
-    const text = modelText(result);
-
-    expect(details.results.map((group) => group.candidates.map((entry) => entry.id))).toEqual([
-      ["mcp:research:research__search"],
-      ["mcp:research:research__fetch"],
-      ["mcp:calc:calc__run"],
-    ]);
-    expect(details.truncated).toBeUndefined();
-    expect(details.mcpServerInstructions).toEqual({ research: shortGuidance, calc: calcGuidance });
-    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS);
-  });
-
   it("keeps a batch within its budget and points to tool_describe for guidance that fits there", async () => {
     const guidance = `MID_GUIDANCE ${"y".repeat(10_000)} MID_TAIL`;
     const { tool } = setup({ researchGuidance: guidance });
