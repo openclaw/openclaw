@@ -67,8 +67,6 @@ export function createCommandSessionFixture(
   return { entry, store: { [sessionKey]: entry } };
 }
 
-const withAgentDefaults = <T>(defaults: T) => ({ agents: { defaults } });
-
 export function createChannelModelRuntimeConfig({
   channel = "discord",
   matchKey = "channel-123",
@@ -81,32 +79,44 @@ export function createChannelModelRuntimeConfig({
   additionalModels?: Record<string, unknown>;
 } = {}): Record<string, unknown> {
   return {
-    ...withAgentDefaults({
-      model: "anthropic/default-model",
-      models: { "anthropic/default-model": {}, [model]: {}, ...additionalModels },
-    }),
+    agents: {
+      defaults: {
+        model: "anthropic/default-model",
+        models: {
+          "anthropic/default-model": {},
+          [model]: {},
+          ...additionalModels,
+        },
+      },
+    },
     channels: { modelByChannel: { [channel]: { [matchKey]: model } } },
   };
 }
 
 export function createLegacyAutoFallbackAliasCollisionConfig() {
-  return withAgentDefaults({
-    model: { primary: "anthropic/claude" },
-    models: {
-      "anthropic/claude": {},
-      "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
-      "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude" },
+        models: {
+          "anthropic/claude": {},
+          "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+          "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+        },
+      },
     },
-  });
+  };
 }
 
 export function createConfiguredModelCompatRuntimeConfig(allowlisted: boolean, excluded = false) {
   return {
-    ...withAgentDefaults({
-      model: { primary: "gmn/gpt-5.4" },
-      ...(allowlisted ? { models: { "gmn/gpt-5.4": {} } } : {}),
-      ...(excluded ? { modelPolicy: { allow: ["gmn/manual"] } } : {}),
-    }),
+    agents: {
+      defaults: {
+        model: { primary: "gmn/gpt-5.4" },
+        ...(allowlisted ? { models: { "gmn/gpt-5.4": {} } } : {}),
+        ...(excluded ? { modelPolicy: { allow: ["gmn/manual"] } } : {}),
+      },
+    },
     models: {
       providers: {
         gmn: {
@@ -141,26 +151,21 @@ type ModelSelectionParams = {
   defaultProvider: string;
   defaultModel?: string;
 };
-type ModelRef = { provider: string; model: string };
 
 const normalizeTestProviderId = (provider: string) => provider.trim().toLowerCase();
-const stringValue = (value: unknown) => (typeof value === "string" ? value : undefined);
-
-function parseTestModelRef(model: string, provider: string): ModelRef {
-  const slash = model.indexOf("/");
-  return slash > 0
-    ? { provider: model.slice(0, slash), model: model.slice(slash + 1) }
-    : { provider, model };
-}
 
 function isTestModelKeyAllowed(allowedKeys: ReadonlySet<string>, key: string): boolean {
-  return (
-    allowedKeys.has(key) ||
-    [...allowedKeys].some(
-      (allowed) =>
-        allowed !== "/*" && allowed.endsWith("/*") && key.startsWith(allowed.slice(0, -1)),
-    )
-  );
+  if (allowedKeys.has(key)) {
+    return true;
+  }
+  let separator = key.indexOf("/");
+  while (separator > 0) {
+    if (allowedKeys.has(`${key.slice(0, separator + 1)}*`)) {
+      return true;
+    }
+    separator = key.indexOf("/", separator + 1);
+  }
+  return false;
 }
 
 function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
@@ -171,7 +176,10 @@ function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
       };
     }
   )?.models?.providers;
-  return Object.entries(providers ?? {}).flatMap(([provider, entry]) =>
+  if (!providers) {
+    return [];
+  }
+  return Object.entries(providers).flatMap(([provider, entry]) =>
     Array.isArray(entry?.models)
       ? entry.models
           .filter(
@@ -179,13 +187,23 @@ function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
               Boolean(model) && typeof model === "object",
           )
           .map((model) => {
-            const id = stringValue(model.id) ?? "";
+            const id = typeof model.id === "string" ? model.id : "";
             return {
               provider,
               id,
-              name: stringValue(model.name) ?? id,
-              api: stringValue(model.api) ?? stringValue(entry.api),
-              baseUrl: stringValue(model.baseUrl) ?? stringValue(entry.baseUrl),
+              name: typeof model.name === "string" ? model.name : id,
+              api:
+                typeof model.api === "string"
+                  ? model.api
+                  : typeof entry.api === "string"
+                    ? entry.api
+                    : undefined,
+              baseUrl:
+                typeof model.baseUrl === "string"
+                  ? model.baseUrl
+                  : typeof entry.baseUrl === "string"
+                    ? entry.baseUrl
+                    : undefined,
               reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
               compat: model.compat,
             };
@@ -209,15 +227,15 @@ function buildTestAllowedModelSet({
     allowedKeys.add(`${defaultProvider}/${defaultModel}`);
   }
   const allowedCatalog = [...(catalog ?? []), ...buildTestConfiguredModelCatalog(cfg)];
-  const allowAny = Object.keys(modelMap).length === 0;
+  if (Object.keys(modelMap).length === 0) {
+    return { allowedKeys, allowedCatalog, allowAny: true };
+  }
   return {
     allowedKeys,
-    allowedCatalog: allowAny
-      ? allowedCatalog
-      : allowedCatalog.filter((entry) =>
-          isTestModelKeyAllowed(allowedKeys, `${entry.provider}/${entry.id}`),
-        ),
-    allowAny,
+    allowedCatalog: allowedCatalog.filter((entry) =>
+      isTestModelKeyAllowed(allowedKeys, `${entry.provider}/${entry.id}`),
+    ),
+    allowAny: false,
   };
 }
 
@@ -233,10 +251,11 @@ export function createTestModelVisibilityPolicy(params: ModelSelectionParams) {
     providerWildcards: new Set<string>(),
     hasConfiguredEntries: !allowed.allowAny,
     hasProviderWildcards: wildcardModelKeys.size > 0,
-    allows: ({ provider, model }: ModelRef) => allowsKey(`${provider}/${model}`),
-    allowsByWildcard: ({ provider, model }: ModelRef) =>
+    allows: ({ provider, model }: { provider: string; model: string }) =>
+      allowsKey(`${provider}/${model}`),
+    allowsByWildcard: ({ provider, model }: { provider: string; model: string }) =>
       isTestModelKeyAllowed(wildcardModelKeys, `${provider}/${model}`),
-    resolveSelection: ({ provider, model }: ModelRef) => {
+    resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
       if (allowsKey(`${provider}/${model}`)) {
         return { provider, model };
       }
@@ -252,7 +271,7 @@ function buildTestModelAliasIndex({
 }: {
   cfg?: { agents?: { defaults?: { models?: Record<string, { alias?: string }> } } };
 }) {
-  const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
+  const byAlias = new Map<string, { alias: string; ref: { provider: string; model: string } }>();
   const byKey = new Map<string, string[]>();
   for (const [ref, entry] of Object.entries(cfg?.agents?.defaults?.models ?? {})) {
     const alias = entry?.alias?.trim();
@@ -283,34 +302,50 @@ function resolveTestModelRefFromString({
   if (aliasMatch) {
     return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
-  return { ref: parseTestModelRef(raw, defaultProvider) };
+  const slash = raw.indexOf("/");
+  return {
+    ref:
+      slash > 0
+        ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
+        : { provider: defaultProvider, model: raw },
+  };
 }
 
-function resolveTestModelAliasFromPair(
-  params: ModelRef & {
-    defaultProvider: string;
-    aliasIndex?: ReturnType<typeof buildTestModelAliasIndex>;
-  },
-) {
-  const aliases = params.aliasIndex?.byAlias;
-  const providerAlias = aliases?.get(`${params.provider}/${params.model}`.trim().toLowerCase());
-  if (providerAlias?.alias) {
+function resolveTestModelAliasFromPair(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  aliasIndex?: ReturnType<typeof buildTestModelAliasIndex>;
+}) {
+  const bareAlias = resolveTestModelRefFromString({
+    raw: params.model,
+    defaultProvider: params.provider,
+    aliasIndex: params.aliasIndex,
+  });
+  const providerAlias = resolveTestModelRefFromString({
+    raw: `${params.provider}/${params.model}`,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (providerAlias.alias) {
     return providerAlias.ref;
   }
-  const bareAlias = aliases?.get(params.model.trim().toLowerCase());
   const provider = normalizeTestProviderId(params.provider);
-  return bareAlias?.alias &&
+  return bareAlias.alias &&
     (normalizeTestProviderId(bareAlias.ref.provider) === provider ||
       provider === normalizeTestProviderId(params.defaultProvider))
     ? bareAlias.ref
     : null;
 }
 
-function resolveTestConfiguredModelRef({ cfg }: { cfg?: unknown }) {
+function configuredPrimary(cfg?: unknown): string {
   const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })?.agents
     ?.defaults?.model;
-  const primary = (typeof raw === "string" ? raw : raw?.primary) ?? "anthropic/claude";
-  const [provider = "anthropic", ...modelParts] = primary.split("/");
+  return (typeof raw === "string" ? raw : raw?.primary) ?? "anthropic/claude";
+}
+
+function resolveTestConfiguredModelRef({ cfg }: { cfg?: unknown }) {
+  const [provider = "anthropic", ...modelParts] = configuredPrimary(cfg).split("/");
   return { provider, model: modelParts.join("/") || "claude" };
 }
 
@@ -337,7 +372,12 @@ export function createTestModelSelection(params: {
     }),
     normalizeProviderId: normalizeTestProviderId,
     normalizeProviderIdForAuth: normalizeTestProviderId,
-    parseModelRef: parseTestModelRef,
+    parseModelRef: (model: string, provider: string) => {
+      const slash = model.indexOf("/");
+      return slash > 0
+        ? { provider: model.slice(0, slash), model: model.slice(slash + 1) }
+        : { provider, model };
+    },
     resolveModelRefFromString: resolveTestModelRefFromString,
     resolveModelAliasFromPair: resolveTestModelAliasFromPair,
     resolveConfiguredModelRef: resolveTestConfiguredModelRef,

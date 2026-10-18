@@ -94,7 +94,7 @@ function ownedMaintenance(pathname: string) {
   });
   return {
     maintenance,
-    async close(pending?: Promise<unknown>) {
+    close: async (pending?: Promise<unknown>) => {
       try {
         await maintenance.close();
       } finally {

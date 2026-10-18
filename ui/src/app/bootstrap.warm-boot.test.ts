@@ -20,7 +20,7 @@ let previousUrl: string;
 function bootstrapApplication() {
   return (activeRuntime = createApplication());
 }
-function captureGatewayConnection<T extends object>(fields: () => T, revision?: () => number) {
+function captureGatewayConnection(fields: () => object, revision?: () => number) {
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const createGateway = gatewayStore.createApplicationGateway;
   let current: ReturnType<typeof createGateway>;

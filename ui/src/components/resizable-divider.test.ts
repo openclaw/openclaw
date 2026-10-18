@@ -37,8 +37,10 @@ async function dragFixture(start = true) {
   const resized = vi.fn();
   const resizeStarted = vi.fn();
   const resizeEnded = vi.fn();
-  divider.setPointerCapture = vi.fn();
-  divider.releasePointerCapture = vi.fn();
+  const setPointerCapture = vi.fn();
+  const releasePointerCapture = vi.fn();
+  divider.setPointerCapture = setPointerCapture;
+  divider.releasePointerCapture = releasePointerCapture;
   divider.hasPointerCapture = vi.fn(() => true);
   container.addEventListener("resize-start", resizeStarted);
   divider.addEventListener("resize", resized);
@@ -46,7 +48,7 @@ async function dragFixture(start = true) {
   if (start) {
     dispatchPointer(divider, "pointerdown", 100);
   }
-  return { divider, resized, resizeStarted, resizeEnded };
+  return { divider, resized, resizeStarted, resizeEnded, setPointerCapture, releasePointerCapture };
 }
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number, pointerId = 7) {
@@ -153,10 +155,11 @@ it.each([
 });
 
 it("keeps dragging owned by the initiating pointer", async () => {
-  const { divider, resized, resizeStarted, resizeEnded } = await dragFixture();
+  const { divider, resized, resizeStarted, resizeEnded, setPointerCapture, releasePointerCapture } =
+    await dragFixture();
   expect(document.activeElement).not.toBe(divider);
   expect([...divider.classList]).toEqual(["dragging"]);
-  expect(divider.setPointerCapture).toHaveBeenCalledWith(7);
+  expect(setPointerCapture).toHaveBeenCalledWith(7);
   expect(resizeStarted).toHaveBeenCalledOnce();
   expect(resizeStarted.mock.calls[0]?.[0]).toMatchObject({
     target: divider,
@@ -168,7 +171,7 @@ it("keeps dragging owned by the initiating pointer", async () => {
   dispatchPointer(document, "pointermove", 220, 8);
   dispatchPointer(document, "pointercancel", 220, 8);
   dispatchPointer(document, "pointerup", 220, 8);
-  expect(divider.setPointerCapture).toHaveBeenCalledTimes(1);
+  expect(setPointerCapture).toHaveBeenCalledTimes(1);
   expect(calls(resizeStarted, resized, resizeEnded)).toEqual([1, 0, 0]);
   expect([...divider.classList]).toEqual(["dragging"]);
 
@@ -183,15 +186,15 @@ it("keeps dragging owned by the initiating pointer", async () => {
   expect(resizeEnded.mock.lastCall?.[0].detail).toEqual({ splitRatio: 0.65 });
   expect(resizeEnded).toHaveBeenCalledTimes(1);
   expect([...divider.classList]).toEqual([]);
-  expect(divider.releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
+  expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
   expect(resizeStarted).toHaveBeenCalledOnce();
 });
 
 it("stops dragging when the window loses focus", async () => {
-  const { divider, resized, resizeEnded } = await dragFixture();
+  const { divider, resized, resizeEnded, releasePointerCapture } = await dragFixture();
   window.dispatchEvent(new Event("blur"));
   expect([...divider.classList]).toEqual([]);
-  expect(divider.releasePointerCapture).toHaveBeenCalledWith(7);
+  expect(releasePointerCapture).toHaveBeenCalledWith(7);
   expectLastResizeRatio(resizeEnded, 0.6);
   expect(resizeEnded).toHaveBeenCalledOnce();
   dispatchPointer(document, "pointermove", 220);

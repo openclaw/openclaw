@@ -122,7 +122,7 @@ it("keeps shared MiMo request and output policy when a provider decorates the st
   });
 });
 
-it("uses each prepared owner for params and stream wrapping with shared config", () => {
+it("uses each prepared owner for params and stream wrapping with shared config", async () => {
   const cfg = { agents: { defaults: { params: { temperature: 0.1 } } } };
   const model = makeProviderModelFixture({ ...modelDefaults, id: "fixture-model" });
   const base = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
@@ -158,7 +158,7 @@ it("uses each prepared owner for params and stream wrapping with shared config",
     const { agent } = prepareAgent(base, providerRuntimeHandle, model, undefined, undefined, {
       preparedExtraParams,
     });
-    agent.streamFn(model, { messages: [] });
+    await agent.streamFn(model, { messages: [] });
   }
   expect(base).toHaveBeenCalledTimes(3);
   expect(base.mock.calls.map((args) => [args[2]?.temperature, args[2]?.headers])).toEqual([

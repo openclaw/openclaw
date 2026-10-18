@@ -47,10 +47,12 @@ vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({ llm: undefined }),
 }));
 
+// mock-isolation: Maintenance assertions control transcript writes through rewriteMock.
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) => rewriteMock(params),
 }));
 
+// mock-isolation: Use the in-memory session fixture instead of opening real transcript files.
 vi.mock("../sessions/index.js", () => ({
   SessionManager: {
     openAsync: (target: SessionTranscriptRuntimeTarget) => openMock(target),

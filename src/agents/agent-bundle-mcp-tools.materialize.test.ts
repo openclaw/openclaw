@@ -14,10 +14,10 @@ import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
-import { catalogTool, makeCatalog, makeMcpRuntime } from "./agent-bundle-mcp-tools.test-support.js";
 import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
+  McpToolCatalog,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
@@ -31,11 +31,39 @@ function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
   return expectDefined(runtime.tools[0], "first materialized tool");
 }
 
-const knowledgeServer = {
-  safeServerName: "knowledge",
-  resources: { listChanged: false },
-  prompts: { listChanged: false },
-};
+function catalogTool(
+  serverName: string,
+  toolName: string,
+  overrides: Partial<McpCatalogTool> = {},
+): McpCatalogTool {
+  return {
+    serverName,
+    safeServerName: serverName,
+    toolName,
+    inputSchema: { type: "object", properties: {} },
+    fallbackDescription: toolName,
+    ...overrides,
+  };
+}
+
+function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
+  return {
+    version: 1,
+    generatedAt: 0,
+    tools: [],
+    servers: {
+      knowledge: {
+        serverName: "knowledge",
+        safeServerName: "knowledge",
+        launchSummary: "knowledge",
+        toolCount: 0,
+        resources: { listChanged: false },
+        prompts: { listChanged: false },
+        ...server,
+      },
+    },
+  };
+}
 
 function makeToolRuntime(
   params: {
@@ -46,22 +74,42 @@ function makeToolRuntime(
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
-  const tools = params.tools ?? [catalogTool(serverName, "bundle_probe")];
-  const peekCatalog = () =>
-    makeCatalog(serverName, tools, {
-      supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
-    });
-  return makeMcpRuntime(
+  const tools = params.tools ?? [
+    catalogTool(serverName, "bundle_probe", {
+      description: "Bundle probe",
+      fallbackDescription: "Bundle probe",
+    }),
+  ];
+  const peekCatalog = (): McpToolCatalog => ({
+    version: 1,
+    generatedAt: 0,
+    servers: {
+      [serverName]: {
+        serverName,
+        launchSummary: serverName,
+        toolCount: tools.length,
+        supportsParallelToolCalls: params.supportsParallelToolCalls ?? false,
+      },
+    },
+    tools,
+  });
+  return {
+    sessionId: "session-collision",
+    workspaceDir: "/tmp",
+    configFingerprint: "fingerprint",
+    createdAt: 0,
+    lastUsedAt: 0,
+    markUsed: () => {},
+    getCatalog: async () => peekCatalog(),
     peekCatalog,
-    () =>
+    callTool: async () =>
       params.result ?? {
         content: [{ type: "text", text: "FROM-BUNDLE" }],
         isError: false,
       },
-    {
-      joinCleanup: async () => {},
-    },
-  );
+    joinCleanup: async () => {},
+    dispose: async () => {},
+  };
 }
 
 async function executeMcpToolResult(result: CallToolResult) {
@@ -107,9 +155,9 @@ describe("createBundleMcpToolRuntime", () => {
     expect(disposeRuntime).toHaveBeenCalledOnce();
   });
 
-  it.each(["joinCleanup", "dispose"] as const)(
-    "replays a combined owner's synchronous %s failure in each final caller",
-    async (failureAt) => {
+  it.each([{ failureAt: "synchronous-join" }, { failureAt: "synchronous-dispose" }] as const)(
+    "replays a combined owner's $failureAt failure in each final caller",
+    async ({ failureAt }) => {
       const failed = makeToolRuntime();
       const sibling = makeToolRuntime();
       sibling.dispose = vi.fn(async () => {});
@@ -118,14 +166,19 @@ describe("createBundleMcpToolRuntime", () => {
       const failingCleanup = vi.fn(() => {
         throw failure;
       });
-      failed[failureAt] = failingCleanup;
+      const disposing = failureAt.endsWith("dispose");
+      if (disposing) {
+        failed.dispose = failingCleanup;
+      } else {
+        failed.joinCleanup = failingCleanup;
+      }
       const runtime = createCombinedSessionMcpRuntime({
         sessionId: failed.sessionId,
         workspaceDir: failed.workspaceDir,
         parts: [failed, sibling],
       });
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
-      if (failureAt === "dispose") {
+      if (disposing) {
         // The physical failure predates both final callers' cleanup contexts.
         await runtime.dispose();
         await runtime.dispose();
@@ -270,69 +323,73 @@ describe("createBundleMcpToolRuntime", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves image previews but never mints requester-scoped views (%s)",
-    async (scoped) => {
-      const serverName = scoped ? "user-mail" : "demo";
-      const uri = `ui://${serverName}/app`;
-      const image = { type: "image", data: "aW1hZ2U=", mimeType: "image/png" } as const;
-      const tool = catalogTool(serverName, "show", {
-        inputSchema: { type: "object" },
-        uiResourceUri: uri,
-      });
-      const sessionRuntime = makeToolRuntime({
-        tools: [tool],
-        serverName,
-        result: scoped
-          ? undefined
-          : {
-              content: [image],
-              _meta: { "ui/state": { selected: true } },
-            },
-      });
-      sessionRuntime.mcpAppsEnabled = true;
-      if (scoped) {
-        // Recovery has no requester identity; private servers stay fail-closed.
-        sessionRuntime.isRequesterScopedServer = (name) => name === serverName;
-      } else {
-        sessionRuntime.sessionKey = "agent:main:main";
-        sessionRuntime.readResource = async () => ({
-          contents: [{ uri, mimeType: MCP_APP_RESOURCE_MIME_TYPE, text: "<html>demo</html>" }],
-        });
-      }
-      const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
-      if (!scoped) {
-        materialized.restrictAppTools?.(materialized.tools);
-      }
-      const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
-      if (scoped) {
-        expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
-        return;
-      }
-      expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
-      expect(result.details).toMatchObject({
-        mcpAppPreview: {
-          mcpApp: {
-            viewId: expect.stringMatching(/^mcp-app-/u),
-            serverName: "demo",
-            toolName: "show",
-            uiResourceUri: "ui://demo/app",
-            toolCallId: "call-1",
-            originSessionKey: "agent:main:main",
-            resultMetaState: "unavailable",
-          },
+  it("attaches app previews without converting typed image results to text", async () => {
+    const tool = catalogTool("demo", "show", {
+      inputSchema: { type: "object" },
+      uiResourceUri: "ui://demo/app",
+    });
+    const sessionRuntime = makeToolRuntime({
+      tools: [tool],
+      serverName: "demo",
+      result: {
+        content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+        _meta: { "ui/state": { selected: true } },
+      },
+    });
+    sessionRuntime.sessionKey = "agent:main:main";
+    sessionRuntime.mcpAppsEnabled = true;
+    sessionRuntime.readResource = async () => ({
+      contents: [
+        {
+          uri: "ui://demo/app",
+          mimeType: MCP_APP_RESOURCE_MIME_TYPE,
+          text: "<html>demo</html>",
         },
-      });
-      const viewId = (result.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } })
-        .mcpAppPreview?.mcpApp?.viewId;
-      expect(
-        getMcpAppViewLease(
-          expectDefined(viewId, "MCP App preview view id test invariant"),
-          sessionRuntime,
-        )?.allowedAppToolNames,
-      ).toEqual(new Set(["show"]));
-    },
-  );
+      ],
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+    materialized.restrictAppTools?.(materialized.tools);
+
+    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
+    expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+    expect(result.details).toMatchObject({
+      mcpAppPreview: {
+        mcpApp: {
+          viewId: expect.stringMatching(/^mcp-app-/u),
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app",
+          toolCallId: "call-1",
+          originSessionKey: "agent:main:main",
+          resultMetaState: "unavailable",
+        },
+      },
+    });
+    const viewId = (result.details as { mcpAppPreview?: { mcpApp?: { viewId?: string } } })
+      .mcpAppPreview?.mcpApp?.viewId;
+    expect(
+      getMcpAppViewLease(
+        expectDefined(viewId, "MCP App preview view id test invariant"),
+        sessionRuntime,
+      )?.allowedAppToolNames,
+    ).toEqual(new Set(["show"]));
+  });
+
+  it("never mints app views for tools from requester-scoped servers", async () => {
+    const tool = catalogTool("user-mail", "show", {
+      inputSchema: { type: "object" },
+      uiResourceUri: "ui://user-mail/app",
+    });
+    const sessionRuntime = makeToolRuntime({ tools: [tool], serverName: "user-mail" });
+    sessionRuntime.mcpAppsEnabled = true;
+    // View recovery (peek + transcript reconstruction) has no requester
+    // identity, so scoped servers stay fail-closed at view creation.
+    sessionRuntime.isRequesterScopedServer = (serverName) => serverName === "user-mail";
+    const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
+
+    const result = await firstTool(materialized).execute("call-1", {}, undefined, undefined);
+    expect(result.details ?? {}).not.toHaveProperty("mcpAppPreview");
+  });
 
   it("marks MCP tools parallel only when the server advertises parallel support", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
@@ -411,28 +468,36 @@ describe("createBundleMcpToolRuntime", () => {
     expect(result.details).toEqual({ mcpServer: "bundleProbe", mcpTool: "bundle_probe" });
   });
 
-  it.each([false, true])(
-    "disambiguates reserved names, including App-only projections (%s)",
-    async (appOnly) => {
-      function* reservedToolNames() {
-        yield "bundleProbe__bundle_probe";
-      }
-      const runtime = await materializeBundleMcpToolsForRun({
-        runtime: makeToolRuntime({
-          tools: [
-            catalogTool("bundleProbe", "bundle_probe", appOnly ? { uiVisibility: ["app"] } : {}),
-          ],
-        }),
-        reservedToolNames: reservedToolNames(),
-      });
-      expect(runtime.tools.map((tool) => tool.name)).toEqual(
-        appOnly ? [] : ["bundleProbe__bundle_probe-2"],
-      );
-      if (appOnly) {
-        expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
-      }
-    },
-  );
+  it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime(),
+      reservedToolNames: ["bundleProbe__bundle_probe"],
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+  });
+
+  it("reuses one-shot reserved names for App-only policy projections", async () => {
+    function* reservedToolNames() {
+      yield "demo__app_tool";
+    }
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "demo",
+        tools: [
+          catalogTool("demo", "app_tool", {
+            inputSchema: { type: "object" },
+            fallbackDescription: "app",
+            uiVisibility: ["app"],
+          }),
+        ],
+      }),
+      reservedToolNames: reservedToolNames(),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.appTools?.map((tool) => tool.name)).toEqual(["demo__app_tool-2"]);
+  });
 
   it("applies per-server MCP tool filters to resource and prompt utility tools", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
@@ -440,8 +505,7 @@ describe("createBundleMcpToolRuntime", () => {
       runtime: {
         ...base,
         getCatalog: async () =>
-          makeCatalog("knowledge", [], {
-            ...knowledgeServer,
+          knowledgeCatalog({
             toolFilter: { include: ["resources_*"], exclude: ["resources_read"] },
           }),
         listResources: async () => [],
@@ -456,7 +520,7 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("projects resource and prompt utility tools for inventory-only catalogs", async () => {
     const tools = buildBundleMcpToolsFromCatalog({
-      catalog: makeCatalog("knowledge", [], knowledgeServer),
+      catalog: knowledgeCatalog(),
     });
 
     expect(tools.map((tool) => tool.name)).toEqual([
@@ -472,11 +536,7 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("projects session-denied tools only for read-only inventory", () => {
     const catalog = {
-      ...makeCatalog("knowledge", [], {
-        ...knowledgeServer,
-        prompts: undefined,
-        deniedToolNames: ["resources_read"],
-      }),
+      ...knowledgeCatalog({ prompts: undefined, deniedToolNames: ["resources_read"] }),
       tools: [
         catalogTool("knowledge", "alpha?", { fallbackDescription: "Enabled knowledge tool" }),
       ],
@@ -496,6 +556,12 @@ describe("createBundleMcpToolRuntime", () => {
       catalog,
       includeSessionDenied: true,
     });
+    expect(inventoryTools.map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__alpha--2",
+      "knowledge__resources_list",
+      "knowledge__resources_read",
+    ]);
     expect(
       inventoryTools.map((tool) => ({
         name: tool.name,

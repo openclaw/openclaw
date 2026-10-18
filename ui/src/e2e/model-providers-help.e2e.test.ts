@@ -1,50 +1,96 @@
 // Control UI tests cover the Models settings help affordances against a mocked Gateway.
 import path from "node:path";
-import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { chromium, type Browser } from "playwright";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
-  button,
-  catalogModel,
-  configSnapshot,
-  createScreenshots,
-  emptyUsage,
-  pageOptions,
-  text,
-} from "./model-provider-fixtures.test-support.ts";
+  canRunPlaywrightChromium,
+  installMockGateway,
+  resolvePlaywrightChromiumExecutablePath,
+  startControlUiE2eServer,
+  type ControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
+import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI Models help mocked Gateway E2E" });
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
+const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
+const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+
 const NOW = Date.now();
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-const utilityHelpArtifactDir = () => path.join(suite.artifactDir, "utility-model-help");
+let utilityHelpArtifactDir: string;
+beforeEach(() => {
+  if (recordVisuals) {
+    utilityHelpArtifactDir = path.join(
+      createControlUiE2eArtifactDir("model-providers"),
+      "utility-model-help",
+    );
+  }
+});
 const redactedConfigValue = "[redacted]";
+
+let browser: Browser;
+let server: ControlUiE2eServer;
 
 function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
-const capture = createScreenshots(utilityHelpArtifactDir, { animations: "disabled" });
 
-suite.define(() => {
+describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
+  beforeAll(async () => {
+    if (!chromiumAvailable) {
+      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
+    }
+    server = await startControlUiE2eServer();
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+    await server?.close();
+  });
+
   it("explains the utility model with accessible pointer, keyboard, and narrow-layout behavior", async () => {
     for (const colorScheme of ["light", "dark"] as const) {
-      await suite.withPage(pageOptions(1280, 900, { colorScheme }), async ({ page }) => {
-        const config = {
-          agents: { defaults: { model: "openai/gpt-5.5" } },
-          models: { providers: { openai: providerConfig(redactedConfigValue) } },
-        };
-        await installMockGateway(page, {
-          models: [
-            catalogModel("openai", "gpt-5.5", "GPT-5.5"),
-            catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna"),
-          ],
-          methodResponses: {
-            "config.get": configSnapshot(config, `utility-help-${colorScheme}`),
-            "models.authStatus": { ts: NOW, providers: [] },
-            ...emptyUsage(NOW),
+      const context = await browser.newContext({
+        colorScheme,
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
+      });
+      const page = await context.newPage();
+      const config = {
+        agents: { defaults: { model: "openai/gpt-5.5" } },
+        models: { providers: { openai: providerConfig(redactedConfigValue) } },
+      };
+      await installMockGateway(page, {
+        models: [
+          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+          {
+            id: "gpt-5.6-luna",
+            name: "GPT-5.6 Luna",
+            provider: "openai",
+            available: true,
           },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        ],
+        methodResponses: {
+          "config.get": {
+            config,
+            sourceConfig: config,
+            hash: `utility-help-${colorScheme}`,
+            issues: [],
+            raw: JSON.stringify(config),
+            valid: true,
+          },
+          "models.authStatus": { ts: NOW, providers: [] },
+          "usage.status": { updatedAt: NOW, providers: [] },
+          "sessions.usage": { aggregates: { byProvider: [] } },
+        },
+      });
+
+      try {
+        await page.goto(`${server.baseUrl}settings/model-providers`);
         await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
         const defaults = page.locator(".model-providers__defaults");
         const utilityField = defaults
@@ -66,10 +112,19 @@ suite.define(() => {
           )
           .toBe("Auto");
         await page.keyboard.press("Escape");
+
         if (recordVisuals) {
-          await capture(page, `${colorScheme}-default-full.png`, { fullPage: true });
-          await capture(utilityField, `${colorScheme}-default-crop.png`);
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-default-full.png`),
+          });
+          await utilityField.screenshot({
+            animations: "disabled",
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-default-crop.png`),
+          });
         }
+
         const helpButton = defaults.getByRole("button", { name: "About the utility model" });
         await expect.poll(() => helpButton.count()).toBe(1);
         await expect.poll(() => helpButton.locator("svg").count()).toBe(1);
@@ -80,6 +135,7 @@ suite.define(() => {
         const tooltipPopup = tooltip.locator(".tooltip-surface[popover]");
         const tooltipBody = tooltip.locator(".tooltip-rich-content");
         const tooltipIsOpen = () => tooltipPopup.evaluate((node) => node.matches(":popover-open"));
+
         const defaultColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await helpButton.hover();
         await expect
@@ -87,38 +143,53 @@ suite.define(() => {
           .not.toBe(defaultColor);
         const helpHoverColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await expect.poll(tooltipIsOpen).toBe(true);
-        await text(tooltip).toContain("short background tasks");
+        await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
         const helpButtonBox = await helpButton.boundingBox();
         expect(helpButtonBox).not.toBeNull();
         expect(helpButtonBox?.width).toBeLessThanOrEqual(16);
         expect(helpButtonBox?.height).toBeLessThanOrEqual(16);
-        await capture(page, `${colorScheme}-hover-tooltip-full.png`, { fullPage: true });
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-hover-tooltip-full.png`),
+          });
+        }
+
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
-        await text(tooltip).toContain("short background tasks");
-        await text(tooltip).toContain("primary model provider");
+        await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
+        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();
           if (!labelBox || !tooltipBox) {
             throw new Error("expected utility label and tooltip bounds");
           }
-          await capture(page, `${colorScheme}-open-full.png`, { fullPage: true });
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-full.png`),
+          });
           const x = Math.min(labelBox.x, tooltipBox.x);
           const y = Math.max(0, tooltipBox.y);
           const right = Math.max(labelBox.x + labelBox.width, tooltipBox.x + tooltipBox.width);
           const bottom = Math.max(labelBox.y + labelBox.height, tooltipBox.y + tooltipBox.height);
-          await capture(page, `${colorScheme}-open-crop.png`, {
+          await page.screenshot({
+            animations: "disabled",
             clip: {
               x,
               y,
               width: right - x,
               height: bottom - y,
             },
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-open-crop.png`),
           });
         }
+
         await page.locator(".page-title", { hasText: "Models" }).first().click();
         await expect.poll(tooltipIsOpen).toBe(false);
+
         await helpButton.focus();
         await expect
           .poll(() => helpButton.evaluate((node) => node === document.activeElement))
@@ -131,6 +202,7 @@ suite.define(() => {
         await expect
           .poll(() => helpButton.evaluate((node) => node === document.activeElement))
           .toBe(true);
+
         for (const help of [
           {
             button: "About thinking defaults",
@@ -147,8 +219,11 @@ suite.define(() => {
         ]) {
           const behaviorRow = defaults
             .locator(".settings-row")
-            .filter({ has: button(page, help.button) });
-          const behaviorButton = button(behaviorRow, help.button);
+            .filter({ has: page.getByRole("button", { name: help.button, exact: true }) });
+          const behaviorButton = behaviorRow.getByRole("button", {
+            name: help.button,
+            exact: true,
+          });
           const behaviorTooltip = behaviorButton.locator("..");
           const group = behaviorRow.getByRole("radiogroup");
           const behaviorTooltipIsOpen = () =>
@@ -160,15 +235,16 @@ suite.define(() => {
             helpHoverColor,
           );
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
-          await text(behaviorTooltip).toContain(help.text);
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
           await behaviorButton.click();
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
           await expect
             .poll(() => group.locator('input[type="radio"]:checked').inputValue())
             .toBe("");
-          await text(behaviorTooltip).toContain(help.defaultText);
+          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }
+
         await page.setViewportSize({ height: 844, width: 390 });
         await utilityField.scrollIntoViewIfNeeded();
         await helpButton.click();
@@ -184,8 +260,17 @@ suite.define(() => {
         }
         expect(mobileTooltipBox.x).toBeGreaterThanOrEqual(0);
         expect(mobileTooltipBox.x + mobileTooltipBox.width).toBeLessThanOrEqual(390);
-        await capture(page, `${colorScheme}-mobile-open.png`, { fullPage: true });
-      });
+
+        if (recordVisuals) {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: true,
+            path: path.join(utilityHelpArtifactDir, `${colorScheme}-mobile-open.png`),
+          });
+        }
+      } finally {
+        await context.close();
+      }
     }
   });
 });

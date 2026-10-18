@@ -28,7 +28,7 @@ function roster(
 ): AgentsListResult {
   return { defaultId, mainKey: "main", scope, agents: ids.map((id) => ({ id, kind: "agent" })) };
 }
-function readyGateway<T extends object>(client: T) {
+function readyGateway(client: object) {
   return makeRoutingGateway({ client, hello: hello() });
 }
 function saveSelection(

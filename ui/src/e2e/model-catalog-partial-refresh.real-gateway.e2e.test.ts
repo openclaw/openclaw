@@ -127,22 +127,8 @@ suite.define(() => {
         { locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           let currentSocket: WebSocket | undefined;
-          type Request = { socket: WebSocket; id: string; complete: boolean };
-          let latestDiscovery: Request | undefined;
-          let latestHistory: Request | undefined;
-          const waitForRendered = (
-            latest: () => Request | undefined,
-            render: () => Promise<unknown>,
-          ) =>
-            expect
-              .poll(async () => {
-                const request = latest();
-                if (!request?.complete || request.socket !== currentSocket) {
-                  return false;
-                }
-                return (await render()) && latest() === request && currentSocket === request.socket;
-              })
-              .toBe(true);
+          let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
+          let latestHistory: { socket: WebSocket; id: string; complete: boolean } | undefined;
           page.on("websocket", (socket) => {
             currentSocket = socket;
             socket.on("framesent", ({ payload }) => {
@@ -163,15 +149,20 @@ suite.define(() => {
             });
             socket.on("framereceived", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
-              if (frame.type !== "res") {
-                return;
-              }
-              const matches = (request: Request | undefined) =>
-                request !== undefined && frame.id === request.id && request.socket === socket;
-              if (latestDiscovery && matches(latestDiscovery)) {
+              if (
+                frame.type === "res" &&
+                latestDiscovery !== undefined &&
+                frame.id === latestDiscovery.id &&
+                latestDiscovery.socket === socket
+              ) {
                 latestDiscovery.complete = frame.ok === true;
               }
-              if (latestHistory && matches(latestHistory)) {
+              if (
+                frame.type === "res" &&
+                latestHistory !== undefined &&
+                frame.id === latestHistory.id &&
+                latestHistory.socket === socket
+              ) {
                 const historyResult = frame.ok === true ? requireRecord(frame.payload) : undefined;
                 latestHistory.complete =
                   historyResult !== undefined &&
@@ -207,10 +198,13 @@ suite.define(() => {
           );
           if (route === "new") {
             // An absent CLI group can mean discovery has not started, or a completed empty result.
-            await waitForRendered(
-              () => latestDiscovery,
-              () =>
-                evaluateControlUiContext(page, async (context) => {
+            await expect
+              .poll(async () => {
+                const discovery = latestDiscovery;
+                if (!discovery?.complete || discovery.socket !== currentSocket) {
+                  return false;
+                }
+                const settled = await evaluateControlUiContext(page, async (context) => {
                   const agents = context.agents.state;
                   if (
                     context.config.current.cliAgentsEnabled !== true ||
@@ -224,30 +218,51 @@ suite.define(() => {
                     HTMLElement & { updateComplete: Promise<boolean> }
                   >("openclaw-new-session-page");
                   return (await view?.updateComplete) === true;
-                }),
-            );
+                });
+                // updated() can reset discovery; require the same completed request after rendering.
+                return (
+                  settled && latestDiscovery === discovery && currentSocket === discovery.socket
+                );
+              })
+              .toBe(true);
           }
           await composer
             .locator(
               '[data-chat-model-target-group="cliAgents"] [data-chat-model-catalog-state="loading"]',
             )
             .waitFor({ state: "detached" });
-          expect(await composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+          const catalogNotices = await composer
+            .locator("[data-chat-model-catalog-state]")
+            .evaluateAll((nodes) =>
+              nodes.map((node) => ({
+                state: node.getAttribute("data-chat-model-catalog-state"),
+                text: node.textContent?.trim(),
+                group:
+                  node
+                    .closest("[data-chat-model-target-group]")
+                    ?.getAttribute("data-chat-model-target-group") ?? "models",
+              })),
+            );
+          expect(catalogNotices).toEqual([]);
           const stage = route === "new" ? "new" : "chat";
-          const capture = (name: string) =>
-            page.screenshot({
-              path: path.join(suite.artifactDir, `${stage}-${name}.png`),
-              animations: "disabled",
-            });
-          await capture("catalog");
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${stage}-catalog.png`),
+            animations: "disabled",
+          });
           await model.click();
-          await capture("composer");
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${stage}-composer.png`),
+            animations: "disabled",
+          });
           if (route !== "new") {
             // Model browsing is ready before history hydration unlocks effort changes.
-            await waitForRendered(
-              () => latestHistory,
-              () =>
-                page.evaluate(
+            await expect
+              .poll(async () => {
+                const history = latestHistory;
+                if (!history?.complete || history.socket !== currentSocket) {
+                  return false;
+                }
+                const rendered = await page.evaluate(
                   async ({ key: expectedKey, sessionId: expectedSessionId }) => {
                     const pane = document.querySelector<
                       HTMLElement & {
@@ -266,8 +281,10 @@ suite.define(() => {
                     );
                   },
                   { key, sessionId },
-                ),
-            );
+                );
+                return rendered && latestHistory === history && currentSocket === history.socket;
+              })
+              .toBe(true);
           }
           const effort = composer.locator("[data-chat-thinking-select]");
           await expect.poll(() => effort.isVisible()).toBe(true);
@@ -276,7 +293,10 @@ suite.define(() => {
           await expect
             .poll(() => composer.locator("[data-chat-thinking-slider]").isEnabled())
             .toBe(true);
-          await capture("effort");
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${stage}-effort.png`),
+            animations: "disabled",
+          });
         },
       );
     }

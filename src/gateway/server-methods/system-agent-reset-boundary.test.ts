@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -11,7 +11,6 @@ import {
   createSystemAgentTranscriptStore,
   readTranscriptTailAsync,
 } from "../../system-agent/transcript-store.js";
-import { quietGreetingFacts } from "./system-agent-chat-fixture.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -22,7 +21,12 @@ const greetingMocks = vi.hoisted(() => ({
   createSystemAgentGreetingCache: () => ({ assertCurrent: () => undefined }),
   acknowledgeSystemAgentGreetingDelivery: vi.fn(),
   buildSystemAgentGreetingQuestion: vi.fn(() => undefined),
-  loadSystemAgentGreetingFacts: vi.fn(() => quietGreetingFacts),
+  loadSystemAgentGreetingFacts: vi.fn(() => ({
+    updateAvailable: null,
+    channelHealth: { available: true, degraded: [] },
+    recentExternalEdit: false,
+    auditSequence: 0,
+  })),
   resolveSystemAgentGreeting: vi.fn(async () => ({ text: "welcome text", source: "template" })),
 }));
 
@@ -109,73 +113,75 @@ async function nextSessionSeed() {
   return readTranscriptTailAsync(30, { afterLastReset: true });
 }
 
-it.each([
-  [
-    "inference verification fails",
-    () => {
-      inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
-        ok: false,
-        status: "unavailable",
-        error: "no configured model",
-      });
-    },
-  ],
-  [
-    "welcome construction fails",
-    () => {
-      vi.spyOn(SystemAgentChatEngine.prototype, "loadOverview").mockRejectedValue(
-        new SystemAgentInferenceUnavailableError("conversation"),
-      );
-    },
-  ],
-])("keeps the boundary when %s", async (_label, arrangeFailure) => {
-  expect(await nextSessionSeed()).toEqual(PRE_RESET_TURNS);
-  const dispose = vi.fn(async () => undefined);
-  const sessions = discardableSessions(dispose);
-  arrangeFailure();
-  const respond = await resetSession({ sessions });
-  expect(respond.mock.calls[0]?.[0]).toBe(false);
-  expect(dispose).toHaveBeenCalled();
-  expect(sessions.has("s1")).toBe(false);
-  expect(await nextSessionSeed()).toEqual([]);
-});
-
-it("keeps the boundary when the reset had no live session", async () => {
-  inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
-    ok: false,
-    status: "unavailable",
-    error: "no configured model",
-  });
-  const sessions = new Map<string, SystemAgentChatSession>();
-  const respond = await resetSession({ sessions });
-  expect(respond.mock.calls[0]?.[0]).toBe(false);
-  expect(await nextSessionSeed()).toEqual([]);
-});
-
-it("keeps the boundary when expiring the pending approval throws", async () => {
-  const sessions = discardableSessions(async () => undefined);
-  const session = expectDefined(sessions.get("s1"), "seeded session test invariant");
-  session.pendingApproval = { id: "approval-1" } as SystemAgentChatSession["pendingApproval"];
-  const expire = vi.fn(() => {
-    throw new Error("approval store unavailable");
+describe("openclaw.chat reset boundary", () => {
+  it.each([
+    [
+      "inference verification fails",
+      () => {
+        inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
+          ok: false,
+          status: "unavailable",
+          error: "no configured model",
+        });
+      },
+    ],
+    [
+      "welcome construction fails",
+      () => {
+        vi.spyOn(SystemAgentChatEngine.prototype, "loadOverview").mockRejectedValue(
+          new SystemAgentInferenceUnavailableError("conversation"),
+        );
+      },
+    ],
+  ])("keeps the boundary when %s", async (_label, arrangeFailure) => {
+    expect(await nextSessionSeed()).toEqual(PRE_RESET_TURNS);
+    const dispose = vi.fn(async () => undefined);
+    const sessions = discardableSessions(dispose);
+    arrangeFailure();
+    const respond = await resetSession({ sessions });
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(dispose).toHaveBeenCalled();
+    expect(sessions.has("s1")).toBe(false);
+    expect(await nextSessionSeed()).toEqual([]);
   });
 
-  await expect(resetSession({ sessions, approvalManager: { expire } })).rejects.toThrow(
-    "approval store unavailable",
-  );
-
-  expect(expire).toHaveBeenCalledWith("approval-1", "session-reset");
-  expect(sessions.has("s1")).toBe(false);
-  expect(await nextSessionSeed()).toEqual([]);
-});
-
-it("keeps the boundary when disposing the discarded engine rejects", async () => {
-  const sessions = discardableSessions(async () => {
-    throw new Error("dispose failed");
+  it("keeps the boundary when the reset had no live session", async () => {
+    inferenceFallbackMocks.verifySystemAgentInferenceWithFallback.mockResolvedValueOnce({
+      ok: false,
+      status: "unavailable",
+      error: "no configured model",
+    });
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const respond = await resetSession({ sessions });
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(await nextSessionSeed()).toEqual([]);
   });
 
-  await expect(resetSession({ sessions })).rejects.toThrow("dispose failed");
+  it("keeps the boundary when expiring the pending approval throws", async () => {
+    const sessions = discardableSessions(async () => undefined);
+    const session = expectDefined(sessions.get("s1"), "seeded session test invariant");
+    session.pendingApproval = { id: "approval-1" } as SystemAgentChatSession["pendingApproval"];
+    const expire = vi.fn(() => {
+      throw new Error("approval store unavailable");
+    });
 
-  expect(sessions.has("s1")).toBe(false);
-  expect(await nextSessionSeed()).toEqual([]);
+    await expect(resetSession({ sessions, approvalManager: { expire } })).rejects.toThrow(
+      "approval store unavailable",
+    );
+
+    expect(expire).toHaveBeenCalledWith("approval-1", "session-reset");
+    expect(sessions.has("s1")).toBe(false);
+    expect(await nextSessionSeed()).toEqual([]);
+  });
+
+  it("keeps the boundary when disposing the discarded engine rejects", async () => {
+    const sessions = discardableSessions(async () => {
+      throw new Error("dispose failed");
+    });
+
+    await expect(resetSession({ sessions })).rejects.toThrow("dispose failed");
+
+    expect(sessions.has("s1")).toBe(false);
+    expect(await nextSessionSeed()).toEqual([]);
+  });
 });

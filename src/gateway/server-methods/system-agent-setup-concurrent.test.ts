@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { Compile } from "typebox/compile";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  WizardNextResultSchema,
+  WizardStartResultSchema,
+} from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/io.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -15,9 +20,8 @@ import type { WizardSession } from "../../wizard/session.js";
 import { readSetupConfigFileSnapshot } from "../../wizard/setup.shared.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
-import { startGatewayRequest, wizardResponse } from "./system-agent-chat-fixture.test-support.js";
 import { systemAgentHandlers } from "./system-agent.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { wizardHandlers } from "./wizard.js";
 
 const provider = vi.hoisted(() => ({
@@ -48,6 +52,8 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     cleanup();
   });
 });
+const validateResult = Compile(WizardNextResultSchema);
+const validateStart = Compile(WizardStartResultSchema);
 const model = (id: string): ModelDefinitionConfig => ({
   id,
   name: id,
@@ -75,17 +81,12 @@ beforeEach(() => {
   });
 });
 
-const providerConfig = (changes: Partial<typeof connection>): OpenClawConfig["models"] => ({
-  providers: { fixture: { ...connection, ...changes } },
-});
-const editConfig = async (changes: Partial<OpenClawConfig>) =>
-  writeConfig({ ...(await readConfig()), ...changes });
-
-async function startPrepare(changes: Partial<OpenClawConfig> = {}) {
+async function startPrepare(change: (config: OpenClawConfig) => void = () => {}) {
   let credentialsSaved = false;
   provider.prepare.mockImplementationOnce(async ({ config, prompter }) => {
-    const prepared = { ...structuredClone(config), ...changes };
+    const prepared = structuredClone(config);
     prepared.auth = { profiles: { "fixture:default": { provider: "fixture", mode: "api_key" } } };
+    change(prepared);
     await prompter.text({ message: "Enter provider key", sensitive: true });
     return {
       config: prepared,
@@ -104,18 +105,25 @@ async function startPrepare(changes: Partial<OpenClawConfig> = {}) {
   const context = tracker as GatewayRequestContext;
   const sessionId = "prepare-concurrent";
   const invoke = async (method: string, params: Record<string, unknown>) => {
-    const { calls, pending } = startGatewayRequest(
+    const respond = vi.fn<RespondFn>();
+    await expectDefined(
       systemAgentHandlers[method] ?? wizardHandlers[method],
-      {
-        req: { type: "req", id: "request", method, params },
-        params,
-        context,
-        client: null,
-        isWebchatConnect: () => false,
-      },
-    );
-    await pending;
-    return wizardResponse(calls, true);
+      method,
+    )({
+      req: { type: "req", id: "request", method, params },
+      params,
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(respond).toHaveBeenCalledOnce();
+    const [ok, payload] = expectDefined(respond.mock.calls[0], "Gateway response");
+    expect(ok).toBe(true);
+    if (!validateResult.Check(payload) && !validateStart.Check(payload)) {
+      throw new Error("Invalid wizard response");
+    }
+    return payload;
   };
   await invoke("openclaw.setup.prepare.start", { sessionId, authChoice: "fixture" });
   sessions.add(expectDefined(tracker.wizardSessions.get(sessionId), "prepared session"));
@@ -123,67 +131,80 @@ async function startPrepare(changes: Partial<OpenClawConfig> = {}) {
   expect(prompt.step).toMatchObject({ type: "text", message: "Enter provider key" });
   const stepId = expectDefined(prompt.step, "provider prompt").id;
   return {
-    complete: async (status = "done") => {
-      const result = await invoke("wizard.next", {
-        sessionId,
-        answer: { stepId, value: "synthetic-key" },
-      });
-      expect(result).toMatchObject({ done: true, status });
-      expect(credentialsSaved).toBe(true);
-      return result;
-    },
+    credentialsSaved: () => credentialsSaved,
+    complete: () =>
+      invoke("wizard.next", { sessionId, answer: { stepId, value: "synthetic-key" } }),
   };
 }
 
-it.each(["invalid JSON", "conflicting provider"] as const)(
-  "preserves %s and reports that credentials were saved",
-  async (edit) => {
-    const conflict = edit === "conflicting provider";
-    const setup = await startPrepare(
-      conflict
-        ? {
-            models: providerConfig({ baseUrl: "http://127.0.0.1:11435" }),
-          }
-        : {},
-    );
-    const invalid = '{ "messages":';
-    if (conflict) {
-      await editConfig({ models: providerConfig({ baseUrl: "http://127.0.0.1:11436" }) });
-    } else {
-      fs.writeFileSync(configPath, invalid);
-    }
-    const result = await setup.complete("error");
+describe("setup prepare concurrent config writes", () => {
+  it("preserves invalid concurrent edits and reports that credentials were saved", async () => {
+    const setup = await startPrepare();
+    const edited = '{ "messages":';
+    fs.writeFileSync(configPath, edited);
+
+    const result = await setup.complete();
+    expect(setup.credentialsSaved()).toBe(true);
+    expect(result).toMatchObject({ done: true, status: "error" });
     expect(result.error).toContain("Credentials saved, but provider settings could not be applied");
-    if (conflict) {
-      expect(result.error).toContain("Review the current settings and retry");
-      expect((await readConfig()).models?.providers?.fixture?.baseUrl).toBe(
-        "http://127.0.0.1:11436",
-      );
-    } else {
-      expect(fs.readFileSync(configPath, "utf8")).toBe(invalid);
-    }
-  },
-);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(edited);
+  });
 
-it("keeps an unrelated edit made while provider login is pending", async () => {
-  const setup = await startPrepare();
-  await editConfig({ messages: { ackReaction: "concurrent-edit" } });
-  await setup.complete();
-  expect(await readConfig()).toMatchObject({
-    messages: { ackReaction: "concurrent-edit" },
-    auth: { profiles: { "fixture:default": { provider: "fixture", mode: "api_key" } } },
-  });
-});
+  it("keeps an unrelated edit made while provider login is pending", async () => {
+    const setup = await startPrepare();
+    const concurrent = await readConfig();
+    concurrent.messages = { ackReaction: "concurrent-edit" };
+    writeConfig(concurrent);
 
-it("keeps distinct model rows added by setup and a concurrent editor", async () => {
-  const setup = await startPrepare({
-    models: providerConfig({ models: [...connection.models, model("prepared")] }),
+    expect(await setup.complete()).toMatchObject({ done: true, status: "done" });
+    expect(setup.credentialsSaved()).toBe(true);
+    expect(await readConfig()).toMatchObject({
+      messages: { ackReaction: "concurrent-edit" },
+      auth: { profiles: { "fixture:default": { provider: "fixture", mode: "api_key" } } },
+    });
   });
-  await editConfig({
-    models: providerConfig({ models: [...connection.models, model("concurrent")] }),
+
+  it("keeps distinct model rows added by setup and a concurrent editor", async () => {
+    const setup = await startPrepare((config) => {
+      config.models = {
+        providers: {
+          fixture: { ...connection, models: [...connection.models, model("prepared")] },
+        },
+      };
+    });
+    const concurrent = await readConfig();
+    concurrent.models = {
+      providers: {
+        fixture: { ...connection, models: [...connection.models, model("concurrent")] },
+      },
+    };
+    writeConfig(concurrent);
+
+    expect(await setup.complete()).toMatchObject({ done: true, status: "done" });
+    expect((await readConfig()).models?.providers?.fixture?.models).toEqual([
+      model("existing"),
+      model("concurrent"),
+      model("prepared"),
+    ]);
   });
-  await setup.complete();
-  expect((await readConfig()).models?.providers?.fixture?.models).toEqual(
-    ["existing", "concurrent", "prepared"].map(model),
-  );
+
+  it("reports saved credentials when the same provider setting changed during login", async () => {
+    const setup = await startPrepare((config) => {
+      config.models = {
+        providers: { fixture: { ...connection, baseUrl: "http://127.0.0.1:11435" } },
+      };
+    });
+    const concurrent = await readConfig();
+    concurrent.models = {
+      providers: { fixture: { ...connection, baseUrl: "http://127.0.0.1:11436" } },
+    };
+    writeConfig(concurrent);
+
+    const result = await setup.complete();
+    expect(setup.credentialsSaved()).toBe(true);
+    expect(result).toMatchObject({ done: true, status: "error" });
+    expect(result.error).toContain("Credentials saved, but provider settings could not be applied");
+    expect(result.error).toContain("Review the current settings and retry");
+    expect((await readConfig()).models?.providers?.fixture?.baseUrl).toBe("http://127.0.0.1:11436");
+  });
 });
