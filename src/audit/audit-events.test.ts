@@ -12,7 +12,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
-import { assertAuditOverflowRetention } from "./audit-event-retention.test-support.js";
+import {
+  assertAuditOverflowRetention,
+  assertAuditRetentionCountDrift,
+} from "./audit-event-retention.test-support.js";
 import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
@@ -246,6 +249,10 @@ describe("audit event persistence", () => {
     );
     expect(next?.sequence).toBe(3);
     expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([next, first]);
+  });
+
+  it("repairs retention count drift once without repeated pruning reads", () => {
+    assertAuditRetentionCountDrift(openOpenClawStateDatabase(createDatabaseOptions()));
   });
 
   it("prunes overflow in one statement and keeps the retained sequence window", () => {

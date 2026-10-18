@@ -576,7 +576,7 @@ function deleteExpiredAuditEvents(db: EngineConnection, now: number) {
 function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequence: number): void {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const cached = auditEventRetention.get(db);
-  const retention = cached
+  let retention = cached
     ? {
         rowCount: cached.rowCount + 1,
         nextExpiryAt: Math.min(cached.nextExpiryAt, at + AUDIT_EVENT_RETENTION_MS),
@@ -599,8 +599,14 @@ function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequenc
       db,
       kysely.deleteFrom("audit_events").where("sequence", "<=", overflowCutoff),
     );
-    retention.rowCount = Math.max(0, retention.rowCount - Number(overflow.numAffectedRows ?? 0n));
-    pruned = true;
+    const deleted = Number(overflow.numAffectedRows ?? 0n);
+    if (deleted > 0) {
+      retention.rowCount = Math.max(0, retention.rowCount - deleted);
+      pruned = true;
+    } else {
+      retention = readAuditEventRetention(db);
+      pruned = false;
+    }
   }
   if (pruned) {
     const oldest = executeSqliteQueryTakeFirstSync(
