@@ -55,11 +55,9 @@ function opencodeHarness(enabled: () => boolean = () => true) {
     agents: [agent("opencode", "OpenCode", { enabled: enabled() })],
   }));
 }
-const wizardSelector = ".model-setup-wizard";
-const primarySelector = ".model-setup-wizard .btn.primary";
-const wizard = (page: ModelProvidersPageTestElement) => page.querySelector(wizardSelector);
+const wizard = (page: ModelProvidersPageTestElement) => page.querySelector(".model-setup-wizard");
 const primary = (page: ModelProvidersPageTestElement) =>
-  page.querySelector<HTMLButtonElement>(primarySelector)!;
+  page.querySelector<HTMLButtonElement>(".model-setup-wizard .btn.primary")!;
 
 function agentRow(page: ModelProvidersPageTestElement, id: string) {
   return page.querySelector<HTMLElement>(`[data-installed-agent="${id}"]`);
@@ -82,7 +80,7 @@ const nativeAgents = (enabled: boolean) => ({
 function consentRequest(
   request: ReturnType<typeof createAgentsHarness>["request"],
   answer: (value: unknown) => unknown,
-  step: { id: string; type: string; message: string; title?: string },
+  step: { message?: string; title?: string } = {},
   cancel = false,
 ) {
   const original = request.getMockImplementation()!;
@@ -93,7 +91,11 @@ function consentRequest(
     if (method === "wizard.next") {
       return params?.answer
         ? answer(params.answer.value)
-        : { done: false, status: "running", step };
+        : {
+            done: false,
+            status: "running",
+            step: { id: "runtime-consent", type: "confirm", message: "Allow runtime?", ...step },
+          };
     }
     if (cancel && method === "wizard.cancel") {
       return { status: "cancelled" };
@@ -142,8 +144,6 @@ describe("ModelProvidersPage installed agents", () => {
         return { done: true, status: "done" };
       },
       {
-        id: "runtime-consent",
-        type: "confirm",
         title: "Installed agent permissions",
         message: "Allow this runtime to execute code?",
       },
@@ -185,16 +185,13 @@ describe("ModelProvidersPage installed agents", () => {
       expect(close).toBeDefined();
       close!.click();
       await waitForSolid(() => expect(wizard(page)).toBeNull());
-      expect(
-        agentRow(page, "opencode")?.querySelector<HTMLInputElement>('[role="switch"]')?.checked,
-      ).toBe(true);
+      expect(toggle(page)).toMatchObject({ checked: true });
     } finally {
       unmountPage(page);
       restoreDialog();
     }
   });
 
-  // SAFETY: Literal cases preserve the distinct selection and connection retirement scenarios.
   it.each(["agent", "selection revision", "connection"] as const)(
     "retires an in-flight consent presentation when its %s changes",
     async (change) => {
@@ -208,16 +205,7 @@ describe("ModelProvidersPage installed agents", () => {
         notifySelection,
         publishPhase,
       } = opencodeHarness(() => false);
-      consentRequest(
-        request,
-        () => answer.promise,
-        {
-          id: "runtime-consent",
-          type: "confirm",
-          message: "Allow runtime?",
-        },
-        true,
-      );
+      consentRequest(request, () => answer.promise, {}, true);
       const page = appendPage(context);
       try {
         await waitForProviders(page);
@@ -330,11 +318,7 @@ describe("ModelProvidersPage installed agents", () => {
       expect(agentText(page)).toMatch(/discovering models/i);
       expect(agentText(page)).not.toMatch(/sign.in/i);
     });
-    expect(
-      agentRow(page, "opencode")?.querySelector<HTMLInputElement>(
-        '.settings-toggle__input[role="switch"]',
-      )?.disabled,
-    ).toBe(false);
+    expect(toggle(page)).toMatchObject({ disabled: false });
     page
       .querySelector<HTMLButtonElement>(
         ".model-providers__installed-agents .model-providers__refresh-button",
@@ -371,13 +355,10 @@ describe("ModelProvidersPage installed agents", () => {
 
     await waitForSolid(() => {
       expect(reads).toBe(3);
-      expect(toggle(page).checked).toBe(false);
-      expect(toggle(page).disabled).toBe(false);
+      expect(toggle(page)).toMatchObject({ checked: false, disabled: false });
     });
     expect(runtimeConfig.patch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        raw: nativeAgents(false),
-      }),
+      expect.objectContaining({ raw: nativeAgents(false) }),
     );
     staleRead.resolve({ agents: [agent("opencode", "OpenCode", { enabled: true })] });
     await staleRead.promise;
@@ -500,7 +481,7 @@ describe("ModelProvidersPage installed agents", () => {
 
     clickAgent(page);
 
-    expect(toggle(page)?.disabled).toBe(true);
+    expect(toggle(page)).toMatchObject({ disabled: true });
     expect(page.querySelector(".model-providers__installed-agents")?.textContent).toContain(
       "Model changes require operator.admin access.",
     );

@@ -8,11 +8,14 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { loadModelProviderCost, loadModelProvidersData } from "./load.ts";
 
 const emptyAuth = { ts: 1, providers: [] };
-function mockModelRequests(
+const model = { id: "configured", name: "Configured", provider: "test-provider" };
+const expectedModels = [{ ...model }];
+function harness(
   catalog: (params?: unknown) => unknown,
   auth: () => unknown = () => emptyAuth,
+  raw = false,
 ) {
-  return vi.fn(async (method: string, params?: unknown) => {
+  const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "models.authStatus") {
       return auth();
     }
@@ -21,149 +24,150 @@ function mockModelRequests(
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-}
-function cachedModels(client: GatewayBrowserClient, agentId = "main", allowStale = false) {
-  return peekModelCatalog(client, { agentId }, { allowStale })?.models;
+  const client = raw
+    ? ({ request } as unknown as GatewayBrowserClient)
+    : createTestGatewayClient(request);
+  return {
+    request,
+    client,
+    load: (refresh = false, signal?: AbortSignal) =>
+      loadModelProvidersData(client, { agentId: "main", refresh, signal }),
+    cached: (allowStale = false) => peekModelCatalog(client, { agentId: "main" }, { allowStale }),
+  };
 }
 
 describe("loadModelProvidersData", () => {
   it("reads the refreshed catalog after failed auth publication", async () => {
     const auth = createDeferred();
-    let authPending = true;
-    const client = createTestGatewayClient(async (method) => {
-      if (method === "models.authStatus") {
+    let pending = true;
+    const h = harness(
+      () => {
+        if (pending) {
+          throw new Error("Model catalog changed while preparing this result. Retry the request.");
+        }
+        return { models: [model] };
+      },
+      async () => {
         try {
           await auth.promise;
         } finally {
-          authPending = false;
+          pending = false;
         }
         return emptyAuth;
-      }
-      if (method === "models.list") {
-        if (authPending) {
-          throw new Error("Model catalog changed while preparing this result. Retry the request.");
-        }
-        return { models: [{ id: "published", name: "Published", provider: "ollama" }] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-
-    const loading = loadModelProvidersData(client, { agentId: "writer", refresh: true });
+      },
+    );
+    const loading = h.load(true);
     auth.reject(new Error("Authentication status unavailable"));
-    const result = await loading;
-
-    expect(cachedModels(client, "writer")).toEqual([
-      { id: "published", name: "Published", provider: "ollama" },
-    ]);
-    expect(result.catalogError).toBeNull();
-    expect(result.error).toBe("Authentication status unavailable");
+    expect(await loading).toMatchObject({
+      catalogError: null,
+      error: "Authentication status unavailable",
+    });
+    expect(h.cached()?.models).toEqual(expectedModels);
   });
 
   it("does not acquire models when the page retires during auth publication", async () => {
     const auth = createDeferred();
-    const modelRequests: unknown[] = [];
-    const client = createTestGatewayClient(async (method, params) => {
-      if (method === "models.authStatus") {
-        await auth.promise;
-        return emptyAuth;
-      }
-      if (method === "models.list") {
-        modelRequests.push(params);
-        return { models: [] };
-      }
-      throw new Error(`Unexpected request: ${method}`);
+    const catalog = vi.fn(() => ({ models: [] }));
+    const h = harness(catalog, async () => {
+      await auth.promise;
+      return emptyAuth;
     });
     const controller = new AbortController();
-
-    const loading = loadModelProvidersData(client, {
-      agentId: "writer",
-      refresh: true,
-      signal: controller.signal,
-    });
+    const loading = h.load(true, controller.signal);
     controller.abort();
     auth.resolve();
     await loading;
-
-    expect(modelRequests).toEqual([]);
+    expect(catalog).not.toHaveBeenCalled();
   });
 
   it("keeps failed provider outcomes from a fulfilled explicit refresh", async () => {
-    const client = createTestGatewayClient(async (method) => {
-      if (method === "models.list") {
-        return {
-          models: [{ provider: "ollama", id: "retained", name: "Retained model", available: true }],
-          refreshFailed: true,
-          providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-        };
-      }
-      return method === "models.authStatus" ? { ts: 1, providers: [] } : {};
+    const retained = {
+      provider: "ollama",
+      id: "retained",
+      name: "Retained model",
+      available: true,
+    };
+    const h = harness(() => ({
+      models: [retained],
+      refreshFailed: true,
+      providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+    }));
+    expect(await h.load(true)).toMatchObject({
+      providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
+      catalogError: "More models could not be discovered.",
+      error: null,
     });
-    const result = await loadModelProvidersData(client, { agentId: "main", refresh: true });
-
-    expect(result.providerOutcomes).toEqual([{ provider: "ollama", status: "unavailable" }]);
-    expect(cachedModels(client, "main", true)).toEqual([
+    expect(h.cached(true)?.models).toEqual([
       { provider: "ollama", id: "retained", name: "Retained model", available: true },
     ]);
-    expect(result.catalogError).toBe("More models could not be discovered.");
-    expect(peekModelCatalog(client, { agentId: "main" })).toBeUndefined();
-    expect(result.error).toBeNull();
+    expect(h.cached()).toBeUndefined();
   });
 
-  it("surfaces an initial catalog failure without discarding provider data", async () => {
-    const request = mockModelRequests(
-      () => {
-        throw new Error("configured catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
-      },
-      () => ({
-        ts: 1,
-        providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
-      }),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const result = await loadModelProvidersData(client, { agentId: "main" });
-
-    expect(peekModelCatalog(client, { agentId: "main" })).toBeUndefined();
-    expect(result.catalogError).toBe(
-      "configured catalog unavailable: OPENAI_API_KEY=sk-123...cdef",
-    );
-    expect(result.authStatus?.providers).toHaveLength(1);
-    expect(result.error).toBeNull();
-  });
+  it.each([false, true])(
+    "retains provider data when catalog refresh=%s fails and redacts its error",
+    async (refresh) => {
+      const prefix = refresh ? "catalog refresh failed" : "configured catalog unavailable";
+      const h = harness(
+        (params) => {
+          if (!refresh || (params as { refresh?: boolean } | undefined)?.refresh) {
+            throw new Error(`${prefix}: OPENAI_API_KEY=sk-1234567890abcdef`);
+          }
+          return { models: [model] };
+        },
+        () => ({
+          ...emptyAuth,
+          providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
+          ...(refresh ? { providerCapabilities: [] } : {}),
+        }),
+        true,
+      );
+      if (refresh) {
+        await h.load();
+        h.request.mockClear();
+      }
+      const result = await h.load(refresh);
+      expect(result).toMatchObject({
+        catalogError: `${prefix}: OPENAI_API_KEY=sk-123...cdef`,
+        error: null,
+      });
+      expect(result.authStatus?.providers).toHaveLength(1);
+      if (refresh) {
+        expect(h.cached()?.models).toEqual(expectedModels);
+        expect(h.request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+          ["models.list", { view: "configured", agentId: "main", refresh: true }],
+          ["models.list", { view: "configured", agentId: "main" }],
+        ]);
+      } else {
+        expect(h.cached()).toBeUndefined();
+      }
+    },
+  );
 
   it("surfaces unavailable auth preparation without discarding configured models", async () => {
     const unavailable = {
       code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
       message: "Model authentication status is unavailable. Refresh Models after setup finishes.",
     };
-    const request = mockModelRequests(
-      () => ({ models: [{ id: "configured", name: "Configured", provider: "test-provider" }] }),
-      () => ({ ts: 1, providers: [], unavailable }),
+    const h = harness(
+      () => ({ models: [model] }),
+      () => ({ ...emptyAuth, unavailable }),
     );
-
-    const client = createTestGatewayClient(request);
-    const result = await loadModelProvidersData(client, {
-      agentId: "main",
+    expect(await h.load()).toMatchObject({
+      error: unavailable.message,
+      authStatus: { unavailable },
     });
-
-    expect(result.error).toBe(unavailable.message);
-    expect(result.authStatus).toMatchObject({ unavailable });
-    expect(cachedModels(client)).toEqual([
-      { id: "configured", name: "Configured", provider: "test-provider" },
-    ]);
+    expect(h.cached()?.models).toEqual(expectedModels);
   });
 
   it("retries a missing auth-status response without discarding other provider data", async () => {
     let malformed = true;
-    const request = mockModelRequests(
+    const h = harness(
       () => ({ models: [] }),
       () => (malformed ? undefined : { ts: 2, providers: [] }),
+      true,
     );
-    const client = { request } as unknown as GatewayBrowserClient;
-
-    const result = await loadModelProvidersData(client, { agentId: "main" });
-
-    expect(cachedModels(client)).toEqual([]);
+    const result = await h.load();
+    expect(h.cached()?.models).toEqual([]);
     expect(result.authStatus).toEqual({ ts: 0, providers: [] });
     expect(result).toMatchObject({
       providerOutcomes: [],
@@ -173,11 +177,10 @@ describe("loadModelProvidersData", () => {
       error: null,
     });
     malformed = false;
-    expect((await loadModelProvidersData(client, { agentId: "main" })).authStatus).toEqual({
-      ts: 2,
-      providers: [],
-    });
-    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
+    expect((await h.load()).authStatus).toEqual({ ts: 2, providers: [] });
+    expect(h.request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
+      2,
+    );
   });
 
   it("retires both supplemental requests when aborted while pending", async () => {
@@ -215,35 +218,9 @@ describe("loadModelProvidersData", () => {
       expect(pending.hasPending).toBe(false);
       expect(await loading).toMatchObject([{ status: "rejected" }, { status: "rejected" }]);
     } finally {
-      // Release any leaked wait if a cancellation regression makes the assertion fail.
+      // Release a leaked wait even if cancellation regresses.
       pending.flush(new Error("test cleanup"));
       await loading;
     }
-  });
-
-  it("surfaces an explicit catalog refresh failure while retaining published configured models", async () => {
-    const request = mockModelRequests(
-      (params) => {
-        if ((params as { refresh?: boolean } | undefined)?.refresh === true) {
-          throw new Error("catalog refresh failed: OPENAI_API_KEY=sk-1234567890abcdef");
-        }
-        return { models: [{ id: "cached", name: "Cached", provider: "openai" }] };
-      },
-      () => ({ ...emptyAuth, providerCapabilities: [] }),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    await loadModelProvidersData(client, { agentId: "writer" });
-    request.mockClear();
-
-    const result = await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
-
-    expect(result.catalogError).toBe("catalog refresh failed: OPENAI_API_KEY=sk-123...cdef");
-    expect(cachedModels(client, "writer")).toEqual([
-      { id: "cached", name: "Cached", provider: "openai" },
-    ]);
-    expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
-      ["models.list", { view: "configured", agentId: "writer", refresh: true }],
-      ["models.list", { view: "configured", agentId: "writer" }],
-    ]);
   });
 });

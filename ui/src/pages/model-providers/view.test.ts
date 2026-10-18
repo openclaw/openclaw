@@ -41,6 +41,16 @@ function noModels() {
     availableModelCount: 0,
   });
 }
+function renderCard(
+  details: Parameters<typeof card>[0],
+  overrides: Partial<ModelProvidersViewProps> = {},
+) {
+  return render({ ...overrides, cards: [card(details)] });
+}
+type Probe = ModelProvidersViewProps["probeResults"][string];
+function probeResults(results: Probe["results"], overrides: Partial<Probe> = {}) {
+  return { openai: { provider: "openai", status: "ok" as const, results, ...overrides } };
+}
 function expectText(root: Element | null, includes: string[], excludes: string[] = []) {
   for (const value of includes) {
     expect(text(root)).toContain(value);
@@ -302,30 +312,28 @@ describe("renderModelProviders", () => {
 
   it("locks provider and default-model mutations while shared config work is pending", async () => {
     const onPrimaryChange = vi.fn();
-    const container = render({
-      configBusy: true,
-      onPrimaryChange,
-      defaultModels: modelDefaults("openai/gpt-5", null, ["anthropic/claude"]),
-      configuredModels: [
-        { id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true },
-        { id: "anthropic/claude", provider: "anthropic", name: "Claude", available: true },
-      ],
-      cards: [
-        card({
-          hasConfigApiKey: true,
-          apiKey: { source: "config" },
-          profiles: [
-            { profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true },
-          ],
-          logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
-        }),
-      ],
-      keyEditorProvider: "openai",
-      keyDraft: "replacement",
-      addProviderOpen: true,
-      addProviderId: "anthropic",
-      addProviderKey: "new-provider-key",
-    });
+    const container = renderCard(
+      {
+        hasConfigApiKey: true,
+        apiKey: { source: "config" },
+        profiles: [{ profileId: "openai:one", type: "oauth", status: "ok", logoutSupported: true }],
+        logoutTargets: [{ provider: "openai", profileIds: ["openai:one"] }],
+      },
+      {
+        configBusy: true,
+        onPrimaryChange,
+        defaultModels: modelDefaults("openai/gpt-5", null, ["anthropic/claude"]),
+        configuredModels: [
+          { id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true },
+          { id: "anthropic/claude", provider: "anthropic", name: "Claude", available: true },
+        ],
+        keyEditorProvider: "openai",
+        keyDraft: "replacement",
+        addProviderOpen: true,
+        addProviderId: "anthropic",
+        addProviderKey: "new-provider-key",
+      },
+    );
 
     const defaults = find(container, defaultsSelector);
     await updatePickers(container);
@@ -447,27 +455,23 @@ describe("renderModelProviders", () => {
 
   it("renders credential provenance and per-credential request timing without aggregate timing", () => {
     const container = render({
-      probeResults: {
-        openai: {
-          provider: "openai",
-          status: "ok",
-          latencyMs: 9_145,
-          results: [
-            {
-              profileId: "openai:default",
-              label: "Default profile",
-              status: "ok",
-              latencyMs: 145,
-            },
-            {
-              profileId: "openai:secondary",
-              label: "Secondary profile",
-              status: "ok",
-              latencyMs: 320,
-            },
-          ],
-        },
-      },
+      probeResults: probeResults(
+        [
+          {
+            profileId: "openai:default",
+            label: "Default profile",
+            status: "ok",
+            latencyMs: 145,
+          },
+          {
+            profileId: "openai:secondary",
+            label: "Secondary profile",
+            status: "ok",
+            latencyMs: 320,
+          },
+        ],
+        { status: "ok", latencyMs: 9_145 },
+      ),
     });
     const provider = find(container, '[data-provider-id="openai"]');
     expectText(provider, [
@@ -514,20 +518,17 @@ describe("renderModelProviders", () => {
   it.each([true])(
     "does not present catalog-rejected credentials as signed in (configured key: %s)",
     (hasConfigApiKey) => {
-      const container = render({
-        cards: [
-          card({
-            auth: { kind: "ok" },
-            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
-            hasConfigApiKey,
-            catalogStatus: "auth-rejected",
-            modelCount: 0,
-            availableModelCount: 0,
-          }),
-        ],
-        configuredModels: [],
-        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-      });
+      const container = renderCard(
+        {
+          auth: { kind: "ok" },
+          profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
+          hasConfigApiKey,
+          catalogStatus: "auth-rejected",
+          modelCount: 0,
+          availableModelCount: 0,
+        },
+        { configuredModels: [], defaultModels: { primary: "", fallbacks: [], utilityModel: null } },
+      );
 
       const provider = find(container, '[data-provider-id="openai"]');
       expect(text(provider)).toContain("Credentials rejected");
@@ -539,12 +540,8 @@ describe("renderModelProviders", () => {
   );
 
   it("labels provider usage and session cost as global", () => {
-    const container = render({
-      cards: [
-        card({
-          localCost: { totalCost: 12, totalTokens: 1_000, messageCount: 2 },
-        }),
-      ],
+    const container = renderCard({
+      localCost: { totalCost: 12, totalTokens: 1_000, messageCount: 2 },
     });
 
     const provider = find(container, '[data-provider-id="openai"]');
@@ -556,9 +553,7 @@ describe("renderModelProviders", () => {
   });
 
   it("does not invent config key provenance when auth status is unavailable", () => {
-    const container = render({
-      cards: [card({ apiKey: undefined, hasConfigApiKey: true })],
-    });
+    const container = renderCard({ apiKey: undefined, hasConfigApiKey: true });
 
     const provider = find(container, '[data-provider-id="openai"]');
     expectText(provider, ["Not configured"], ["API key set in config"]);
@@ -566,27 +561,23 @@ describe("renderModelProviders", () => {
 
   it("renders mixed credential probes as connected with warnings", () => {
     const container = render({
-      probeResults: {
-        openai: {
-          provider: "openai",
-          status: "ok",
-          latencyMs: 145,
-          results: [
-            {
-              label: "Configured credential · openai/gpt-5.6-sol",
-              status: "unknown",
-              error:
-                "The configured credential could not be resolved. Update or remove it, then retry.",
-            },
-            {
-              profileId: "openai:default",
-              label: "Profile Default · openai/gpt-5.6-sol",
-              status: "ok",
-              latencyMs: 145,
-            },
-          ],
-        },
-      },
+      probeResults: probeResults(
+        [
+          {
+            label: "Configured credential · openai/gpt-5.6-sol",
+            status: "unknown",
+            error:
+              "The configured credential could not be resolved. Update or remove it, then retry.",
+          },
+          {
+            profileId: "openai:default",
+            label: "Profile Default · openai/gpt-5.6-sol",
+            status: "ok",
+            latencyMs: 145,
+          },
+        ],
+        { status: "ok", latencyMs: 145 },
+      ),
     });
 
     const probe = find(container, ".model-providers__probe--warning");
@@ -605,20 +596,16 @@ describe("renderModelProviders", () => {
     const container = render({
       cards: [noModels()],
       configuredModels: [],
-      probeResults: {
-        openai: {
-          provider: "openai",
-          status: "no_model",
-          error: "No model is available for this provider.",
-          results: [
-            {
-              profileId: "openai:chatgpt",
-              label: "ChatGPT",
-              status: "no_model",
-            },
-          ],
-        },
-      },
+      probeResults: probeResults(
+        [
+          {
+            profileId: "openai:chatgpt",
+            label: "ChatGPT",
+            status: "no_model",
+          },
+        ],
+        { status: "no_model", error: "No model is available for this provider." },
+      ),
     });
 
     const provider = find(container, '[data-provider-id="openai"]');
@@ -717,10 +704,10 @@ describe("renderModelProviders", () => {
 
   it("uses every credential owner id for connection probes", () => {
     const onProbe = vi.fn();
-    const container = render({
-      cards: [card({ credentialProviderIds: ["anthropic", "claude-cli"] })],
-      onProbe,
-    });
+    const container = renderCard(
+      { credentialProviderIds: ["anthropic", "claude-cli"] },
+      { onProbe },
+    );
     button(container, "Test connection")?.click();
     expect(onProbe).toHaveBeenCalledWith("openai", ["anthropic", "claude-cli"]);
   });
@@ -772,9 +759,7 @@ describe("renderModelProviders", () => {
   });
 
   it("disables API-key mutations for explicit non-API-key auth modes", () => {
-    const container = render({
-      cards: [card({ configAuthMode: "oauth" })],
-    });
+    const container = renderCard({ configAuthMode: "oauth" });
     const setKey = button(container, "Set API key");
     expect(setKey?.disabled).toBe(true);
     expect(setKey?.title).toContain('auth mode is "oauth"');

@@ -51,31 +51,15 @@ function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProf
   };
 }
 
-const mountedProfiles = new WeakMap<
-  HTMLElement,
-  (card: ModelProviderCard, props: ProviderProfilesViewProps) => void
->();
-
-function mount(
-  providerCard: ModelProviderCard,
-  viewProps: ProviderProfilesViewProps,
-  container?: HTMLElement,
-): HTMLElement {
-  const update = container && mountedProfiles.get(container);
-  if (container && update) {
-    update(providerCard, { ...viewProps });
-    flush();
-    return container;
-  }
+function mount(providerCard: ModelProviderCard, viewProps = props()) {
   const [current, setCurrent] = createSignal({ card: providerCard, props: viewProps });
-  const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />, {
-    container,
-  });
-  mountedProfiles.set(view.container, (nextCard, nextProps) =>
-    setCurrent({ card: nextCard, props: nextProps }),
-  );
+  const view = mountSolid(() => <ProviderProfiles {...current().props} card={current().card} />);
+  const update = (nextCard: ModelProviderCard, nextProps: ProviderProfilesViewProps) => {
+    setCurrent({ card: nextCard, props: nextProps });
+    flush();
+  };
   flush();
-  return view.container;
+  return { container: view.container, update };
 }
 
 function reorderCard(): ModelProviderCard {
@@ -114,7 +98,7 @@ function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) 
 
 function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const providerCard = reorderCard();
-  const container = mount(providerCard, viewProps);
+  const { container, update } = mount(providerCard, viewProps);
   const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
   const target = rowFor(container, "account:three");
   // Different row heights occur when account metadata wraps on narrow screens.
@@ -132,7 +116,7 @@ function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const hitTest = vi.fn((): Element | null => target);
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hitTest });
   const row = grip.closest<HTMLElement>(rowSelector)!;
-  return { container, grip, row, rows, target, hitTest, providerCard };
+  return { container, update, grip, row, rows, target, hitTest, providerCard };
 }
 
 describe("renderProviderProfiles", () => {
@@ -150,14 +134,10 @@ describe("renderProviderProfiles", () => {
     const onProfileOrderChange = vi.fn();
     const providerCard = card({
       profiles: [
-        makeProfile("openai:configured", { source: "config", email: "configured@example.com" }),
-        makeProfile("openai:codex", {
-          source: "external",
-          displayName: "Codex import",
-          email: "codex@example.com",
-        }),
-        makeProfile("openai:saved", { source: "saved", email: "saved@example.com" }),
-        makeProfile("openai:inherited", { source: "inherited", email: "inherited@example.com" }),
+        makeProfile("openai:configured", { source: "config" }),
+        makeProfile("openai:codex", { source: "external", displayName: "Codex import" }),
+        makeProfile("openai:saved", { source: "saved" }),
+        makeProfile("openai:inherited", { source: "inherited" }),
       ],
       profileProviderIds: {
         "openai:configured": "openai-config",
@@ -190,65 +170,65 @@ describe("renderProviderProfiles", () => {
     expect(onProfileOrderChange).not.toHaveBeenCalled();
   });
 
-  it("points auth-config priority locks to auth.order", () => {
-    const container = mount(
+  it.each<[string, ModelProviderCard, string, number, boolean, string[]]>([
+    [
+      "auth-config lock",
       pairedCard("openai", "openai", {
         profileOrderLocks: { openai: "auth-config" },
       }),
-      props(),
-    );
-
-    expect(container.textContent).toContain("Priority is managed by auth.order");
-    expect(container.textContent).not.toContain("provider configuration");
-    expect(container.querySelectorAll(gripSelector)).toHaveLength(0);
-  });
-
-  it("keeps an environment API-key source visible beside account profiles", () => {
-    const result = mount(
+      "Priority is managed by auth.order",
+      0,
+      false,
+      ["provider configuration"],
+    ],
+    [
+      "stale stored order",
+      pairedCard("openai", "openai", {
+        profileOrders: { openai: ["openai:removed", "openai:one"] },
+        profileOrderStoredProviders: ["openai"],
+      }),
+      "Clear custom order",
+      2,
+      true,
+      [],
+    ],
+    [
+      "shared cross-route order",
+      pairedCard("shared-owner", "shared", {
+        id: "route-one",
+        profileOrders: { "shared-owner": ["shared:one", "shared:two", "shared:three"] },
+      }),
+      "Priority is inherited or managed across provider routes",
+      0,
+      false,
+      [],
+    ],
+    [
+      "environment credential with one saved account",
       card({
         apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
         profiles: [makeProfile("openai:oauth", { source: "saved" })],
         profileOrders: { openai: ["openai:oauth"] },
       }),
-      props(),
-    );
-
-    expect(result.textContent).toContain("API key from environment (OPENAI_API_KEY)");
-  });
-
-  it("disables reordering when a same-length stored order contains a stale profile", () => {
+      "API key from environment (OPENAI_API_KEY)",
+      0,
+      false,
+      [],
+    ],
+  ])("locks reordering for %s", (_name, providerCard, message, count, disabled, excluded) => {
     const onProfileOrderChange = vi.fn();
-    const providerCard = pairedCard("openai", "openai", {
-      profileOrders: { openai: ["openai:removed", "openai:one"] },
-      profileOrderStoredProviders: ["openai"],
-    });
-
-    const container = mount(providerCard, props({ onProfileOrderChange }));
-    const grips = container.querySelectorAll<HTMLButtonElement>(gripSelector);
-    expect(grips).toHaveLength(2);
-    expect([...grips].every((grip) => grip.disabled)).toBe(true);
-    expect(container.textContent).toContain("Clear custom order");
-    pointer(grips[0]!, "pointerdown");
-    grips[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-  });
-
-  it("identifies managed priority when a shared order spans provider routes", () => {
-    const onProfileOrderChange = vi.fn();
-    const container = mount(
-      pairedCard("shared-owner", "shared", {
-        id: "route-one",
-        profileOrders: {
-          "shared-owner": ["shared:one", "shared:two", "shared:three"],
-        },
-      }),
-      props({ onProfileOrderChange }),
-    );
-
-    expect(container.querySelectorAll(gripSelector)).toHaveLength(0);
-    expect(container.textContent).toContain(
-      "Priority is inherited or managed across provider routes",
-    );
+    const { container } = mount(providerCard, props({ onProfileOrderChange }));
+    const grips = [...container.querySelectorAll<HTMLButtonElement>(gripSelector)];
+    expect(grips).toHaveLength(count);
+    expect(container.textContent).toContain(message);
+    for (const text of excluded) {
+      expect(container.textContent).not.toContain(text);
+    }
+    if (disabled) {
+      expect(grips.every((grip) => grip.disabled)).toBe(true);
+      pointer(grips[0]!, "pointerdown");
+      grips[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    }
     expect(onProfileOrderChange).not.toHaveBeenCalled();
   });
 
@@ -309,12 +289,12 @@ describe("renderProviderProfiles", () => {
   it("releases a removed row's drag without handling the next Escape", () => {
     const onProfileOrderChange = vi.fn();
     const viewProps = props({ onProfileOrderChange });
-    const { container, grip, row, rows, hitTest, providerCard } = pointerFixture(viewProps);
+    const { container, update, grip, row, rows, hitTest, providerCard } = pointerFixture(viewProps);
     pointer(grip, "pointerdown");
     pointer(grip, "pointermove", { x: 40, y: 285 });
     expect(row.style.translate).toBe("20px 210px");
 
-    mount(
+    update(
       {
         ...providerCard,
         profiles: providerCard.profiles.filter(
@@ -326,7 +306,6 @@ describe("renderProviderProfiles", () => {
         },
       },
       viewProps,
-      container,
     );
     expect(row.isConnected).toBe(false);
     expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
@@ -360,11 +339,11 @@ describe("renderProviderProfiles", () => {
           throw new Error("Expected an account order");
         }
         viewProps = { ...viewProps, profileOrders: { [provider]: order } };
-        queueMicrotask(() => mount(providerCard, viewProps, container));
+        queueMicrotask(() => update(providerCard, viewProps));
       },
     );
     let viewProps = props({ onProfileOrderChange });
-    const container = mount(providerCard, viewProps);
+    const { container, update } = mount(providerCard, viewProps);
     const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
     grip.focus();
     const details = grip.closest(rowSelector)!.querySelector("details")!;
