@@ -48,6 +48,15 @@ also blocks package replacement, even if the process title no longer contains
 its installation path. The refusal leaves the installation unchanged and names
 the service inspection and stop commands to use before retrying.
 
+Before stopping a managed Gateway, the updater waits up to 30 seconds for foreign
+SQLite maintenance to finish. If it remains busy, activation is deferred and the
+Gateway stays running. Recovery checks after shutdown use the same bounded wait;
+if maintenance still does not finish, the existing rollback path restores the
+previous build. The refusal names the maintenance process and tells you to let
+it finish before retrying `openclaw update`. An explicit update timeout and
+cancellation still bound these waits; live ownership and recovery checks remain
+required before activation.
+
 `openclaw update status` reports confirmed driver loss without changing the
 recorded run, and names `openclaw update repair` as the next action. Repair or the
 next update's admission can record the failed outcome without waiting for the
