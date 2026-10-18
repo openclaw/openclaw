@@ -657,7 +657,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
-  registerQueuedFollowupNoticeCases(NO_VISIBLE_REPLY_FALLBACK_TEXT);
+  registerQueuedFollowupNoticeCases();
 
   it("does not report a pending continuation as an empty terminal reply", async () => {
     setNoAbort();

@@ -8,7 +8,6 @@ import { buildChannelInboundEventContext } from "../channels/inbound-event/conte
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { loadUnfinishedDeliveries } from "../infra/outbound/delivery-queue-storage.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
@@ -141,12 +140,6 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           key: scenario.targetKey,
         });
         const firstReply = humanReplies.length;
-        const sourceLifecycle: Record<string, unknown>[] = [];
-        const stopEvents = onAgentEvent((event) => {
-          if (event.sessionKey === sourceKey && event.stream === "lifecycle") {
-            sourceLifecycle.push(event.data);
-          }
-        });
         let completion: ReturnType<typeof waitForProofRun> | undefined;
         try {
           await dispatchProofHuman(ctx, identity.senderId, "followup", signal);
@@ -154,7 +147,6 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           expect(
             humanReplies.slice(firstReply),
             JSON.stringify({
-              sourceLifecycle,
               providerErrors,
               requests: scenario.sourceRequests.length,
             }),
@@ -215,7 +207,6 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           expect(scenario.effectAfterSourceCompletion).toEqual(action === "current" ? [true] : []);
           expect(providerErrors).toEqual([]);
         } finally {
-          stopEvents();
           scenario.releaseTarget.resolve();
           hold.release.resolve();
           await completion?.catch(() => undefined);

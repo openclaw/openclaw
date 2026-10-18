@@ -239,18 +239,6 @@ async function verifyRegisteredRequesterPolicy(signal: AbortSignal) {
           spec.name,
         )
         .toEqual(scenario.targetRequests.map(() => !spec.denied));
-      console.log(
-        "[busy receiver proof]",
-        JSON.stringify({
-          case: spec.id,
-          accepted: scenario.accepted,
-          incumbentTools: scenario.incumbentRequests.map((request) =>
-            request.tools.includes("message"),
-          ),
-          targetTools: scenario.targetRequests.map((request) => request.tools.includes("message")),
-          deliveries,
-        }),
-      );
       if (scenario.targetKey === sourceKey) {
         expect
           .soft(
@@ -984,30 +972,24 @@ it(
       process.stderr.write(`[provenance proof aborted] phase=${phase}\n`);
     });
     void diagnostic;
-    await verifyRegisteredRequesterPolicy(signal);
-    phase = "native spawn";
-    await verifyNativeSpawnRequester(signal, false);
-    phase = "native collector spawn";
-    await verifyNativeSpawnRequester(signal, true);
-    phase = "queued collector admission";
-    await verifyQueuedCollectorAdmission(signal);
-    phase = "completed child followup";
-    await verifyCompletedChildFollowup(signal);
-    phase = "steering policy compatibility";
-    await verifySteeringPolicyCompatibility(signal, false);
-    phase = "steering policy change";
-    await verifySteeringPolicyCompatibility(signal, true);
-    phase = "cross-human false";
-    await verifyCrossHumanAdmission(signal, false);
-    phase = "cross-human default";
-    await verifyCrossHumanAdmission(signal, undefined);
-    phase = "cross-human true";
-    await verifyCrossHumanAdmission(signal, true);
-    phase = "different-conversation input";
-    await verifyCrossHumanAdmission(signal, true, "different");
-    phase = "collaborative cancellation";
-    await verifyCollaborativeCancellation(signal);
-    phase = "linked principal final delivery";
-    await verifyLinkedPrincipalDelivery(signal);
+    const phases: ReadonlyArray<readonly [string, () => Promise<void>]> = [
+      ["registered requester policy", () => verifyRegisteredRequesterPolicy(signal)],
+      ["native spawn", () => verifyNativeSpawnRequester(signal, false)],
+      ["native collector spawn", () => verifyNativeSpawnRequester(signal, true)],
+      ["queued collector admission", () => verifyQueuedCollectorAdmission(signal)],
+      ["completed child followup", () => verifyCompletedChildFollowup(signal)],
+      ["steering policy compatibility", () => verifySteeringPolicyCompatibility(signal, false)],
+      ["steering policy change", () => verifySteeringPolicyCompatibility(signal, true)],
+      ["cross-human false", () => verifyCrossHumanAdmission(signal, false)],
+      ["cross-human default", () => verifyCrossHumanAdmission(signal, undefined)],
+      ["cross-human true", () => verifyCrossHumanAdmission(signal, true)],
+      ["different-conversation input", () => verifyCrossHumanAdmission(signal, true, "different")],
+      ["collaborative cancellation", () => verifyCollaborativeCancellation(signal)],
+      ["linked principal final delivery", () => verifyLinkedPrincipalDelivery(signal)],
+    ];
+    for (const [name, run] of phases) {
+      phase = name;
+      await run();
+    }
   },
 );

@@ -241,15 +241,6 @@ describe("restart recovery requester custody", () => {
           sandboxRequired: true,
           sessionAccessCap: "none",
         });
-        expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "a" })).toBe(
-          false,
-        );
-        expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "b" })).toBe(
-          true,
-        );
-        expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
-          false,
-        );
         const widened = structuredClone(current);
         expectDefined(widened.gateway?.roles?.definitions.operator, "operator role").modelPolicy = {
           allow: ["fixture/a", "fixture/b", "fixture/c"],

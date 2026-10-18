@@ -1,10 +1,11 @@
 /** Isolated Gateway and scripted provider for requester admission boundary proof. */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
@@ -61,7 +62,7 @@ export type ProofCase = {
 };
 type Outbound = { to: string; text: string; accountId?: string };
 export type RunResult = { runId?: string; status?: string; error?: unknown };
-type ModelRequest = { raw: string; tools: string[] };
+type ModelRequest = { tools: string[] };
 export type ProofModelRequest = ModelRequest & {
   prompt: string;
   result?: Record<string, unknown>;
@@ -116,7 +117,7 @@ export type Scenario = {
   releaseIncumbent: Deferred;
   incumbentCompleted: boolean;
   bootstrapPrompt: string;
-  bootstrapRequests: ModelRequest[];
+  bootstrapRequestCount: number;
   bootstrapAccepted?: Record<string, unknown>;
   accepted?: Record<string, unknown>;
   sourceCompleted: boolean;
@@ -124,7 +125,7 @@ export type Scenario = {
   targetStarted: Deferred;
   releaseTarget: Deferred;
 };
-export const scenarios: Scenario[] = [];
+const scenarios: Scenario[] = [];
 export const outbound: Outbound[] = [];
 export const providerErrors: string[] = [];
 export let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
@@ -144,24 +145,14 @@ function resetGatewayState() {
   resetAgentEventsForTest({ preserveListeners: true });
 }
 
-async function readBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function startProviderAndSink() {
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "proof-model", object: "model" }] }));
+        respondJson(response, { data: [{ id: "proof-model", object: "model" }] });
         return;
       }
-      const raw = await readBody(request);
-      const body: unknown = JSON.parse(raw);
+      const body: unknown = JSON.parse(await readRequestText(request));
       if (!isRecord(body)) {
         throw new Error("Expected a provider or sink object");
       }
@@ -170,8 +161,7 @@ async function startProviderAndSink() {
           throw new Error("Send preparation requires a target");
         }
         await prepareProofSend(body.to);
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end("{}");
+        respondJson(response, {});
         return;
       }
       if (request.method === "POST" && request.url === "/sink") {
@@ -192,8 +182,7 @@ async function startProviderAndSink() {
           incumbent.incumbentStarted.resolve();
           await incumbent.releaseIncumbent.promise;
         }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ channel: "telegram", messageId: `sink-${outbound.length}` }));
+        respondJson(response, { channel: "telegram", messageId: `sink-${outbound.length}` });
         return;
       }
       if (request.method !== "POST" || request.url !== "/v1/responses") {
@@ -220,7 +209,6 @@ async function startProviderAndSink() {
         return;
       }
       const modelRequest = {
-        raw,
         tools: (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
           isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
         ),
@@ -274,8 +262,8 @@ async function startProviderAndSink() {
         return;
       }
       if (prompt.includes(scenario.bootstrapPrompt)) {
-        scenario.bootstrapRequests.push(modelRequest);
-        if (scenario.bootstrapRequests.length === 1) {
+        scenario.bootstrapRequestCount++;
+        if (scenario.bootstrapRequestCount === 1) {
           respond(response, {
             name: "sessions_send",
             args: {
@@ -329,8 +317,7 @@ async function startProviderAndSink() {
       const message = error instanceof Error ? error.message : String(error);
       providerErrors.push(message);
       console.error(`[provenance fixture] ${message}`);
-      response.writeHead(400, { "content-type": "application/json" });
-      response.end(JSON.stringify({ error: { message, type: "invalid_request_error" } }));
+      respondJson(response, { error: { message, type: "invalid_request_error" } }, 400);
     });
   });
   const port = await acquireTestPortBlock({ offsets: [0] });
@@ -358,26 +345,8 @@ beforeAll(async () => {
   const stateDir = path.join(home, ".openclaw");
   workspace = path.join(home, "workspace");
   const emptyBundled = path.join(home, "empty-bundled-plugins");
-  const environment = captureEnv([
-    "HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-    "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-    "OPENCLAW_TEST_MINIMAL_GATEWAY",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-    "OPENCLAW_SKIP_PROVIDERS",
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-  ]);
-  cleanups.push(async () => environment.restore());
   const token = `provenance-proof-${randomUUID()}`;
-  for (const [key, value] of Object.entries({
+  const overrides = {
     HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_GATEWAY_TOKEN: token,
@@ -387,17 +356,21 @@ beforeAll(async () => {
     OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: emptyBundled,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  })) {
-    setTestEnvValue(key, value);
-  }
-  for (const key of [
+  };
+  const cleared = [
     "OPENCLAW_SKIP_CHANNELS",
     "OPENCLAW_SKIP_PROVIDERS",
     "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
     "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
     "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  ]) {
+  ];
+  const environment = captureEnv([...Object.keys(overrides), ...cleared]);
+  cleanups.push(async () => environment.restore());
+  for (const [key, value] of Object.entries(overrides)) {
+    setTestEnvValue(key, value);
+  }
+  for (const key of cleared) {
     deleteTestEnvValue(key);
   }
   await Promise.all(
@@ -582,7 +555,7 @@ export function createScenario(spec: ProofCase, sourceKey: string): Scenario {
     releaseIncumbent: createDeferred(),
     incumbentCompleted: false,
     bootstrapPrompt: `PROVENANCE_BOOTSTRAP_${spec.id}`,
-    bootstrapRequests: [],
+    bootstrapRequestCount: 0,
     sourceCompleted: false,
     effectAfterSourceCompletion: [],
     targetStarted: createDeferred(),

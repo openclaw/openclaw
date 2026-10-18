@@ -214,16 +214,6 @@ export async function verifyCollaborativeCancellation(signal: AbortSignal) {
               ),
             ).toBe(false);
           }
-          console.log(
-            "[collaborative cancellation proof]",
-            JSON.stringify({
-              case: id,
-              disposition: bobResult.result?.deferredToActiveRun,
-              sourceRequests: scenario.sourceRequests.length,
-              targetRequests: scenario.targetRequests.length,
-              deliveries: outbound.filter((entry) => entry.to.startsWith(scenario.recipient)),
-            }),
-          );
         } finally {
           resume.resolve();
           scenario.releaseIncumbent.resolve();

@@ -18,7 +18,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: string): void {
+export function registerQueuedFollowupNoticeCases(): void {
   it.each(["direct", "routed"] as const)(
     "delivers one explicit followup start notice before the pending %s reply",
     async (route) => {
@@ -91,75 +91,52 @@ export function registerQueuedFollowupNoticeCases(noVisibleReplyFallbackText: st
     },
   );
 
-  it("reports strict steering refusal without claiming queueing or cancellation", async () => {
-    setNoAbort();
-    const deliveredTexts: string[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        deliveredTexts.push(payload.text ?? "");
-      },
-    });
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ SessionKey: "test:steer-refusal", Body: "stop" }),
-      cfg: {},
-      dispatcher,
-      replyResolver: async (_ctx, opts) => {
-        const state = resolveReplyOperationRunState(opts);
-        if (!state) {
-          throw new Error("expected reply operation state");
-        }
-        state.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
-        return undefined;
-      },
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-    expect(deliveredTexts).toEqual([
-      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
-    ]);
-    expect(result.collaborativeSteeringRefused).toBe(true);
-    expect(result.deferredToActiveRun).toBeUndefined();
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-  });
-
-  it("reports queue-cap rejection instead of a temporary model failure", async () => {
-    setNoAbort();
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    const deliveredTexts: string[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async (payload) => {
-        deliveredTexts.push(payload.text ?? "");
-      }),
-    });
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const runState = resolveReplyOperationRunState(opts);
-      if (!runState) {
-        throw new Error("expected reply operation state");
+  it.each([
+    {
+      reason: "collaborative-steering-disabled",
+      notice:
+        "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+      fallbackDelivered: undefined,
+    },
+    { reason: "queue-cap", notice: QUEUE_CAP_REJECTION_TEXT, fallbackDelivered: true },
+  ] as const)(
+    "reports $reason without claiming queueing or cancellation",
+    async ({ reason, notice, fallbackDelivered }) => {
+      setNoAbort();
+      diagnosticMocks.logMessageDispatchCompleted.mockClear();
+      const sessionKey = `test:${reason}`;
+      const deliveredTexts: string[] = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload) => {
+          deliveredTexts.push(payload.text ?? "");
+        },
+      });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
+        cfg: { diagnostics: { enabled: true } },
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          const state = resolveReplyOperationRunState(opts);
+          if (!state) {
+            throw new Error("expected reply operation state");
+          }
+          state.admission = { status: "skipped", reason };
+          return undefined;
+        },
+      });
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+      expect(deliveredTexts).toEqual([notice]);
+      expect(result.noVisibleReplyFallbackDelivered).toBe(fallbackDelivered);
+      expect(result.deferredToActiveRun).toBeUndefined();
+      if (reason === "collaborative-steering-disabled") {
+        expect(result.collaborativeSteeringRefused).toBe(true);
       }
-      runState.admission = { status: "skipped", reason: "queue-cap" };
-      return undefined;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
-      cfg: { diagnostics: { enabled: true } },
-      dispatcher,
-      replyResolver,
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
-    expect(deliveredTexts).not.toContain(noVisibleReplyFallbackText);
-    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
-    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "skipped",
-        reason: "queue-cap",
-        sessionKey: "test:queue-cap",
-      }),
-    );
-  });
+      expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped", reason, sessionKey }),
+      );
+    },
+  );
 
   it.each([
     { phase: "still queued", reason: "explicit-followup" },

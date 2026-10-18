@@ -1,4 +1,4 @@
-import { expect, it, vi, type Mock } from "vitest";
+import { assert, expect, it, vi, type Mock } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
@@ -133,10 +133,10 @@ export function registerFollowupOwnerPolicyCases({
       });
       try {
         const result = await admitFollowupTurn({ queued, defaults: createDefaults() });
-        expect(result.kind).toBe("admitted");
-        if (result.kind !== "admitted") {
-          throw new Error("Expected the original input to receive a new execution");
-        }
+        assert(
+          result.kind === "admitted",
+          "Expected the original input to receive a new execution",
+        );
         const execution = result.turn.queued;
         expect(execution.run.config).toEqual(admittedConfig);
         expect(execution.run.requesterOrigin?.senderId).toBe(senderId);
@@ -151,10 +151,8 @@ export function registerFollowupOwnerPolicyCases({
           expect(assertOwner).toBeDefined();
           expect(assertOwner).not.toThrow();
           setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
-          expect(assertOwner).toThrow("Channel operator authority changed");
-        } else {
-          expect(assertOwner).toThrow("Channel operator authority changed");
         }
+        expect(assertOwner).toThrow("Channel operator authority changed");
         expect(queued.run.requesterOrigin?.senderId).toBe(senderId);
         expect(queued.run.requesterOrigin?.senderE164).toBe(senderE164);
         expect(queued.run.senderIsOwner).toBe(enqueuedOwner);
@@ -213,22 +211,15 @@ export function registerFollowupOwnerPolicyCases({
     queued.run.senderIsOwner = true;
     queued.run.traceAuthorized = true;
     state.admitReply.mockResolvedValue({ status: "owned", operation: createOperation() });
-    const durableOwnerRead = vi
+    using durableOwnerRead = vi
       .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
       .mockResolvedValue(undefined);
-    try {
-      const result = await admitFollowupTurn({ queued, defaults: createDefaults() });
-      expect(result.kind).toBe("admitted");
-      if (result.kind !== "admitted") {
-        throw new Error("Expected operator input admission");
-      }
-      expect(result.turn.queued.run.senderIsOwner).toBe(true);
-      expect(result.turn.queued.run.traceAuthorized).toBe(true);
-      expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(true);
-      expect(assertCurrent).toHaveBeenCalled();
-      expect(durableOwnerRead).not.toHaveBeenCalled();
-    } finally {
-      durableOwnerRead.mockRestore();
-    }
+    const result = await admitFollowupTurn({ queued, defaults: createDefaults() });
+    assert(result.kind === "admitted", "Expected operator input admission");
+    expect(result.turn.queued.run.senderIsOwner).toBe(true);
+    expect(result.turn.queued.run.traceAuthorized).toBe(true);
+    expect(resolveAdmittedToolAuthority(result.turn).capabilityProfile.sender.isOwner).toBe(true);
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(durableOwnerRead).not.toHaveBeenCalled();
   });
 }
