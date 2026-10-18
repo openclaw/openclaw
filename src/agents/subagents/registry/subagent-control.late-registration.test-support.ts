@@ -35,13 +35,34 @@ export function registerLateDescendantControlTests({
     "captures descendants registered during %s before releasing capacity (replacement=%s)",
     async (phase, replaceChild) => {
       const owner = "agent:main:main";
+      const identity = (id: string) => ({
+        sessionId: `${id}-session`,
+        lifecycleRevision: `${id}-session-revision`,
+      });
+      const registerQueued = (
+        runId: string,
+        requesterSessionKey: string,
+        task: string,
+        requesterTurnRunId?: string,
+      ) =>
+        registerSubagentRun({
+          runId,
+          childSessionKey: `agent:main:subagent:${runId}`,
+          childAgentId: "main",
+          sessionEntry: identity(runId),
+          requesterSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId,
+          requesterDisplayKey: requesterSessionKey,
+          task,
+          cleanup: "keep",
+          collect: true,
+          queued: true,
+        });
       let parent = createSubagentRunRecord({
         runId: "late-parent",
         childSessionKey: "agent:main:subagent:late-parent",
-        childSessionIdentity: {
-          sessionId: "late-parent-session",
-          lifecycleRevision: "late-parent-session-revision",
-        },
+        childSessionIdentity: identity("late-parent"),
         requesterSessionKey: owner,
         requesterDisplayKey: owner,
         task: "orchestrator",
@@ -53,10 +74,7 @@ export function registerLateDescendantControlTests({
         ...parent,
         runId: "live-child",
         childSessionKey: "agent:main:subagent:live-child",
-        childSessionIdentity: {
-          sessionId: "live-child-session",
-          lifecycleRevision: "live-child-session-revision",
-        },
+        childSessionIdentity: identity("live-child"),
         controllerSessionKey: parent.childSessionKey,
       });
       await addSubagentRunForTests(parent);
@@ -95,22 +113,11 @@ export function registerLateDescendantControlTests({
           start,
           onStartFailure: () => true,
         });
-        return registerSubagentRun({
-          runId: "late-child",
-          childSessionKey: childKey,
-          childAgentId: "main",
-          sessionEntry: {
-            sessionId: "late-child-session",
-            lifecycleRevision: "late-child-session-revision",
-          },
-          requesterSessionKey: requester.childSessionKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: requester.childSessionKey,
-          task: "registered while orchestrator is live",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
+        return registerQueued(
+          "late-child",
+          requester.childSessionKey,
+          "registered while orchestrator is live",
+        );
       };
       setSubagentControlDepsForTest({});
       const controller = {
@@ -160,23 +167,12 @@ export function registerLateDescendantControlTests({
         }
         await registerChild();
         const outsideStart = vi.fn(async () => {});
-        await registerSubagentRun({
-          runId: "other-turn-root",
-          childSessionKey: "agent:main:subagent:other-turn-root",
-          childAgentId: "main",
-          sessionEntry: {
-            sessionId: "other-turn-root-session",
-            lifecycleRevision: "other-turn-root-session-revision",
-          },
-          requesterSessionKey: owner,
-          requesterAgentId: "main",
-          requesterTurnRunId: "other-turn",
-          requesterDisplayKey: owner,
-          task: "outside the captured root set",
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
+        await registerQueued(
+          "other-turn-root",
+          owner,
+          "outside the captured root set",
+          "other-turn",
+        );
         enqueueSwarmRun({
           groupId: "other-turn",
           runId: "other-turn-root",

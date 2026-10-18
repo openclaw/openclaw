@@ -39,6 +39,35 @@ const controller = {
   controlScope: "children" as const,
 };
 
+function failRootRead(shouldFail: () => boolean, failure: string) {
+  const read = registryRead.withSubagentRunReadSnapshot;
+  return vi
+    .spyOn(registryState, "withSubagentRunReadSnapshot")
+    .mockImplementation((runs, select, consume, readScope) =>
+      read(
+        runs,
+        select,
+        (selection, selected) => {
+          if (selection.sessionKeys.includes(key("root")) && shouldFail()) {
+            throw new Error(failure);
+          }
+          return consume(selection, selected);
+        },
+        readScope,
+      ),
+    );
+}
+
+function expectStatuses(statuses: string[]) {
+  expect(
+    ["root", "child", "healthy"].map((id) => resolveSubagentSessionStatus(subagentRuns.get(id))),
+  ).toEqual(statuses);
+}
+
+function expectDrained() {
+  expect([getSessionControllerWorkCount(), getSessionMutationCount()]).toEqual([0, 0]);
+}
+
 async function seed() {
   let storePath = "";
   for (const id of ["root", "child", "healthy"]) {
@@ -112,29 +141,14 @@ it.each(
           },
         };
       });
-    const read = registryRead.withSubagentRunReadSnapshot;
-    const reader = vi
-      .spyOn(registryState, "withSubagentRunReadSnapshot")
-      .mockImplementation((runs, select, consume, readScope) =>
-        read(
-          runs,
-          select,
-          (selection, selected) => {
-            if (
-              armed &&
-              phase === "descendant drain" &&
-              selection.sessionKeys.includes(key("root")) &&
-              ++armedReads === 2
-            ) {
-              armed = false;
-              failedReads += 1;
-              throw new Error(failure);
-            }
-            return consume(selection, selected);
-          },
-          readScope,
-        ),
-      );
+    const reader = failRootRead(() => {
+      if (!armed || phase !== "descendant drain" || ++armedReads !== 2) {
+        return false;
+      }
+      armed = false;
+      failedReads += 1;
+      return true;
+    }, failure);
     const patch = killSession.persistSubagentAbortedLastRun;
     const writer = vi
       .spyOn(killSession, "persistSubagentAbortedLastRun")
@@ -185,12 +199,11 @@ it.each(
       expect(isSameSubagentRunOwner(stoppedRoot, root)).toBe(true);
       expect(stoppedRoot?.endedReason).toBe("subagent-killed");
       const childKills = phase === "descendant drain" ? 2 : 0;
-      expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe(
+      expectStatuses([
+        "killed",
         childKills ? "killed" : "running",
-      );
-      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
         childKills ? "killed" : "running",
-      );
+      ]);
       expect(result).toMatchObject(
         boundary === "bulk"
           ? {
@@ -219,8 +232,7 @@ it.each(
         ownerReader.mockRestore();
         writer.mockRestore();
       }
-      expect(getSessionControllerWorkCount()).toBe(0);
-      expect(getSessionMutationCount()).toBe(0);
+      expectDrained();
     }
   },
 );
@@ -242,27 +254,17 @@ it.each([false, true])(
     if (sameTextSibling) {
       attachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
     }
-    const read = registryRead.withSubagentRunReadSnapshot;
     let armed = false;
     let reads = 0;
     let failedReads = 0;
     const failure = "transient root discovery failure";
-    const reader = vi
-      .spyOn(registryState, "withSubagentRunReadSnapshot")
-      .mockImplementation((runs, select, consume, readScope) =>
-        read(
-          runs,
-          select,
-          (selection, selected) => {
-            if (armed && selection.sessionKeys.includes(key("root")) && ++reads === 2) {
-              failedReads += 1;
-              throw new Error(failure);
-            }
-            return consume(selection, selected);
-          },
-          readScope,
-        ),
-      );
+    const reader = failRootRead(() => {
+      if (!armed || ++reads !== 2) {
+        return false;
+      }
+      failedReads += 1;
+      return true;
+    }, failure);
     const pending = killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),
       controller,
@@ -290,11 +292,7 @@ it.each([false, true])(
       expect(result.error).toContain(failure);
       // Identical labels and runtime errors on distinct nodes remain distinct diagnostics.
       expect(result.error.match(/Subagent is still active/g)).toHaveLength(sameTextSibling ? 2 : 1);
-      expect(resolveSubagentSessionStatus(subagentRuns.get("root"))).toBe("running");
-      expect(resolveSubagentSessionStatus(subagentRuns.get("child"))).toBe("killed");
-      expect(resolveSubagentSessionStatus(subagentRuns.get("healthy"))).toBe(
-        sameTextSibling ? "running" : "killed",
-      );
+      expectStatuses(["running", "killed", sameTextSibling ? "running" : "killed"]);
     } finally {
       armed = false;
       admission.release();
@@ -305,8 +303,7 @@ it.each([false, true])(
         await detachActiveEmbeddedRun("root-session", rootHandle, key("root"));
         await detachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
       }
-      expect(getSessionControllerWorkCount()).toBe(0);
-      expect(getSessionMutationCount()).toBe(0);
+      expectDrained();
     }
   },
 );

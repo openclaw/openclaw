@@ -2,9 +2,9 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import * as preparedFacts from "../../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -26,10 +26,6 @@ import {
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 
 const fixture = useSubagentControlFixture();
-
-beforeEach(() => {
-  setRuntimeConfigSnapshot({ agents: { defaults: { workspace: fixture.stateDir } } });
-});
 
 it.for(["unrelated", "same session"] as const)(
   "prepares warm cancellation with a %s write while retaining publication ordering",
@@ -57,28 +53,37 @@ it.for(["unrelated", "same session"] as const)(
     let publication: Promise<void> | undefined;
     const release = () => releaseNativeReply.resolve();
     signal.addEventListener("abort", release, { once: true });
+    const gate = (ready: Promise<unknown>, pending: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(ready, pending, message), signal);
+    const identity = { sessionId: childId, lifecycleRevision: revision };
+    const prepare = (assertCurrent: () => void) =>
+      prepareSubagentKillSession(
+        getRuntimeConfig(),
+        childKey,
+        assertCurrent,
+        undefined,
+        "main",
+        identity,
+      );
+    const writeSession = (
+      sessionKey: string,
+      defaultSessionId: string,
+      lifecycleRevision?: string,
+    ) =>
+      writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId,
+        lifecycleRevision,
+      });
 
     try {
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: childKey,
-        defaultSessionId: childId,
-        lifecycleRevision: revision,
-      });
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey: peerKey,
-        defaultSessionId: peerId,
-      });
-      const cfg = getRuntimeConfig();
+      const storePath = await writeSession(childKey, childId, revision);
+      await writeSession(peerKey, peerId);
       const writerKey = writerTarget === "unrelated" ? peerKey : childKey;
       const writerSessionId = writerTarget === "unrelated" ? peerId : childId;
-      initial = await prepareSubagentKillSession(cfg, childKey, () => {}, undefined, "main", {
-        sessionId: childId,
-        lifecycleRevision: revision,
-      });
+      initial = await prepare(() => {});
       execution = executionOwner.captureOpenClawAgentDatabaseExecution({
         agentId: "main",
         env: process.env,
@@ -194,14 +199,7 @@ it.for(["unrelated", "same session"] as const)(
           signal,
         ),
       );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          nativeReplyHeld.promise,
-          producer,
-          "Writer publication was not held",
-        ),
-        signal,
-      );
+      await gate(nativeReplyHeld.promise, producer, "Writer publication was not held");
       // Both the retained native incarnation and freshly read A facts are valid while B's
       // publication remains pending. A is not waiting for its own generation to settle.
       nativeClaim.assertCurrent();
@@ -211,38 +209,24 @@ it.for(["unrelated", "same session"] as const)(
           agentId: "main",
           storePath,
           sessionKey: childKey,
-          sessionId: childId,
-          lifecycleRevision: revision,
+          ...identity,
         });
         generationFacts.assertCurrent();
       }
       preparation = operationScope.run("preparation", () =>
-        prepareSubagentKillSession(
-          cfg,
-          childKey,
-          () => nativeClaim.assertCurrent(),
-          undefined,
-          "main",
-          {
-            sessionId: childId,
-            lifecycleRevision: revision,
-          },
-        ),
+        prepare(() => nativeClaim.assertCurrent()),
       );
       if (writerTarget === "same session") {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            Promise.race([preparationQueued.promise, generationPublicationPending.promise]),
-            preparation,
-            "Preparation bypassed its own pending session publication",
-          ),
-          signal,
+        await gate(
+          Promise.race([preparationQueued.promise, generationPublicationPending.promise]),
+          preparation,
+          "Preparation bypassed its own pending session publication",
         );
         release();
         prepared = await preparation;
         await producer;
         prepared.assertCurrent();
-        expect(prepared.entry).toMatchObject({ sessionId: childId, lifecycleRevision: revision });
+        expect(prepared.entry).toMatchObject(identity);
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
         ).toMatchObject({
@@ -265,7 +249,7 @@ it.for(["unrelated", "same session"] as const)(
       if (!prepared) {
         throw new Error("Cancellation preparation returned no retained session");
       }
-      expect(prepared.entry).toMatchObject({ sessionId: childId, lifecycleRevision: revision });
+      expect(prepared.entry).toMatchObject(identity);
       prepared.assertCurrent();
       let published = false;
       publication = operationScope.run("publication", () =>
@@ -274,14 +258,7 @@ it.for(["unrelated", "same session"] as const)(
           published = true;
         }),
       );
-      await withinTest(
-        awaitGateBeforeSettlement(
-          publicationQueued.promise,
-          publication,
-          "Publication bypassed the writer FIFO",
-        ),
-        signal,
-      );
+      await gate(publicationQueued.promise, publication, "Publication bypassed the writer FIFO");
       expect(published).toBe(false);
       release();
       await Promise.all([producer, publication]);
