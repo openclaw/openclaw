@@ -55,18 +55,18 @@ export class GatewayPageBinding {
     private readonly options: GatewayPageBindingOptions,
   ) {}
 
-  connect(): void {
+  connect(source = this.options.getGateway()): void {
     if (this.options.onPageActivation) {
       this.stopActivation = [
         listen(document, "visibilitychange", this.options.onPageActivation),
         listen(globalThis, "focus", this.options.onPageActivation),
       ];
     }
-    this.refresh();
+    this.refresh(source);
   }
 
-  refresh(): void {
-    const gateway = this.options.getGateway() ?? null;
+  refresh(source = this.options.getGateway()): void {
+    const gateway = source ?? null;
     if (this.hasBoundGateway && gateway === this.currentGateway) {
       return;
     }

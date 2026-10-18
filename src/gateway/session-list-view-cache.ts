@@ -1,5 +1,8 @@
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { serializedJsonArrayBytes } from "./serialized-json.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
+import { captureSessionRowGeneration, type SessionRowGeneration } from "./session-row-identity.js";
+import { sessionRowEncodingBytes } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
@@ -57,8 +60,9 @@ export type SessionListView = {
   refs: number;
   bytes: number;
   historyRefs: number;
+  encodedBytes?: number;
   rows?: GatewaySessionRow[];
-  rowHistory?: GatewaySessionRow[][];
+  rowHistory?: SessionRowGeneration[];
   sidebar?: boolean;
   selection?: SessionEntrySelection;
   selectedAt?: number;
@@ -73,6 +77,7 @@ function hasSidebarBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
+  private rowEncodings = new WeakMap<GatewaySessionRow, { refs: number; bytes: number }>();
   private bytes = 0;
   private refs = 0;
 
@@ -108,28 +113,79 @@ export class SessionListViewCache {
   }
 
   retireRows(view: SessionListView) {
-    if (view.rows?.[0]?.rowMode === "sidebar") {
+    if (view.rows && this.lists.get(view.key) === view) {
+      this.releaseRowEncodings(view.rows);
+    }
+    if (view.sidebar && view.rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
+    view.encodedBytes = 0;
     this.update(view);
   }
 
-  setRows(view: SessionListView, rows: GatewaySessionRow[], sidebar: boolean) {
+  setRows(
+    view: SessionListView,
+    rows: GatewaySessionRow[],
+    sidebar: boolean,
+    sharedBytes = 0,
+    extraRowEncodingBytes?: (row: GatewaySessionRow) => number,
+  ) {
+    const retained = this.lists.get(view.key) === view;
+    if (retained && view.rows) {
+      this.releaseRowEncodings(view.rows);
+    }
     if (sidebar && view.rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
     view.sidebar = sidebar;
+    view.encodedBytes =
+      (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
+      serializedJsonArrayBytes(rows) +
+      sharedBytes;
     this.update(view);
+  }
+
+  private retainRowEncodings(
+    rows: GatewaySessionRow[],
+    extraBytes?: (row: GatewaySessionRow) => number,
+  ) {
+    let bytes = 0;
+    for (const row of rows) {
+      let encoding = this.rowEncodings.get(row);
+      if (encoding) {
+        encoding.refs++;
+        // Each view reports its full cost; the cache charges shared row strings once.
+        this.bytes -= encoding.bytes;
+        retainedBytes -= encoding.bytes;
+      } else {
+        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row) + (extraBytes?.(row) ?? 0) };
+        this.rowEncodings.set(row, encoding);
+      }
+      bytes += encoding.bytes;
+    }
+    return bytes;
+  }
+
+  private releaseRowEncodings(rows: GatewaySessionRow[]) {
+    for (const row of rows) {
+      const encoding = this.rowEncodings.get(row)!;
+      if (--encoding.refs === 0) {
+        this.rowEncodings.delete(row);
+      } else {
+        this.bytes += encoding.bytes;
+        retainedBytes += encoding.bytes;
+      }
+    }
   }
 
   private retainRows(view: SessionListView, rows: GatewaySessionRow[]) {
     const history = (view.rowHistory ??= []);
-    history.push(rows);
+    history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
     if (history.length > SIDEBAR_ROW_HISTORY_LIMIT) {
-      view.historyRefs -= history.shift()!.length;
+      view.historyRefs -= history.shift()!.ids.length;
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
         cause: "history-evicted",
@@ -147,16 +203,17 @@ export class SessionListViewCache {
     const entryRefs =
       (view.selection ? selectionRefs(view.selection) : 0) + (view.partitions?.refs ?? 0);
     const refs = rowRefs + entryRefs;
-    // Eight-byte row references; conservative 48-byte selection entries/tuples;
-    // fixed view/array/map overhead and UTF-16 query keys. Shared row objects and
-    // encodings belong to the publication, not a per-view deep-size estimate.
+    // Eight-byte current row references/history IDs; conservative selection entries,
+    // vector/revision overhead and UTF-16 query keys. Duplicate current row strings
+    // are discounted separately while any view retains them.
     const bytes =
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
       entryRefs * 48 +
       (view.partitions?.count ?? 0) * 64 +
-      (view.rowHistory?.length ?? 0) * 32;
+      (view.rowHistory?.length ?? 0) * 160 +
+      (view.encodedBytes ?? 0);
     retainedRefs += refs - view.refs;
     this.refs += refs - view.refs;
     retainedBytes += bytes - view.bytes;
@@ -174,6 +231,9 @@ export class SessionListViewCache {
   }
 
   private remove(view: SessionListView) {
+    if (view.rows) {
+      this.releaseRowEncodings(view.rows);
+    }
     if (hasSidebarBaseline(view)) {
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
@@ -196,6 +256,7 @@ export class SessionListViewCache {
     this.bytes = 0;
     this.refs = 0;
     this.lists.clear();
+    this.rowEncodings = new WeakMap();
     scheduleRetentionReport();
   }
 }

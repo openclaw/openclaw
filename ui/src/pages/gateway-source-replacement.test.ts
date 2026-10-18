@@ -48,11 +48,6 @@ function usageResult(key?: string): NonNullable<UsageRouteData["result"]> {
   };
 }
 
-const settledEmptyProviderUsage = {
-  state: "settled",
-  result: { ok: true, value: { updatedAt: 1, providers: [] } },
-} satisfies UsageRouteData["providerUsage"];
-
 const emptySkillLibrary = {
   entries: [],
   profileId: null,
@@ -216,7 +211,6 @@ function usageRouteData(
     },
     result,
     costSummary: null,
-    providerUsage: settledEmptyProviderUsage,
     loadedAtMs: Date.now(),
     error: null,
   };
@@ -396,9 +390,14 @@ describe("gateway source replacement across reconnect with a reused client", () 
       sessions: result.sessions,
     });
 
+    // Route data carries only session usage; the page starts its own provider read.
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["usage.status"]);
     harness.emitConnected(false);
     harness.emitConnected(true);
-    expect(request).not.toHaveBeenCalled();
+    // Fresh session usage survives a same-client reconnect, even one that interrupts the
+    // page's provider read.
+    expect(request.mock.calls.filter(([method]) => method === "sessions.usage")).toEqual([]);
+    request.mockClear();
 
     clock.mockReturnValue(loadedAt + USAGE_PAYLOAD_TTL_MS);
     visibility.mockReturnValue("hidden");

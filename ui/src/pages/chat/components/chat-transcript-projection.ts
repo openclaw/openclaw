@@ -331,6 +331,7 @@ export function projectChatTranscript(
     subagentActivity: subagents.activity.length
       ? {
           rows: subagents.activity,
+          presented,
           turnStartedAt: subagents.wait ? workingIndicator?.request?.askedAt : undefined,
           onOpenSubagent: props.onOpenSubagent,
           onOpenSession: props.onOpenSession,

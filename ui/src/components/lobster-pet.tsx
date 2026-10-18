@@ -28,7 +28,6 @@ export const LobsterPet = defineSolidBridge<LobsterPetProps>(
       () => ({ ...props }),
       (next) => pet.update(next),
     );
-    createEffect(state, () => pet.afterCommit());
     return (
       <>
         <LobsterPetScene scene={state().scene} />
