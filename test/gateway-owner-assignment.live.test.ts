@@ -43,6 +43,13 @@ it.skipIf(!isLiveTestEnabled() || process.env.OPENCLAW_LIVE_OWNER_ASSIGNMENT !==
       stopTimeoutMs: 30_000,
     });
     try {
+      const configured = await instance.cli([
+        "config",
+        "set",
+        "agents.defaults.workspace",
+        instance.state.workspaceDir,
+      ]);
+      expect(configured.code, configured.stderr).toBe(0);
       await instance.startGateway();
       const client = await connectGatewayClient({
         url: instance.url,
@@ -65,7 +72,6 @@ it.skipIf(!isLiveTestEnabled() || process.env.OPENCLAW_LIVE_OWNER_ASSIGNMENT !==
           { expectFinal: true, timeoutMs: 180_000 },
         );
         expect(response.status).toBe("ok");
-        expect(await fs.readFile(output, "utf8")).toBe("OWNER_RECOVERY_CONTINUED\n");
         const history = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey,
           limit: 100,
@@ -74,6 +80,7 @@ it.skipIf(!isLiveTestEnabled() || process.env.OPENCLAW_LIVE_OWNER_ASSIGNMENT !==
         expect(recorded).toContain('"assign_owner"');
         expect(recorded).toContain("Gateway profile ID");
         expect(recorded).toContain('"owner_profiles"');
+        expect(await fs.readFile(output, "utf8")).toBe("OWNER_RECOVERY_CONTINUED\n");
       } finally {
         await disconnectGatewayClient(client);
       }
