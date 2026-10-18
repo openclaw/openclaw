@@ -112,15 +112,19 @@ const BASE_PROJECT_FILES = {
   [BUILD_STAMP]: '{"head":"abc123","inputsClean":true}\n',
 } as const;
 
-export function createExitedProcess(code: number | null, signal: string | null = null) {
-  return {
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => cb(code, signal));
-      }
-      return undefined;
-    },
+type ExitCallback = (code: number | null, signal: string | null) => void;
+
+function exitListener(notify: (cb: ExitCallback) => void) {
+  return (event: string, cb: ExitCallback) => {
+    if (event === "exit") {
+      queueMicrotask(() => notify(cb));
+    }
+    return undefined;
   };
+}
+
+export function createExitedProcess(code: number | null, signal: string | null = null) {
+  return { on: exitListener((cb) => cb(code, signal)) };
 }
 
 export function createPipedExitedProcess(params: {
@@ -134,20 +138,15 @@ export function createPipedExitedProcess(params: {
   return {
     stdout,
     stderr,
-    on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
-      if (event === "exit") {
-        queueMicrotask(() => {
-          if (params.stdout) {
-            stdout.emit("data", Buffer.from(params.stdout));
-          }
-          if (params.stderr) {
-            stderr.emit("data", Buffer.from(params.stderr));
-          }
-          cb(params.code ?? 0, params.signal ?? null);
-        });
+    on: exitListener((cb) => {
+      if (params.stdout) {
+        stdout.emit("data", Buffer.from(params.stdout));
       }
-      return undefined;
-    },
+      if (params.stderr) {
+        stderr.emit("data", Buffer.from(params.stderr));
+      }
+      cb(params.code ?? 0, params.signal ?? null);
+    }),
   };
 }
 
@@ -255,10 +254,7 @@ async function writeProjectFiles(tmp: string, files: Record<string, string>) {
 
 export async function touchProjectFiles(tmp: string, relativePaths: string[], time: Date) {
   await Promise.all(
-    relativePaths.map(async (relativePath) => {
-      const absolutePath = resolvePath(tmp, relativePath);
-      await fs.utimes(absolutePath, time, time);
-    }),
+    relativePaths.map((relativePath) => fs.utimes(resolvePath(tmp, relativePath), time, time)),
   );
 }
 
@@ -344,12 +340,10 @@ export function createBuildRequirementDeps(
     distEntry: path.join(tmp, DIST_ENTRY),
     buildStampPath: path.join(tmp, BUILD_STAMP),
     runtimePostBuildStampPath: path.join(tmp, RUNTIME_POSTBUILD_STAMP),
-    sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
-      (sourceRoot) => ({
-        name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
-        path: sourceRoot,
-      }),
-    ),
+    sourceRoots: ["src", bundledPluginRoot("demo")].map((sourceRoot) => ({
+      name: sourceRoot.replaceAll("\\", "/"),
+      path: path.join(tmp, sourceRoot),
+    })),
     configFiles: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN].map((filePath) =>
       path.join(tmp, filePath),
     ),

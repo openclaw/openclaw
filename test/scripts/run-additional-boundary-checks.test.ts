@@ -34,11 +34,7 @@ afterAll(async () => {
   await receipts.close();
 });
 
-async function fixtureReadyBeforeSettlement(
-  file: string,
-  operation: PromiseLike<unknown>,
-  message = `timeout waiting for ${file}`,
-) {
+async function fixtureReadyBeforeSettlement(file: string, operation: PromiseLike<unknown>) {
   // The fixture records readiness before sending; completion and receipts use different pipes.
   const recorded = () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0;
   const verify = (error: unknown) => {
@@ -46,7 +42,10 @@ async function fixtureReadyBeforeSettlement(
       throw error;
     }
   };
-  const settled = Promise.resolve(operation).then(() => verify(new Error(message)), verify);
+  const settled = Promise.resolve(operation).then(
+    () => verify(new Error(`timeout waiting for ${file}`)),
+    verify,
+  );
   await Promise.race([receipts.waitFor(file, "ready"), settled]);
 }
 
@@ -230,11 +229,7 @@ describe("run-additional-boundary-checks", () => {
     ["lint:docker-e2e", ["run", "lint:docker-e2e"]],
     ["deps:pins:check", ["deps:pins:check"]],
   ] as const)("keeps the %s guard in CI boundary checks", (label, args) => {
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label,
-      command: "pnpm",
-      args,
-    });
+    expect(BOUNDARY_CHECKS).toContainEqual({ label, command: "pnpm", args });
   });
 
   it("runs the shared focused guard pass once across every source root", () => {
@@ -297,17 +292,13 @@ describe("run-additional-boundary-checks", () => {
     );
 
     expect(failures).toBe(1);
-    for (const expected of [
-      "::group::passes",
-      "ok-out",
-      "[ok] passes in ",
-      "::group::fails",
-      "bad-out",
-      "::error title=fails failed::fails failed (exit 7)",
-      "Additional boundary check timings:",
-    ]) {
-      expect(text).toContain(expected);
-    }
+    expect(text).toContain("::group::passes");
+    expect(text).toContain("ok-out");
+    expect(text).toContain("[ok] passes in ");
+    expect(text).toContain("::group::fails");
+    expect(text).toContain("bad-out");
+    expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
+    expect(text).toContain("Additional boundary check timings:");
   });
 
   it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
@@ -362,14 +353,7 @@ describe("run-additional-boundary-checks", () => {
             })),
         );
 
-        await withinTest(
-          fixtureReadyBeforeSettlement(
-            childPidPath,
-            completion,
-            `timeout waiting for pid in ${childPidPath}`,
-          ),
-          signal,
-        );
+        await withinTest(fixtureReadyBeforeSettlement(childPidPath, completion), signal);
         childPid = Number(fs.readFileSync(childPidPath, "utf8"));
         expect(isProcessAlive(childPid)).toBe(true);
         const result = await withinTest(releaseAndWait(), signal);

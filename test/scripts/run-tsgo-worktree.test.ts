@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,8 +29,8 @@ function createLinkedCheckoutFixture() {
   // Isolate Git writes from hook-owned indexes; wrappers inherit the real environment.
   const gitEnv = createNestedGitEnv();
   delete gitEnv.GIT_COMMON_DIR;
-  const git = (args: string[]) => {
-    const result = spawnSync(
+  const git = (args: string[]) =>
+    execFileSync(
       "git",
       [
         `--git-dir=${path.join(primary, ".git")}`,
@@ -45,9 +45,6 @@ function createLinkedCheckoutFixture() {
       ],
       { cwd: primary, env: gitEnv, encoding: "utf8", timeout: 10_000 },
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-  };
   git(["init", "-q"]);
   writeNativeFixtureFile(primary, "package.json", '{"private":true,"type":"module"}\n');
   writeNativeFixtureFile(primary, "pnpm-workspace.yaml", "packages: []\n");
@@ -99,13 +96,7 @@ describe("run-tsgo linked worktree entry", () => {
     linkCheckoutTools(root);
     const native = resolveInstalledNativeCompiler();
     const write = (file: string, text: string) => writeNativeFixtureFile(root, file, text);
-    const compilerOptions = {
-      module: "NodeNext",
-      target: "ES2023",
-      types: [],
-      strict: true,
-      noEmit: true,
-    };
+    const compilerOptions = { types: [], noEmit: true };
     write("tsconfig.json", JSON.stringify({ compilerOptions, files: ["wrong-entry.ts"] }));
     write("wrong-entry.ts", 'export const value: number = "wrong project";\n');
     write("src/tsconfig.json", JSON.stringify({ compilerOptions, files: ["entry.ts"] }));

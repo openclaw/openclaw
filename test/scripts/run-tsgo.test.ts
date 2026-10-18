@@ -1,7 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -17,7 +16,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -80,6 +79,21 @@ export default () => process.execPath;\n`,
 });
 
 describe("run-tsgo sparse guard", () => {
+  const requiredPaths = [
+    "packages/plugin-package-contract/src/index.ts",
+    "ui/config/control-ui-chunking.ts",
+    "ui/src/api/gateway.ts",
+    "ui/src/app/settings.ts",
+    "ui/src/i18n/lib/registry.ts",
+    "ui/src/i18n/lib/types.ts",
+  ];
+  const missingInputsError = (paths: string[]) =>
+    [
+      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:",
+      ...paths.map((file) => `- ${file}`),
+      "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
+    ].join("\n");
+
   it("ignores full worktrees", () => {
     expect(sparseGuard({ isSparseCheckoutEnabled: () => false })).toBeNull();
   });
@@ -110,15 +124,6 @@ describe("run-tsgo sparse guard", () => {
 
   it("rejects sparse core worktrees that include only selected ui and package files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
-    const requiredPaths = [
-      "packages/plugin-package-contract/src/index.ts",
-      "ui/config/control-ui-chunking.ts",
-      "ui/src/i18n/lib/registry.ts",
-      "ui/src/i18n/lib/types.ts",
-      "ui/src/app/settings.ts",
-      "ui/src/api/gateway.ts",
-    ];
-
     for (const relativePath of requiredPaths) {
       write(cwd, relativePath, "");
     }
@@ -128,13 +133,7 @@ describe("run-tsgo sparse guard", () => {
         cwd,
         sparseCheckoutPatterns: requiredPaths.map((file) => `/${file}`),
       }),
-    ).toMatchInlineSnapshot(`
-      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
-      - packages
-      - ui/config
-      - ui/src
-      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
-    `);
+    ).toBe(missingInputsError(["packages", "ui/config", "ui/src"]));
   });
 
   it("does not require plugin browser sources for tsconfig.ui.json", () => {
@@ -150,16 +149,7 @@ describe("run-tsgo sparse guard", () => {
   });
 
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
-    expect(sparseGuard()).toMatchInlineSnapshot(`
-      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
-      - packages/plugin-package-contract/src/index.ts
-      - ui/config/control-ui-chunking.ts
-      - ui/src/api/gateway.ts
-      - ui/src/app/settings.ts
-      - ui/src/i18n/lib/registry.ts
-      - ui/src/i18n/lib/types.ts
-      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
-    `);
+    expect(sparseGuard()).toBe(missingInputsError(requiredPaths));
   });
 
   it("recognizes the check:changed sparse-skip env", () => {
@@ -181,17 +171,6 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
   afterAll(async () => {
     await receipts?.close();
   });
-
-  // Orphaned descendants have no ChildProcess handle; cancellation bounds rescue.
-  async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
-    while (isProcessAlive(pid)) {
-      try {
-        await delay(5, undefined, { signal });
-      } catch (cause) {
-        throw new Error(`process still alive: ${pid}`, { cause });
-      }
-    }
-  }
 
   it("keeps the watchdog opt-in", () => {
     expect(resolveTsgoTimeoutMs({})).toBeUndefined();

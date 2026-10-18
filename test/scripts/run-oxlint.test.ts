@@ -362,23 +362,15 @@ describe("run-oxlint", () => {
   });
 
   it.each([
-    { name: "constrained CI", env: { CI: "true" }, host: CONSTRAINED_HOST, count: 1 },
-    {
-      name: "remote changed gate",
-      env: {
-        OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1",
-        OPENCLAW_LOCAL_CHECK_MODE: "throttled",
-      },
-      host: ROOMY_HOST,
-      count: 4,
-    },
-    {
-      name: "explicit override",
-      env: { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" },
-      host: ROOMY_HOST,
-      count: 2,
-    },
-  ])("resolves split-core concurrency for $name", ({ env, host, count }) => {
+    ["constrained CI", { CI: "true" }, CONSTRAINED_HOST, 1],
+    [
+      "remote changed gate",
+      { OPENCLAW_CHECK_CHANGED_REMOTE_CHILD: "1", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
+      ROOMY_HOST,
+      4,
+    ],
+    ["explicit override", { CI: "true", OPENCLAW_OXLINT_SHARD_CONCURRENCY: "2" }, ROOMY_HOST, 2],
+  ] as const)("resolves split-core concurrency for %s", (_name, env, host, count) => {
     expect(resolveSplitCoreConcurrency(env, host)).toBe(count);
   });
 
@@ -589,29 +581,27 @@ describe("run-oxlint", () => {
     expect(shouldRunOxlintShardsSerial({ env, platform, hostResources })).toBe(true);
   });
 
-  it("parses shard runner flags without forwarding them to oxlint", () => {
-    const parsed = parseShardRunnerArgs([
-      "--only=core",
-      "--split-core",
-      "--core-stripe=2/3",
-      "--max-warnings",
-      "0",
-    ]);
-
-    expect(parsed).toMatchObject({
-      only: new Set(["core"]),
-      coreStripe: { index: 2, total: 3 },
-      extensionStripe: undefined,
-      splitCore: true,
-      oxlintArgs: ["--max-warnings", "0"],
-    });
-
-    const extension = parseShardRunnerArgs(["--only", "extensions", "--extension-stripe", "4/6"]);
-    expect(extension).toMatchObject({
-      only: new Set(["extensions"]),
-      extensionStripe: { index: 4, total: 6 },
-      oxlintArgs: [],
-    });
+  it.each([
+    {
+      args: ["--only=core", "--split-core", "--core-stripe=2/3", "--max-warnings", "0"],
+      expected: {
+        only: new Set(["core"]),
+        coreStripe: { index: 2, total: 3 },
+        extensionStripe: undefined,
+        splitCore: true,
+        oxlintArgs: ["--max-warnings", "0"],
+      },
+    },
+    {
+      args: ["--only", "extensions", "--extension-stripe", "4/6"],
+      expected: {
+        only: new Set(["extensions"]),
+        extensionStripe: { index: 4, total: 6 },
+        oxlintArgs: [],
+      },
+    },
+  ])("parses runner flags without forwarding them: $args", ({ args, expected }) => {
+    expect(parseShardRunnerArgs(args)).toMatchObject(expected);
   });
 
   it("isolates large core targets while preserving disjoint stripe coverage", () => {

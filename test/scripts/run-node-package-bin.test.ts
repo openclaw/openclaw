@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -23,7 +23,7 @@ const commands: [string, string, string, ...string[]][] = [
   [".", "qa:lab:watch", "vite", "build", "--watch", ...qaConfig],
 ];
 
-function write(root: string, file: string, text: string, mode?: number) {
+function write(root: string, file: string, text = fs.readFileSync(file, "utf8"), mode?: number) {
   const target = path.join(root, file);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, text, { mode });
@@ -34,21 +34,13 @@ function writePackage(root: string, fields = {}) {
   write(root, "package.json", JSON.stringify({ private: true, type: "module", ...fields }));
 }
 
-function copyScript(root: string, file: string) {
-  const destination = path.join(root, file);
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(file, destination);
-}
-
 function toolFixture(directory: string, tool: string, layout: string, exitCode: number) {
   const root = fs.realpathSync(createTempDir("openclaw-package-bin-"));
   const cwd = path.resolve(root, directory);
   const capture = path.join(root, "capture.json");
-  for (const target of new Set([root, cwd])) {
-    writePackage(target);
-  }
   let entry = "";
   for (const target of new Set([root, cwd])) {
+    writePackage(target);
     const modules = path.join(target, "node_modules");
     if (target === root || layout === "isolated") {
       entry = writeTool(modules, tool, target === root ? "root" : "local", exitCode);
@@ -68,7 +60,14 @@ function toolFixture(directory: string, tool: string, layout: string, exitCode: 
     root,
     cwd,
     env,
-    check(result: ReturnType<typeof spawnSync>, args: string[]) {
+    run(command: string, commandArgs: string[], args: string[], options: SpawnSyncOptions = {}) {
+      const result = spawnSync(command, commandArgs, {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        timeout: 10_000,
+        ...options,
+      });
       expect(result.error).toBeUndefined();
       expect(result.status, `${result.stdout}${result.stderr}`).toBe(exitCode);
       expect(JSON.parse(fs.readFileSync(capture, "utf8"))).toEqual({
@@ -84,16 +83,10 @@ function toolFixture(directory: string, tool: string, layout: string, exitCode: 
 function writeTool(modules: string, tool: string, scope: string, exitCode: number): string {
   const directory = path.join(modules, tool);
   const entry = toolEntries[tool]!;
-  write(
-    directory,
-    "package.json",
-    JSON.stringify({
-      name: tool,
-      type: "module",
-      exports: { ".": "./index.mjs", "./package.json": "./package.json" },
-      bin: { [tool]: entry },
-    }),
-  );
+  writePackage(directory, {
+    exports: { ".": "./index.mjs", "./package.json": "./package.json" },
+    bin: { [tool]: entry },
+  });
   write(directory, "index.mjs", "export const chromium = {};\n");
   return write(
     directory,
@@ -138,20 +131,14 @@ it.each(
     const forwarded = ["--help", "--mode", "fixture with spaces"];
     const manifest = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
     writePackage(cwd, { scripts: { [script]: manifest.scripts[script] } });
-    copyScript(root, "scripts/run-node-package-bin.mts");
+    write(root, "scripts/run-node-package-bin.mts");
     const spec = createPnpmRunnerSpawnSpec({
       cwd: root,
       env: fixture.env,
+      stdio: "pipe",
       pnpmArgs: ["--dir", cwd, "run", script, ...forwarded],
     });
-    const result = spawnSync(spec.command, spec.args, {
-      ...spec.options,
-      encoding: "utf8",
-      stdio: "pipe",
-      timeout: 10_000,
-    });
-
-    fixture.check(result, [...args, ...forwarded]);
+    fixture.run(spec.command, spec.args, [...args, ...forwarded], spec.options);
   },
 );
 
@@ -174,7 +161,7 @@ it.each(["hoisted", "isolated"])(
       "packages/normalization-core/src/string-coerce.ts",
       "packages/normalization-core/src/utf16-slice.ts",
     ]) {
-      copyScript(root, file);
+      write(root, file);
     }
     write(
       root,
@@ -188,12 +175,8 @@ process.exitCode = ensurePlaywrightChromium({
   }
 });\n`,
     );
-    const result = spawnSync(process.execPath, [path.join(root, "probe.mjs")], {
-      cwd: root,
+    fixture.run(process.execPath, [path.join(root, "probe.mjs")], ["install", "ffmpeg"], {
       env: mergeProcessEnv([fixture.env, { PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: undefined }]),
-      encoding: "utf8",
-      timeout: 10_000,
     });
-    fixture.check(result, ["install", "ffmpeg"]);
   },
 );
