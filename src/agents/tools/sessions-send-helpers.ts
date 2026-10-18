@@ -34,26 +34,26 @@ export function sendReplyResult(
   result: { replyText?: string; replyTruncated?: true; sourceReplyDelivered?: boolean },
 ) {
   const { replyText: reply, replyTruncated, sourceReplyDelivered } = result;
+  if (!reply) {
+    return jsonResult({
+      ...receipt,
+      status: "no_reply" as const,
+      message: sourceReplyDelivered
+        ? "The target delivered its final reply directly to its source conversation. Do not resend."
+        : "No visible reply or pending delivery. Continue or retry if needed.",
+    });
+  }
   return jsonResult({
     ...receipt,
-    ...(reply
+    status: "ok" as const,
+    delivery: { status: "skipped" as const },
+    ...(replyTruncated
       ? {
-          status: "ok" as const,
-          delivery: { status: "skipped" as const },
-          reply,
-          ...(replyTruncated
-            ? {
-                replyTruncated,
-                note: "The reply may have been cut at 4,096 characters; read the full reply with sessions_history.",
-              }
-            : {}),
+          replyTruncated,
+          note: "The reply may be truncated. Ask the target for the missing section or a file containing the full reply; do not repeat the original task.",
         }
-      : {
-          status: "no_reply" as const,
-          message: sourceReplyDelivered
-            ? "The target delivered its final reply directly to its source conversation. Do not resend."
-            : "No visible reply or pending delivery. Continue or retry if needed.",
-        }),
+      : {}),
+    reply,
   });
 }
 
