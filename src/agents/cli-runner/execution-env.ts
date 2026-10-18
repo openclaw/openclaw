@@ -15,7 +15,8 @@ type ChildEnvBackend = Pick<
  * The environment a local CLI child starts from: the Gateway process, minus the backend's
  * clearEnv, plus backend and prepared overrides. Preparation and execution both call this,
  * so what a history owner is derived from is the environment the child actually receives.
- * Per-attempt MCP capture variables are layered on by the executor and never carry identity.
+ * The executor layers per-attempt MCP capture and installation target variables on top; those
+ * never carry identity.
  */
 export function resolveCliChildEnv(
   preparedBackend: ChildEnvBackend,

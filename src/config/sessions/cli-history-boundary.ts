@@ -12,8 +12,8 @@ export type CliHistoryWriter = {
   assertCurrent: () => void;
   assertReadable: () => void | Promise<void>;
   /**
-   * Fresh owner check, asked once per coverage commit. False keeps the commit's rows but
-   * does not advance coverage. Absent means the owner cannot change during the run.
+   * Fresh owner check, asked once per coverage commit; never throws. False keeps the commit's
+   * rows but does not advance coverage. Absent means the owner cannot change during the run.
    */
   confirmsOwner?: () => boolean;
 };
@@ -107,12 +107,7 @@ export function answerCliHistoryOwnerProbe(
   ) {
     return false;
   }
-  let holds = false;
-  try {
-    holds = writer?.confirmsOwner?.() === true;
-  } catch {
-    // An owner that cannot be confirmed does not hold.
-  }
+  const holds = writer?.confirmsOwner?.() === true;
   Atomics.store(new Int32Array(fact.verdict), 0, holds ? 1 : 0);
   return true;
 }

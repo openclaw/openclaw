@@ -727,4 +727,23 @@ describe("native CLI login owner", () => {
       expect(JSON.stringify(manager.getEntries())).toContain("under b");
     });
   });
+
+  it("treats a login lookup that throws as no owner at every check", async () => {
+    const f = await fixture();
+    const { backend } = logins();
+    loginIn(backend, "uuid:account-a");
+    await withNativeWriter(f, "boundary-native-enotdir", backendUsing(backend), async (writer) => {
+      const manager = await SessionManager.openAsync(f.target);
+      const before = coveredSeq(f);
+      // A config root replaced by a file makes the credential lookup throw (ENOTDIR).
+      fs.rmSync(backend, { recursive: true });
+      fs.writeFileSync(backend, "");
+      await manager.appendMessageAsync({ role: "user", content: "unreadable", timestamp: 1 });
+      expect(coveredSeq(f)).toBe(before);
+      expect(JSON.stringify(manager.getEntries())).toContain("unreadable");
+      // Saved history is refused; a turn without it runs on, uncovered.
+      expect(() => writer.checkNativeLoginBoundary(true)).toThrow("CLI history authority changed");
+      writer.checkNativeLoginBoundary(false);
+    });
+  });
 });

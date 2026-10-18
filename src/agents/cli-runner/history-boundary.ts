@@ -339,8 +339,17 @@ async function prepareCliHistoryBoundaryOnce(
   // A boundary that sees a credential this process has not attested yet (normally the
   // CLI's own token refresh) attests it in the background. Coverage waits until it settles.
   let pendingAttestation: Promise<void> | undefined;
-  const readNativeOwner = () =>
-    nativeEnv === undefined ? undefined : readAttestedNativeCliLoginOwner(provider, nativeEnv);
+  const readNativeOwner = () => {
+    if (nativeEnv === undefined) {
+      return undefined;
+    }
+    // A lookup that throws (an unreadable config root) has no owner, like any failed lookup.
+    try {
+      return readAttestedNativeCliLoginOwner(provider, nativeEnv);
+    } catch {
+      return undefined;
+    }
+  };
   const nativeLoginMatches = () =>
     !nativeLoginOwner ||
     (!detached && !pendingAttestation && readNativeOwner() === nativeLoginOwner);
@@ -428,8 +437,7 @@ async function prepareCliHistoryBoundaryOnce(
     // rows but leaves coverage where it is, so a produced reply is never discarded. Other
     // owners cannot change during the run, so their writers carry no owner check.
     ...(nativeLoginOwner !== undefined ? { confirmsOwner: nativeLoginMatches } : {}),
-    checkNativeLoginBoundary: (carriesSavedHistory) =>
-      checkNativeLoginBoundary(carriesSavedHistory),
+    checkNativeLoginBoundary,
     bindExecutionEnv: (env, carriesSavedHistory) => {
       nativeEnv = env;
       checkNativeLoginBoundary(
@@ -488,7 +496,6 @@ async function planCliHistoryBoundary(
   const currentUserIsLast = !admission || watermark.maxSeq === admission.rawSeq;
   const stored = snapshot.cliHistoryBoundary;
   const { credential, nativeLoginOwner } = identity;
-  const provider = normalizeProviderId(params.provider);
   // Native reuse epochs intentionally tolerate identity-less OAuth and stable
   // SecretRefs. History cannot: use the resolved static credential or a named
   // OAuth account, never a profile name, reference, or opaque CLI login alone.
@@ -513,7 +520,7 @@ async function planCliHistoryBoundary(
             ? ["native-login", nativeLoginOwner]
             : undefined;
   const fingerprint = owner
-    ? sha256Hex(JSON.stringify(["cli-history-v1", provider, owner]))
+    ? sha256Hex(JSON.stringify(["cli-history-v1", normalizeProviderId(params.provider), owner]))
     : undefined;
   const writerRunId = params.expectedWriterRunId ?? params.runId;
   let allowed = Boolean(
