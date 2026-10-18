@@ -1,0 +1,16 @@
+[
+  {
+    "name": "ancestor bins before inherited PATH",
+    "prefix": [
+      "/work/openclaw/node_modules/.bin",
+      "/work/node_modules/.bin",
+      "/node_modules/.bin"
+    ],
+    "suffix": []
+  },
+  {
+    "name": "ancestor bins after inherited PATH",
+    "prefix": ["/work/openclaw/node_modules/.bin"],
+    "suffix": ["/work/node_modules/.bin", "/node_modules/.bin"]
+  }
+]

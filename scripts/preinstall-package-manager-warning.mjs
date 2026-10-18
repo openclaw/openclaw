@@ -132,11 +132,11 @@ function isStableAbsolutePath(value, pathApi, platform) {
   return root !== "\\" && root !== "/";
 }
 
-function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
-  const expectedPrefix = [];
+function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform) {
+  const lifecyclePaths = [];
   let directory = pathApi.resolve(cwd);
   while (true) {
-    expectedPrefix.push(pathApi.join(directory, "node_modules", ".bin"));
+    lifecyclePaths.push(pathApi.join(directory, "node_modules", ".bin"));
     const parent = pathApi.dirname(directory);
     if (parent === directory) {
       break;
@@ -144,18 +144,27 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
     directory = parent;
   }
 
-  if (pathEntries.length < expectedPrefix.length) {
+  if (pathEntries.length < lifecyclePaths.length) {
     return null;
   }
-  for (const [index, expected] of expectedPrefix.entries()) {
-    if (
-      normalizePathForComparison(pathEntries[index], pathApi, platform) !==
-      normalizePathForComparison(expected, pathApi, platform)
-    ) {
+  const matches = (entry, expected) =>
+    normalizePathForComparison(entry, pathApi, platform) ===
+    normalizePathForComparison(expected, pathApi, platform);
+  for (let prefixLength = 1; prefixLength <= lifecyclePaths.length; prefixLength++) {
+    if (!matches(pathEntries[prefixLength - 1], lifecyclePaths[prefixLength - 1])) {
       return null;
     }
+    const suffixStart = pathEntries.length - (lifecyclePaths.length - prefixLength);
+    const suffixMatches = lifecyclePaths
+      .slice(prefixLength)
+      .every((expected, index) => matches(pathEntries[suffixStart + index], expected));
+    if (suffixMatches) {
+      // Prefer the shortest proven prefix: inherited entries can themselves
+      // match ancestor bins and must retain their place before later Node paths.
+      return pathEntries.slice(prefixLength, suffixStart);
+    }
   }
-  return pathEntries.slice(expectedPrefix.length);
+  return null;
 }
 
 /**
@@ -188,9 +197,10 @@ export function probePackageCliNodeRuntime(options = {}) {
   const delimiter = platform === "win32" ? ";" : ":";
   const executableName = platform === "win32" ? "node.exe" : "node";
   const seen = new Set();
-  // Bun prepends one cwd-to-root node_modules/.bin path per ancestor before
-  // the original PATH. Strip only that exact prefix; anything else persists.
-  const pathEntries = stripBunLifecyclePathPrefix(pathEnv.split(delimiter), cwd, pathApi, platform);
+  // Bun places the ordered cwd-to-root bins around the inherited PATH. Dependency
+  // scripts can put ancestor bins last so they cannot shadow inherited tools.
+  // Strip only the complete chain at the edges; middle entries persist.
+  const pathEntries = stripBunLifecyclePaths(pathEnv.split(delimiter), cwd, pathApi, platform);
   if (!pathEntries) {
     return null;
   }
