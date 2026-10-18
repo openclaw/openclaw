@@ -697,17 +697,3 @@ export type PluginManifestOnboardingScope =
   | "text-inference"
   | "image-generation"
   | "music-generation";
-
-export function normalizeProviderAssistantVisibility(
-  value: unknown,
-): PluginManifestProviderAuthChoice["assistantVisibility"] {
-  return value === "visible" || value === "manual-only" || value === "detected-only"
-    ? value
-    : undefined;
-}
-
-export function isPluginManifestOnboardingScope(
-  value: unknown,
-): value is PluginManifestOnboardingScope {
-  return value === "text-inference" || value === "image-generation" || value === "music-generation";
-}

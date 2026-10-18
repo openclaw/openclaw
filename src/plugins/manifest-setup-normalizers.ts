@@ -14,16 +14,14 @@ import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { isRecord } from "../utils.js";
 import {
+  isPluginManifestOnboardingScope,
   normalizeManifestObjectList,
   normalizeNamedMetadataRecord,
+  normalizeProviderAssistantVisibility,
   omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
-import {
-  isPluginManifestOnboardingScope,
-  normalizeProviderAssistantVisibility,
-} from "./manifest-types.js";
 import type {
   PluginManifestActivation,
   PluginManifestActivationCapability,

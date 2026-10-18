@@ -2,14 +2,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  isPluginManifestOnboardingScope,
+  normalizeProviderAssistantVisibility,
   omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import {
-  isPluginManifestOnboardingScope,
-  normalizeProviderAssistantVisibility,
-} from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;

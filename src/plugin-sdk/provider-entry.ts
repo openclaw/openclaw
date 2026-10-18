@@ -7,7 +7,7 @@ import {
 import {
   isPluginManifestOnboardingScope,
   normalizeProviderAssistantVisibility,
-} from "../plugins/manifest-types.js";
+} from "../plugins/manifest-capability-normalizers.js";
 import type {
   PluginManifestProviderAuthChoice,
   PluginManifestSetupProvider,

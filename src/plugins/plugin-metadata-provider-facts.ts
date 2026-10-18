@@ -13,7 +13,7 @@ import type {
   PluginProviderAuthAliasCandidate,
   PluginProviderAuthContribution,
 } from "./plugin-metadata-snapshot.types.js";
-import { PLUGIN_ORIGIN_PRIORITIES } from "./plugin-origin.types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import { collectPluginProviderRequestOwners } from "./plugin-provider-request-policy.js";
 import { listSetupProviderIds } from "./setup-descriptors.js";
 
@@ -98,6 +98,13 @@ export function prepareProviderEndpoints(value: unknown): PluginManifestProvider
   return endpoints;
 }
 
+const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
+  config: 0,
+  bundled: 1,
+  global: 2,
+  workspace: 3,
+};
+
 /** Prepares package alias candidates without capturing current workspace trust. */
 export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginManifestRecord[]) {
   const aliases = new Map<string, PluginProviderAuthAliasCandidate[]>();
@@ -132,8 +139,8 @@ export function buildPluginMetadataProviderAuthAliases(plugins: readonly PluginM
   for (const candidates of aliases.values()) {
     candidates.sort(
       (left, right) =>
-        (PLUGIN_ORIGIN_PRIORITIES[left.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER) -
-        (PLUGIN_ORIGIN_PRIORITIES[right.plugin.origin]?.provider ?? Number.MAX_SAFE_INTEGER),
+        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[left.plugin.origin] ?? Number.MAX_SAFE_INTEGER) -
+        (PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY[right.plugin.origin] ?? Number.MAX_SAFE_INTEGER),
     );
   }
   return aliases;
