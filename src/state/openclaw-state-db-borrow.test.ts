@@ -251,8 +251,7 @@ it("pins an independent transaction without exposing a native snapshot source", 
     expect(pin).toBeDefined();
     expect(pin).not.toHaveProperty("database");
     expect(() => pin?.assertCurrent()).not.toThrow();
-    expect(database.db.isTransaction).toBe(true);
-    expect(database.db.isOpen).toBe(true);
+    expect(database.db).toMatchObject({ isTransaction: true, isOpen: true });
     expect(isOpenClawDatabaseMaintenanceResourceOwned(database.db, scope)).toBe(true);
   } finally {
     pin?.release();

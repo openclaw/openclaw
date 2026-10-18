@@ -40,6 +40,10 @@ function databasePath(name = "state") {
   return path.join(dirs.make("openclaw-async-drain-"), `${name}.sqlite`);
 }
 
+function expectOpen(open: boolean, ...handles: { readonly isOpen: boolean }[]) {
+  expect(handles.map((handle) => handle.isOpen)).toEqual(handles.map(() => open));
+}
+
 function holdReader(
   reader: ReturnType<typeof openOpenClawStateReadConnection>,
   identity: DatabasePathIdentity,
@@ -229,12 +233,10 @@ describe("canonical shared-state resource drainage", () => {
     try {
       expect(admitted.assertCurrent).toThrow(/admission is closed/);
       await entered.promise;
-      expect(writer.db.isOpen).toBe(true);
-      expect(reader.database.db.isOpen).toBe(true);
+      expectOpen(true, writer.db, reader.database.db);
       finish.resolve();
       await closing;
-      expect(reader.database.db.isOpen).toBe(false);
-      expect(writer.db.isOpen).toBe(false);
+      expectOpen(false, reader.database.db, writer.db);
       expect(admitted.assertCurrent).toThrow(/admission changed/);
       captureOpenClawStateDatabaseReadAdmission(pathname).assertCurrent();
       const reopened = openOpenClawStateDatabase({ path: pathname });
@@ -270,19 +272,16 @@ describe("canonical shared-state resource drainage", () => {
     try {
       await expect(closeOpenClawStateDatabaseByPathAsync(first.path)).rejects.toBe(failure);
       unregister();
-      expect(first.db.isOpen).toBe(true);
-      expect(firstReader.database.db.isOpen).toBe(true);
+      expectOpen(true, first.db, firstReader.database.db);
       captureOpenClawStateDatabaseReadAdmission(first.path).assertCurrent();
       captureOpenClawStateDatabaseReadAdmission(second.path).assertCurrent();
       await closeOpenClawStateDatabaseByPathAsync(second.path);
       expect(close).toHaveBeenLastCalledWith(secondIdentity);
-      expect(second.db.isOpen).toBe(false);
-      expect(secondReader.database.db.isOpen).toBe(false);
+      expectOpen(false, second.db, secondReader.database.db);
       expect(firstReader.database.db.isOpen).toBe(true);
       failFirst = false;
       await closeOpenClawStateDatabaseByPathAsync(first.path);
-      expect(firstReader.database.db.isOpen).toBe(false);
-      expect(first.db.isOpen).toBe(false);
+      expectOpen(false, firstReader.database.db, first.db);
       captureOpenClawStateDatabaseReadAdmission(first.path).assertCurrent();
     } finally {
       failFirst = false;
@@ -311,14 +310,12 @@ describe("canonical shared-state resource drainage", () => {
     try {
       await expect(closeOpenClawStateDatabaseAsync()).rejects.toBe(failure);
       expect(finalize).not.toHaveBeenCalled();
-      expect(owner.db.isOpen).toBe(true);
-      expect(reader.database.db.isOpen).toBe(true);
+      expectOpen(true, owner.db, reader.database.db);
       captureOpenClawStateDatabaseReadAdmission(owner.path).assertCurrent();
       await closeOpenClawStateDatabaseAsync();
       expect(close).toHaveBeenCalledTimes(2);
       expect(finalize).toHaveBeenCalledOnce();
-      expect(reader.database.db.isOpen).toBe(false);
-      expect(owner.db.isOpen).toBe(false);
+      expectOpen(false, reader.database.db, owner.db);
     } finally {
       unregister();
       unregisterFinalizer();
@@ -474,8 +471,7 @@ describe("canonical shared-state resource drainage", () => {
       expect(reader.database.db.isOpen).toBe(true);
       finish.resolve();
       removal = await acquiring;
-      expect(reader.database.db.isOpen).toBe(false);
-      expect(owner.db.isOpen).toBe(false);
+      expectOpen(false, reader.database.db, owner.db);
       removal.assertCurrent();
       expect(() => captureOpenClawStateDatabaseReadAdmission(owner.path)).toThrow(/closed/);
       removal.release();

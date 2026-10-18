@@ -114,6 +114,13 @@ function seedEvent(db: EngineConnection, scope: string) {
   ).run(scope, "preserved", "{}", 1);
 }
 
+function readRow(db: EngineConnection, query: string) {
+  return db.prepare(query).get();
+}
+
+const statsTableQuery = "SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'";
+const runStatsQuery = "SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'";
+
 async function pluginStore(namespace: string, value: string) {
   const root = tempDirs.make(`state-wal-${namespace}-`);
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
@@ -276,9 +283,7 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(writer.isTransaction).toBe(true);
     expect(observations.every((state) => state === "complete" || state === "blocked")).toBe(true);
     sql.assertIdle();
-    expect(
-      writer.prepare("SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'").get(),
-    ).toBeUndefined();
+    expect(readRow(writer, statsTableQuery)).toBeUndefined();
   } finally {
     stop();
     if (writer.isTransaction) {
@@ -292,9 +297,9 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     sql.assertIdle();
   });
-  expect(database.db.prepare("SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'").get()).toEqual(
-    { tbl: "schema_meta" },
-  );
+  expect(readRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'")).toEqual({
+    tbl: "schema_meta",
+  });
 });
 
 it("refreshes planner stats without changing snapshots or indexes", async () => {
@@ -323,9 +328,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
   const admission = createSqliteWorkerOperationAdmission((request, grant) => {
     context.admission.assertCurrent();
     if (refuseCommit && request.stage === "commit" && plannerPasses() === 3) {
-      refreshedStatisticsAtCommit = database.db
-        .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
-        .get();
+      refreshedStatisticsAtCommit = readRow(database.db, runStatsQuery);
       throw new Error("fixture revoked commit");
     }
     grant();
@@ -359,19 +362,13 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
     expect(read.all("run-100", 0)).toEqual(before);
     await periodic();
     expect(plannerPasses()).toBe(1);
-    expect(
-      reader.prepare("SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'").get(),
-    ).toBeUndefined();
+    expect(readRow(reader, statsTableQuery)).toBeUndefined();
     expect(read.all("run-100", 0)).toEqual(before);
     reader.exec("COMMIT");
     expect(read.all("run-100", 0)).toEqual(before);
     {
       using fresh = new DatabaseSync(database.path, { readOnly: true });
-      expect(
-        fresh
-          .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='idx_audit_events_run_sequence'")
-          .get(),
-      ).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
+      expect(readRow(fresh, runStatsQuery)).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
       expect(fresh.prepare(`EXPLAIN QUERY PLAN ${query}`).all("run-100", 0)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -389,9 +386,9 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
       SELECT 'bulk-'||n,hex(zeroblob(8192)),1 FROM rows;
       DELETE FROM config_machine_state WHERE state_key LIKE 'bulk-%';
     `);
-    expect(
-      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count),
-    ).toBeGreaterThan(8);
+    expect(Number(readRow(database.db, "PRAGMA freelist_count")?.freelist_count)).toBeGreaterThan(
+      8,
+    );
     await periodic();
     expect(plannerPasses()).toBe(2);
     // Missing statistics force real maintenance work before the refused commit.
@@ -477,9 +474,10 @@ it("joins private timer cancellation after publisher failure", async () => {
   }
   const reopened = openOpenClawStateDatabase({ path: pathname });
   expect(
-    reopened.db
-      .prepare("SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'")
-      .get(),
+    readRow(
+      reopened.db,
+      "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
+    ),
   ).toEqual({ value_json: "true" });
 });
 
@@ -690,9 +688,7 @@ it("flushes worker writes before host close without host SQL", async () => {
   }
   using reopened = new DatabaseSync(database.path, { readOnly: true });
   expect(
-    reopened
-      .prepare("SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'")
-      .get(),
+    readRow(reopened, "SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'"),
   ).toEqual({ value_json: '"final"' });
 });
 
