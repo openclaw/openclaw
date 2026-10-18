@@ -10,6 +10,7 @@ import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
 import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
+import sessionPanelRailStyles from "../styles/session-panel-rail.css?inline";
 import dockPanelStyles from "./dock-panel.css?inline";
 import linkReaderContentStyles from "./link-reader-content.css?inline";
 import linkReaderPanelStyles from "./link-reader-panel.css?inline";
@@ -27,11 +28,12 @@ export const linkReaderPanelLayout = createDockPanelLayout({
 export const linkReaderViewStyles = [
   panelTabStripCss,
   dockPanelStyles,
+  sessionPanelRailStyles,
   linkReaderPanelStyles,
   linkReaderContentStyles,
 ];
 
-function readerIcon(name: string | undefined, ownerDocument: Document) {
+export function readerIcon(name: string | undefined, ownerDocument: Document) {
   const icon =
     name && Object.hasOwn(iconData, name)
       ? (name as IconName) // SAFETY: The own-key guard admits only names in the built-in catalog.
