@@ -115,6 +115,7 @@ describe("Crabbox allocation through Gateway ownership", () => {
         killed: false,
         termination: "exit",
       });
+      const jsonResult = (value: unknown) => result(JSON.stringify(value));
       const runner = vi
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async (argv) => {
@@ -123,56 +124,48 @@ describe("Crabbox allocation through Gateway ownership", () => {
             return result("crabbox 999.0.0\n");
           }
           if (argv[1] === "config") {
-            return result(JSON.stringify({ aws: { instanceProfile: "" } }));
+            return jsonResult({ aws: { instanceProfile: "" } });
           }
           if (argv[1] === "warmup") {
             leases.add(value("--lease-id"));
           }
           if (argv[1] === "checkpoint" && argv[2] === "fork") {
             leases.add(value("--lease-id"));
-            return result(
-              JSON.stringify({
-                checkpointId: argv[3],
-                leaseId: value("--lease-id"),
-                slug: value("--slug"),
-                provider: "aws",
-                workdir: "/workspace",
-              }),
-            );
+            return jsonResult({
+              checkpointId: argv[3],
+              leaseId: value("--lease-id"),
+              slug: value("--slug"),
+              provider: "aws",
+              workdir: "/workspace",
+            });
           }
           if (argv[1] === "checkpoint" && argv[2] === "create") {
-            return result(
-              JSON.stringify({
-                id: "chk_authority",
-                kind: "aws-ebs-snapshot",
-                leaseId: value("--id"),
-                workdir: "/workspace",
-                native: { imageId: "snap_authority", state: "completed" },
-              }),
-            );
+            return jsonResult({
+              id: "chk_authority",
+              kind: "aws-ebs-snapshot",
+              leaseId: value("--id"),
+              workdir: "/workspace",
+              native: { imageId: "snap_authority", state: "completed" },
+            });
           }
           if (argv[1] === "checkpoint" && argv[2] === "inspect") {
-            return result(
-              JSON.stringify({
-                localState: "metadata_available",
-                providerState: "available",
-                nextAction: "fork_or_delete",
-              }),
-            );
+            return jsonResult({
+              localState: "metadata_available",
+              providerState: "available",
+              nextAction: "fork_or_delete",
+            });
           }
           if (argv[1] === "inspect" || argv[1] === "status") {
             const id = value("--id");
             return leases.has(id)
-              ? result(
-                  JSON.stringify({
-                    id,
-                    state: "running",
-                    ready: true,
-                    expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
-                    leasePolicy: { maxTTLSeconds: 14_400 },
-                    providerMetadata: { instanceProfileAttached: false },
-                  }),
-                )
+              ? jsonResult({
+                  id,
+                  state: "running",
+                  ready: true,
+                  expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
+                  leasePolicy: { maxTTLSeconds: 14_400 },
+                  providerMetadata: { instanceProfileAttached: false },
+                })
               : { ...result("", 4), stderr: `lease/server not found: ${id}` };
           }
           if (argv[1] === "stop") {

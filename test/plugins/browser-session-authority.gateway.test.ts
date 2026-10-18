@@ -187,6 +187,17 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           expect(requests).toEqual([]);
           let entered = createDeferred();
           let resumed = createDeferred();
+          const waitForPause = (request: ReturnType<typeof invoke>, phase: string) =>
+            withTestTimeout(
+              Promise.race([
+                entered.promise,
+                request.then((result) => {
+                  throw new Error(`Browser settled before ${phase}: ${JSON.stringify(result)}`);
+                }),
+              ]),
+              15_000,
+              `Browser did not enter ${phase}`,
+            );
           release = () => resumed.resolve();
           let holdAllocation = false;
           let holdNavigation = false;
@@ -232,16 +243,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             url: `${origin}/authority/revoked-navigation`,
           });
           void pending.catch(() => {});
-          await withTestTimeout(
-            Promise.race([
-              entered.promise,
-              pending.then((result) => {
-                throw new Error(`Browser settled before navigation: ${JSON.stringify(result)}`);
-              }),
-            ]),
-            15_000,
-            "Browser did not enter existing-page navigation preparation",
-          );
+          await waitForPause(pending, "existing-page navigation preparation");
           await removeSessionMember(target, writer.id);
           resumed.resolve();
           expect((await pending).ok).toBe(false);
@@ -253,16 +255,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
           holdAllocation = true;
           pending = invoke("revoked", writerSocket);
           void pending.catch(() => {});
-          await withTestTimeout(
-            Promise.race([
-              entered.promise,
-              pending.then((result) => {
-                throw new Error(`Browser settled before allocation: ${JSON.stringify(result)}`);
-              }),
-            ]),
-            15_000,
-            "Browser did not enter context allocation",
-          );
+          await waitForPause(pending, "context allocation");
           await removeSessionMember(target, writer.id);
           resumed.resolve();
           expect((await pending).ok).toBe(false);

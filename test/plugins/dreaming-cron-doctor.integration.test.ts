@@ -57,6 +57,16 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
+function authoredJob(id: string, message: string, fields: Partial<CronStoredJob> = {}) {
+  return makeJob(id, {
+    description: "[managed-by=memory-core.short-term-promotion] operator note",
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message },
+    delivery: { mode: "none" },
+    ...fields,
+  });
+}
+
 function readRows(db: EngineConnection) {
   return {
     jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
@@ -65,6 +75,66 @@ function readRows(db: EngineConnection) {
       .prepare("SELECT * FROM cron_job_runtime_authorities ORDER BY store_key, job_id")
       .all(),
   };
+}
+
+type Rows = ReturnType<typeof readRows>;
+const tables = ["jobs", "scratch", "authority"] as const;
+const declarationKey = "memory-core:memory-dreaming-promotion";
+const dreamingPayload = {
+  kind: "agentTurn",
+  message: "__openclaw_memory_core_short_term_promotion_dream__",
+  lightContext: true,
+};
+const migratedDefinition = {
+  declarationKey,
+  sessionTarget: "isolated",
+  payload: { kind: "agentTurn", lightContext: true },
+  delivery: { mode: "none" },
+};
+const dreamingConfig = (enabled: boolean): OpenClawConfig => ({
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: { dreaming: { enabled, frequency: "15 4 * * *", timezone: "UTC" } },
+      },
+    },
+  },
+});
+const rowAt = (rows: Rows, store: string, id: string) =>
+  rows.jobs.find((row) => row.store_key === store && row.job_id === id);
+const definitionOf = (row: Record<string, unknown> | undefined) =>
+  JSON.parse(String(row?.job_json));
+
+function expectPreservedRows(
+  before: Rows,
+  after: Rows,
+  keep: (row: Record<string, unknown>) => boolean,
+) {
+  for (const table of tables) {
+    expect(after[table].filter(keep)).toEqual(before[table].filter(keep));
+  }
+}
+
+function expectPreservedRuntime(
+  row: Record<string, unknown> | undefined,
+  original: Record<string, unknown> | undefined,
+  id: string,
+) {
+  expect(row).toMatchObject({
+    job_id: id,
+    sort_order: original?.sort_order,
+    state_json: original?.state_json,
+    runtime_updated_at_ms: original?.runtime_updated_at_ms,
+  });
+}
+
+function expectBackup(backupPath: string, before: Rows) {
+  const backup = new DatabaseSync(backupPath, { readOnly: true });
+  try {
+    expect(readRows(backup)).toEqual(before);
+  } finally {
+    backup.close();
+  }
 }
 
 type Fixture = {
@@ -361,27 +431,20 @@ describe("host Cron Doctor repair", () => {
         version: 1,
         jobs: [
           makeJob("survivor"),
-          makeJob("authored-phase", {
-            name: "Operator-authored workflow",
-            description:
-              "[managed-by=memory-core.dreaming.light] [managed-by=memory-core.short-term-promotion] operator note",
-            sessionTarget: "isolated",
-            payload: {
-              kind: "agentTurn",
-              message: "Summarize workspace activity and draft tomorrow's priorities.",
+          authoredJob(
+            "authored-phase",
+            "Summarize workspace activity and draft tomorrow's priorities.",
+            {
+              name: "Operator-authored workflow",
+              description:
+                "[managed-by=memory-core.dreaming.light] [managed-by=memory-core.short-term-promotion] operator note",
             },
-            delivery: { mode: "none" },
-          }),
-          makeJob("authored-unified", {
-            name: "Operator-authored review",
-            description: "[managed-by=memory-core.short-term-promotion] operator note",
-            sessionTarget: "isolated",
-            payload: {
-              kind: "agentTurn",
-              message: "Review the project notes and prepare questions for tomorrow's meeting.",
-            },
-            delivery: { mode: "none" },
-          }),
+          ),
+          authoredJob(
+            "authored-unified",
+            "Review the project notes and prepare questions for tomorrow's meeting.",
+            { name: "Operator-authored review" },
+          ),
         ],
       });
       const input = migrationInput(fixture);
@@ -406,47 +469,27 @@ describe("host Cron Doctor repair", () => {
       }
       expect(result.changes.join("\n")).toContain(backupPath);
       const after = readRows(fixture.db());
-      const survivor = after.jobs.find(
-        (row) => row.store_key === activeStore && row.job_id === "survivor",
-      );
+      const survivor = rowAt(after, activeStore, "survivor");
       expect(survivor).toMatchObject({
         job_id: "survivor",
         sort_order: 17,
         state_json: runtimeJson,
         runtime_updated_at_ms: 1_800_000_000_999,
       });
-      expect(JSON.parse(String(survivor?.job_json))).toMatchObject({
+      expect(definitionOf(survivor)).toMatchObject({
+        ...migratedDefinition,
         id: "survivor",
-        declarationKey: "memory-core:memory-dreaming-promotion",
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", lightContext: true },
-        delivery: { mode: "none" },
       });
-      const inactiveSurvivor = after.jobs.find(
-        (row) => row.store_key === retiredStore && row.job_id === "retired",
-      );
-      const previousInactiveSurvivor = before.jobs.find(
-        (row) => row.store_key === retiredStore && row.job_id === "retired",
-      );
-      expect(inactiveSurvivor).toMatchObject({
-        store_key: retiredStore,
-        job_id: "retired",
-        sort_order: previousInactiveSurvivor?.sort_order,
-        state_json: previousInactiveSurvivor?.state_json,
-        runtime_updated_at_ms: previousInactiveSurvivor?.runtime_updated_at_ms,
-      });
-      expect(JSON.parse(String(inactiveSurvivor?.job_json))).toMatchObject({
-        declarationKey: "memory-core:memory-dreaming-promotion",
-        sessionTarget: "isolated",
-        payload: { kind: "agentTurn", lightContext: true },
-        delivery: { mode: "none" },
-      });
+      const inactiveSurvivor = rowAt(after, retiredStore, "retired");
+      expectPreservedRuntime(inactiveSurvivor, rowAt(before, retiredStore, "retired"), "retired");
+      expect(inactiveSurvivor).toMatchObject({ store_key: retiredStore });
+      expect(definitionOf(inactiveSurvivor)).toMatchObject(migratedDefinition);
       const unaffected = (row: Record<string, unknown>) =>
         !(
           row.store_key === activeStore && ["survivor", "duplicate"].includes(String(row.job_id))
         ) && !(row.store_key === retiredStore && row.job_id === "retired");
-      for (const table of ["jobs", "scratch", "authority"] as const) {
-        expect(after[table].filter(unaffected)).toEqual(before[table].filter(unaffected));
+      expectPreservedRows(before, after, unaffected);
+      for (const table of tables) {
         expect(
           after[table].some((row) => row.store_key === activeStore && row.job_id === "duplicate"),
         ).toBe(false);
@@ -464,12 +507,7 @@ describe("host Cron Doctor repair", () => {
 
       const recoveredPath = state.path("recovered.sqlite");
       await fs.copyFile(backupPath, recoveredPath);
-      const recovered = new DatabaseSync(recoveredPath, { readOnly: true });
-      try {
-        expect(readRows(recovered)).toEqual(before);
-      } finally {
-        recovered.close();
-      }
+      expectBackup(recoveredPath, before);
       const remaining = await migration.detectLegacyState(input);
       expect(remaining?.preview).toHaveLength(3);
       expect(remaining?.preview).toEqual(
@@ -534,40 +572,28 @@ describe("host Cron Doctor repair", () => {
           phaseRows.some(({ store, id }) => row.store_key === store && row.job_id === id);
         const removed = (row: Record<string, unknown>) =>
           selected(row) && (!enabled || row.job_id === "duplicate");
-        for (const table of ["jobs", "scratch", "authority"] as const) {
-          expect(after[table].filter((row) => !selected(row))).toEqual(
-            before[table].filter((row) => !selected(row)),
-          );
+        expectPreservedRows(before, after, (row) => !selected(row));
+        for (const table of tables) {
           expect(after[table].some(removed)).toBe(false);
         }
         if (enabled) {
           for (const { store, id } of phaseRows.filter((row) => row.id !== "duplicate")) {
-            const original = before.jobs.find(
-              (row) => row.store_key === store && row.job_id === id,
-            );
-            const survivor = after.jobs.find((row) => row.store_key === store && row.job_id === id);
-            expect(survivor).toMatchObject({
-              store_key: store,
-              job_id: id,
-              sort_order: original?.sort_order,
-              state_json: original?.state_json,
-              runtime_updated_at_ms: original?.runtime_updated_at_ms,
-            });
-            const originalDefinition = JSON.parse(String(original?.job_json));
-            const definition = JSON.parse(String(survivor?.job_json));
+            const original = rowAt(before, store, id);
+            const survivor = rowAt(after, store, id);
+            expectPreservedRuntime(survivor, original, id);
+            expect(survivor).toMatchObject({ store_key: store });
+            const originalDefinition = definitionOf(original);
+            const definition = definitionOf(survivor);
             expect(definition).toMatchObject({
-              declarationKey: "memory-core:memory-dreaming-promotion",
+              ...migratedDefinition,
               name: "Memory Dreaming Promotion",
               description: "[managed-by=memory-core.short-term-promotion] keep operator note",
               enabled: originalDefinition.enabled,
               createdAtMs: originalDefinition.createdAtMs,
               schedule: originalDefinition.schedule,
               wakeMode: originalDefinition.wakeMode,
-              sessionTarget: "isolated",
               payload: {
-                kind: "agentTurn",
-                message: "__openclaw_memory_core_short_term_promotion_dream__",
-                lightContext: true,
+                ...dreamingPayload,
                 timeoutSeconds: 90,
                 toolsAllow: ["read"],
               },
@@ -579,7 +605,7 @@ describe("host Cron Doctor repair", () => {
             expect(after[table]).toEqual(before[table].filter((row) => !removed(row)));
           }
         } else {
-          for (const table of ["jobs", "scratch", "authority"] as const) {
+          for (const table of tables) {
             expect(after[table]).toEqual(before[table].filter((row) => !selected(row)));
           }
         }
@@ -589,12 +615,7 @@ describe("host Cron Doctor repair", () => {
         if (!backupPath) {
           throw new Error("Phase migration did not retain its backup");
         }
-        const backup = new DatabaseSync(backupPath, { readOnly: true });
-        try {
-          expect(readRows(backup)).toEqual(before);
-        } finally {
-          backup.close();
-        }
+        expectBackup(backupPath, before);
         expect((await migration.migrateLegacyState(input)).changes).toEqual([]);
         expect(readRows(fixture.db())).toEqual(after);
         expect(await listBackups(fixture.databasePath)).toEqual(backups);
@@ -628,8 +649,10 @@ describe("host Cron Doctor repair", () => {
               retiredStore,
             );
           });
-          const taggedBeforeDoctor = readRows(fixture.db()).jobs.find(
-            (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+          const taggedBeforeDoctor = rowAt(
+            readRows(fixture.db()),
+            activeStore,
+            "authored-lookalike",
           );
           expect(taggedBeforeDoctor).toBeDefined();
           const migrated = await migration.migrateLegacyState(migrationInput(fixture));
@@ -647,8 +670,7 @@ describe("host Cron Doctor repair", () => {
             beforeRuntime.jobs.filter(
               (row) =>
                 row.store_key === activeStore &&
-                JSON.parse(String(row.job_json)).declarationKey ===
-                  "memory-core:memory-dreaming-promotion",
+                definitionOf(row).declarationKey === declarationKey,
             ),
           ).toHaveLength(activeDreaming ? 1 : 0);
           const migratedSurvivors = beforeRuntime.jobs.filter(
@@ -658,29 +680,17 @@ describe("host Cron Doctor repair", () => {
           );
           expect(migratedSurvivors).toHaveLength(activeDreaming ? 2 : 1);
           for (const row of migratedSurvivors) {
-            expect(JSON.parse(String(row.job_json)).payload).toMatchObject({
-              kind: "agentTurn",
-              message: "__openclaw_memory_core_short_term_promotion_dream__",
-              lightContext: true,
+            expect(definitionOf(row).payload).toMatchObject({
+              ...dreamingPayload,
               ...authoredPayloadOptions,
             });
           }
           const retiredRevision = getCronJobsStoreRevision(retiredStore);
           const inactive = (row: Record<string, unknown>) => row.store_key !== activeStore;
-          const authoredBefore = beforeRuntime.jobs.find(
-            (row) => row.store_key === activeStore && row.job_id === "operator",
-          );
+          const authoredBefore = rowAt(beforeRuntime, activeStore, "operator");
           const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
           try {
-            const config: OpenClawConfig = {
-              plugins: {
-                entries: {
-                  "memory-core": {
-                    config: { dreaming: { enabled, frequency: "15 4 * * *", timezone: "UTC" } },
-                  },
-                },
-              },
-            };
+            const config = dreamingConfig(enabled);
             await runRegisteredDreamingService(config, cron, logger, scheduler);
             expect(mutations).toEqual(
               enabled
@@ -698,17 +708,13 @@ describe("host Cron Doctor repair", () => {
               ),
             );
             const jobs = await cron.list({ includeDisabled: true });
-            const managed = jobs.filter(
-              (job) => job.declarationKey === "memory-core:memory-dreaming-promotion",
-            );
+            const managed = jobs.filter((job) => job.declarationKey === declarationKey);
             expect(managed).toHaveLength(enabled ? 1 : 0);
             if (enabled) {
               expect(managed[0]).toMatchObject({
                 enabled: true,
-                sessionTarget: "isolated",
+                ...migratedDefinition,
                 schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
-                payload: { kind: "agentTurn", lightContext: true },
-                delivery: { mode: "none" },
               });
               if (activeDreaming) {
                 expect(managed[0]?.id).toBe("survivor");
@@ -719,23 +725,13 @@ describe("host Cron Doctor repair", () => {
             }
             expect(jobs.some((job) => job.id === "operator")).toBe(true);
             const afterRuntime = readRows(fixture.db());
-            const authoredAfter = afterRuntime.jobs.find(
-              (row) => row.store_key === activeStore && row.job_id === "operator",
+            expect(definitionOf(rowAt(afterRuntime, activeStore, "operator"))).toEqual(
+              definitionOf(authoredBefore),
             );
-            expect(JSON.parse(String(authoredAfter?.job_json))).toEqual(
-              JSON.parse(String(authoredBefore?.job_json)),
+            expect(definitionOf(rowAt(afterRuntime, activeStore, "authored-lookalike"))).toEqual(
+              definitionOf(taggedBeforeDoctor),
             );
-            const taggedAfter = afterRuntime.jobs.find(
-              (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
-            );
-            expect(JSON.parse(String(taggedAfter?.job_json))).toEqual(
-              JSON.parse(String(taggedBeforeDoctor?.job_json)),
-            );
-            for (const table of ["jobs", "scratch", "authority"] as const) {
-              expect(afterRuntime[table].filter(inactive)).toEqual(
-                beforeRuntime[table].filter(inactive),
-              );
-            }
+            expectPreservedRows(beforeRuntime, afterRuntime, inactive);
             expect(getCronJobsStoreRevision(retiredStore)).toBe(retiredRevision);
             mutations.length = 0;
             await runRegisteredDreamingService(config, cron, logger, scheduler);
@@ -749,12 +745,8 @@ describe("host Cron Doctor repair", () => {
         {
           activeDreaming,
           additionalActiveJobs: [
-            makeJob("authored-lookalike", {
-              description: "[managed-by=memory-core.short-term-promotion] operator note",
+            authoredJob("authored-lookalike", "Summarize my authored project notes.", {
               schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
-              sessionTarget: "isolated",
-              payload: { kind: "agentTurn", message: "Summarize my authored project notes." },
-              delivery: { mode: "none" },
             }),
           ],
         },
@@ -765,7 +757,6 @@ describe("host Cron Doctor repair", () => {
   it("requires Doctor for a declared legacy payload before runtime converges the same job", async () => {
     await withCronFixture(async (fixture) => {
       const migration = getDreamingMigration(fixture);
-      const declarationKey = "memory-core:memory-dreaming-promotion";
       runOpenClawStateWriteTransaction(({ db }) => {
         db.prepare(`UPDATE cron_jobs
           SET declaration_key = ?, job_json = json_set(job_json, '$.declarationKey', ?)
@@ -781,18 +772,8 @@ describe("host Cron Doctor repair", () => {
         await cron.list({ includeDisabled: true });
         const before = readRows(fixture.db());
         const previousRevisions = revisions(fixture);
-        const original = before.jobs.find(
-          (row) => row.store_key === fixture.activeStore && row.job_id === "survivor",
-        );
-        const config: OpenClawConfig = {
-          plugins: {
-            entries: {
-              "memory-core": {
-                config: { dreaming: { enabled: true, frequency: "15 4 * * *", timezone: "UTC" } },
-              },
-            },
-          },
-        };
+        const original = rowAt(before, fixture.activeStore, "survivor");
+        const config = dreamingConfig(true);
         await runRegisteredDreamingService(config, cron, logger, scheduler);
         expect(mutations).toEqual([]);
         expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
@@ -804,16 +785,9 @@ describe("host Cron Doctor repair", () => {
         const backups = await listBackups(fixture.databasePath);
         expect(backups).toHaveLength(1);
         expect(repaired.changes.join("\n")).toContain(backups[0]);
-        const migrated = readRows(fixture.db()).jobs.find(
-          (row) => row.store_key === fixture.activeStore && row.job_id === "survivor",
-        );
-        expect(migrated).toMatchObject({
-          job_id: "survivor",
-          sort_order: original?.sort_order,
-          state_json: original?.state_json,
-          runtime_updated_at_ms: original?.runtime_updated_at_ms,
-        });
-        expect(JSON.parse(String(migrated?.job_json))).toMatchObject({
+        const migrated = rowAt(readRows(fixture.db()), fixture.activeStore, "survivor");
+        expectPreservedRuntime(migrated, original, "survivor");
+        expect(definitionOf(migrated)).toMatchObject({
           declarationKey,
           sessionTarget: "isolated",
           payload: { kind: "agentTurn", lightContext: true },
