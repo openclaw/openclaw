@@ -366,7 +366,7 @@ describe("existing shared-state schema admission", () => {
             await closeOpenClawStateDatabaseAsync();
             expect(read(capture())).toEqual(before);
           }
-          expect(checkCount()).toBe(change === "schema rollback" ? 1 : 2);
+          expect(checkCount()).toBe(change === "replacement" ? 2 : 1);
         } finally {
           reads.restore();
         }

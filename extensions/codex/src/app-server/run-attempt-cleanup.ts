@@ -142,7 +142,7 @@ export async function cleanupCodexAttempt(
             async () => {
               if (
                 !isSameCodexAppServerThreadOwner(
-                  bindingStore.read(bindingIdentity),
+                  await bindingStore.readAsync(bindingIdentity),
                   resourceState.thread,
                 )
               ) {

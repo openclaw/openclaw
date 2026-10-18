@@ -6,12 +6,10 @@ import {
   type OverlayOptions,
 } from "./overlay-lifecycle.ts";
 import type { OverlayPhase } from "./overlay-types.ts";
-
 type Fixture = ReturnType<typeof mountOverlay>;
 const owners: Overlay[] = [];
 const roots: Element[] = [];
 let nextId = 0;
-
 afterEach(() => {
   for (const owner of owners.splice(0).toReversed()) {
     owner.dispose();
@@ -20,7 +18,6 @@ afterEach(() => {
     root.remove();
   }
 });
-
 function mountOverlay(
   options: OverlayOptions = {},
   parent?: Overlay,
@@ -49,7 +46,47 @@ function mountOverlay(
   owners.push(owner);
   return { owner, surface, trigger, item };
 }
-
+const dialogAdapter: NonNullable<OverlayOptions["native"]> = {
+  isOpen: (element) => element.hasAttribute("open"),
+  show: (element) => {
+    if (element instanceof HTMLDialogElement) {
+      element.showModal();
+    }
+  },
+  hide: (element) => {
+    if (element instanceof HTMLDialogElement) {
+      element.close();
+    }
+  },
+};
+async function openWithLease() {
+  const release = vi.fn();
+  const fixture = mountOverlay({ acquireOcclusion: () => release });
+  await open(fixture);
+  return { fixture, release };
+}
+async function openParentAndChild() {
+  const root = mountOverlay();
+  await open(root);
+  const child = mountOverlay({}, root.owner);
+  await open(child);
+  return { root, child };
+}
+function outsideButton() {
+  const button = document.createElement("button");
+  document.body.append(button);
+  roots.push(button);
+  return button;
+}
+function iframeDocument() {
+  const iframe = document.createElement("iframe");
+  document.body.append(iframe);
+  roots.push(iframe);
+  return iframe.contentDocument!;
+}
+function pointer(target: Element, type: string, pointerId: number) {
+  target.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId }));
+}
 function completion(fixture: Fixture, phase: "open" | "hidden") {
   return new Promise<void>((resolve) => {
     fixture.surface.addEventListener(
@@ -59,25 +96,37 @@ function completion(fixture: Fixture, phase: "open" | "hidden") {
     );
   });
 }
-
 async function open(fixture: Fixture) {
   const completed = completion(fixture, "open");
   expect(fixture.owner.request(true)).toBe(true);
   await completed;
 }
-
 function frame(doc = document) {
   return new Promise<void>((resolve) => {
     doc.defaultView!.requestAnimationFrame(() => resolve());
   });
 }
-
 function recordPhases(fixture: Fixture) {
   const phases: OverlayPhase[] = [];
   fixture.surface.addEventListener("overlay-after-show", () => phases.push(fixture.owner.phase));
   fixture.surface.addEventListener("overlay-after-hide", () => phases.push(fixture.owner.phase));
   return phases;
 }
+
+it("does not rewrite unchanged inert state on closed peers when another overlay opens", async () => {
+  const closed = mountOverlay();
+  const active = mountOverlay();
+  const writes: MutationRecord[] = [];
+  const observer = new MutationObserver((records) => writes.push(...records));
+  observer.observe(closed.surface, { attributes: true, attributeFilter: ["inert"] });
+  try {
+    await open(active);
+  } finally {
+    observer.disconnect();
+  }
+  expect(closed.surface.inert).toBe(true);
+  expect(writes).toHaveLength(0);
+});
 
 describe("native overlay lifecycle", () => {
   it("admits show and hide before changing accepted state, focus, or occlusion", async () => {
@@ -88,15 +137,12 @@ describe("native overlay lifecycle", () => {
     fixture.trigger.focus();
     const vetoShow = (event: Event) => event.preventDefault();
     fixture.surface.addEventListener("overlay-show", vetoShow);
-
     expect(fixture.owner.request(true, "first")).toBe(false);
-    expect(fixture.owner.open).toBe(false);
-    expect(fixture.owner.phase).toBe("hidden");
+    expect(fixture.owner).toMatchObject({ open: false, phase: "hidden" });
     expect(fixture.surface.matches(":popover-open")).toBe(false);
     expect(document.activeElement).toBe(fixture.trigger);
     expect(initialFocus).not.toHaveBeenCalled();
     expect(acquireOcclusion).not.toHaveBeenCalled();
-
     fixture.surface.removeEventListener("overlay-show", vetoShow);
     await open(fixture);
     fixture.item.focus();
@@ -107,30 +153,22 @@ describe("native overlay lifecycle", () => {
     };
     document.addEventListener("overlay-hide", vetoHide, { once: true });
     expect(fixture.owner.request(false, "return")).toBe(false);
-    expect(fixture.owner.open).toBe(true);
-    expect(fixture.owner.phase).toBe("open");
+    expect(fixture.owner).toMatchObject({ open: true, phase: "open" });
     expect(fixture.surface.inert).toBe(false);
     expect(document.activeElement).toBe(fixture.item);
     expect(release).not.toHaveBeenCalled();
-
     const hidden = completion(fixture, "hidden");
     expect(fixture.owner.request(false)).toBe(true);
-    expect(fixture.owner.open).toBe(false);
-    expect(fixture.owner.phase).toBe("closing");
+    expect(fixture.owner).toMatchObject({ open: false, phase: "closing" });
     expect(fixture.surface.inert).toBe(true);
     expect(release).not.toHaveBeenCalled();
     await hidden;
     expect(release).toHaveBeenCalledTimes(1);
   });
-
   it("keeps ancestors and siblings unchanged when a descendant vetoes replacement", async () => {
-    const root = mountOverlay();
-    await open(root);
-    const child = mountOverlay({}, root.owner);
-    await open(child);
+    const { root, child } = await openParentAndChild();
     const incoming = mountOverlay();
     child.surface.addEventListener("overlay-hide", (event) => event.preventDefault());
-
     expect(incoming.owner.request(true)).toBe(false);
     expect(root.owner.open).toBe(true);
     expect(child.owner.open).toBe(true);
@@ -138,24 +176,18 @@ describe("native overlay lifecycle", () => {
     expect(root.surface.inert).toBe(false);
     expect(child.surface.inert).toBe(false);
   });
-
   it("settles accepted descendant closes exactly once", async () => {
-    const root = mountOverlay();
-    await open(root);
-    const child = mountOverlay({}, root.owner);
-    await open(child);
+    const { root, child } = await openParentAndChild();
     const rootPhases = recordPhases(root);
     const childPhases = recordPhases(child);
     const rootHidden = completion(root, "hidden");
     const childHidden = completion(child, "hidden");
-
     expect(root.owner.request(false)).toBe(true);
     await Promise.all([rootHidden, childHidden]);
     expect(rootPhases).toEqual(["hidden"]);
     expect(childPhases).toEqual(["hidden"]);
     expect(child.owner.open).toBe(false);
   });
-
   it.each([false, true])(
     "retires a child admitted by a native close callback, reopen=%s",
     async (reopen) => {
@@ -189,7 +221,6 @@ describe("native overlay lifecycle", () => {
         root.surface.addEventListener("toggle", () => resolve(), { once: true });
       });
       const hidden = reopen ? undefined : completion(root, "hidden");
-
       root.surface.hidePopover();
       if (reopen) {
         root.surface.showPopover();
@@ -197,15 +228,13 @@ describe("native overlay lifecycle", () => {
       await toggled;
       await hidden;
       expect(admission.attempted).toBe(true);
-      expect(root.owner.open).toBe(reopen);
-      expect(root.owner.phase).toBe(reopen ? "open" : "hidden");
+      expect(root.owner).toMatchObject({ open: reopen, phase: reopen ? "open" : "hidden" });
       expect(root.surface.inert).toBe(!reopen);
       expect(child.owner.open, `native child admission: ${JSON.stringify(admission)}`).toBe(false);
       expect(child.surface.matches(":popover-open"), "no orphan native child").toBe(false);
       expect(phases).toEqual(reopen ? [] : ["hidden"]);
     },
   );
-
   it("does not let native callback removal of an incoming surface throw or reopen it", async () => {
     const outgoing = mountOverlay();
     await open(outgoing);
@@ -216,13 +245,11 @@ describe("native overlay lifecycle", () => {
         incoming.surface.remove();
       }
     });
-
     expect(incoming.owner.request(true)).toBe(false);
     await hidden;
     expect(incoming.owner.open).toBe(false);
     expect(outgoing.owner.open).toBe(false);
   });
-
   it("reopens after a native close callback supersedes the accepted close", async () => {
     const fixture = mountOverlay();
     await open(fixture);
@@ -237,25 +264,21 @@ describe("native overlay lifecycle", () => {
       { once: true },
     );
     const shown = completion(fixture, "open");
-
     fixture.owner.request(false);
     await shown;
     expect(fixture.owner.open).toBe(true);
     expect(fixture.surface.matches(":popover-open")).toBe(true);
     expect(phases).toEqual(["open"]);
   });
-
   it("preserves the accepted hide when initial focus dismisses the opening", async () => {
     const fixture: Fixture = mountOverlay({ onInitialFocus: () => fixture.owner.request(false) });
     const phases = recordPhases(fixture);
     const hidden = completion(fixture, "hidden");
-
     expect(fixture.owner.request(true, "first")).toBe(false);
     await hidden;
     expect(fixture.owner.open).toBe(false);
     expect(phases).toEqual(["hidden"]);
   });
-
   it("does not restore focus for a close superseded by an accepted-state subscriber", async () => {
     const fixture = mountOverlay();
     await open(fixture);
@@ -271,7 +294,6 @@ describe("native overlay lifecycle", () => {
     expect(fixture.owner.open).toBe(true);
     expect(document.activeElement).not.toBe(fixture.trigger);
   });
-
   it("keeps one show completion when initial focus repeats or vetoes a request", async () => {
     const fixture: Fixture = mountOverlay({
       onInitialFocus: () => {
@@ -282,13 +304,11 @@ describe("native overlay lifecycle", () => {
     fixture.surface.addEventListener("overlay-hide", (event) => event.preventDefault());
     const phases = recordPhases(fixture);
     const shown = completion(fixture, "open");
-
     fixture.owner.request(true, "first");
     await shown;
     expect(fixture.owner.open).toBe(true);
     expect(phases).toEqual(["open"]);
   });
-
   it("notifies forced invalidation once before native hiding without accepting a veto", async () => {
     let enabled = true;
     const release = vi.fn();
@@ -315,7 +335,6 @@ describe("native overlay lifecycle", () => {
     expect(fixture.owner.open).toBe(false);
     expect(release).toHaveBeenCalledTimes(1);
   });
-
   it.each(["retire", "remove", "dispose"] as const)(
     "joins reentrant %s during forced hide without duplicate notifications or leaked leases",
     async (action) => {
@@ -345,7 +364,6 @@ describe("native overlay lifecycle", () => {
       expect(phases).toEqual(action === "retire" ? ["hidden"] : []);
     },
   );
-
   it.each(["opening", "open"] as const)(
     "silently retires a detached %s surface while releasing its lease",
     async (phase) => {
@@ -364,12 +382,10 @@ describe("native overlay lifecycle", () => {
       await frame();
       expect(hides).not.toHaveBeenCalled();
       expect(phases).toEqual([]);
-      expect(fixture.owner.open).toBe(false);
-      expect(fixture.owner.phase).toBe("hidden");
+      expect(fixture.owner).toMatchObject({ open: false, phase: "hidden" });
       expect(release).toHaveBeenCalledTimes(1);
     },
   );
-
   it("ignores infinite animations and retains occlusion through finite closing work", async () => {
     const release = vi.fn();
     const fixture = mountOverlay({ acquireOcclusion: () => release });
@@ -382,7 +398,6 @@ describe("native overlay lifecycle", () => {
     spinner.cancel();
     const fading = fixture.surface.animate({ opacity: [1, 0] }, { duration: 60_000 });
     const hidden = completion(fixture, "hidden");
-
     fixture.owner.request(false);
     await frame();
     expect(fixture.owner.phase).toBe("closing");
@@ -392,24 +407,19 @@ describe("native overlay lifecycle", () => {
     expect(fixture.owner.phase).toBe("hidden");
     expect(release).toHaveBeenCalledTimes(1);
   });
-
   it("fences the closing completion after an animation reversal", async () => {
-    const release = vi.fn();
-    const fixture = mountOverlay({ acquireOcclusion: () => release });
-    await open(fixture);
+    const { fixture, release } = await openWithLease();
     const phases = recordPhases(fixture);
     const animation = fixture.surface.animate({ opacity: [1, 0] }, { duration: 60_000 });
     fixture.owner.request(false);
     await frame();
     const shown = completion(fixture, "open");
-
     expect(fixture.owner.request(true)).toBe(true);
     animation.cancel();
     await shown;
     expect(phases).toEqual(["open"]);
     expect(release).not.toHaveBeenCalled();
   });
-
   it.each(["div", "dialog"] as const)(
     "closes the old native %s surface before replacing an animated lifetime",
     async (surfaceTag) => {
@@ -417,22 +427,7 @@ describe("native overlay lifecycle", () => {
       const fixture = mountOverlay(
         {
           acquireOcclusion: () => release,
-          native:
-            surfaceTag === "dialog"
-              ? {
-                  isOpen: (element) => element.hasAttribute("open"),
-                  show: (element) => {
-                    if (element instanceof HTMLDialogElement) {
-                      element.showModal();
-                    }
-                  },
-                  hide: (element) => {
-                    if (element instanceof HTMLDialogElement) {
-                      element.close();
-                    }
-                  },
-                }
-              : undefined,
+          native: surfaceTag === "dialog" ? dialogAdapter : undefined,
         },
         undefined,
         document,
@@ -455,7 +450,6 @@ describe("native overlay lifecycle", () => {
         expect(fixture.owner.surface).toBe(replacement);
         expect(fixture.owner.open).toBe(false);
         expect(release).toHaveBeenCalledTimes(1);
-
         await open({ ...fixture, surface: replacement });
         animation.finish();
         await frame();
@@ -468,7 +462,6 @@ describe("native overlay lifecycle", () => {
       }
     },
   );
-
   it("waits for a paused finite animation before publishing completion", async () => {
     const fixture = mountOverlay();
     const animation = fixture.surface.animate({ opacity: [0, 1] }, { duration: 60_000 });
@@ -481,24 +474,18 @@ describe("native overlay lifecycle", () => {
     await shown;
     expect(fixture.owner.phase).toBe("open");
   });
-
   it("retires detached content without retaining a stale completion on remount", async () => {
-    const release = vi.fn();
-    const fixture = mountOverlay({ acquireOcclusion: () => release });
-    await open(fixture);
+    const { fixture, release } = await openWithLease();
     const phases = recordPhases(fixture);
     const parent = fixture.surface.parentNode!;
     fixture.surface.remove();
     await Promise.resolve();
-    expect(fixture.owner.open).toBe(false);
-    expect(fixture.owner.phase).toBe("hidden");
+    expect(fixture.owner).toMatchObject({ open: false, phase: "hidden" });
     expect(release).toHaveBeenCalledTimes(1);
-
     parent.appendChild(fixture.surface);
     await open(fixture);
     expect(phases).toEqual(["open"]);
   });
-
   it.each([
     { outer: "open", inner: "open" },
     { outer: "open", inner: "closed" },
@@ -518,11 +505,8 @@ describe("native overlay lifecycle", () => {
       const inputRoot = inputHost.attachShadow({ mode: inner });
       const input = document.createElement("input");
       inputRoot.append(input);
-      const outside = document.createElement("button");
-      document.body.append(outside);
-      roots.push(outside);
+      const outside = outsideButton();
       await open(fixture);
-
       fixture.item.focus();
       await Promise.resolve();
       expect(fixture.owner.open).toBe(true);
@@ -533,7 +517,6 @@ describe("native overlay lifecycle", () => {
       expect(inputRoot.activeElement).toBe(input);
       expect(fixture.owner.contains(input)).toBe(true);
       expect(fixture.owner.containsFocus()).toBe(true);
-
       outside.focus();
       input.focus();
       await Promise.resolve();
@@ -545,7 +528,6 @@ describe("native overlay lifecycle", () => {
       expect(document.activeElement).toBe(outside);
     },
   );
-
   it.each(["trigger", "return target"] as const)(
     "recognizes focus on a portaled overlay's %s inside a separate closed root",
     async (target) => {
@@ -567,7 +549,6 @@ describe("native overlay lifecycle", () => {
       expect(fixture.owner.open).toBe(true);
     },
   );
-
   it.each(["implicit", "explicit"] as const)(
     "rebinds an open trigger while preserving the %s return-focus target",
     async (returnFocus) => {
@@ -593,13 +574,10 @@ describe("native overlay lifecycle", () => {
       expect(replacement.getAttribute("aria-expanded")).toBe("false");
     },
   );
-
   it("isolates peer arbitration to the surface document", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.append(iframe);
-    roots.push(iframe);
+    const doc = iframeDocument();
     const first = mountOverlay();
-    const second = mountOverlay({}, undefined, iframe.contentDocument!);
+    const second = mountOverlay({}, undefined, doc);
     await open(first);
     await open(second);
     expect(first.owner.open).toBe(true);
@@ -609,7 +587,6 @@ describe("native overlay lifecycle", () => {
     await hidden;
     expect(first.owner.open).toBe(true);
   });
-
   it("discovers nearest physical ancestry and retires before changing parent ownership", async () => {
     const first = mountOverlay({ exclusiveGroup: undefined });
     const second = mountOverlay({ exclusiveGroup: undefined });
@@ -631,57 +608,37 @@ describe("native overlay lifecycle", () => {
     first.owner.dispose();
     expect(nested.owner.open).toBe(true);
   });
-
   it("rejects a cross-document parent without changing the current lifetime", async () => {
-    const iframe = document.createElement("iframe");
-    document.body.append(iframe);
-    roots.push(iframe);
+    const doc = iframeDocument();
     const first = mountOverlay({ exclusiveGroup: undefined });
-    const foreign = mountOverlay({}, undefined, iframe.contentDocument!);
+    const foreign = mountOverlay({}, undefined, doc);
     await open(first);
     expect(() => first.owner.setParent(foreign.owner)).toThrow("another document");
     expect(first.owner.open).toBe(true);
     expect(first.owner.parent).toBeUndefined();
   });
-
   it("requires both pointer endpoints outside and preserves the new outside focus", async () => {
     const fixture = mountOverlay();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    roots.push(outside);
+    const outside = outsideButton();
     await open(fixture);
-    fixture.item.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 4 }));
+    pointer(fixture.item, "pointerdown", 4);
     outside.focus();
-    outside.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 4 }));
+    pointer(outside, "pointerup", 4);
     await Promise.resolve();
     expect(fixture.owner.open).toBe(true);
-
     const hidden = completion(fixture, "hidden");
-    outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 5 }));
-    outside.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 5 }));
+    pointer(outside, "pointerdown", 5);
+    pointer(outside, "pointerup", 5);
     await hidden;
     expect(document.activeElement).toBe(outside);
   });
-
   it("uses native dialog operations without menu peer arbitration or content assumptions", async () => {
     const fixture = mountOverlay(
       {
         exclusiveGroup: undefined,
         dismissOutsideFocus: false,
         dismissOutsidePointer: false,
-        native: {
-          isOpen: (element) => element.hasAttribute("open"),
-          show: (element) => {
-            if (element instanceof HTMLDialogElement) {
-              element.showModal();
-            }
-          },
-          hide: (element) => {
-            if (element instanceof HTMLDialogElement) {
-              element.close();
-            }
-          },
-        },
+        native: dialogAdapter,
       },
       undefined,
       document,

@@ -9,8 +9,10 @@ import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.t
 import { formatNextRun } from "../../lib/presenter.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
-import { updatePickers } from "../../test-helpers/select-picker.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { updatePickers, openPicker } from "../../test-helpers/select-picker.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createSkill } from "../skills/view.test-support.ts";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
@@ -271,12 +273,21 @@ describe("renderAgents", () => {
     expect(container.querySelector(".cron-load-more")).toBeNull();
   });
 
-  it("renders Memory after Automations and scopes the panel to the selected agent", () => {
+  it("renders Memory after Automations and scopes the panel to the selected agent", async () => {
     const container = document.createElement("div");
+    const request = vi.fn(async (method: string) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+    );
+    const client = createTestGatewayClient(request);
     const context = {
-      gateway: createApplicationGateway().gateway,
+      gateway: createApplicationGateway({
+        ...createApplicationGateway().gateway.snapshot,
+        client,
+        phase: "connected",
+      }).gateway,
       runtimeConfig: {
         state: { configForm: null, configSnapshot: null },
+        ensureLoaded: async () => undefined,
         subscribe: () => () => undefined,
       },
     } as unknown as ApplicationContext;
@@ -294,10 +305,12 @@ describe("renderAgents", () => {
       directText(tab),
     );
     expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
-    const panel = container.querySelector<HTMLElement & { agentId: string }>(
-      "openclaw-agent-memory-panel",
+    expect(
+      container.querySelector("openclaw-agent-memory-panel .agent-memory-panel__header"),
+    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "beta" }),
     );
-    expect(panel?.agentId).toBe("beta");
   });
 
   it("updates the configured primary model selection when the active agent changes", async () => {
@@ -325,6 +338,7 @@ describe("renderAgents", () => {
 
     await updatePickers(container);
     const defaultPicker = primaryModelPicker(container);
+    await openPicker(defaultPicker!);
     expect(
       defaultPicker
         ?.querySelector('[role="option"][aria-selected="true"]')
@@ -340,6 +354,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
+    await openPicker(primaryModelPicker(container)!);
     const inheritedSelection = primaryModelPicker(container)?.querySelector(
       '[role="option"][aria-selected="true"]',
     );
@@ -404,6 +419,7 @@ describe("renderAgents", () => {
 
     await updatePickers(container);
     const select = primaryModelPicker(container);
+    await openPicker(select!);
     expect(
       select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
     ).toBe("anthropic/claude-opus-4-8");
@@ -819,11 +835,10 @@ describe("renderAgents toolbar", () => {
     expect(onCreateAgent).toHaveBeenCalledOnce();
   });
 
-  it("preserves creation permission gating with multiple agents", () => {
+  it("keeps unavailable creation visible and disabled with a recovery reason", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const onCreateAgent = vi.fn();
-    const defaults = createProps();
     try {
       renderView(
         {
@@ -833,13 +848,26 @@ describe("renderAgents toolbar", () => {
             scope: "per-sender",
             agents: [{ id: "alpha" }, { id: "beta" }],
           },
-          access: { ...defaults.access, canCreateAgent: false },
+          access: {
+            canCreateAgent: false,
+            canPatchConfig: false,
+            canUpdateConfig: false,
+            canUpdateIdentity: false,
+            canWriteFiles: false,
+            canRunCron: false,
+          },
           onCreateAgent,
         },
         container,
       );
       expect(container.querySelector("openclaw-agent-select")).toBeNull();
-      expect(container.querySelector(".agents-create-btn")).toBeNull();
+      const createButton = container.querySelector<HTMLButtonElement>(".agents-create-btn");
+      expect(createButton).not.toBeNull();
+      expect(createButton?.disabled).toBe(true);
+      expect(createButton?.title).toContain("openclaw.chat");
+      expect(createButton?.title).toContain("operator.admin");
+      expect(createButton?.title).toContain("reconnect");
+      createButton?.click();
       expect(onCreateAgent).not.toHaveBeenCalled();
     } finally {
       container.remove();

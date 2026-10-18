@@ -71,7 +71,7 @@ import {
   createGetGoalTool,
   createUpdateGoalTool,
 } from "./tools/goal-tools.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { resolveHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
@@ -294,7 +294,7 @@ function* createOpenClawToolsSteps(
     agentSessionKey: mediaGenerationAgentSessionKey,
     requesterRunSessionKey: trimmedRunSessionKey,
     requesterAgentId: sessionAgentId,
-    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    requesterOrigin: widgetPresentation.deliveryContext,
     workspaceDir,
     sandbox,
   };
@@ -387,7 +387,7 @@ function* createOpenClawToolsSteps(
           workspaceDir,
         },
       })[0] ?? null);
-  const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
+  const heartbeatTool = resolveHeartbeatResponseTool(options);
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     ...options,
@@ -542,6 +542,7 @@ function* createOpenClawToolsSteps(
       ? createGitHubPublishTool({
           publicationAvailable: options.githubPublicationAvailable,
           actionsAvailable: githubActionsAvailable,
+          sandbox: options.sandbox,
         })
       : null,
     transcriptsTool,
@@ -670,10 +671,6 @@ function* createOpenClawToolsSteps(
       // callers (e.g. Telegram DM with a policy key distinct from the durable run key) still
       // see their spawned runs in the active/recent list. Mirrors createSessionsSpawnTool above.
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-      // Retained task rows created before the durable-key alignment still carry the policy
-      // key in owner_key; let the listing/cancel tool match both so those rows stay reachable
-      // for split-key callers instead of disappearing with "Task outside session tree".
-      callerPolicySessionKey: options?.agentSessionKey,
       agentId: sessionAgentId,
       config: sessionConfig,
     }),

@@ -54,6 +54,7 @@ type SharedProps = Omit<
   PluginSettingsEditorModel,
   "pluginId" | "configSchema" | "backHref" | "onBack"
 > & {
+  registerIcon?: (readId: () => string) => () => void;
   loading: boolean;
   error: string | null;
   busy: Readonly<Record<string, PluginMutationAction>>;
@@ -159,9 +160,9 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
-      ) : props.loading ? (
+      ) : props.loading && !props.result ? (
         <SettingsLoadingSkeleton rows={4} carapace />
       ) : props.error && !props.result ? (
         renderRetryError(props.error, props.onRefresh)
@@ -189,6 +190,7 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                   }}
                 >
                   <PluginArtTile
+                    registerIcon={props.registerIcon}
                     slug={plugin().id}
                     name={plugin().name}
                     iconUrl={props.iconUrls[plugin().id]}
@@ -243,7 +245,7 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
   });
   return (
     <Show
-      when={options.connected}
+      when={options.connected || Boolean(config())}
       fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
     >
       <Show
@@ -308,31 +310,27 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
           </div>
         </>
       ) : (
-        <>
-          <div id="plugin-settings-advanced" class="settings-stack">
-            <PluginManager />
-            <SettingsSection
-              title={t("pluginsPage.advanced")}
-              description={t("pluginsPage.advancedDescription")}
-              actions={
-                <>
-                  <button
-                    type="button"
-                    class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
-                    aria-label={t("common.reload")}
-                    disabled={props.configBusy || props.configSchemaLoading}
-                    onClick={props.onConfigReload}
-                  >
-                    <Icon name="refresh" />
-                  </button>
-                </>
-              }
-              carapace={true}
-            >
-              <AdvancedSettings {...props} />
-            </SettingsSection>
-          </div>
-        </>
+        <div id="plugin-settings-advanced" class="settings-stack">
+          <PluginManager />
+          <SettingsSection
+            title={t("pluginsPage.advanced")}
+            description={t("pluginsPage.advancedDescription")}
+            actions={
+              <button
+                type="button"
+                class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
+                aria-label={t("common.reload")}
+                disabled={props.configBusy || props.configSchemaLoading}
+                onClick={props.onConfigReload}
+              >
+                <Icon name="refresh" />
+              </button>
+            }
+            carapace
+          >
+            <AdvancedSettings {...props} />
+          </SettingsSection>
+        </div>
       )}
     </>
   );
@@ -429,7 +427,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
           <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
         </SettingsPage>
@@ -515,6 +513,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}
             iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}

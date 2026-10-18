@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import { renderMessageGroup } from "./chat-message-group.test-support.ts";
+import { MessageGroup as NativeMessageGroup } from "./chat-message-group-view.tsx";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 const alice = { id: "alice", name: "Alice" };
@@ -18,7 +20,7 @@ const turnSource = { replyTurnSource: { key: "prompt-render-key", message: promp
 let container: HTMLDivElement;
 afterEach(() => {
   if (container) {
-    render(null, container);
+    cleanupSolid();
     container.remove();
   }
 });
@@ -95,30 +97,31 @@ function draw(
     onOpenReply,
     resolveReplyPreview,
   };
-  render(
-    presentation === "frame"
-      ? solidContent(AgentRunFrame, {
-          frame: {
-            kind: "agent-run-frame",
-            key: "frame",
-            runId: "run",
-            boundaryId: "prompt",
-            outcome: { kind: "completed", actionOwner: group.messages.at(-1) ?? null },
-            parts: group.messages.map((entry, index) => ({
-              ...group,
-              key: `frame-part-${index}`,
-              messages: [entry],
-            })),
-          },
-          options: {
-            streamOptions: {},
-            renderGroupOptions: () => options,
-            isWorkExpanded: () => false,
-            onToggleWork: () => undefined,
-          },
-        })
-      : renderMessageGroup(group, options),
-    container,
+  mountSolid(
+    () =>
+      presentation === "frame"
+        ? createComponent(AgentRunFrame, {
+            frame: {
+              kind: "agent-run-frame",
+              key: "frame",
+              runId: "run",
+              boundaryId: "prompt",
+              outcome: { kind: "completed", actionOwner: group.messages.at(-1) ?? null },
+              parts: group.messages.map((entry, index) => ({
+                ...group,
+                key: `frame-part-${index}`,
+                messages: [entry],
+              })),
+            },
+            options: {
+              streamOptions: {},
+              renderGroupOptions: () => options,
+              isWorkExpanded: () => false,
+              onToggleWork: () => undefined,
+            },
+          })
+        : createComponent(NativeMessageGroup, { group, options }),
+    { container },
   );
   return {
     onOpenReply,
@@ -206,39 +209,36 @@ it.each([
       new Map([["earlier", { message: original, messageId: "earlier-key", senderLabel: strip }]]),
       { assistantName: "OpenClaw", userId: "alice" },
     );
-    render(
-      renderMessageGroup(
-        {
-          kind: "group",
-          key: "reply-group",
-          role,
-          timestamp: 1,
-          isStreaming: false,
-          visibleContent: "text",
-          replyShared: true,
-          ...(sender ? { sender, senderLabel: sender.name } : {}),
-          messages: [
-            {
-              key: "reply",
-              hasVisibleContent: true,
-              message: {
-                role,
-                content: "Reply",
-                __openclaw: { id: "reply", replyToId: "earlier" },
-              },
+    createMessageGroupHarness(container).render(
+      {
+        kind: "group",
+        key: "reply-group",
+        role,
+        timestamp: 1,
+        isStreaming: false,
+        visibleContent: "text",
+        replyShared: true,
+        ...(sender ? { sender, senderLabel: sender.name } : {}),
+        messages: [
+          {
+            key: "reply",
+            hasVisibleContent: true,
+            message: {
+              role,
+              content: "Reply",
+              __openclaw: { id: "reply", replyToId: "earlier" },
             },
-          ],
-        },
-        {
-          showReasoning: false,
-          showToolCalls: false,
-          avatarPlacement: "none",
-          userId: "alice",
-          assistantName: "OpenClaw",
-          resolveReplyPreview,
-        },
-      ),
-      container,
+          },
+        ],
+      },
+      {
+        showReasoning: false,
+        showToolCalls: false,
+        avatarPlacement: "none",
+        userId: "alice",
+        assistantName: "OpenClaw",
+        resolveReplyPreview,
+      },
     );
     expect(
       container.querySelector(".chat-reply-attribution--reply .chat-reply-attribution__name")
@@ -339,7 +339,7 @@ it.each([
         row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!.click();
         expect(onOpenReply).toHaveBeenCalledWith("older");
       }
-      render(null, container);
+      cleanupSolid();
       container.remove();
     }
   },
@@ -534,37 +534,34 @@ it.each([
       { assistantName: "OpenClaw", userId: "alice", userName: "Alice" },
     );
     const onOpenReply = vi.fn();
-    render(
-      renderMessageGroup(
-        {
-          kind: "group",
-          key: "inline-user",
-          role: "user",
-          timestamp: 1,
-          isStreaming: false,
-          visibleContent: "text",
-          sender: { id: "alice", name: "Alice", identity: { type: "profile", id: "alice" } },
-          messages: [
-            {
-              key: "inline-user",
-              hasVisibleContent: true,
-              message: {
-                role: "user",
-                content: "Follow up",
-                __openclaw: { id: "inline-user", replyToId: "inline-source" },
-              },
+    createMessageGroupHarness(container).render(
+      {
+        kind: "group",
+        key: "inline-user",
+        role: "user",
+        timestamp: 1,
+        isStreaming: false,
+        visibleContent: "text",
+        sender: { id: "alice", name: "Alice", identity: { type: "profile", id: "alice" } },
+        messages: [
+          {
+            key: "inline-user",
+            hasVisibleContent: true,
+            message: {
+              role: "user",
+              content: "Follow up",
+              __openclaw: { id: "inline-user", replyToId: "inline-source" },
             },
-          ],
-        },
-        {
-          showReasoning: false,
-          showToolCalls: false,
-          userId: "alice",
-          resolveReplyPreview,
-          onOpenReply,
-        },
-      ),
-      container,
+          },
+        ],
+      },
+      {
+        showReasoning: false,
+        showToolCalls: false,
+        userId: "alice",
+        resolveReplyPreview,
+        onOpenReply,
+      },
     );
     const row = container.querySelector<HTMLButtonElement>(
       ".chat-bubble > .chat-reply-attribution--inline .chat-reply-attribution__target",
@@ -596,36 +593,33 @@ function drawOwnReply(
       read: (id) => (id === "older" ? original : undefined),
     },
   });
-  render(
-    renderMessageGroup(
-      {
-        kind: "group",
-        key: "own-reply",
-        role: "user",
-        timestamp: 1,
-        isStreaming: false,
-        visibleContent: "text",
-        sender: { id: "alice", name: "Alice", identity: { type: "profile", id: "alice" } },
-        ...(shared ? { replyShared: true } : {}),
-        messages: [
-          {
-            key: "own-reply",
-            hasVisibleContent: true,
-            message: {
-              role: "user",
-              content: "Follow up",
-              __openclaw: {
-                id: "own-reply",
-                replyToId: "older",
-                ...(snapshot ? { replyToPreview: snapshot } : {}),
-              },
+  createMessageGroupHarness(container).render(
+    {
+      kind: "group",
+      key: "own-reply",
+      role: "user",
+      timestamp: 1,
+      isStreaming: false,
+      visibleContent: "text",
+      sender: { id: "alice", name: "Alice", identity: { type: "profile", id: "alice" } },
+      ...(shared ? { replyShared: true } : {}),
+      messages: [
+        {
+          key: "own-reply",
+          hasVisibleContent: true,
+          message: {
+            role: "user",
+            content: "Follow up",
+            __openclaw: {
+              id: "own-reply",
+              replyToId: "older",
+              ...(snapshot ? { replyToPreview: snapshot } : {}),
             },
           },
-        ],
-      },
-      { showReasoning: false, showToolCalls: false, userId: "alice", resolveReplyPreview },
-    ),
-    container,
+        },
+      ],
+    },
+    { showReasoning: false, showToolCalls: false, userId: "alice", resolveReplyPreview },
   );
   return container.querySelector(".chat-bubble > .chat-reply-attribution--inline");
 }

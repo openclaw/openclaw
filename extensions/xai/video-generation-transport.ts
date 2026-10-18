@@ -1,4 +1,5 @@
 import { downloadGeneratedVideoAsset } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   assertOkOrThrowHttpError,
   executeProviderOperationWithRetry,
@@ -11,16 +12,6 @@ export type XaiVideoRequestPolicy = {
   allowPrivateNetwork: boolean;
   dispatcherPolicy?: NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>["dispatcherPolicy"];
 };
-
-function resolveXaiVideoFetchTimeoutMs(
-  timeoutMs: ProviderOperationTimeoutMs | undefined,
-  defaultTimeoutMs: number,
-) {
-  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
-  return typeof resolved === "number" && Number.isFinite(resolved) && resolved > 0
-    ? resolved
-    : defaultTimeoutMs;
-}
 
 export async function fetchXaiVideoResponse(
   params: {
@@ -41,7 +32,10 @@ export async function fetchXaiVideoResponse(
       const result = await fetchWithTimeoutGuarded(
         params.url,
         params.init,
-        resolveXaiVideoFetchTimeoutMs(params.timeoutMs, params.defaultTimeoutMs),
+        resolvePositiveTimerTimeoutMs(
+          typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs,
+          params.defaultTimeoutMs,
+        ),
         params.fetchFn,
         {
           ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),

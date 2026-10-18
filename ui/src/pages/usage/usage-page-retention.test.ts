@@ -6,6 +6,7 @@ import * as downloads from "../../lib/download.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { selectUsageExport } from "./export-menu.test-support.ts";
+import { createUsageDetailFixture } from "./usage-details.test-support.ts";
 import {
   cacheSnapshot,
   cleanupUsagePageTest,
@@ -77,24 +78,23 @@ describe("UsagePage detail requests", () => {
       payloads.push(new WeakRef(payload));
       return method === "sessions.usage.logs" ? { logs: [payload] } : { points: [payload] };
     };
-    const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.details.timeSeries.load("agent:main:detail-lifetime");
-    await page.details.sessionLogs.load("agent:main:detail-lifetime");
-    page.details.cancel();
+    const { details } = createUsageDetailFixture({ request } as unknown as GatewayBrowserClient);
+    await details.timeSeries.load("agent:main:detail-lifetime");
+    await details.sessionLogs.load("agent:main:detail-lifetime");
+    details.cancel();
     const collectionControl = new WeakRef({ unowned: true });
     await collectGarbageForTest();
     expect(collectionControl.deref()).toBeUndefined();
     expect(payloads).toHaveLength(2);
     expect(payloads.every((payload) => payload.deref() !== undefined)).toBe(true);
-    expect(page.details.timeSeries.data).not.toBeNull();
-    expect(page.details.sessionLogs.data).not.toBeNull();
+    expect(details.timeSeries.data).not.toBeNull();
+    expect(details.sessionLogs.data).not.toBeNull();
 
-    page.details.clear();
+    details.clear();
     await collectGarbageForTest();
     expect(payloads.every((payload) => payload.deref() === undefined)).toBe(true);
-    expect(page.details.timeSeries.data).toBeNull();
-    expect(page.details.sessionLogs.data).toBeNull();
-    expect(page.isConnected).toBe(true);
+    expect(details.timeSeries.data).toBeNull();
+    expect(details.sessionLogs.data).toBeNull();
   });
 
   it("releases a loaded overview when its Gateway identity is replaced", async () => {
@@ -113,12 +113,11 @@ describe("UsagePage detail requests", () => {
       return { providers: [] };
     };
     const page = await createPage({ request } as unknown as GatewayBrowserClient);
-    await page.loadUsage();
+    await page.refresh();
     expect(payload).toBeDefined();
     page.context = contextWithClient({
       request: async () => ({}),
     } as unknown as GatewayBrowserClient);
-    page.requestUpdate();
     await page.updateComplete;
     const collectionControl = new WeakRef({ unowned: true });
     await collectGarbageForTest();

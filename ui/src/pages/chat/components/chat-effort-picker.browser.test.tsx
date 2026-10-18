@@ -11,7 +11,6 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
-import { closeChatPaneDetails } from "../chat-pane-shared.ts";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 import { installChatComposerPickerDismissal } from "./chat-picker-overlay.ts";
@@ -89,7 +88,9 @@ async function fixture(
     await opened;
   }
   expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
-  expect(host.querySelector<HTMLInputElement>("input[type=range]")!.checkVisibility()).toBe(open);
+  expect(
+    host.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
+  ).toBe(open);
   return {
     input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,
@@ -106,7 +107,7 @@ function appearance(input: HTMLInputElement) {
 
 describe("effort bar colour and flow", () => {
   it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
-    const { input } = await fixture(["low", "medium", "high"], "high", false, undefined, false);
+    await fixture(["low", "medium", "high"], "high", false, undefined, false);
     const composer = host!;
     composer.classList.add("agent-chat__input");
     const details = composer.querySelector("details")!;
@@ -127,32 +128,43 @@ describe("effort bar colour and flow", () => {
       composer.removeEventListener("pointerdown", focusComposer);
       composer.removeEventListener("click", focusComposer);
     });
-    const dismissLegacyDetails = (event: KeyboardEvent) => {
-      if (
-        !event.defaultPrevented &&
-        !event.isComposing &&
-        event.keyCode !== 229 &&
-        event.key === "Escape" &&
-        closeChatPaneDetails(composer)
-      ) {
-        event.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", dismissLegacyDetails, true);
-    onTestFinished(() => document.removeEventListener("keydown", dismissLegacyDetails, true));
-
     textarea.focus();
     await page.elementLocator(trigger).click();
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await expect
-      .poll(() => surface.getAnimations().every((animation) => animation.playState === "finished"))
-      .toBe(true);
+    expect(document.activeElement).toBe(textarea);
+    try {
+      await expect
+        .poll(() =>
+          surface.getAnimations().every((animation) => animation.playState === "finished"),
+        )
+        .toBe(true);
+    } catch (error) {
+      console.error(
+        "Unfinished effort picker animations",
+        surface.getAnimations().map((animation) => {
+          const effect = animation.effect;
+          const target = effect instanceof KeyframeEffect ? effect.target : null;
+          return {
+            name: animation instanceof CSSAnimation ? animation.animationName : null,
+            target: target instanceof Element ? `${target.tagName}.${target.className}` : null,
+            playState: animation.playState,
+            pending: animation.pending,
+            currentTime: animation.currentTime,
+            playbackRate: animation.playbackRate,
+            timing: effect?.getComputedTiming(),
+          };
+        }),
+      );
+      throw error;
+    }
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{Tab}");
-    await expect.poll(() => document.activeElement).toBe(input);
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);

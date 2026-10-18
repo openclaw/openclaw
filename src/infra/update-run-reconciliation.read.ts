@@ -9,7 +9,6 @@ import type {
   UpdateRunReconciliationInput,
 } from "./update-run-reconciliation.types.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 
@@ -38,11 +37,11 @@ export function readUpdateRunReconciliationCandidates(
     .selectFrom("update_runs")
     .selectAll()
     .where("status", "=", "running");
-  if (!input.explicit) {
-    query = query.where("updated_at_ms", "<", Date.now() - ABANDONED_UPDATE_RUN_MS);
-  }
   if (input.runIds) {
     query = query.where("run_id", "in", [...input.runIds]);
+  }
+  if (input.excludeRunId) {
+    query = query.where("run_id", "!=", input.excludeRunId);
   }
   return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
     inspectUpdateRunReconciliation(db, decodeRun(row), input),

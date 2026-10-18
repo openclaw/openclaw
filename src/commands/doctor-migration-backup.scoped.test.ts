@@ -1,11 +1,17 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import * as backupArtifacts from "./doctor-migration-backup-artifacts.js";
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import {
   backupDoctorMigrationDatabases,
@@ -20,12 +26,14 @@ vi.mock("../state/openclaw-state-db-fast-path.js", async (importOriginal) => ({
   needsOpenClawStateDatabaseSchemaRepair: () => false,
 }));
 // mock-isolation: Synthetic scopes isolate backup selection without certifying real migrations.
-vi.mock("../state/schema-migration-backup-scope.js", () => ({
+vi.mock("../state/schema-migration-backup-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/schema-migration-backup-scope.js")>()),
   resolveSchemaMigrationBackupTables: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const declaredTables = ["schema_meta", "small"];
+afterEach(() => vi.restoreAllMocks());
 
 beforeEach(() => {
   vi.mocked(resolveSchemaMigrationBackupTables).mockReset().mockReturnValue(declaredTables);
@@ -116,7 +124,143 @@ function expectFullBackup(databasePath: string, earlierBackups: readonly string[
   });
 }
 
+function observeRegistration(
+  before?: (inventory: Parameters<typeof backupArtifacts.recordDoctorMigrationBackups>[2]) => void,
+) {
+  const reads = new Map<string, number>();
+  let active = new Map<string, string>();
+  const read = fs.readSync;
+  vi.spyOn(fs, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
+    const count = read(...args);
+    if (active.size > 0) {
+      const stat = fs.fstatSync(args[0], { bigint: true });
+      const archive = active.get(`${stat.dev}:${stat.ino}`);
+      if (archive) {
+        reads.set(archive, reads.get(archive)! + count);
+      }
+    }
+    return count;
+  });
+  const record = backupArtifacts.recordDoctorMigrationBackups;
+  vi.spyOn(backupArtifacts, "recordDoctorMigrationBackups").mockImplementation((...args) => {
+    before?.(args[2]);
+    active = new Map(
+      args[2].map(({ archivePath }) => {
+        const stat = fs.statSync(archivePath, { bigint: true });
+        reads.set(archivePath, 0);
+        return [`${stat.dev}:${stat.ino}`, archivePath];
+      }),
+    );
+    try {
+      return record(...args);
+    } finally {
+      active.clear();
+    }
+  });
+  return reads;
+}
+
+function expectRegisteredContent(env: NodeJS.ProcessEnv) {
+  const manifests = listSessionSqliteMigrationManifestPaths(env);
+  expect(manifests).toHaveLength(1);
+  const manifest = readSessionSqliteMigrationManifest(manifests[0]!)!;
+  for (const target of manifest.targets) {
+    for (const move of target.completedMoves) {
+      const bytes = fs.readFileSync(move.archivePath);
+      const stat = fs.lstatSync(move.archivePath, { bigint: true });
+      expect(move.artifact?.identity).toEqual({
+        dev: String(stat.dev),
+        ino: String(stat.ino),
+        mtimeNs: String(stat.mtimeNs),
+        size: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+  }
+}
+
 describe("Doctor table-scoped migration backup selection", () => {
+  it.each([false, true])(
+    "registers newly published backups without rereading their payloads (scoped=%s)",
+    async (scoped) => {
+      const fixture = createFixture();
+      const originals = [fixture.agent, fixture.shared].map((file) => fs.readFileSync(file));
+      const reads = observeRegistration();
+      const result = await backup(fixture, [fixture.agent], [fixture.agent], scoped);
+      expect(result.warnings).toEqual([]);
+      expect(reads.size).toBe(2);
+      expect([...reads.values()]).toEqual([0, 0]);
+      expectRegisteredContent(fixture.env);
+      expect([fixture.agent, fixture.shared].map((file) => fs.readFileSync(file))).toEqual(
+        originals,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "freshly hashes retained backups when their registration is missing (scoped=%s)",
+    async (scoped) => {
+      const fixture = createFixture();
+      await backup(fixture, [fixture.agent], [fixture.agent], scoped);
+      for (const manifest of listSessionSqliteMigrationManifestPaths(fixture.env)) {
+        fs.unlinkSync(manifest);
+      }
+      const reads = observeRegistration();
+      expect((await backup(fixture, [fixture.agent], [fixture.agent], scoped)).warnings).toEqual(
+        [],
+      );
+      expect(reads.size).toBe(2);
+      for (const [archive, bytes] of reads) {
+        expect(bytes).toBe(fs.statSync(archive).size);
+      }
+      expectRegisteredContent(fixture.env);
+      await backup(fixture, [fixture.agent], [fixture.agent], scoped);
+      expect([...reads.values()]).toEqual([0, 0]);
+    },
+  );
+
+  it.each(["same-size edit", "replacement", "hard link", "symlink"] as const)(
+    "does not reuse stale publication content after a %s before registration",
+    async (change) => {
+      const fixture = createFixture();
+      let changedArchive = "";
+      const reads = observeRegistration((inventory) => {
+        changedArchive = inventory.find(
+          ({ path: source }) => source === fixture.agent,
+        )!.archivePath;
+        const original = fs.statSync(changedArchive);
+        const bytes = fs.readFileSync(changedArchive);
+        const offset = bytes.indexOf("before migration");
+        expect(offset).toBeGreaterThanOrEqual(0);
+        bytes[offset] = "B".charCodeAt(0);
+        if (change === "same-size edit") {
+          fs.writeFileSync(changedArchive, bytes);
+          fs.utimesSync(changedArchive, original.atime, original.mtime);
+        } else if (change === "replacement") {
+          const replacement = `${changedArchive}.replacement`;
+          fs.writeFileSync(replacement, bytes);
+          fs.renameSync(replacement, changedArchive);
+        } else if (change === "hard link") {
+          fs.linkSync(changedArchive, `${changedArchive}.alias`);
+        } else {
+          fs.renameSync(changedArchive, `${changedArchive}.original`);
+          fs.symlinkSync(`${changedArchive}.original`, changedArchive);
+        }
+      });
+      const result = await backup(fixture, [fixture.agent], [fixture.agent], false);
+      if (change === "hard link" || change === "symlink") {
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toContain("not an unaliased regular file");
+        expect(listSessionSqliteMigrationManifestPaths(fixture.env)).toEqual([]);
+        expect(fs.lstatSync(changedArchive)).toBeDefined();
+      } else {
+        expect(result.warnings).toEqual([]);
+        expect(reads.get(changedArchive)).toBe(fs.statSync(changedArchive).size);
+        expectRegisteredContent(fixture.env);
+      }
+    },
+  );
+
   it("keeps the complete Doctor repair run on full images even for declared versions", async () => {
     const fixture = createFixture();
     const result = await backup(fixture, [fixture.agent], [fixture.agent], false);

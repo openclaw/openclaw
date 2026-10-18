@@ -2,20 +2,19 @@
 import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
-import type { RequestClient } from "./rest.js";
-import type { StructureClient } from "./structures.js";
+import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
 function makeCache() {
   let getCalls = 0;
-  const rest = {
-    get: async (route: string) => {
+  const client = createInternalTestClient();
+  attachRestMock(client, {
+    get: vi.fn(async (route: string) => {
       getCalls += 1;
       const id = route.split("/").pop() ?? "x";
       return { id };
-    },
-  } as unknown as RequestClient;
-  const client = {} as StructureClient;
-  const cache = new DiscordEntityCache({ client, rest: () => rest });
+    }),
+  });
+  const cache = new DiscordEntityCache(client);
   return { cache, getCalls: () => getCalls };
 }
 

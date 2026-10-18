@@ -28,6 +28,9 @@ SQLite is the default. The host's experimental PostgreSQL configuration also
 supports Team Reports, including database port and matched backup/restore.
 Collected activity is temporary and is discarded when its connection closes;
 saved reports, person-day counts, and run history are durable.
+Storage initializes in the service background; Reports requests await readiness,
+and shutdown joins initialization before closing storage. Initialization failures
+appear in plugin service health without delaying unrelated Gateway connections.
 Startup does not trigger collection. The first scheduled run catches up yesterday,
 reusing accepted closed days when retrying a partially failed run; manual generation
 still refreshes the requested day. Automatic collection waits at least five minutes

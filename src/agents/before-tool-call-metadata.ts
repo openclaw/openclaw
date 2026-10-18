@@ -1,3 +1,4 @@
+import { bindPluginToolExecutionSource } from "../plugins/plugin-tool-execution.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -71,7 +72,6 @@ export function clearBeforeToolCallWrappedMarker(tool: BeforeToolCallMetadataToo
   delete tool[BEFORE_TOOL_CALL_WRAPPED];
 }
 
-/** Return true when a tool already carries the before_tool_call wrapper state. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   return getBeforeToolCallMetadata(tool) !== undefined;
 }
@@ -116,9 +116,12 @@ export function copyBeforeToolCallMetadata(
   }
   const sourceTool = getBeforeToolCallSourceTool(source);
   if (sourceTool) {
-    Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
-      value: sourceTool,
-      enumerable: false,
-    });
+    const boundSource = bindPluginToolExecutionSource(target, sourceTool);
+    if (getBeforeToolCallSourceTool(target) !== boundSource) {
+      Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
+        value: boundSource,
+        enumerable: false,
+      });
+    }
   }
 }

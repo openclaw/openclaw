@@ -307,7 +307,7 @@ describe("agent schema 22 storage cutover", () => {
         try {
           db.exec(`PRAGMA encoding = '${encoding}'; PRAGMA journal_mode = WAL`);
           seedOpenClawAgentSchemaV22(db);
-          const { event, usage } = seedHistoricalData(db);
+          const { event } = seedHistoricalData(db);
           db.close();
           db = new DatabaseSync(pathname);
           const before = legacySnapshot(db);
@@ -450,7 +450,10 @@ describe("agent schema 22 storage cutover", () => {
           if (typeof cached.value_json !== "string" || !(cached.blob instanceof Uint8Array)) {
             throw new Error("Expected migrated usage envelope/body");
           }
-          expect(decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob)).toEqual(usage);
+          // Version-6 reports predate the current pricing rules, so readers rebuild them.
+          expect(
+            decodeUsageCostRollup(cached.value_json, "synthetic", cached.blob),
+          ).toBeUndefined();
           expect(reader.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
           expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
           expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });

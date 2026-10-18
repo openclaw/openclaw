@@ -96,7 +96,7 @@ export function WhatsAppCard(props: ChannelsProps) {
       ) : undefined}
       <ChannelActions>
         <button
-          class={linked() ? "btn" : "btn primary"}
+          class={["btn", { primary: !linked() }]}
           disabled={props.channels.whatsappBusy}
           onClick={() => props.onWhatsAppStart(linked())}
         >

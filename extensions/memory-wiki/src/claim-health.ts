@@ -96,10 +96,8 @@ export function compareWikiClaimSummaries(
   left: { text: string; confidence?: number; freshnessLevel?: string },
   right: { text: string; confidence?: number; freshnessLevel?: string },
 ): number {
-  const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
-  const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
   return (
-    rightConfidence - leftConfidence ||
+    (right.confidence ?? -1) - (left.confidence ?? -1) ||
     CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
       CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
     left.text.localeCompare(right.text)
@@ -119,9 +117,7 @@ export function assessClaimFreshness(params: {
     params.claim.updatedAt,
     ...params.claim.evidence.map((entry) => entry.updatedAt),
   ];
-  const hasClaimTimestamp = candidates.some(
-    (value) => typeof value === "string" && value.trim().length > 0,
-  );
+  const hasClaimTimestamp = candidates.some((value) => value?.trim());
   const latestTimestamp = resolveLatestTimestamp(candidates);
   return buildFreshnessFromTimestamp({
     timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
@@ -144,7 +140,7 @@ function buildWikiClaimHealth(params: {
     ...(claimId ? { claimId } : {}),
     text: params.claim.text,
     status: normalizeClaimStatus(params.claim.status),
-    ...(typeof params.claim.confidence === "number" ? { confidence: params.claim.confidence } : {}),
+    ...(params.claim.confidence !== undefined ? { confidence: params.claim.confidence } : {}),
     evidenceCount: params.claim.evidence.length,
     missingEvidence: params.claim.evidence.length === 0,
     freshness: assessClaimFreshness({ page: params.page, claim: params.claim, now: params.now }),

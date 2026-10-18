@@ -31,7 +31,10 @@ import {
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import * as storeRuntime from "./store-runtime.js";
-import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
+import {
+  captureAuthProfileStorePersistenceSnapshot,
+  withAuthProfileStoreAgentDir,
+} from "./store.js";
 import type { ApiKeyCredential, OAuthCredential } from "./types.js";
 import {
   persistAuthProfileBatch,
@@ -460,6 +463,45 @@ describe("auth profile batch persistence", () => {
       },
     );
   });
+
+  it.each(["upsert", "batch"] as const)(
+    "compares a scoped %s OAuth refresh against the store it writes",
+    async (writer) => {
+      const processRoot = tempDirs.make("openclaw-auth-process-root-");
+      const scopedRoot = tempDirs.make("openclaw-auth-scoped-root-");
+      const agentDir = path.join(scopedRoot, "agents", "work", "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const profileId = "openai:default";
+      const current = {
+        type: "oauth",
+        provider: "openai",
+        access: "current-access",
+        refresh: "stable-refresh",
+        expires: Date.now() + 60_000,
+      } satisfies OAuthCredential;
+      const refreshed = { ...current, access: "refreshed-access", expires: Date.now() + 120_000 };
+      const store = { version: 1, profiles: { [profileId]: current } };
+      // Upserts follow the scoped agent; batches without agentDir follow the scoped shared store.
+      const targetDir = writer === "upsert" ? agentDir : undefined;
+      await withEnvAsync({ OPENCLAW_STATE_DIR: scopedRoot }, async () => {
+        saveAuthProfileStore(store, targetDir);
+      });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: processRoot }, async () => {
+        await withAuthProfileStoreAgentDir(agentDir, scopedRoot, async () => {
+          if (writer === "upsert") {
+            await expect(
+              upsertAuthProfileWithLock({ profileId, credential: refreshed }),
+            ).resolves.not.toBeNull();
+          } else {
+            await persistAuthProfileBatch({ profiles: [{ profileId, credential: refreshed }] });
+          }
+        });
+      });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: scopedRoot }, async () => {
+        expect(loadPersistedAuthProfileStore(targetDir)?.profiles[profileId]).toEqual(refreshed);
+      });
+    },
+  );
 
   it("does not restore a nonportable OAuth generation during batch rollback", async () => {
     await withAgentDir(async (agentDir) => {

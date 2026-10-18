@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
+import { withDaemonRuntimePinStore } from "../../daemon/runtime-pin-store.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type {
   GatewayServiceCommandConfig,
@@ -103,7 +104,7 @@ describe("registered gateway install runtime default", () => {
         "--port",
         "29453",
       ]);
-      expect(probe).toHaveBeenCalledWith(bunPath, undefined, expect.any(Object));
+      expect(probe).toHaveBeenCalledWith(bunPath, expect.any(Object));
       expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
         "No supported Node runtime was found; using the running Bun for the service.",
       ]);
@@ -135,6 +136,9 @@ beforeEach(async () => {
   })) {
     vi.stubEnv(key, value);
   }
+  await fs.mkdir(state);
+  // Keep migration pending, but create private files before emulating another platform.
+  withDaemonRuntimePinStore(process.env, true, () => undefined);
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   mockSystemAccountHome();
   clearConfigCache();
@@ -145,7 +149,6 @@ beforeEach(async () => {
   service.install.mockResolvedValue(undefined);
   service.readCommand.mockReset();
   service.readCommand.mockResolvedValue(null);
-  await fs.mkdir(state);
   await fs.writeFile(
     path.join(state, "openclaw.json"),
     JSON.stringify({ gateway: { mode: "local", auth: { mode: "none" } } }),

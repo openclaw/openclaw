@@ -241,8 +241,7 @@ export async function createFaceTimeRuntime(params: {
       .finally(scheduleOutboundReconciliation);
     const helperResults = readHelperResults(result);
     const cancelled = helperResults.some((entry) => entry.cancelled === true);
-    const helpersContacted =
-      typeof result.helpersContacted === "number" ? result.helpersContacted : helperResults.length;
+    const helpersContacted = result.helpersContacted ?? helperResults.length;
     const definitivelyAbsent =
       helperResults.length === helpersContacted &&
       hasDialHelperConfirmation(helperResults) &&

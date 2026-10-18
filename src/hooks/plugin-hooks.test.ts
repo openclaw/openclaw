@@ -17,7 +17,6 @@ import {
   triggerInternalHook,
 } from "./internal-hooks.js";
 import { prepareInternalHooks } from "./loader.js";
-import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 describe("bundle plugin hooks", () => {
@@ -173,14 +172,17 @@ describe("bundle plugin hooks", () => {
     const config = createConfig(true);
     const snapshot = loadPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
     setCurrentPluginMetadataSnapshot(snapshot, { config, workspaceDir });
-    const hookDir = fs.realpathSync.native(path.join(bundleRoot, "hooks"));
     const manifestRegistry = await import("../plugins/manifest-registry-installed.js");
     const scanManifests = vi.spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex");
 
     for (let iteration = 0; iteration < 2; iteration += 1) {
-      expect(resolvePluginHookDirs({ workspaceDir, config })).toEqual([
-        { dir: hookDir, pluginId: "sample-bundle", rootDir: fs.realpathSync.native(bundleRoot) },
-      ]);
+      const entry = requireOnlyHookEntry(loadWorkspaceHookEntries(workspaceDir, { config }));
+      expect(entry.hook).toMatchObject({
+        name: "bundle-hook",
+        source: "openclaw-plugin",
+        pluginId: "sample-bundle",
+        baseDir: fs.realpathSync.native(path.join(bundleRoot, "hooks", "bundle-hook")),
+      });
     }
 
     expect(scanManifests).not.toHaveBeenCalled();

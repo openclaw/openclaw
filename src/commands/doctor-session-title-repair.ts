@@ -12,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
 import { hasExplicitSessionName } from "../gateway/session-title-state.js";
-import { sqliteMessageEventWithSeq } from "../gateway/session-transcript-entry-message.js";
 import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
@@ -43,7 +42,7 @@ function readLegacySessionTitle(
       return undefined;
     }
     for (const event of head.events) {
-      const message = asOptionalRecord(sqliteMessageEventWithSeq(event));
+      const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
       if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
         const displayName = deriveGoalSessionTitle(projected.text);
@@ -136,18 +135,14 @@ export async function repairLegacySessionTitles(params: {
           continue;
         }
         // Offline Doctor owns these stores; concurrent title changes are best effort.
-        await patchSessionEntryCore(
-          session,
-          () => ({ displayName: Buffer.from(title, "utf16le").toString("utf16le") }),
-          {
-            preserveActivity: true,
-            skipMaintenance: true,
-            assertCommitAllowed: assertRepairAuthority,
-            onCommitted: () => {
-              report.repaired++;
-            },
+        await patchSessionEntryCore(session, () => ({ displayName: title }), {
+          preserveActivity: true,
+          skipMaintenance: true,
+          assertCommitAllowed: assertRepairAuthority,
+          onCommitted: () => {
+            report.repaired++;
           },
-        );
+        });
         assertRepairAuthority();
       } catch (error) {
         if (params.apply) {

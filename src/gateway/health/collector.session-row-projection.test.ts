@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import * as combinedStore from "../../config/sessions/combined-store-gateway-read.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -12,9 +13,16 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { readStatusSessionStores } from "../../status/session-stores.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createSessionLifecyclePublisher } from "../server-chat-lifecycle-publication.js";
+import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
+import { drainSessionEventPublications } from "../session-event-prepared-row.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
@@ -84,6 +92,121 @@ describe("health agent summaries heartbeat roster", () => {
 });
 
 describe("health and status resident session summaries", () => {
+  it.each(["before-read", "during-topology"])(
+    "reads surviving health summaries when an unrelated agent closes %s",
+    async (phase) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const cfg: OpenClawConfig = { agents: { entries: { main: {}, retiring: {} } } };
+        setRuntimeConfigSnapshot(cfg);
+        for (const agentId of ["main", "retiring"]) {
+          replaceSessionEntrySync(
+            { agentId, sessionKey: `agent:${agentId}:main` },
+            { sessionId: `${agentId}-session`, updatedAt: 1 },
+          );
+        }
+        const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+        const closing = createDeferred();
+        const release = createDeferred();
+        let closed: Promise<unknown> | undefined;
+        let unregister: (() => void) | undefined;
+        try {
+          await settleProjection(projection);
+          const retiringPath = resolveOpenClawAgentSqlitePath({ agentId: "retiring" });
+          const startClosing = () => {
+            beginAgentDeletionJournal({
+              agentId: "retiring",
+              operationId: "delete-retiring",
+              agentDir: path.dirname(retiringPath),
+              workspaceDir: state.statePath("workspace-retiring"),
+              sessionsDir: state.statePath("agents", "retiring", "sessions"),
+              deleteFiles: false,
+            });
+            unregister = registerOpenClawAgentDatabaseAsyncResource({
+              agentId: "retiring",
+              path: retiringPath,
+              revoke: closing.resolve,
+              close: () => release.promise,
+            });
+            closed = closeOpenClawAgentDatabaseByPathAsync(retiringPath, "retiring");
+          };
+          if (phase === "during-topology") {
+            const prepare = combinedStore.prepareCombinedSessionStoreForGatewayAsync;
+            vi.spyOn(
+              combinedStore,
+              "prepareCombinedSessionStoreForGatewayAsync",
+            ).mockImplementationOnce(async (...args) => {
+              const captured = await prepare(...args);
+              startClosing();
+              await closing.promise;
+              return captured;
+            });
+            sessionChanges.emit({ all: true, scope: "stores" });
+          } else {
+            startClosing();
+            await closing.promise;
+          }
+          const summaries = await buildHealthAgentSummaries(
+            cfg,
+            resolveHealthAgentOrder(cfg),
+            projection,
+          );
+          expect(summaries.map(({ agentId, sessions }) => [agentId, sessions.count])).toEqual([
+            ["main", 1],
+            ["retiring", 0],
+          ]);
+          expect(summaries[0]?.sessions.recent[0]?.key).toBe("agent:main:main");
+          const subscribers = createSessionEventSubscriberRegistry();
+          subscribers.subscribe("observer");
+          const broadcast = vi.fn();
+          const publisher = createSessionLifecyclePublisher({
+            broadcastToConnIds: broadcast,
+            sessionEventSubscribers: subscribers,
+            getSessionRowProjection: () => projection,
+            persistGatewaySessionLifecycleEventForEvent: async () => {},
+            loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => ({
+              row:
+                options?.sessionRows?.describe({ key, agentId: options.agentId ?? "main" })
+                  ?.materialized.row ?? null,
+            }),
+          });
+          publisher.publish({
+            phase: "end",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            clientRunId: "survivor-run",
+            event: {
+              runId: "survivor-run",
+              sessionId: "main-session",
+              seq: 1,
+              stream: "lifecycle",
+              ts: 2,
+              data: { phase: "end" },
+            },
+            persistence: Promise.resolve(),
+            projection,
+          });
+          await Promise.resolve();
+          await drainSessionEventPublications(projection);
+          expect(broadcast).toHaveBeenCalledWith(
+            "sessions.changed",
+            expect.objectContaining({
+              phase: "end",
+              sessionKey: "agent:main:main",
+              sessionId: "main-session",
+            }),
+            new Set(["observer"]),
+            expect.any(Object),
+          );
+        } finally {
+          release.resolve();
+          await closed;
+          unregister?.();
+          projection.dispose();
+        }
+      });
+    },
+  );
+
   it("returns current counts and recent entries while unrelated display work is held", async ({
     signal,
   }) => {

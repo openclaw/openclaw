@@ -89,7 +89,7 @@ export class GuildMember extends Base {
     return this.rawData.user ? new User(this.client, this.rawData.user) : null;
   }
   get roles() {
-    return (this.rawData.roles ?? []) as Array<string | Role>;
+    return this.rawData.roles ?? [];
   }
   get nickname() {
     return this.rawData.nick ?? undefined;

@@ -290,6 +290,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
   "agents-home": navigationPresentation("bot", "agentsHome"),
+  claws: navigationPresentation("bot", "claws"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),

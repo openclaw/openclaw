@@ -76,28 +76,16 @@ export function createHooksBridge(
     return undefined;
   }
   const onError = config.onHookError ?? DEFAULT_HOOK_ERROR_HANDLER;
-  const hooks: SdkSessionHooks = {};
-  const pre = isolate("onPreToolUse", config.onPreToolUse, onError);
-  const preMcp = isolate("onPreMcpToolCall", config.onPreMcpToolCall, onError);
-  const post = isolate("onPostToolUse", config.onPostToolUse, onError);
-  const postFailure = isolate("onPostToolUseFailure", config.onPostToolUseFailure, onError);
+  const hooks: SdkSessionHooks = {
+    onPreToolUse: isolate("onPreToolUse", config.onPreToolUse, onError),
+    onPreMcpToolCall: isolate("onPreMcpToolCall", config.onPreMcpToolCall, onError),
+    onPostToolUse: isolate("onPostToolUse", config.onPostToolUse, onError),
+    onPostToolUseFailure: isolate("onPostToolUseFailure", config.onPostToolUseFailure, onError),
+    onSessionStart: isolate("onSessionStart", config.onSessionStart, onError),
+    onSessionEnd: isolate("onSessionEnd", config.onSessionEnd, onError),
+    onErrorOccurred: isolate("onErrorOccurred", config.onErrorOccurred, onError),
+  };
   const userPrompt = isolate("onUserPromptSubmitted", config.onUserPromptSubmitted, onError);
-  const sessionStart = isolate("onSessionStart", config.onSessionStart, onError);
-  const sessionEnd = isolate("onSessionEnd", config.onSessionEnd, onError);
-  const errorOccurred = isolate("onErrorOccurred", config.onErrorOccurred, onError);
-
-  if (pre) {
-    hooks.onPreToolUse = pre as SdkSessionHooks["onPreToolUse"];
-  }
-  if (preMcp) {
-    hooks.onPreMcpToolCall = preMcp as SdkSessionHooks["onPreMcpToolCall"];
-  }
-  if (post) {
-    hooks.onPostToolUse = post as SdkSessionHooks["onPostToolUse"];
-  }
-  if (postFailure) {
-    hooks.onPostToolUseFailure = postFailure as SdkSessionHooks["onPostToolUseFailure"];
-  }
   if (userPrompt) {
     hooks.onUserPromptSubmitted = async (input, invocation) => {
       const output = await userPrompt(input, invocation);
@@ -116,14 +104,10 @@ export function createHooksBridge(
       return output;
     };
   }
-  if (sessionStart) {
-    hooks.onSessionStart = sessionStart as SdkSessionHooks["onSessionStart"];
-  }
-  if (sessionEnd) {
-    hooks.onSessionEnd = sessionEnd as SdkSessionHooks["onSessionEnd"];
-  }
-  if (errorOccurred) {
-    hooks.onErrorOccurred = errorOccurred as SdkSessionHooks["onErrorOccurred"];
+  for (const key of Object.keys(hooks) as (keyof SdkSessionHooks)[]) {
+    if (hooks[key] === undefined) {
+      delete hooks[key];
+    }
   }
 
   return Object.keys(hooks).length > 0 ? hooks : undefined;

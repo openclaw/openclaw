@@ -21,16 +21,12 @@ import {
 } from "./gateway-process-argv.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { readWindowsProcessCensus } from "./windows-process-census.js";
+import { readWindowsUserSid } from "./windows-user-sid.js";
 
 const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entry) => [
   path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
   `dist/${entry.distWorkerPath}`,
 ]);
-
-type ProcessArtifactCustody =
-  | { kind: "holder" }
-  | { kind: "non-holder" }
-  | { kind: "unresolved"; reason: string };
 
 function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
   return (
@@ -68,23 +64,23 @@ function isStandardSystemdLoginProcess(
   );
 }
 
-function classifyProcessArtifactCustody(
+function processHoldsOpenClawArtifacts(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
   parentCommand: ProcessCommand | undefined,
-): ProcessArtifactCustody {
+): boolean {
   try {
     const argv = command && "argv" in command ? command.argv : [];
     if ([...argv, cwd ?? ""].some(referencesRetainedArtifact)) {
-      return { kind: "holder" };
+      return true;
     }
     if (!command) {
       throw new Error("process command is unavailable");
     }
     // The command reader admits these only for observed foreign UIDs or kernel/dead processes.
     if ("argvUnavailable" in command || command.argv.length === 0) {
-      return { kind: "non-holder" };
+      return false;
     }
     const { serviceMarker } = command;
     const options = {
@@ -96,7 +92,7 @@ function classifyProcessArtifactCustody(
     };
     const identity = classifyOpenClawArgv(argv, options);
     if (identity.kind === "openclaw") {
-      return { kind: "holder" };
+      return true;
     }
     if (identity.kind === "unclassified" && identity.cause !== "runtime-syntax") {
       throw new Error(identity.reason);
@@ -114,18 +110,18 @@ function classifyProcessArtifactCustody(
         (command.uid !== inspectorUid ||
           isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
       ) {
-        return { kind: "non-holder" };
+        return false;
       }
       throw new Error("working directory is unavailable");
     }
     if (typeof position !== "number" && position.kind === "not-runtime") {
-      return { kind: "non-holder" };
+      return false;
     }
     let scripts: Record<string, unknown> = {};
     if (typeof position !== "number") {
       const pkg = readProcessPackageIdentity(cwd, true);
       if (pkg.name === "openclaw") {
-        return { kind: "holder" };
+        return true;
       }
       scripts = pkg.scripts;
     }
@@ -152,18 +148,77 @@ function classifyProcessArtifactCustody(
         throw new Error(evidence.reason);
       }
       if (evidence.kind === "openclaw") {
-        return { kind: "holder" };
+        return true;
       }
     }
-    return { kind: "non-holder" };
+    return false;
   } catch (error) {
-    return { kind: "unresolved", reason: error instanceof Error ? error.message : String(error) };
+    throw new Error(
+      `Could not classify PID ${pid}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
 }
 
-type HandoffReferences = { runId: string; artifactPaths: readonly string[] };
+type HandoffReferences = {
+  runId: string;
+  artifactPaths: readonly string[];
+  windowsUserSid?: string;
+  drivers?: readonly { pid: number; startIdentity: string }[];
+};
 type CensusResult = { matchingPids: number[]; unverifiedPids: number[]; error?: string };
 type CensusProcess = { pid: number; state: string; command?: { ppid: number } & ProcessCommand };
+
+function classifyWindowsHandoffAncestry(
+  process: ReturnType<typeof readWindowsProcessCensus>[number],
+  byPid: ReadonlyMap<number, ReturnType<typeof readWindowsProcessCensus>[number]>,
+  drivers: NonNullable<HandoffReferences["drivers"]>,
+): "descendant" | "unrelated" | "unknown" {
+  const startedAt = process.startIdentity;
+  if (
+    startedAt &&
+    drivers.length &&
+    drivers.every(
+      ({ startIdentity }) =>
+        /^\d+$/.test(startIdentity) && BigInt(startIdentity) > BigInt(startedAt),
+    )
+  ) {
+    return "unrelated";
+  }
+  const visited = new Set<number>();
+  let child = process;
+  while (child.startIdentity && !visited.has(child.pid)) {
+    const childStart = child.startIdentity;
+    visited.add(child.pid);
+    if (
+      drivers.some(
+        ({ pid, startIdentity }) => pid === child.pid && startIdentity === child.startIdentity,
+      )
+    ) {
+      return "descendant";
+    }
+    const parent = byPid.get(child.parentPid ?? 0);
+    const driver = drivers.find(
+      ({ pid, startIdentity }) =>
+        pid === child.parentPid &&
+        /^\d+$/.test(startIdentity) &&
+        BigInt(startIdentity) <= BigInt(childStart),
+    );
+    if (driver) {
+      return !parent || parent.startIdentity === driver.startIdentity ? "descendant" : "unknown";
+    }
+    if (child.parentPid === 0 || child.parentPid === 4) {
+      return "unrelated";
+    }
+    // Persisted Windows identities have millisecond resolution; equal births
+    // cannot exclude a child created in the same clock tick.
+    if (!parent?.startIdentity || BigInt(parent.startIdentity) > BigInt(child.startIdentity)) {
+      break;
+    }
+    child = parent;
+  }
+  return "unknown";
+}
 
 /** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
@@ -180,6 +235,10 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
     const deadline = Date.now() + (handoff ? 15_000 : 1_000);
     const native = windows && handoff ? [...readWindowsProcessCensus(15_000)] : undefined;
     const nativeByPid = new Map(native?.map((entry) => [entry.pid, entry]));
+    const sameWindowsUser =
+      windows &&
+      handoff?.windowsUserSid !== undefined &&
+      readWindowsUserSid() === handoff.windowsUserSid;
     const processes: CensusProcess[] = native?.map(({ pid, parentPid, commandLine }) => {
       const argv = commandLine ? parseWindowsNativeCommandLine(commandLine) : null;
       return {
@@ -285,6 +344,19 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
           result.matchingPids.push(pid);
           continue;
         }
+        const ancestry =
+          observation &&
+          classifyWindowsHandoffAncestry(observation, nativeByPid, handoff.drivers ?? []);
+        if (ancestry === "descendant") {
+          result.matchingPids.push(pid);
+          continue;
+        }
+        // Handoff spawn never elevates or changes accounts. A denied process
+        // cannot be its child when inspecting from the recorded launching SID.
+        // Missing intermediate parents still leave surviving work unverified.
+        if (ancestry === "unrelated" || (sameWindowsUser && observation?.accessDenied)) {
+          continue;
+        }
         const inspectorUid = process.getuid?.();
         const foreign =
           observation?.foreignOwner ||
@@ -302,21 +374,19 @@ export function inspectOtherOpenClawProcesses(handoff?: HandoffReferences) {
         ) {
           result.unverifiedPids.push(pid);
           if (windows) {
-            result.error = "Retry update repair as Administrator using the same Windows account.";
+            result.error =
+              "Please run update repair as the same Windows account that started the update.";
           }
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(
+      const holdsArtifacts = processHoldsOpenClawArtifacts(
         command,
         pid,
         directories.get(pid),
         byPid.get(command?.ppid ?? 0)?.command,
       );
-      if (custody.kind === "unresolved") {
-        throw new Error(`Could not classify PID ${pid}: ${custody.reason}`);
-      }
-      if (custody.kind === "holder") {
+      if (holdsArtifacts) {
         result.matchingPids.push(pid);
       }
     }

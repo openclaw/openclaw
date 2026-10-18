@@ -1,4 +1,46 @@
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { expect } from "vitest";
+
+export function expectRecordFields(
+  record: Record<string, unknown>,
+  fields: Record<string, unknown>,
+) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+export function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
+  if (!call) {
+    throw new Error(`missing ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+export function planUpdate(title: string) {
+  return { type: "plan_update", title };
+}
+
+export function taskUpdate(
+  id: unknown,
+  title: string,
+  status: "pending" | "in_progress" | "complete" | "error",
+  extra?: Record<string, unknown>,
+) {
+  return { type: "task_update", id, title, status, ...extra };
+}
+
+export function contentTaskId(prefix: string) {
+  return expect.stringMatching(new RegExp(`^${prefix}_[a-f0-9]{8}_1$`, "u"));
+}
+
+export function checkpoint(run: () => Promise<void>): {
+  kind: "checkpoint";
+  run: () => Promise<void>;
+} {
+  return { kind: "checkpoint", run };
+}
 
 export type SlackReplyOptionEvent =
   | {

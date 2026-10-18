@@ -12,7 +12,6 @@ import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manag
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { clearBootstrapSnapshotOnSessionBoundary } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { readRegistryWorktree } from "../agents/worktrees/registry-read.js";
@@ -737,13 +736,8 @@ async function performPreparedGatewaySessionReset({
 
       let createdNewEntry = false;
       assertCompletionAuthorized?.();
-      const boundaryEntry = (await loadResetSession(assertCompletionAuthorized)).entry;
-      if (boundaryEntry?.sessionId !== entry?.sessionId) {
-        params.assertCurrent?.();
-        throw new Error(`Session ${params.key} changed before reset boundary append.`);
-      }
       let resetBoundaryAppended = false;
-      const resetBoundaryId = boundaryEntry ? createSessionResetBoundaryId() : undefined;
+      const resetBoundaryId = entry ? createSessionResetBoundaryId() : undefined;
       let resetSkipped = false;
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
       let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
@@ -752,7 +746,7 @@ async function performPreparedGatewaySessionReset({
         commitGuard,
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundary: boundaryEntry
+        resetBoundary: entry
           ? {
               boundaryId: resetBoundaryId!,
               context: "clear",
@@ -784,7 +778,7 @@ async function performPreparedGatewaySessionReset({
           if (fastModeSelectionError) {
             throw new Error(fastModeSelectionError.message);
           }
-          if (currentEntry?.sessionId !== boundaryEntry?.sessionId) {
+          if (currentEntry?.sessionId !== entry?.sessionId) {
             if (currentEntry) {
               resetSkipped = true;
               return currentEntry;
@@ -1017,10 +1011,6 @@ async function performPreparedGatewaySessionReset({
               }).catch(reportLifecycleCleanupError),
             );
           }
-          clearBootstrapSnapshotOnSessionBoundary({
-            boundaryAppended: resetBoundaryAppended,
-            sessionKey: target.canonicalKey,
-          });
           if (createdNewEntry) {
             await recordSessionCreated(cfg, {
               sessionKey: target.canonicalKey,

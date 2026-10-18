@@ -15,7 +15,6 @@ import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
-import { createUpdateCommandOriginalCancellation } from "./update-command-executor-cancellation.js";
 import {
   requestUpdateCommandExecutorCancellation,
   requireUpdateCommandAcquisition,
@@ -83,12 +82,13 @@ export async function withUpdateCommandExecutor<T>(
       let admissionComplete = false;
       let legacyChild: ManagedHandoffLease | undefined;
       let legacyTarget: ManagedHandoffLease | undefined;
-      const cancellation = createUpdateCommandOriginalCancellation({
-        runId,
-        signal: cancellationSignal,
-        current: () => ({ active, store, lease, serviceLease }),
-        closeChildren: () => children.close(),
-      });
+      // The original executor retains cancellation and remains its sole release owner.
+      const cancellation: {
+        successor: ReturnType<ReturnType<typeof createManagedHandoffLeaseStore>["cancelUpdate"]>;
+        cause?: Error;
+      } = {
+        successor: null,
+      };
       const identityWarnings = createUpdateIdentityWarningReporter(runId);
       const assertBase = () => {
         const cancelled = cancellation.cause;
@@ -402,7 +402,30 @@ export async function withUpdateCommandExecutor<T>(
             !lease.key.includes("/.openclaw-update-child-");
           if (originalOwner) {
             originalFence = fence;
-            cancellation.register(fence);
+            originalCancellations.set(fence, (requestedRunId, cause) => {
+              if (
+                !active ||
+                requestedRunId !== runId ||
+                !(cause instanceof Error) ||
+                !store ||
+                !lease ||
+                lease.version !== 2 ||
+                (serviceLease && !cancellation.successor && !store.owns(serviceLease, "executor"))
+              ) {
+                throw new UpdateCommandRecoveryPendingError("Original cancellation owner changed.");
+              }
+              const successor = store.cancelUpdate(lease, serviceLease);
+              if (!successor) {
+                throw new UpdateCommandRecoveryPendingError(
+                  "Original cancellation generation changed.",
+                );
+              }
+              cancellation.successor = successor;
+              cancellation.cause ??= cause;
+              children.close();
+              preflightReleases.delete(fence);
+              cancellationSignal.abort(cause);
+            });
           }
           if (enterOptions?.preflight && !borrowed) {
             preflightReleases.set(fence, () => {
@@ -433,7 +456,18 @@ export async function withUpdateCommandExecutor<T>(
         children,
       });
       identityWarnings.flush();
-      const outcome = cancellation.mergeOutcome(operationOutcome);
+      const outcome = cancellation.cause
+        ? {
+            error:
+              "error" in operationOutcome && operationOutcome.error !== cancellation.cause
+                ? new AggregateError(
+                    [operationOutcome.error, cancellation.cause],
+                    "Update cancelled while execution failed",
+                    { cause: cancellation.cause },
+                  )
+                : cancellation.cause,
+          }
+        : operationOutcome;
       retireFence();
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
         throw new UpdateCommandRecoveryPendingError(

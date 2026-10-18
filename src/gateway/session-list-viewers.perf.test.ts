@@ -11,6 +11,7 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as visibility from "../shared/session-list-visibility.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -97,6 +98,13 @@ test("preserves viewer pages across publications while bounding shared predicate
       ],
     ];
     try {
+      await projection.ensureMaterialized();
+      // Establish active display demand without priming list selection or cold archives.
+      for (const row of projection.selectEntries()) {
+        if (row.entry?.archivedAt === undefined) {
+          projection.describe(row);
+        }
+      }
       for (let revision = 0; revision < 2; revision++) {
         await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.
@@ -359,6 +367,104 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       paused.resolve(empty);
       await settled;
       selected.mockRestore();
+      release();
+      clock.mockRestore();
+    }
+  });
+});
+
+test("shares concurrent list selection across row modes and refilters only published partitions", async () => {
+  await withStateDirEnv("openclaw-list-selection-repeat-", async () => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const cfg = { agents: { entries: { main: {} } } };
+    resetConfigRuntimeState();
+    setRuntimeConfigSnapshot(cfg);
+    const alice = viewer(ensureProfileForEmail("alice@selection.example").id);
+    const bob = viewer(ensureProfileForEmail("bob@selection.example").id);
+    const now = 1_800_000_000_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = Object.fromEntries(
+      Array.from({ length: 128 }, (_, index) => [
+        `agent:main:selection-${index}`,
+        {
+          sessionId: `s${index}`,
+          updatedAt: now + index,
+          visibility: "shared" as const,
+          createdActor: {
+            type: "human" as const,
+            source: "profile" as const,
+            id: (index === 127 ? bob : alice).authenticatedUserProfile!.profileId,
+          },
+        },
+      ]),
+    );
+    writeResidentEntries(store);
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const opts = { limit: 2, activeMinutes: 1 };
+    const read = (rowMode: "compact" | "sidebar", client = alice) =>
+      listProjectedSessions({
+        projection,
+        client,
+        acceptsSerializedJson: true,
+        opts: { ...opts, rowMode },
+      });
+    try {
+      expect((await read("compact")).sessions.map((row) => row.sessionId)).toEqual([
+        "s127",
+        "s126",
+      ]);
+      const owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+      try {
+        const repeated = await Promise.all(
+          Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
+        );
+        expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
+        expect(owner).not.toHaveBeenCalled();
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:selection-0" },
+          {
+            ...store["agent:main:selection-0"]!,
+            updatedAt: now + 200,
+            visibility: "draft",
+          },
+        );
+        const changed = await read("compact");
+        expect(changed.sessions.map((row) => row.sessionId)).toEqual(["s0", "s127"]);
+        expect(changed.totalCount).toBe(128);
+        expect(owner.mock.calls.length).toBeLessThan(32);
+        const other = await read("compact", bob);
+        expect(other.sessions.map((row) => row.sessionId)).toEqual(["s127", "s126"]);
+        expect(other.totalCount).toBe(127);
+        // An exact publication must not hide an expired retained partition.
+        clock.mockReturnValue(now + 60_128);
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:selection-1" },
+          {
+            ...store["agent:main:selection-1"]!,
+            updatedAt: Date.now(),
+          },
+        );
+        const expired = await read("compact");
+        expect(expired.sessions.map((row) => row.sessionId)).toEqual(["s1", "s0"]);
+        expect(expired.totalCount).toBe(2);
+        setDisplayName(alice.authenticatedUserProfile!.profileId, "Renamed Alice");
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: "agent:main:selection-127" },
+          { ...store["agent:main:selection-127"]!, updatedAt: Date.now() },
+        );
+        const renamed = await read("compact");
+        expect(renamed.totalCount).toBe(3);
+        expect(
+          renamed.owners?.find((actor) => actor.id === alice.authenticatedUserProfile!.profileId)
+            ?.label,
+        ).toBe("Renamed Alice");
+      } finally {
+        owner.mockRestore();
+      }
+    } finally {
+      projection.dispose();
       release();
       clock.mockRestore();
     }

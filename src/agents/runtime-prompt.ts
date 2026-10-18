@@ -1,5 +1,6 @@
 import os from "node:os";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -8,6 +9,7 @@ import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
+import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
 import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
@@ -17,11 +19,13 @@ export async function resolveAgentRuntimePrompt(params: {
   cwd?: string;
   preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string | null;
+  preparedSessionEntry?: InternalSessionEntry;
   sessionKey?: string;
   sessionId?: string;
   model: string;
   channel?: string;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
   chatType?: ChatType;
   requesterProfileId?: string;
   remoteWorkspace?: boolean;
@@ -30,6 +34,7 @@ export async function resolveAgentRuntimePrompt(params: {
     cfg: params.config,
     channel: params.channel,
     accountId: params.accountId,
+    requester: params.requester,
   });
   const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({
@@ -56,6 +61,7 @@ export async function resolveAgentRuntimePrompt(params: {
         ? { preparedRepoRoot: params.preparedRepoRoot }
         : {}),
     preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,

@@ -88,6 +88,7 @@ export function makeTui(overrides: Partial<TUI> = {}): TUI {
     clearScreen: vi.fn(),
     setTitle: vi.fn(),
     setProgress: vi.fn(),
+    setProgramStatus: vi.fn(),
   } satisfies ConstructorParameters<typeof TuiMainScreen>[0];
   const tui = new TuiMainScreen(terminal);
   return Object.assign(tui, { requestRender: vi.fn(), ...overrides });

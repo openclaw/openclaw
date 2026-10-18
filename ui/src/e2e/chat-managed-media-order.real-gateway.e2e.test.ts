@@ -419,25 +419,97 @@ suite.define(() => {
                   });
                   throw error;
                 }
-                expect(
-                  await bubble
-                    .locator("img.chat-message-image")
-                    .evaluateAll((images) =>
-                      images.map(
-                        (image) =>
-                          image instanceof HTMLImageElement &&
-                          image.complete &&
-                          image.naturalWidth > 0,
+                // History reconciliation can replace the nodes that just finished decoding.
+                await expect
+                  .poll(() =>
+                    bubble
+                      .locator("img.chat-message-image")
+                      .evaluateAll((images) =>
+                        images.map(
+                          (image) =>
+                            image instanceof HTMLImageElement &&
+                            image.complete &&
+                            image.naturalWidth > 0,
+                        ),
                       ),
-                    ),
-                ).toEqual([true, true]);
+                  )
+                  .toEqual([true, true]);
               };
               await assertDecoded();
-              // Capture before the order assertion so an unfixed run retains the actual flattening.
-              // Running this unchanged scenario on the repaired build yields the comparable After.
-              await capture(page, bubble, "01-live");
-              const liveOrder = await renderedOrder(bubble);
-              expect(liveOrder).toEqual(expectedOrder);
+              const liveNodes = await bubble.evaluateHandle((element) => ({
+                bubble: element,
+                row: element.closest("[data-chat-row-key]"),
+                images: Array.from(element.querySelectorAll("img.chat-message-image")),
+              }));
+              let liveOrder: string[];
+              try {
+                // Capture before the order assertion so an unfixed run retains the actual flattening.
+                // Running this unchanged scenario on the repaired build yields the comparable After.
+                await capture(page, bubble, "01-live");
+                liveOrder = await renderedOrder(bubble);
+                expect(liveOrder).toEqual(expectedOrder);
+              } catch (error) {
+                try {
+                  const diagnostic = await liveNodes.evaluate((before, expectedIntro) => {
+                    const matches = Array.from(
+                      document.querySelectorAll(".chat-group.assistant .chat-bubble"),
+                    ).filter((element) => element.textContent?.includes(expectedIntro));
+                    const current = matches.length === 1 ? matches[0] : undefined;
+                    const count = (selector: string) =>
+                      current?.querySelectorAll(selector).length ?? 0;
+                    const slots = Array.from(
+                      current?.querySelectorAll(".chat-text div") ?? [],
+                    ).filter((element) =>
+                      Array.from(element.childNodes).some(
+                        (node) =>
+                          node.nodeType === Node.COMMENT_NODE && node.textContent === "lit-content",
+                      ),
+                    );
+                    return {
+                      schemaVersion: 1,
+                      kind: "managed-image-order-after-capture",
+                      matchingBubbles: matches.length,
+                      originalBubbleConnected: before.bubble.isConnected,
+                      sameBubble: current === before.bubble,
+                      originalRowConnected: before.row?.isConnected ?? null,
+                      sameRow: before.row
+                        ? current?.closest("[data-chat-row-key]") === before.row
+                        : null,
+                      originalImages: before.images.map((image) => ({
+                        connected: image.isConnected,
+                        inOriginalBubble: before.bubble.contains(image),
+                        inCurrentBubble: current?.contains(image) ?? false,
+                      })),
+                      current: {
+                        images: count("img.chat-message-image"),
+                        allImages: count("img"),
+                        galleries: count(".chat-message-images"),
+                        frames: count(".chat-image-frame"),
+                        skeletons: count(".chat-image-skeleton"),
+                        unavailable: count(".chat-image-frame--compact"),
+                        busyFrames: count('.chat-image-frame[aria-busy="true"]'),
+                        mediaSlots: slots.map((slot) => ({
+                          childElements: slot.childElementCount,
+                          images: slot.querySelectorAll("img.chat-message-image").length,
+                          galleries: slot.querySelectorAll(".chat-message-images").length,
+                        })),
+                      },
+                    };
+                  }, intro);
+                  console.error(
+                    "[control-ui-e2e] managed image order failure",
+                    JSON.stringify(diagnostic),
+                  );
+                } catch (captureError) {
+                  console.error(
+                    "[control-ui-e2e] managed image order diagnostics failed",
+                    captureError instanceof Error ? captureError.name : "UnknownError",
+                  );
+                }
+                throw error;
+              } finally {
+                await liveNodes.dispose();
+              }
               expect(await bubble.textContent()).not.toContain("MEDIA:");
               expect(sends).toEqual([prompt]);
               expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);

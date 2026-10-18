@@ -50,6 +50,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { createAuthRateLimiterSpy, makeMockHttpResponse } from "./test-http-response.js";
 
@@ -416,6 +417,39 @@ describe("handleControlUiHttpRequest", () => {
     expect(parseBootstrapPayload(bootstrap.end).terminalEnabled).toBe(true);
   });
 
+  it.each([
+    ["gif", ANIMATED_GIF_BYTES, "image/gif"],
+    ["png", APNG_BYTES, "image/png"],
+    [
+      "webp",
+      Buffer.from(
+        "UklGRuQAAABXRUJQVlA4WAoAAAACAAAAFwAAFwAAQU5JTQYAAAD/////AABBTk1GWAAAAAAAAAAAABcAABcAAFAAAAJWUDggQAAAAHADAJ0BKhgAGAA+bTSWR6QjIiEoCACADYllAMougH4AAEGUEAD+8JtD/8guWF1yNf/yA/5Af8gP/499jCgwAABBTk1GWAAAAAAAAAAAABcAABcAAHgAAABWUDggQAAAAFQDAJ0BKhgAGAA+bTKWR4KAgAAA2JZQC/ZoB+AH4AAETfZgAP7lhz/9rQHBqv8z//998KI7df5tQBnBY0gAAAA=",
+        "base64",
+      ),
+      "image/webp",
+    ],
+  ] as const)(
+    "preserves legacy local %s animation bytes for preview requests",
+    async (extension, bytes, mimeType) => {
+      const filePath = await createMediaFile("animation." + extension, bytes);
+      const response = await runAssistantMediaRequest({
+        url:
+          "/__openclaw__/assistant-media?source=" +
+          encodeURIComponent(filePath) +
+          "&token=test-token&variant=thumbnail&width=480",
+      });
+      expect(response.res.statusCode).toBe(200);
+      expect(response.setHeader).toHaveBeenCalledWith("Content-Type", mimeType);
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        response.res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.res.once("end", resolve);
+        response.res.once("error", reject);
+      });
+      expect(Buffer.concat(chunks)).toEqual(bytes);
+    },
+  );
+
   it("serves a bounded inbound photo preview without replacing its original", async () => {
     const state = testTempDirs.make("inbound-preview-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: state }, async () => {
@@ -425,18 +459,25 @@ describe("handleControlUiHttpRequest", () => {
       await fs.writeFile(photoPath, bytes);
       const modified = new Date("2025-01-01T00:00:00.000Z");
       await fs.utimes(photoPath, modified, modified);
-      const url =
-        "/__openclaw__/assistant-media?source=media%3A%2F%2Finbound%2Fphoto.png&token=test-token";
+      const source = "media://inbound/photo.png";
+      const url = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&token=test-token`;
       const preview = await runAssistantMediaRequest({ url: `${url}&variant=thumbnail` });
       expect(preview.res.statusCode).toBe(200);
       const body = preview.end.mock.calls[0]?.[0];
       expect(Buffer.isBuffer(body)).toBe(true);
-      expect(body.byteLength).toBeLessThanOrEqual(512 * 1024);
+      expect(body.byteLength).toBeLessThanOrEqual(256 * 1024);
+      expect(preview.setHeader).toHaveBeenCalledWith("Content-Type", "image/webp");
       expect(body.byteLength).toBeLessThan(bytes.byteLength);
       expect(await createImageProcessor().probe(body)).toMatchObject({
-        format: "png",
-        width: 400,
-        height: 200,
+        format: "webp",
+        width: 600,
+        height: 300,
+      });
+      const small = await runAssistantMediaRequest({ url: `${url}&variant=thumbnail&width=480` });
+      expect(await createImageProcessor().probe(small.end.mock.calls[0]?.[0])).toMatchObject({
+        format: "webp",
+        width: 240,
+        height: 120,
       });
       const head = await runAssistantMediaRequest({
         url: `${url}&variant=thumbnail`,

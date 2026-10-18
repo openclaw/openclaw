@@ -187,14 +187,6 @@ function resolveCursorComponents(
   return { skills, capabilities };
 }
 
-function resolveAgentSkillDirs(rootDir: string): string[] {
-  try {
-    return pluginCacheStatSync(path.join(rootDir, "skills"))?.isDirectory() ? ["skills"] : [];
-  } catch {
-    return [];
-  }
-}
-
 function resolveAgentActivation(
   raw: Record<string, unknown>,
   manifestPath: string,
@@ -282,7 +274,9 @@ export function loadBundleManifest(params: {
         manifestPath: loaded.manifestPath,
       };
     }
-    manifest.skills = resolveAgentSkillDirs(params.rootDir);
+    manifest.skills = pluginCacheStatSync(path.join(params.rootDir, "skills"))?.isDirectory()
+      ? ["skills"]
+      : [];
     manifest.activation = resolveAgentActivation(raw, loaded.manifestPath);
     manifest.capabilities = [
       ...(manifest.skills.length > 0 ? ["skills"] : []),

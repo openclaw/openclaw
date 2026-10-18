@@ -1,4 +1,4 @@
-// Workboard tests cover the sqlite batch card read path.
+// Workboard tests cover batched card persistence and hydration.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -123,62 +123,134 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
   });
 }
 
-describe("workboard sqlite batch card read", () => {
+async function withKernelStores(
+  run: (stores: ReturnType<typeof createKernelStores>, dbPath: string) => Promise<void>,
+) {
+  await withStores(async (dbPath) => {
+    const stores = createKernelStores(dbPath);
+    try {
+      await run(stores, dbPath);
+    } finally {
+      await stores.close();
+    }
+  });
+}
+
+describe("workboard sqlite batch card persistence", () => {
+  it("replaces ordered child collections across batches and clears them on a later write", async () => {
+    await withKernelStores(async (stores) => {
+      const original = fixtureCard(0);
+      // Descending IDs make resetting ordinals at the next batch observable on readback.
+      const children = Array.from({ length: 65 }, (_, index) => fixtureCard(100 - index));
+      const replacement: WorkboardCard = {
+        ...original,
+        title: "Replaced children",
+        updatedAt: original.updatedAt + 1,
+        labels: children.map((card) => card.labels[0]!),
+        events: children.flatMap((card) => card.events!),
+        metadata: {
+          ...original.metadata,
+          attempts: children.flatMap((card) => card.metadata!.attempts!),
+          comments: children.flatMap((card) => card.metadata!.comments!),
+          links: children.flatMap((card) => card.metadata!.links!),
+          proof: children.flatMap((card) => card.metadata!.proof!),
+          artifacts: children.flatMap((card) => card.metadata!.artifacts!),
+          attachments: children.flatMap((card) =>
+            card.metadata!.attachments!.map((attachment) =>
+              Object.assign(attachment, { cardId: original.id }),
+            ),
+          ),
+          diagnostics: children.flatMap((card) =>
+            card.metadata!.diagnostics!.map((diagnostic) =>
+              Object.assign(diagnostic, { detail: card.title }),
+            ),
+          ),
+          notifications: children.flatMap((card) => card.metadata!.notifications!),
+          workerLogs: children.flatMap((card) => card.metadata!.workerLogs!),
+        },
+      };
+      await stores.cards.register(original.id, { version: 1, card: original });
+      const before = sqliteStatements.count;
+      await expect(
+        stores.cards.registerIfUpdatedAt(
+          replacement.id,
+          { version: 1, card: replacement },
+          original.updatedAt,
+        ),
+      ).resolves.toBe(true);
+      if (!workboardTestDatabaseInput()) {
+        // A row-at-a-time write exceeds 700 statements for this bounded fixture.
+        expect(sqliteStatements.count - before).toBeLessThan(100);
+      }
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual({
+        version: 1,
+        card: replacement,
+      });
+      const cleared = {
+        ...replacement,
+        updatedAt: replacement.updatedAt + 1,
+        labels: [],
+        events: [],
+        metadata: undefined,
+      };
+      await expect(
+        stores.cards.registerIfUpdatedAt(
+          cleared.id,
+          { version: 1, card: cleared },
+          replacement.updatedAt,
+        ),
+      ).resolves.toBe(true);
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual({
+        version: 1,
+        card: { ...cleared, events: undefined },
+      });
+    });
+  });
+
   // Counts statements by intercepting the native SQLite open boundary.
   test.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
+    await withKernelStores(async (stores) => {
       const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
-      try {
-        const card = await store.create({ title: "Hydration budget" });
-        const before = sqliteStatements.executed.length;
-        const updated =
-          operation === "worker log"
-            ? await store.addWorkerLog(card.id, { message: "Recorded progress" })
-            : await store.addProof(card.id, { status: "passed", label: "Verified result" });
-        const statements = sqliteStatements.executed.slice(before);
-        const hydrationReads = statements.filter((sql) => /^SELECT \* FROM workboard_/i.test(sql));
-        expect(hydrationReads).toHaveLength(13);
-        expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(15);
-        expect(
-          operation === "worker log"
-            ? updated.metadata?.workerLogs?.[0]?.message
-            : updated.metadata?.proof?.[0]?.label,
-        ).toBe(operation === "worker log" ? "Recorded progress" : "Verified result");
-      } finally {
-        await stores.close();
-      }
+      const card = await store.create({ title: "Hydration budget" });
+      const before = sqliteStatements.executed.length;
+      const updated =
+        operation === "worker log"
+          ? await store.addWorkerLog(card.id, { message: "Recorded progress" })
+          : await store.addProof(card.id, { status: "passed", label: "Verified result" });
+      const statements = sqliteStatements.executed.slice(before);
+      const hydrationReads = statements.filter((sql) => /^SELECT \* FROM workboard_/i.test(sql));
+      expect(hydrationReads).toHaveLength(13);
+      expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(15);
+      expect(
+        operation === "worker log"
+          ? updated.metadata?.workerLogs?.[0]?.message
+          : updated.metadata?.proof?.[0]?.label,
+      ).toBe(operation === "worker log" ? "Recorded progress" : "Verified result");
     });
   });
 
   // Regression for large-board stalls from per-card child reads.
   test("issues the same number of statements no matter how many cards exist", async () => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
-      try {
-        const prepared = async (cardCount: number): Promise<number> => {
-          for (let index = 0; index < cardCount; index++) {
-            await stores.cards.register(`card-${index}`, { version: 1, card: fixtureCard(index) });
-          }
-          const before = sqliteStatements.count;
-          await stores.cards.entries();
-          return sqliteStatements.count - before;
-        };
-        const few = await prepared(3);
-        const many = await prepared(30);
+    await withKernelStores(async (stores) => {
+      const prepared = async (cardCount: number): Promise<number> => {
+        for (let index = 0; index < cardCount; index++) {
+          await stores.cards.register(`card-${index}`, { version: 1, card: fixtureCard(index) });
+        }
+        const before = sqliteStatements.count;
+        await stores.cards.entries();
+        return sqliteStatements.count - before;
+      };
+      const few = await prepared(3);
+      const many = await prepared(30);
 
-        expect(few).toBeGreaterThan(0);
-        expect(many).toBe(few);
-      } finally {
-        await stores.close();
-      }
+      expect(few).toBeGreaterThan(0);
+      expect(many).toBe(few);
     });
   });
 
   // Injects malformed values through a native SQLite file handle.
   test("preserves native, child, and execution error order through entries and remains reusable", async () => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
+    await withKernelStores(async (stores, dbPath) => {
       const raw = new DatabaseSync(dbPath);
       const card = fixtureCard(1);
       card.events = [...(card.events ?? []), { id: "late-event", kind: "created", at: 1002 }];
@@ -207,19 +279,17 @@ describe("workboard sqlite batch card read", () => {
         await expect(read()).resolves.toEqual([{ key: card.id, value: expected }]);
       } finally {
         raw.close();
-        await stores.close();
       }
     });
   });
 
   // Injects malformed rows and counts native SQLite statements.
   test("checks the claim revision before decoding unrelated malformed children", async () => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
+    await withKernelStores(async (stores, dbPath) => {
       const raw = new DatabaseSync(dbPath);
       const target = fixtureCard(2);
+      const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
       try {
-        const busy = { ...fixtureCard(0), status: "running" as const, agentId: "slot-owner" };
         await stores.cards.register(busy.id, { version: 1, card: busy });
         await stores.cards.register("card-1", { version: 1, card: fixtureCard(1) });
         await stores.cards.register(target.id, { version: 1, card: target });
@@ -241,7 +311,6 @@ describe("workboard sqlite batch card read", () => {
         ).toEqual({ updated_at: target.updatedAt });
       } finally {
         raw.close();
-        await stores.close();
       }
     });
   });
@@ -256,8 +325,7 @@ describe("workboard sqlite batch card read", () => {
       expected: "updated",
     },
   ])("preserves owner capacity for $name", async (scenario) => {
-    await withStores(async (dbPath) => {
-      const stores = createKernelStores(dbPath);
+    await withKernelStores(async (stores) => {
       const occupied = fixtureCard(0);
       const target = fixtureCard(2);
       occupied.status = scenario.status as WorkboardCard["status"];
@@ -285,26 +353,22 @@ describe("workboard sqlite batch card read", () => {
           updatedAt: 1,
         };
       }
-      try {
-        await stores.cards.register(occupied.id, { version: 1, card: occupied });
-        await stores.cards.register(target.id, { version: 1, card: target });
-        const next = { ...target, updatedAt: target.updatedAt + 1 };
-        await expect(
-          stores.cards.claimIfOwnerAvailable(
-            target.id,
-            { version: 1, card: next },
-            target.updatedAt,
-            "slot-owner",
-            1_000_000,
-          ),
-        ).resolves.toBe(scenario.expected);
-        await expect(stores.cards.lookup(target.id)).resolves.toEqual({
-          version: 1,
-          card: scenario.expected === "updated" ? next : target,
-        });
-      } finally {
-        await stores.close();
-      }
+      await stores.cards.register(occupied.id, { version: 1, card: occupied });
+      await stores.cards.register(target.id, { version: 1, card: target });
+      const next = { ...target, updatedAt: target.updatedAt + 1 };
+      await expect(
+        stores.cards.claimIfOwnerAvailable(
+          target.id,
+          { version: 1, card: next },
+          target.updatedAt,
+          "slot-owner",
+          1_000_000,
+        ),
+      ).resolves.toBe(scenario.expected);
+      await expect(stores.cards.lookup(target.id)).resolves.toEqual({
+        version: 1,
+        card: scenario.expected === "updated" ? next : target,
+      });
     });
   });
 
@@ -342,7 +406,7 @@ describe("workboard sqlite batch card read", () => {
   });
 
   it.each(["constraint", "binding"])(
-    "rolls back a grouped write and claim after a later child %s fails",
+    "rolls back earlier batches, grouped writes, and claims after a later child %s fails",
     async (fault) => {
       await withStores(async (dbPath) => {
         const sibling = fixtureCard(0);
@@ -380,7 +444,11 @@ describe("workboard sqlite batch card read", () => {
             metadata: {
               ...target.metadata,
               comments: [
-                { id: "replacement-comment", body: "First row", createdAt: 1000 },
+                ...Array.from({ length: 65 }, (_, index) => ({
+                  id: `replacement-comment-${index}`,
+                  body: `Row ${index}`,
+                  createdAt: 1000,
+                })),
                 invalidComment,
               ],
             },

@@ -15,7 +15,10 @@ import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-ent
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
+import {
+  resetAgentRunRegistryForTest,
+  rotateAgentRunRegistryLifecycleGeneration,
+} from "../../infra/agent-run-registry.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import {
   claimHeartbeatOutcomeForRun,
@@ -34,6 +37,7 @@ import { mintSecretSentinel } from "../../secrets/sentinel.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -75,6 +79,7 @@ import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { assembleHarnessContextEngine } from "./context-engine-lifecycle.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
@@ -551,6 +556,88 @@ function registerTestCompactor(
 }
 
 describe("runAgentHarnessAttempt", () => {
+  it.each(["close", "abort", "lifecycle replacement"] as const)(
+    "revokes retained settled-turn callbacks after %s",
+    async (revocation) => {
+      const controller = new AbortController();
+      const params = { ...createAttemptParams(), abortSignal: controller.signal };
+      const context = { source: "harness" as const, data: "captured while active" };
+      const capture = vi.fn(async () => context);
+      const observeDelivery = vi.fn();
+      params.onSettledTurn = async (settled, captureContext) => {
+        observeDelivery();
+        settled.settledTurnFinalizationContext = await captureContext();
+      };
+      let retained!: NonNullable<EmbeddedRunAttemptParams["onSettledTurn"]>;
+      registerHarness({
+        runAttempt: async (attempt) => {
+          retained = attempt.onSettledTurn!;
+          const settled = createAttemptResult("native");
+          await retained(settled, capture);
+          expect(settled.settledTurnFinalizationContext).toEqual(context);
+          if (revocation === "abort") {
+            controller.abort(new Error("attempt aborted"));
+          } else if (revocation === "lifecycle replacement") {
+            rotateAgentRunRegistryLifecycleGeneration();
+          }
+          if (revocation !== "close") {
+            await expect(retained(settled, capture)).rejects.toThrow(
+              /no longer active|attempt aborted/,
+            );
+          }
+          return settled;
+        },
+      });
+
+      const result = await runAgentHarnessAttempt(params);
+      const lateCapture = vi.fn(async () => ({ source: "unavailable" as const }));
+      await expect(retained(result, lateCapture)).rejects.toThrow(
+        /no longer active|attempt aborted/,
+      );
+      expect(observeDelivery).toHaveBeenCalledOnce();
+      expect(capture).toHaveBeenCalledOnce();
+      expect(lateCapture).not.toHaveBeenCalled();
+      expect(result.settledTurnFinalizationContext).toEqual(context);
+    },
+  );
+
+  it.each(["close", "abort", "lifecycle replacement"] as const)(
+    "rejects unawaited settled-turn capture after %s",
+    async (revocation) => {
+      const controller = new AbortController();
+      const params = { ...createAttemptParams(), abortSignal: controller.signal };
+      const captureStarted = createDeferredCore();
+      const captured =
+        createDeferredCore<EmbeddedRunAttemptResult["settledTurnFinalizationContext"]>();
+      const settled = createAttemptResult("native");
+      params.onSettledTurn = async (attempt, captureContext) => {
+        attempt.settledTurnFinalizationContext = await captureContext();
+      };
+      let pending!: Promise<void>;
+      registerHarness({
+        runAttempt: async (attempt) => {
+          pending = attempt.onSettledTurn!(settled, async () => {
+            captureStarted.resolve();
+            return captured.promise;
+          });
+          await captureStarted.promise;
+          if (revocation === "abort") {
+            controller.abort(new Error("attempt aborted"));
+          } else if (revocation === "lifecycle replacement") {
+            rotateAgentRunRegistryLifecycleGeneration();
+          }
+          return settled;
+        },
+      });
+
+      const result = await runAgentHarnessAttempt(params);
+      captured.resolve({ source: "harness", data: "late capture" });
+      await expect(pending).rejects.toThrow(/no longer active|attempt aborted/);
+      expect(settled.settledTurnFinalizationContext).toBeUndefined();
+      expect(result.settledTurnFinalizationContext).toBeUndefined();
+    },
+  );
+
   it("carries silent heartbeat outcome into the plugin host boundary exactly once per retry", async () => {
     const harnessId = "codex";
     const root = trajectoryTempDirs.make("harness-heartbeat-outcome-");
@@ -877,6 +964,7 @@ describe("runAgentHarnessAttempt", () => {
         hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
         expect(attempt.operation).toBe("settled-tool-finalization");
         expect(attempt).not.toHaveProperty("hostCapabilities");
+        expect(attempt).not.toHaveProperty("onSettledTurn");
         for (const { field } of privateHarnessParamCases) {
           expect(attempt).not.toHaveProperty(field);
         }
@@ -897,6 +985,7 @@ describe("runAgentHarnessAttempt", () => {
       createAttemptParams(providerRuntimeConfig("codex", "codex")),
       Object.fromEntries(privateHarnessParamCases.map(({ field, value }) => [field, value])),
     );
+    params.onSettledTurn = vi.fn();
     const settledAttempt = createAttemptResult("settled");
 
     await expect(
@@ -1057,6 +1146,7 @@ describe("runAgentHarnessAttempt", () => {
   it.each([
     { boundary: "missing admission", selection: "host", ownership: "none" },
     { boundary: "missing terminal", selection: "host", ownership: "none" },
+    { boundary: "complete", selection: "native different", ownership: "none" },
     { boundary: "complete", selection: "native different", ownership: "native" },
     { boundary: "complete", selection: "native different", ownership: "host" },
     { boundary: "complete", selection: "host", ownership: "native" },
@@ -1125,7 +1215,10 @@ describe("runAgentHarnessAttempt", () => {
             aborted: false,
             yieldAborted: false,
             runtimeContext:
-              nativeSessionRuntime && runtimeModelSelection
+              runtimeModelSelection &&
+              (nativeSessionRuntime ||
+                runtimeModelSelection.provider !== params.provider ||
+                runtimeModelSelection.model !== params.modelId)
                 ? {
                     provider: runtimeModelSelection.provider,
                     modelId: runtimeModelSelection.model,
@@ -1143,6 +1236,196 @@ describe("runAgentHarnessAttempt", () => {
       }
     },
   );
+
+  it.each([
+    { change: "none", tokenBudget: 400_000, expectedBudget: 379_985 },
+    { change: "observed window", tokenBudget: 400_000, expectedBudget: 379_985 },
+    { change: "smaller budget", tokenBudget: 120_000, expectedBudget: 120_000 },
+    { change: "mutable settings", tokenBudget: 400_000, expectedBudget: 379_985 },
+    { change: "model", tokenBudget: 400_000, expectedBudget: undefined },
+    { change: "provider", tokenBudget: 400_000, expectedBudget: undefined },
+    { change: "session", tokenBudget: 400_000, expectedBudget: undefined },
+    { change: "assembly failure", tokenBudget: 400_000, expectedBudget: undefined },
+  ] as const)(
+    "hands accepted native context only its bounded assembly settings: $change",
+    async ({ change, tokenBudget, expectedBudget }) => {
+      const admission = {
+        ...createTranscriptAnchor("user-1", 1, 0),
+        logicalTurnId: "bounded-turn",
+        role: "user" as const,
+      };
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      params.sessionKey = admission.sessionKey;
+      params.contextTokenBudget = tokenBudget;
+      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      const record = vi.fn();
+      params.onContextEngineTurnCandidate = record;
+      const engine = createContextEngineRequiringAssembly();
+      if (change === "assembly failure") {
+        engine.assemble = async () => {
+          throw new Error("assembly unavailable");
+        };
+      } else if (change === "mutable settings") {
+        engine.assemble = async ({ messages, runtimeSettings }) => {
+          if (runtimeSettings) {
+            runtimeSettings.limits.promptTokenBudget = 900_000;
+            runtimeSettings.model.resolved = "mutated-model";
+          }
+          return { messages, estimatedTokens: 0 };
+        };
+      }
+      registerHarness({
+        runAttempt: async (attempt) => {
+          await assembleHarnessContextEngine({
+            contextEngine: engine,
+            sessionId: attempt.sessionId,
+            sessionKey: attempt.sessionKey,
+            providerId: attempt.provider,
+            modelId: attempt.modelId,
+            messages: [],
+            tokenBudget: attempt.contextTokenBudget,
+            promptBudget: {
+              contextTokens: 400_000,
+              reserveTokens: 20_000,
+              systemPrompt: "",
+              prompt: "",
+            },
+          }).catch(() => undefined);
+          return {
+            ...createAttemptResult(change === "session" ? "other-session" : attempt.sessionId),
+            ...(change === "observed window"
+              ? { contextTokens: 475_000, contextTokensSource: "runtime" as const }
+              : {}),
+            contextEngineTerminalAnchor: createTranscriptAnchor("assistant-1", 2, 1),
+            runtimeModelSelection: {
+              provider: change === "provider" ? "other-provider" : attempt.provider,
+              model: change === "model" ? "other-model" : attempt.modelId,
+            },
+          };
+        },
+      });
+
+      const registration = getRegisteredAgentHarness("codex");
+      if (!registration) {
+        throw new Error("expected registered native harness");
+      }
+      await runAgentHarnessAttempt(params, {
+        harness: registration.harness,
+        auth: "native",
+        assertCurrent: async () => {},
+      });
+
+      expect(record).toHaveBeenCalledOnce();
+      const facts = record.mock.calls[0]![0];
+      if (expectedBudget === undefined) {
+        expect(facts.runtimeContext).not.toHaveProperty("tokenBudget");
+      } else {
+        expect(facts.runtimeContext.tokenBudget).toBe(expectedBudget);
+      }
+      if (change === "observed window") {
+        expect(facts.runtimeContext.modelContextWindow).toBe(475_000);
+      }
+    },
+  );
+
+  it.each(["failed", "aborted"] as const)(
+    "does not reuse assembly from a %s attempt in its retry",
+    async (terminalKind) => {
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      const admission = {
+        ...createTranscriptAnchor("user-1", 1, 0),
+        logicalTurnId: "retry-turn",
+        role: "user" as const,
+      };
+      params.sessionKey = admission.sessionKey;
+      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      const record = vi.fn();
+      params.onContextEngineTurnCandidate = record;
+      let attemptCount = 0;
+      registerHarness({
+        runAttempt: async (attempt) => {
+          if (attemptCount++ === 0) {
+            await assembleHarnessContextEngine({
+              contextEngine: createContextEngineRequiringAssembly(),
+              sessionId: attempt.sessionId,
+              sessionKey: attempt.sessionKey,
+              providerId: attempt.provider,
+              modelId: attempt.modelId,
+              tokenBudget: 400_000,
+              messages: [],
+            });
+            return {
+              ...createAttemptResult(attempt.sessionId),
+              terminal:
+                terminalKind === "failed"
+                  ? { kind: "failed", source: "prompt", error: new Error("fixture failure") }
+                  : { kind: "aborted", source: "external" },
+              contextEngineTerminalAnchor: createTranscriptAnchor("assistant-1", 2, 1),
+            };
+          }
+          return {
+            ...createAttemptResult(attempt.sessionId),
+            contextEngineTerminalAnchor: createTranscriptAnchor("assistant-1", 2, 1),
+          };
+        },
+      });
+
+      await runAgentHarnessAttempt(params);
+      await runAgentHarnessAttempt(params);
+
+      expect(record).toHaveBeenCalledTimes(2);
+      expect(record.mock.calls[1]![0].runtimeContext?.tokenBudget).toBeUndefined();
+    },
+  );
+
+  it("keeps concurrent attempt assemblies separate", async () => {
+    const firstAssembled = Promise.withResolvers<void>();
+    const secondAssembled = Promise.withResolvers<void>();
+    registerHarness({
+      runAttempt: async (attempt) => {
+        await assembleHarnessContextEngine({
+          contextEngine: createContextEngineRequiringAssembly(),
+          sessionId: attempt.sessionId,
+          sessionKey: attempt.sessionKey,
+          providerId: attempt.provider,
+          modelId: attempt.modelId,
+          tokenBudget: attempt.contextTokenBudget,
+          messages: [],
+        });
+        if (attempt.contextTokenBudget === 400_000) {
+          firstAssembled.resolve();
+          await secondAssembled.promise;
+        } else {
+          secondAssembled.resolve();
+        }
+        return {
+          ...createAttemptResult(attempt.sessionId),
+          contextEngineTerminalAnchor: createTranscriptAnchor("assistant-1", 2, 1),
+        };
+      },
+    });
+    const run = (tokenBudget: number) => {
+      const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
+      const admission = {
+        ...createTranscriptAnchor("user-1", 1, 0),
+        logicalTurnId: `concurrent-${tokenBudget}`,
+        role: "user" as const,
+      };
+      params.sessionKey = admission.sessionKey;
+      params.contextTokenBudget = tokenBudget;
+      params.userTurnTranscriptRecorder = createTranscriptRecorder(admission);
+      const record = vi.fn();
+      params.onContextEngineTurnCandidate = record;
+      return { record, completed: runAgentHarnessAttempt(params) };
+    };
+    const first = run(400_000);
+    await firstAssembled.promise;
+    const second = run(120_000);
+    await Promise.all([first.completed, second.completed]);
+
+    expect(first.record.mock.calls[0]![0].runtimeContext?.tokenBudget).toBe(400_000);
+    expect(second.record.mock.calls[0]![0].runtimeContext?.tokenBudget).toBe(120_000);
+  });
 
   it.each([
     ["observed window", 475_000, "runtime", 500_000, undefined, 475_000, 475_000],
@@ -1308,12 +1591,14 @@ describe("runAgentHarnessAttempt", () => {
       toolsAllow: string[] | undefined;
       extraSystemPrompt: string | undefined;
       hostScopeActive: boolean;
+      policyScope: EmbeddedRunAttemptParams["pluginHarnessToolPolicyScope"];
     }> = [];
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attemptParams) => {
       received.push({
         toolsAllow: attemptParams.toolsAllow,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
         hostScopeActive: isHostScopedAgentToolActive("openclaw"),
+        policyScope: attemptParams.pluginHarnessToolPolicyScope,
       });
       return createAttemptResult("codex");
     });
@@ -1355,9 +1640,24 @@ describe("runAgentHarnessAttempt", () => {
     }
 
     expect(received).toEqual([
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
-      { toolsAllow: ["openclaw"], extraSystemPrompt: undefined, hostScopeActive: true },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
+      {
+        toolsAllow: ["openclaw"],
+        extraSystemPrompt: undefined,
+        hostScopeActive: true,
+        policyScope: "conversation",
+      },
     ]);
     expect(isHostScopedAgentToolActive("openclaw")).toBe(false);
   });
@@ -1620,12 +1920,14 @@ describe("runAgentHarnessAttempt", () => {
     const received: Array<{
       conversationToolPolicy: EmbeddedRunAttemptParams["conversationToolPolicy"];
       pluginHarnessToolPolicyRestricted: boolean | undefined;
+      pluginHarnessToolPolicyScope: EmbeddedRunAttemptParams["pluginHarnessToolPolicyScope"];
       toolsAllow: string[] | undefined;
     }> = [];
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (attempt) => {
       received.push({
         conversationToolPolicy: attempt.conversationToolPolicy,
         pluginHarnessToolPolicyRestricted: attempt.pluginHarnessToolPolicyRestricted,
+        pluginHarnessToolPolicyScope: attempt.pluginHarnessToolPolicyScope,
         toolsAllow: attempt.toolsAllow,
       });
       return createAttemptResult("codex");
@@ -1649,11 +1951,13 @@ describe("runAgentHarnessAttempt", () => {
       {
         conversationToolPolicy: { deny: ["exec"] },
         pluginHarnessToolPolicyRestricted: true,
+        pluginHarnessToolPolicyScope: "conversation",
         toolsAllow: undefined,
       },
       {
         conversationToolPolicy: { deny: ["exec"] },
         pluginHarnessToolPolicyRestricted: true,
+        pluginHarnessToolPolicyScope: "turn",
         toolsAllow: ["Read", "Bash"],
       },
     ]);
@@ -1871,6 +2175,7 @@ describe("runAgentHarnessAttempt", () => {
       name: "empty runtime allowlist",
       policy: { toolsAllow: [] },
       restricted: true,
+      scope: "turn",
       tools: [],
       denyAll: true,
     },
@@ -1879,6 +2184,7 @@ describe("runAgentHarnessAttempt", () => {
       name: "disabled tools with wildcard",
       policy: { disableTools: true, toolsAllow: ["*"] },
       restricted: true,
+      scope: "turn",
       tools: [],
       denyAll: true,
     },
@@ -1887,19 +2193,31 @@ describe("runAgentHarnessAttempt", () => {
       name: "overlapping runtime globs",
       policy: { toolsAllow: attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]) },
       restricted: true,
+      scope: "turn",
       tools: [],
+      denyAll: false,
+    },
+    {
+      name: "additive plugin grant",
+      policy: {
+        runtimePluginToolGrant: { pluginId: "grant-plugin", toolNames: ["proof_optional"] },
+      },
+      restricted: false,
+      scope: "turn",
+      tools: undefined,
       denyAll: false,
     },
     {
       name: "wildcard runtime allowlist",
       policy: { toolsAllow: ["*"] },
       restricted: false,
+      scope: "conversation",
       tools: ["*"],
       denyAll: false,
     },
   ])(
     "preserves $name semantics at plugin handoff",
-    async ({ policy, restricted, tools, denyAll }) => {
+    async ({ policy, restricted, scope, tools, denyAll }) => {
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
         createAttemptResult("codex"),
       );
@@ -1920,6 +2238,8 @@ describe("runAgentHarnessAttempt", () => {
       expect(runAttempt).toHaveBeenCalledTimes(1);
       const attempt = runAttempt.mock.calls[0]?.[0];
       expect(attempt?.pluginHarnessToolPolicyRestricted).toBe(restricted);
+      expect(attempt?.pluginHarnessToolPolicyScope).toBe(scope);
+      expect(attempt).not.toHaveProperty("runtimePluginToolGrant");
       expect(attempt?.toolsAllow).toEqual(tools);
       expect(attempt?.extraSystemPrompt).toContain("Existing operator note.");
       if (denyAll) {

@@ -105,10 +105,10 @@ export function renderUsage(props: UsageProps) {
         tool: [],
       },
   );
-  const querySuggestions = createMemo(() =>
-    buildQuerySuggestions(props.filters.queryDraft, filterOptions()),
-  );
   const queryTerms = createMemo(() => extractQueryTerms(props.filters.queryDraft));
+  const querySuggestions = createMemo(() =>
+    buildQuerySuggestions(props.filters.queryDraft, queryTerms(), filterOptions()),
+  );
   const primarySelectedEntry = createMemo(() =>
     props.filters.selectedSessions.length === 1 && props.data.overview?.selectedRowCount !== 0
       ? (props.data.selectedSession ??
@@ -318,7 +318,7 @@ export function renderUsage(props: UsageProps) {
                 />
                 <button
                   class="btn btn--sm primary"
-                  onClick={() => props.callbacks.filters.onRefresh()}
+                  onClick={() => void props.callbacks.filters.onRefresh()}
                   disabled={props.data.loading}
                 >
                   {t("common.refresh")}
@@ -461,7 +461,7 @@ export function renderUsage(props: UsageProps) {
             </div>
           ) : undefined
         ) : isEmpty() ? (
-          renderUsageEmptyState(props.callbacks.filters.onRefresh)
+          renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
         ) : (
           <>
             <Show

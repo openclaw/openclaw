@@ -30,6 +30,7 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
@@ -37,8 +38,8 @@ import {
   setChatRunOwner,
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
-import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
+import type { ToolStreamHost, ToolStreamState } from "./tool-stream-contract.ts";
+import { resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
@@ -71,6 +72,7 @@ export type ChatRunUiStatus = {
   runId: string | null;
   sessionKey: string;
   occurredAt: number;
+  localModelMayStillBeFinishing?: boolean;
 };
 
 type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
@@ -82,29 +84,33 @@ export type LocalTerminalReconcile = {
   phase: ChatRunUiStatus["phase"];
   sessionStatus: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
 };
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "sessions"> & {
-  sessionKey: string;
-  chatRunError?: ChatRunError | null;
-  chatRunLifecycleGeneration?: number;
-  chatRunSessionAbortable?: boolean;
-  compactionClearTimer?: TimerHandle | number | null;
-  fallbackClearTimer?: TimerHandle | number | null;
-  chatRunStatus?: ChatRunUiStatus | null;
-  chatRunStatusClearTimer?: TimerHandle | number | null;
-  sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
-  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-};
+type RunLifecycleHost = ToolStreamState &
+  Omit<Partial<ToolStreamHost>, "sessions"> & {
+    sessionKey: string;
+    chatRunError?: ChatRunError | null;
+    chatRunLifecycleGeneration?: number;
+    chatRunSessionAbortable?: boolean;
+    compactionClearTimer?: TimerHandle | number | null;
+    fallbackClearTimer?: TimerHandle | number | null;
+    chatRunStatus?: ChatRunUiStatus | null;
+    chatRunStatusClearTimer?: TimerHandle | number | null;
+    sessionsResult?: SessionsListResult | null;
+    sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
+    lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
+  };
 
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
   sessionStatus?: TerminalSessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   runId?: string | null;
+  localModelMayStillBeFinishing?: boolean;
   sessionKey?: string | null;
   agentId?: string;
   sessionKeys?: readonly (string | null | undefined)[];
@@ -116,7 +122,7 @@ type ReconcileOptions = {
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
   yielded?: boolean;
-  requestUpdate?: boolean;
+  publishRunState?: boolean;
 };
 
 type ChatAbortRunState = ChatAbortTargetState & {
@@ -127,7 +133,6 @@ type ChatAbortRunState = ChatAbortTargetState & {
   chatRunError?: ChatRunError | null;
   chatQueue?: readonly ChatQueueItem[];
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  requestUpdate?: () => void;
   /** Reloads history and the authoritative session row. */
   refreshCurrentChat?: () => Promise<void>;
 };
@@ -136,6 +141,7 @@ type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
     chatReplyTarget?: ChatReplyTarget | null;
+    composerDraftChanged?: () => void;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
@@ -173,7 +179,7 @@ export function adoptStartedChatRun(
       clearToolStreamForRun: true,
       clearIndicators: Boolean(host.chatRunId),
       clearRunStatus: true,
-      requestUpdate: false,
+      publishRunState: false,
     });
     host.chatRunError = null;
     if (host.providerPolicyNotice?.runId !== runId) {
@@ -194,12 +200,14 @@ export function setChatRunError(
   runId?: string,
   kind?: ChatRunError["kind"],
 ) {
-  setChatRunOwner(state, runId);
-  state.chatRunError = {
-    ...(kind ? { kind } : {}),
-    summary: redactToolDetail(summary.trim()),
-    ...(runId ? { runId } : {}),
-  };
+  mutateChatRunState(state, () => {
+    setChatRunOwner(state, runId);
+    state.chatRunError = {
+      ...(kind ? { kind } : {}),
+      summary: redactToolDetail(summary.trim()),
+      ...(runId ? { runId } : {}),
+    };
+  });
 }
 
 type SessionRunHost = {
@@ -280,10 +288,8 @@ async function settleChatAbortResponse(
       } else {
         setChatRunError(state, message, intent.runId ?? undefined, "stop");
       }
-      state.requestUpdate?.();
     } else if (result.warning) {
       setChatRunError(state, result.warning, intent.runId ?? undefined, "stop");
-      state.requestUpdate?.();
     } else if (result.noActiveRun && state.connected) {
       // Only the refreshed owner may retire a run that is still finalizing.
       await state.refreshCurrentChat?.();
@@ -375,6 +381,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.chatMentions = [];
     host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
+    host.composerDraftChanged?.();
   }
   if (pendingAbort) {
     host.pendingAbort = pendingAbort;
@@ -411,9 +418,7 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     host.chatRunStatusClearTimer = null;
     // Terminal status temporarily masks stale active rows from session polling.
     // Reconcile again as the mask expires so the composer cannot revert to Stop.
-    if (!reconcileChatRunAfterSessionStatePublication(host)) {
-      host.requestUpdate?.();
-    }
+    reconcileChatRunAfterSessionStatePublication(host);
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
 }
 
@@ -486,7 +491,9 @@ function reconcileSessionRows(
     agentId: options.agentId,
     runId: options.runId ?? host.chatRunId ?? null,
     status,
-    ...(options.outcome ? { errorMessage: options.errorMessage } : {}),
+    ...(options.outcome
+      ? { errorMessage: options.errorMessage, suppressErrorNotice: options.suppressErrorNotice }
+      : {}),
     endedAt: occurredAt,
   };
   if (host.sessionsResult) {
@@ -496,6 +503,14 @@ function reconcileSessionRows(
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
+  return mutateChatRunState(
+    host,
+    () => applyChatRunLifecycle(host, options),
+    options.publishRunState === false ? false : "immediate",
+  );
+}
+
+function applyChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions) {
   const occurredAt = Date.now();
   const runId = options.runId ?? host.chatRunId ?? null;
   const sessionKey = normalizeNullableString(options.sessionKey) ?? host.sessionKey;
@@ -517,12 +532,10 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatRunId = null;
     host.chatRunSessionAbortable = undefined;
   }
-  if (canResetToolStream(host)) {
-    if (options.clearToolStream) {
-      resetToolStream(host);
-    } else if (options.clearToolStreamForRun && runId) {
-      resetToolStreamRun(host, runId);
-    }
+  if (options.clearToolStream) {
+    resetToolStream(host);
+  } else if (options.clearToolStreamForRun && runId) {
+    resetToolStreamRun(host, runId);
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
@@ -530,6 +543,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       runId,
       sessionKey,
       occurredAt,
+      ...(options.localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
     };
     reconcileSessionRows(host, sessionOptions, occurredAt);
     if (options.armLocalTerminalReconcile) {
@@ -540,6 +554,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         phase: options.outcome,
         sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
         errorMessage: options.errorMessage,
+        suppressErrorNotice: options.suppressErrorNotice,
       };
     }
     if (options.publishRunStatus !== false) {
@@ -553,8 +568,8 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
-  if (options.requestUpdate !== false) {
-    host.requestUpdate?.();
+  if (options.publishRunState !== false) {
+    publishChatRunState(host);
   }
 }
 
@@ -608,13 +623,14 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
       outcome: recent.phase,
       sessionStatus: recent.sessionStatus,
       errorMessage: recent.errorMessage,
+      suppressErrorNotice: recent.suppressErrorNotice,
       sessionKey: recent.sessionKey,
       agentId: recent.agentId,
       runId: recent.runId,
     },
     Date.now(),
   );
-  host.requestUpdate?.();
+  publishChatRunState(host);
   return true;
 }
 
@@ -687,7 +703,12 @@ export function reconcileChatRunFromSessionRow(
     return true;
   }
   let errorMessage: string | undefined;
-  if (runId && row.lastRunId === runId && (row.status === "failed" || row.status === "timeout")) {
+  if (
+    runId &&
+    row.lastRunId === runId &&
+    !row.suppressErrorNotice &&
+    (row.status === "failed" || row.status === "timeout")
+  ) {
     // Session publication can beat (or replace) chat.error. Show its diagnostic
     // before retiring the run, without freezing the bounded row summary into the
     // terminal reducer: a later live/history diagnostic can contain more detail.
@@ -708,6 +729,7 @@ export function reconcileChatRunFromSessionRow(
     outcome: row.status === "done" ? "done" : "interrupted",
     sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
     errorMessage,
+    suppressErrorNotice: row.suppressErrorNotice,
     runId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],

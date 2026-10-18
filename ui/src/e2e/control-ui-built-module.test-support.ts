@@ -1,8 +1,32 @@
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import type { Page } from "playwright";
 import { inject } from "vitest";
 import { extractControlUiStartupAssetPaths } from "../../../scripts/check-control-ui-performance.mts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
+
+export async function failControlUiModuleForDocuments(
+  page: Page,
+  module: RegExp,
+  failedDocumentCount = 1,
+) {
+  let documentSequence = 0;
+  const requestedDocuments = new Set<number>();
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      documentSequence += 1;
+    }
+  });
+  await page.route(module, async (route) => {
+    requestedDocuments.add(documentSequence);
+    if (requestedDocuments.size <= failedDocumentCount) {
+      await route.abort("internetdisconnected");
+      return;
+    }
+    await route.fallback();
+  });
+  return { documentCount: () => requestedDocuments.size };
+}
 
 function builtAssetRequest(files: string[]): RegExp {
   if (files.length === 0) {

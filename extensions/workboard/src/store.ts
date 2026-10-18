@@ -387,7 +387,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
     assertOwnerCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
-      async () => await this.promoteDependencyReady(id, now),
+      async () => await this.promoteDependencyReady(await this.requireCard(id), now),
       assertOwnerCurrent,
     );
   }
@@ -428,7 +428,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         }
         // Keep the batch FIFO, but accepted work on one card cannot admit the next.
         await this.withMutationAuthority(async () => {
-          let latest = await this.promoteDependencyReady(card.id, now);
+          let latest = await this.promoteDependencyReady(await this.requireCard(card.id), now);
           const wasPromoted = latest.status !== card.status;
           const claim = latest.metadata?.claim;
           const latestAttempt = latestRunningAttempt(latest);
@@ -614,11 +614,8 @@ export class WorkboardStore extends WorkboardNotificationStore {
     return { card, workerContext: buildWorkerContext(card, relatedCards) };
   }
 
-  static openSqlite(
-    workerModuleUrl: URL,
-    config?: Parameters<typeof createWorkboardSqliteStores>[0]["config"],
-  ) {
-    const stores = createWorkboardSqliteStores({ workerModuleUrl, config });
+  static openSqlite(workerModuleUrl: URL) {
+    const stores = createWorkboardSqliteStores({ workerModuleUrl });
     return new WorkboardStore(stores.cards, stores);
   }
 }

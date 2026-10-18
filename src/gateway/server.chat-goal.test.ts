@@ -22,7 +22,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
@@ -40,6 +39,7 @@ import type {
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { registerGoalAutomaticContinuationCases } from "./server.chat-goal-continuation.test-support.js";
+import { registerWorkerGoalChatCases } from "./server.chat-goal-workers.test-support.js";
 import {
   createGoalChatStartRequest,
   expectGoalChatRetryResponses,
@@ -105,6 +105,7 @@ beforeEach(async () => {
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
   context = createDirectChatContext({ getRuntimeConfig });
+  context.resolveGatewayContext = () => context;
   const projection = await createSessionRowProjection({
     cfg: getRuntimeConfig(),
     getConfig: getRuntimeConfig,
@@ -511,41 +512,7 @@ describe("Goal chat admission and continuation", () => {
     });
   });
 
-  it.each([
-    { caseName: "the existing session is busy", busy: true, entry: {} },
-    {
-      caseName: "the session used the native Codex harness",
-      entry: { agentHarnessId: "codex" },
-    },
-  ])("leaves no Goal or turn when $caseName", async ({ entry, busy }) => {
-    await patchSessionEntryCore(scope(), () => entry);
-    const runId = "existing-goal-session-run";
-    if (busy) {
-      registerAgentRunContext(runId, {
-        sessionKey,
-        sessionId,
-        agentId: "main",
-        projectSessionActive: true,
-      });
-    }
-    try {
-      const result = await rpc("chat.send", goalStart("Finish the release checklist"));
-      expect(result).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message:
-            "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
-        }),
-      );
-      expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-      expect(userMessages()).toEqual([]);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    } finally {
-      clearAgentRunContext(runId);
-    }
-  });
+  registerWorkerGoalChatCases(scope, runEmbeddedAgent, rpc, () => context, client);
 
   it.each(["objective", "issuedAtMs"] as const)(
     "rejects a concurrent operation ID collision on %s",

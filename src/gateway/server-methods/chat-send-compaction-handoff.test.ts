@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -27,7 +27,6 @@ import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient } from "./types.js";
 
-type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
 type ChatDispatchParams = Parameters<typeof chatDispatch.startChatDispatch>[0];
 
 it.each([
@@ -103,7 +102,7 @@ it.each([
         },
       };
       const context = createGatewayRequestContext(makeContextParams());
-      const prepared = createDeferred<DispatchOptions>();
+      const prepared = createDeferred();
       const releasePreparation = createDeferred();
       const capturedSuccessor = createDeferred();
       const releaseRuntimePlugins = createDeferred();
@@ -121,14 +120,12 @@ it.each([
       let owned: ChatDispatchParams | undefined;
       let successor: ReplyOperation | undefined;
       let originalRegistration: ChatDispatchParams["admission"]["sessionBinding"] | undefined;
-      let persistenceFailure: unknown;
       const resolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options, replyConfig) => {
         if (!options || !replyConfig || !owned || !originalRegistration) {
           throw new Error("fixture requires the original accepted chat dispatch");
         }
         expect(ctx.BodyForAgent).toBe(message);
-        expect(options.runId).toBe(runId);
-        expect(options.expectedExistingSessionId).toBe(finalSessionId);
+        expect(options).toMatchObject({ runId, expectedExistingSessionId: finalSessionId });
         const initialized = await initSessionState({
           ctx: finalizeInboundContext(ctx),
           cfg: replyConfig,
@@ -151,7 +148,7 @@ it.each([
       const holdPreparation = vi
         .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
         .mockImplementation(async (options) => {
-          prepared.resolve(options);
+          prepared.resolve();
           await releasePreparation.promise;
           return await originalDispatch({ ...options, replyResolver: resolver });
         });
@@ -183,20 +180,10 @@ it.each([
           expect.anything(),
         );
         await prepared.promise;
-        owned = observeChatDispatch.mock.calls.at(-1)?.[0];
-        if (!owned) {
-          throw new Error("chat.send did not start detached dispatch");
-        }
-        const recorder = owned.userTurn.recorder;
-        const persistApproved = recorder.persistApproved.bind(recorder);
-        vi.spyOn(recorder, "persistApproved").mockImplementation(async (...args) => {
-          try {
-            return await persistApproved(...args);
-          } catch (error) {
-            persistenceFailure = error;
-            throw error;
-          }
-        });
+        owned = expectDefined(
+          observeChatDispatch.mock.calls.at(-1)?.[0],
+          "chat.send did not start detached dispatch",
+        );
         originalRegistration = owned.admission.sessionBinding;
         expect(originalRegistration.sessionId).toBe(initialSessionId);
 
@@ -254,10 +241,7 @@ it.each([
           scenario === "active-compaction" ||
           scenario === "successive-compactions"
         ) {
-          expect(
-            context.broadcast,
-            `persistApproved failure: ${inspect(persistenceFailure, { depth: 8 })}`,
-          ).not.toHaveBeenCalledWith(
+          expect(context.broadcast).not.toHaveBeenCalledWith(
             "chat",
             expect.objectContaining({ runId, state: "error" }),
             expect.anything(),

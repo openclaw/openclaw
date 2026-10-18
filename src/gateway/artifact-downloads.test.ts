@@ -1,16 +1,19 @@
 import { createServer, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { createImageProcessor } from "../media/image-processor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   createArtifactDownload,
+  createManagedArtifactDownload,
+  clearArtifactDownloads,
   pruneExpiredArtifactDownloads,
 } from "./artifact-download-grants.js";
 import {
@@ -20,13 +23,14 @@ import {
 import { handleArtifactDownloadHttpRequest } from "./artifact-downloads.js";
 import { createGatewayRequest as createRequest } from "./hooks-test-helpers.js";
 import { ANIMATED_GIF_BYTES, APNG_BYTES } from "./http-image.test-support.js";
-import { encodeImageThumbnail } from "./managed-image-thumbnail-cache.js";
 import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-preparation.js";
+
+afterEach(clearArtifactDownloads);
 
 function createResponse() {
   const res = new ServerResponse(createRequest({ path: "/" }));
@@ -154,9 +158,6 @@ it.each([
       const start = source.indexOf("IDAT") + 4;
       source.fill(0, start, start + source.readUInt32BE(start - 8));
     }
-    if (kind === "compact") {
-      expect((await encodeImageThumbnail(source)).byteLength).toBeGreaterThan(source.byteLength);
-    }
     const artifact: ArtifactRecord = {
       id: "artifact_transcript_image_fixture",
       type: kind === "file" ? "file" : "image",
@@ -208,7 +209,7 @@ it.each([
     }
     expect(thumbnail.res.statusCode).toBe(200);
     for (const [name, value] of Object.entries({
-      "content-type": kind === "file" ? "text/plain" : "image/png",
+      "content-type": kind === "file" ? "text/plain" : "image/webp",
       "content-security-policy": "default-src 'none'; sandbox",
       "x-content-type-options": "nosniff",
       "referrer-policy": "no-referrer",
@@ -222,20 +223,24 @@ it.each([
       expect.stringMatching(/^attachment;/),
     );
     if (kind === "image") {
-      expect(await createImageProcessor().probe(bytes)).toMatchObject({ width: 1200, height: 600 });
+      expect(await createImageProcessor().probe(bytes)).toMatchObject({
+        format: "webp",
+        width: 960,
+        height: 480,
+      });
       expect(bytes).not.toEqual(new Uint8Array(source));
       expect(bytes.byteLength).toBeLessThan(source.byteLength);
     } else if (kind === "large") {
       expect(await createImageProcessor().probe(bytes)).toMatchObject({
-        format: "png",
-        width: 400,
-        height: 200,
+        format: "webp",
+        width: 600,
+        height: 300,
       });
-      expect(bytes.byteLength).toBeLessThanOrEqual(512 * 1024);
+      expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024);
       expect(bytes.byteLength).toBeLessThan(source.byteLength);
     } else if (kind === "compact") {
       expect(await createImageProcessor().probe(bytes)).toMatchObject({
-        format: "png",
+        format: "webp",
         width: 32,
         height: 32,
       });
@@ -250,6 +255,171 @@ it.each([
     expect(range.end).toHaveBeenCalledExactlyOnceWith(bytes.subarray(0, 8));
   },
 );
+
+it.each(["missing", "stream", "body-and-stream"] as const)(
+  "refuses unavailable thumbnail bytes without opening an original stream (%s)",
+  async (kind) => {
+    const source = createSolidPngBuffer(32, 16, { r: 20, g: 40, b: 60 });
+    const artifact: ArtifactRecord = {
+      id: "artifact_unavailable_preview",
+      type: "image",
+      title: "photo.png",
+      mimeType: "image/png",
+      download: { mode: "bytes" },
+      data: source.toString("base64"),
+    };
+    const stream = vi.fn(async function* () {
+      yield source;
+    });
+    const client = createClient();
+    const grant = createArtifactDownload({
+      client,
+      prepared: prepareArtifactDownload(artifact)!,
+      release() {},
+      assertCurrent() {},
+      read: async (request) => {
+        const prepared = prepareArtifactDownloadResponse(artifact, request)!;
+        return {
+          ...prepared,
+          body: kind === "body-and-stream" ? prepared.body : undefined,
+          stream: kind === "missing" ? undefined : stream,
+        };
+      },
+    });
+    const response = createResponse();
+    await handleArtifactDownloadHttpRequest(
+      createRequest({ path: grant.url + "?variant=thumbnail" }),
+      response.res,
+      { clients: new Set([client]), basePath: "" },
+    );
+    expect(response.res.statusCode).toBe(404);
+    expect(response.end).toHaveBeenCalledExactlyOnceWith("Not Found");
+    expect(stream).not.toHaveBeenCalled();
+  },
+);
+
+it("serves distinct fixed WebP renditions over HTTP with alpha, orientation, and exact originals", async () => {
+  const processor = createImageProcessor();
+  const client = createClient();
+  const server = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        void handleArtifactDownloadHttpRequest(req, res, {
+          clients: new Set([client]),
+          basePath: "",
+        });
+      }),
+  });
+  const grantFor = (source: Buffer, mimeType = "image/png") => {
+    const artifact: ArtifactRecord = {
+      id: "artifact_rendition_fixture",
+      type: "image",
+      title: "photo.png",
+      mimeType,
+      download: { mode: "bytes" },
+      data: source.toString("base64"),
+    };
+    return createArtifactDownload({
+      client,
+      prepared: prepareArtifactDownload(artifact)!,
+      release() {},
+      assertCurrent() {},
+      read: async (request) => prepareArtifactDownloadResponse(artifact, request),
+    }).url;
+  };
+  const fetchImage = async (url: string) => {
+    const origin = "http://127.0.0.1:" + server.claim.port;
+    const target = new URL(url, origin);
+    if (target.origin !== origin) {
+      throw new Error("Image fixture requests must stay on the leased loopback origin");
+    }
+    const { response, release } = await fetchWithSsrFGuard({
+      url: target.href,
+      policy: { allowedOrigins: [origin] },
+      maxRedirects: 0,
+    });
+    try {
+      return { response, bytes: Buffer.from(await response.arrayBuffer()) };
+    } finally {
+      await release();
+    }
+  };
+  try {
+    const source = createSolidPngBuffer(2400, 1200, { r: 24, g: 64, b: 128, a: 96 });
+    const url = grantFor(source);
+    let defaultBytes: Buffer | undefined;
+    for (const [width, ceiling] of [
+      [480, 96],
+      [960, 256],
+      [1920, 512],
+    ] as const) {
+      const { response, bytes } = await fetchImage(url + "?variant=thumbnail&width=" + width);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/webp");
+      expect(response.headers.get("content-disposition")).toContain("-preview.webp");
+      expect(Number(response.headers.get("content-length"))).toBe(bytes.byteLength);
+      expect(bytes.byteLength).toBeLessThanOrEqual(ceiling * 1024);
+      expect(await processor.probe(bytes)).toMatchObject({
+        format: "webp",
+        width,
+        height: width / 2,
+      });
+      expect(await processor.transparency(bytes)).toMatchObject({ hasTransparentPixels: true });
+      if (width === 960) {
+        defaultBytes = bytes;
+      }
+    }
+    for (const query of ["", "&width=481", "&width=999999", "&width=-1", "&width=960.5"]) {
+      const { bytes } = await fetchImage(url + "?variant=thumbnail" + query);
+      expect(bytes).toEqual(defaultBytes);
+    }
+    const original = await fetchImage(url + "?width=480");
+    expect(original.response.headers.get("content-type")).toBe("image/png");
+    expect(original.bytes).toEqual(source);
+
+    // Dense images may step down, but may not evade the selected rendition's byte ceiling.
+    const denseUrl = grantFor(createNoisyPngBuffer(1600, 800));
+    const dense = await fetchImage(denseUrl + "?variant=thumbnail&width=480");
+    expect(dense.response.status).toBe(200);
+    expect(dense.bytes.byteLength).toBeLessThanOrEqual(96 * 1024);
+    expect(await processor.probe(dense.bytes)).toMatchObject({
+      format: "webp",
+      width: 240,
+      height: 120,
+    });
+
+    const jpeg = (
+      await processor.encode(createSolidPngBuffer(32, 16, { r: 10, g: 30, b: 50 }), {
+        format: "jpeg",
+      })
+    ).data;
+    const orientation = Buffer.from(
+      "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
+      "hex",
+    );
+    const orientedUrl = grantFor(
+      Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]),
+      "image/jpeg",
+    );
+    const oriented = await fetchImage(orientedUrl + "?variant=thumbnail&width=1920");
+    expect(await processor.probe(oriented.bytes)).toMatchObject({
+      format: "webp",
+      width: 16,
+      height: 32,
+    });
+
+    const invalid = await fetchImage(
+      grantFor(Buffer.from("not an image")) + "?variant=thumbnail&width=480",
+    );
+    expect(invalid.response.status).toBe(404);
+    expect(invalid.bytes.toString()).toBe("Not Found");
+  } finally {
+    server.listener.closeAllConnections();
+    await server.releaseListener();
+    await server.claim.release();
+  }
+});
 
 it("releases retained sharing facts on unused expiry, eviction, and disconnect", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -270,41 +440,57 @@ it("releases retained sharing facts on unused expiry, eviction, and disconnect",
       download: { mode: "bytes" },
       data: "aGVsbG8=",
     })!;
-    for (const reason of ["expiry", "eviction", "disconnect"]) {
-      const controller = new AbortController();
-      const client = createClient(controller.signal);
-      const facts = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-      const release = vi.fn(facts.release);
-      const read = vi.fn(async () => undefined);
-      try {
-        const grant = createArtifactDownload({
-          client,
-          prepared,
-          assertCurrent: () => {
-            facts.readCurrent(cfg);
-          },
-          read,
-          release,
-        });
-        expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
-        if (reason === "expiry") {
-          pruneExpiredArtifactDownloads([client], Date.parse(grant.expiresAt));
-        } else if (reason === "eviction") {
-          for (let index = 0; index < 128; index += 1) {
-            createArtifactDownload({ client, prepared, assertCurrent() {}, read, release() {} });
+    for (const reason of ["expiry", "eviction", "disconnect", "shutdown"]) {
+      for (const kind of ["bytes", "managed"]) {
+        const controller = new AbortController();
+        const client = createClient(controller.signal);
+        const facts = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+        const release = vi.fn(facts.release);
+        const read = vi.fn(async () => undefined);
+        try {
+          const authority = {
+            client,
+            assertCurrent: () => {
+              facts.readCurrent(cfg);
+            },
+            release,
+          };
+          const grant =
+            kind === "bytes"
+              ? createArtifactDownload({ ...authority, prepared, read })
+              : createManagedArtifactDownload({
+                  ...authority,
+                  path: "/api/chat/media/outgoing/session/attachment/full",
+                });
+          expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
+          if (reason === "expiry") {
+            pruneExpiredArtifactDownloads(Date.parse(grant.expiresAt), [client]);
+          } else if (reason === "eviction") {
+            for (let index = 0; index < 128; index += 1) {
+              createArtifactDownload({ client, prepared, assertCurrent() {}, read, release() {} });
+            }
+          } else if (reason === "shutdown") {
+            clearArtifactDownloads();
+          } else {
+            controller.abort();
+            if (kind === "managed") {
+              expect(release).not.toHaveBeenCalled();
+              expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
+              pruneExpiredArtifactDownloads(Date.parse(grant.expiresAt));
+            }
           }
-        } else {
+          expect(release, reason).toHaveBeenCalledOnce();
+          expect(() => facts.readCurrent(cfg), reason).toThrow(
+            SessionMutationFactsUnavailableError,
+          );
+          expect(read).not.toHaveBeenCalled();
           controller.abort();
+          pruneExpiredArtifactDownloads(Number.MAX_SAFE_INTEGER, [client]);
+          expect(release, reason).toHaveBeenCalledOnce();
+        } finally {
+          controller.abort();
+          facts.release();
         }
-        expect(release, reason).toHaveBeenCalledOnce();
-        expect(() => facts.readCurrent(cfg), reason).toThrow(SessionMutationFactsUnavailableError);
-        expect(read).not.toHaveBeenCalled();
-        controller.abort();
-        pruneExpiredArtifactDownloads([client], Number.MAX_SAFE_INTEGER);
-        expect(release, reason).toHaveBeenCalledOnce();
-      } finally {
-        controller.abort();
-        facts.release();
       }
     }
   });
@@ -383,7 +569,7 @@ it("backpressures HTTP streams across URL expiry and closes their source on brow
     expect(reads).toBeLessThanOrEqual(2);
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(Date.parse(grant.expiresAt));
-    pruneExpiredArtifactDownloads([client], Date.now());
+    pruneExpiredArtifactDownloads(Date.now(), [client]);
     expect(release).not.toHaveBeenCalled();
     const expired = await fetch("http://127.0.0.1:" + server.claim.port + grant.url);
     expect(expired.status).toBe(404);

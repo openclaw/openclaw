@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRequiredReplyExpectation } from "../../../agents/reply-completion.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
@@ -264,7 +265,7 @@ export function claimNextQueuedFollowupRequestFrom(
     (item) =>
       !queue.inFlight.has(item) &&
       !isFollowupRunAborted(item) &&
-      item.run.terminalReplyExpectation === "required" &&
+      isRequiredReplyExpectation(item.run.terminalReplyExpectation) &&
       item.strandedReplyRetry !== true,
   );
   if (

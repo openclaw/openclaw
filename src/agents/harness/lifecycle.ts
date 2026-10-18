@@ -32,7 +32,10 @@ import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-pro
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
-import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
+import {
+  EmptySettledTurnFinalizationError,
+  type PreparedSettledTurnFinalizationResult,
+} from "./settled-turn-finalization-outcome.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -43,9 +46,10 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
 
-type AgentHarnessLifecycleFinalizationOutcome =
-  | { outcome: "answered"; result: AgentHarnessSettledTurnFinalizationResult }
-  | { outcome: "empty"; result: AgentHarnessSettledTurnFinalizationResult };
+type AgentHarnessLifecycleFinalizationOutcome = {
+  outcome: "answered" | "empty";
+  result: PreparedSettledTurnFinalizationResult;
+};
 
 type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
 type AgentRunCompletion = {

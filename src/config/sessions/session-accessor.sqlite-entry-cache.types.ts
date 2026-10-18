@@ -1,6 +1,7 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
+import type { PostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -121,6 +122,11 @@ export function sessionSharingEntriesEqual(
 }
 
 export type SessionEntryPublicationSource = {
+  /** The anchor routes receipts; null marks PostgreSQL capture without an admitted store. */
+  admission?: Pick<
+    PostgresPhysicalFacts,
+    "engine" | "namespace" | "storeId" | "admissionId"
+  > | null;
   identity: string | symbol;
   birthtime: string | undefined;
   incarnation: string;
@@ -147,6 +153,8 @@ export type SessionEntryProjectionFacts = {
 };
 
 export type SessionEntryReplacementPublication = {
+  /** Removed aliases preserved transcript contents, visibility, and logical-agent attribution. */
+  transcriptInventoryUnchanged?: true;
   maintenancePlans?: readonly SessionMaintenancePreservationPlan[];
   kind: "session-entry-replacements";
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];
@@ -190,7 +198,7 @@ export type CreationRecord = {
 export type PlaceholderReceipt = {
   kind: "placeholder";
   creation: CreationRecord | undefined;
-  databaseIdentity: DatabaseSync | string;
+  databaseIdentity: EngineConnection | string;
   sessionKey: string;
   placeholder: SessionEntryPlaceholder;
   committed: boolean;
@@ -248,7 +256,9 @@ export type PendingSessionEntryPublication = {
   completion: Promise<void>;
 };
 
-export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {
+export function readSessionEntryCreationIdentity(
+  creation: CreationRecord,
+): EngineConnection | string {
   return creation.source.kind === "native"
     ? creation.source.database.db
     : creation.source.databaseIdentity;

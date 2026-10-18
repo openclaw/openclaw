@@ -17,6 +17,9 @@ afterEach(() => {
 describe("Control UI accent presentation", () => {
   it("samples chrome colors only when palette, inline presentation, or chat breakpoint changes", () => {
     const root = document.documentElement;
+    // Shared jsdom workers can retain a previous file's theme attributes.
+    root.dataset.theme = "claw";
+    root.dataset.themeMode = "dark";
     const shell = document.body.appendChild(document.createElement("div"));
     const meta = document.createElement("meta");
     meta.name = "theme-color";

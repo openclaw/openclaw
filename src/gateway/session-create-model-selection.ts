@@ -42,7 +42,7 @@ import { resolveSessionWorkerPlacementContext } from "./session-worker-placement
 export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<
     CreateGatewaySessionParams,
-    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes"
+    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
   >;
   agentId: string;
   sessionKey: string;
@@ -69,6 +69,7 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     catalog: params.catalog?.entries,
     // Thinking policy was already validated by the patch owner; create discards hydration.
     hydrateThinkingCatalog: false,
+    prepareNativeCatalog: request.waitForModelCatalog ?? ((operation) => operation()),
     validateModelSelection: params.validateModelSelection,
     ...(context ? { placement: { context, sessionKey } } : {}),
   });

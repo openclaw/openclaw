@@ -1,13 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
+import { PluginArtTile } from "./consent-dialog.tsx";
 import {
   createClient,
   createContext,
@@ -22,6 +25,7 @@ import {
   resetPluginsPageTestState,
   settlePlugins,
 } from "./plugins-page.test-support.ts";
+import { createPluginsPage } from "./plugins-page.ts";
 
 function stubUrls(value: () => string = () => "blob:icon") {
   const create = vi.fn(value);
@@ -78,6 +82,60 @@ afterEach(() => {
 
 beforeEach(async () => {
   await i18n.setLocale("en");
+});
+
+it("loads artwork when a retained tile changes identity without a page refresh", async () => {
+  let nextUrl = 0;
+  const { revoke } = stubUrls(() => `blob:icon-${++nextUrl}`);
+  const fetchMock = vi.fn(async (_url: string) => iconResponse());
+  vi.stubGlobal("fetch", fetchMock);
+  const { gateway } = iconGateway();
+  const routeData = createPluginsRouteData(
+    gateway,
+    createResult([
+      createPlugin({ id: "first", hasIcon: true }),
+      createPlugin({ id: "second", hasIcon: true }),
+    ]),
+    createPluginsRouteLocation("/settings/plugins"),
+  );
+  let changeSlug!: (slug: string) => void;
+  const mounted = mountSolid(() => {
+    const [slug, setSlug] = createSignal("first");
+    changeSlug = setSlug;
+    const page = createPluginsPage({
+      context: createContext(gateway),
+      element: () => host,
+      routeData: () => routeData,
+      surface: () => "settings",
+    });
+    return createComponent(PluginArtTile, {
+      registerIcon: page.icons.register,
+      get slug() {
+        return slug();
+      },
+      get name() {
+        return slug();
+      },
+      get iconUrl() {
+        return page.state.iconUrls[slug()];
+      },
+    });
+  });
+  const host = mounted.container;
+  await waitForSolid(() =>
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:icon-1"),
+  );
+  changeSlug("second");
+  await waitForSolid(() =>
+    expect(host.querySelector("img")?.getAttribute("src")).toBe("blob:icon-2"),
+  );
+  expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+    "/__openclaw__/plugin-icon/first",
+    "/__openclaw__/plugin-icon/second",
+  ]);
+  expect(revoke).not.toHaveBeenCalled();
+  expect(() => mounted.unmount()).not.toThrow();
+  expect(revoke.mock.calls).toEqual([["blob:icon-1"], ["blob:icon-2"]]);
 });
 
 it("loads artwork for rendered category cards and expands without per-card metadata reads", async () => {

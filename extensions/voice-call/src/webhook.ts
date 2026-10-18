@@ -23,7 +23,6 @@ import {
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import {
-  normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
@@ -131,7 +130,7 @@ export class VoiceCallWebhookServer {
     private readonly agentRuntime?: OpenClawPluginApi["runtime"]["agent"],
     logger?: PluginLogger,
   ) {
-    this.config = normalizeVoiceCallConfig(config);
+    this.config = config;
     const rawLogger = logger ?? {
       info: console.log,
       warn: console.warn,
@@ -884,12 +883,7 @@ export class VoiceCallWebhookServer {
   private async processParsedEvents(events: NormalizedEvent[]): Promise<boolean> {
     let replayable = false;
     for (const event of events) {
-      try {
-        replayable = (await this.processEventWithAutoResponse(event)) || replayable;
-      } catch (err) {
-        this.logger.error(`Error processing event ${event.type}: ${String(err)}`);
-        throw err;
-      }
+      replayable = (await this.processEventWithAutoResponse(event)) || replayable;
     }
     return replayable;
   }

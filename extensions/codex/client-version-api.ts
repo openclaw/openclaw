@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerStartOptionsForAgent,
 } from "./src/app-server/config.js";
@@ -17,7 +18,7 @@ export async function resolveCodexClientVersion(params: {
   agentDir?: string;
 }): Promise<string> {
   const { start } = resolveCodexAppServerRuntimeOptions({
-    pluginConfig: params.config?.plugins?.entries?.codex?.config,
+    pluginConfig: readCodexPluginConfig(params.config?.plugins?.entries?.codex?.config),
     env: params.env,
   });
   if (start.transport !== "stdio" || start.commandSource !== "managed") {

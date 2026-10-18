@@ -210,7 +210,6 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
           role: "user",
           content: [{ type: "input_text", text: upstreamPrompt }],
         });
-        expect(Object.isFrozen(captured?.data)).toBe(true);
         expect(captured?.data.at(-1)).toMatchObject({
           type: "function_call_output",
           call_id: "sent",

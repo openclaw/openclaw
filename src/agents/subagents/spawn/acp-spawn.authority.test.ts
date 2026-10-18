@@ -3,29 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  getAcpSessionManager,
-  testing as managerTesting,
-} from "../../../acp/control-plane/manager.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import * as acpManager from "../../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../../acp/control-plane/manager.lifecycle.js";
 import { SessionActorQueue } from "../../../acp/control-plane/session-actor-queue.js";
-import {
-  registerAcpRuntimeBackend,
-  unregisterAcpRuntimeBackend,
-} from "../../../acp/runtime/registry.js";
+import * as runtimeRegistry from "../../../acp/runtime/registry.js";
 import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../../../config/config.js";
-import {
-  loadSessionEntry,
-  recordSessionParticipant,
-} from "../../../config/sessions/session-accessor.js";
+import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
@@ -33,51 +18,33 @@ import { withLocalGatewayRequestScope } from "../../../gateway/local-request-con
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { getSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import {
-  registerSessionBindingAdapter,
-  unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
-} from "../../../infra/outbound/session-binding-service.js";
+import * as bindings from "../../../infra/outbound/session-binding-service.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { loadActivatedBundledPluginPublicSurfaceModule } from "../../../plugin-sdk/facade-runtime.js";
 import { getActivePluginRegistry } from "../../../plugins/runtime.js";
-import {
-  bindGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../../plugins/runtime/gateway-request-scope.js";
+import * as gatewayScope from "../../../plugins/runtime/gateway-request-scope.js";
 import { listSessionStateEventsSince } from "../../../sessions/session-state-events.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import {
-  createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import * as admissionContext from "../../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
-import type { AnyAgentTool } from "../../agent-tools.types.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
+import * as gatewayCaller from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import {
-  settleSubagentRegistryPersistenceWork,
-  writeSubagentSessionEntry,
-} from "../registry/subagent-registry.persistence.test-support.js";
+import * as registryPersistence from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
+import { createAcpSpawnSessionBinding } from "./acp-spawn-store.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
+// mock-isolation: Authority tests supply their own registry without loading installed plugins.
 vi.mock("../../runtime-plugins.js", () => ({
-  loadAgentRuntimePluginRegistryHandle:
-    vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
+  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
 }));
 
 const parentSessionKey = "agent:main:main";
@@ -101,10 +68,11 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-acp-authority-")));
+  const configPath = path.join(stateDir, "openclaw.json");
   setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   await writeFile(
-    path.join(stateDir, "openclaw.json"),
+    configPath,
     JSON.stringify({
       logging: { file: path.join(stateDir, "gateway.log"), audit: { enabled: false } },
       acp: { enabled: true, backend: backendId, allowedAgents: ["fixture"] },
@@ -115,15 +83,15 @@ beforeEach(async () => {
       },
     }),
   );
-  clearConfigCache();
-  clearRuntimeConfigSnapshot();
-  await captureRuntimeConfigAsyncReader()();
+  configRuntime.clearConfigCache();
+  configRuntime.clearRuntimeConfigSnapshot();
+  await configRuntime.captureRuntimeConfigAsyncReader()();
   // Prepare the real browser cleanup surface outside the provisional-session RPC deadline.
   await loadActivatedBundledPluginPublicSurfaceModule({
     dirName: "browser",
     artifactBasename: "browser-maintenance.js",
   });
-  managerTesting.resetAcpSessionManagerForTests();
+  acpManager.testing.resetAcpSessionManagerForTests();
   await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
@@ -132,18 +100,18 @@ beforeEach(async () => {
 
 afterEach(async () => {
   try {
-    await disposeAcpSessionManagerInstance(getAcpSessionManager(), "test-cleanup");
-    managerTesting.resetAcpSessionManagerForTests();
-    unregisterAcpRuntimeBackend(backendId);
-    await settleSubagentRegistryPersistenceWork();
+    await disposeAcpSessionManagerInstance(acpManager.getAcpSessionManager(), "test-cleanup");
+    acpManager.testing.resetAcpSessionManagerForTests();
+    runtimeRegistry.unregisterAcpRuntimeBackend(backendId);
+    await registryPersistence.settleSubagentRegistryPersistenceWork();
     await resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     spawnTesting.setDepsForTest();
     vi.restoreAllMocks();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    configRuntime.clearRuntimeConfigSnapshot();
+    configRuntime.clearConfigCache();
     try {
       await flushLogger();
       resetLogger();
@@ -165,37 +133,31 @@ it.each([
 ] as const)(
   "pending ACP spawn transfers work only from its live parent: %s / %s",
   async (stage, closure) => {
-    const cfg = getRuntimeConfig();
-    await writeSubagentSessionEntry({
-      stateDir,
-      ...parentScope,
-      defaultSessionId: "parent-session",
-    });
+    const cfg = configRuntime.getRuntimeConfig();
+    await registryPersistence.writeChildSession(stateDir, parentSessionKey, "parent-session");
     const live = closure === "live";
     const thread = stage === "thread";
-    const readChild = (sessionKey: string) => loadSessionEntry({ sessionKey, agentId: "fixture" });
+    const readChild = (sessionKey: string) =>
+      sessionAccessor.loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
-      await recordSessionParticipant(parentScope, {
+      await sessionAccessor.recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
       });
     }
     const context = await withLocalGatewayRequestScope(
       { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
-      () => getPluginRuntimeGatewayRequestScope()!.context!,
+      () => gatewayScope.getPluginRuntimeGatewayRequestScope()!.context!,
     );
     const work = new AsyncWorkScope();
     const trackExecution = context.trackExecution;
     context.trackExecution = (run) => work.track(() => trackExecution(run));
-    const admission = prepareAgentRunAdmission({
+    const admission = admissionContext.prepareSystemAgentRunAdmission(
       cfg,
-      operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
-      facts: {
-        runId: parentRunId,
-        agentId: "main",
-        ingress: { kind: "system", boundary: "acp-authority-test", state: "present" },
-      },
-    });
+      parentRunId,
+      "main",
+      "acp-authority-test",
+    );
     const parent = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId: parentRunId,
@@ -206,8 +168,10 @@ it.each([
       operationalRunInstance: admission.operationalRunInstance,
     });
     const admitted = await admission.admit("embedded");
-    bindGatewayContextResolver(admitted, () => context);
-    parent.bindAgentRunDelegatedAuthority(getAdmittedRunDelegatedAuthority(admitted)!);
+    gatewayScope.bindGatewayContextResolver(admitted, () => context);
+    parent.bindAgentRunDelegatedAuthority(
+      admissionContext.getAdmittedRunDelegatedAuthority(admitted)!,
+    );
     expect(admitted.executionIdentityToken).toBeUndefined();
     const entered = createDeferred<string>();
     const release = createDeferred();
@@ -244,7 +208,7 @@ it.each([
           const initialized = await initialize(params);
           if (stage === "initialized") {
             await pause(params.sessionKey);
-          } else if (!getAdmittedRunDelegatedAuthority(admitted)) {
+          } else if (!admissionContext.getAdmittedRunDelegatedAuthority(admitted)) {
             lateMetadata(initialized.initialized.meta);
           }
           return initialized;
@@ -269,21 +233,13 @@ it.each([
         return updated;
       });
     }
-    const bindThread = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => ({
-      bindingId: "default:child-thread",
-      targetSessionKey: input.targetSessionKey,
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "child-thread",
-        parentConversationId: "parent-channel",
-      },
-      status: "active",
-      boundAt: Date.now(),
-      metadata: input.metadata,
-    }));
-    const bindingAdapter: SessionBindingAdapter = {
+    const bindThread = vi.fn<NonNullable<bindings.SessionBindingAdapter["bind"]>>(async (input) =>
+      createAcpSpawnSessionBinding({
+        targetSessionKey: input.targetSessionKey,
+        metadata: input.metadata,
+      }),
+    );
+    const bindingAdapter: bindings.SessionBindingAdapter = {
       channel: "discord",
       accountId: "default",
       capabilities: { placements: ["child"], bindSupported: true, unbindSupported: true },
@@ -293,7 +249,7 @@ it.each([
       unbind: async () => [],
     };
     if (thread) {
-      registerSessionBindingAdapter(bindingAdapter);
+      bindings.registerSessionBindingAdapter(bindingAdapter);
     }
     const pausesRuntime = stage === "runtime" || thread;
     const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
@@ -304,8 +260,10 @@ it.each([
       async ensureSession(input) {
         if (live) {
           const entry = readChild(input.sessionKey);
-          expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
-          expect(entry?.participants ?? []).toEqual([]);
+          expect({
+            profiles: entry?.inheritedGitContributorProfileIds,
+            participants: entry?.participants ?? [],
+          }).toEqual({ profiles: ["human-contributor"], participants: [] });
         }
         ensuredSessions.push(input.sessionKey);
         if (pausesRuntime) {
@@ -325,7 +283,7 @@ it.each([
       async cancel() {},
       close: closeRuntime,
     };
-    registerAcpRuntimeBackend({ id: backendId, runtime });
+    runtimeRegistry.registerAcpRuntimeBackend({ id: backendId, runtime });
     const dispatch = vi.fn();
     let acceptedRunId: string | undefined;
     spawnTesting.setDepsForTest({
@@ -367,7 +325,7 @@ it.each([
         : {}),
     });
     let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
+    const observed = copyAgentToolMetadata(source, {
       ...source,
       execute: (...args) => {
         const pending = source.execute!(...args);
@@ -380,11 +338,11 @@ it.each([
       hookContext: { ...parentScope, config: cfg, runId: parentRunId },
       abortSignal: parent.controller.signal,
     });
-    const wrapped = withPluginRuntimeGatewayRequestScope(
+    const wrapped = gatewayScope.withPluginRuntimeGatewayRequestScope(
       { context, isWebchatConnect: () => false },
       () =>
-        withGatewayToolCallerIdentity(
-          createAdmittedGatewayToolCallerIdentity({
+        gatewayCaller.withGatewayToolCallerIdentity(
+          gatewayCaller.createAdmittedGatewayToolCallerIdentity({
             ...parentScope,
             admittedRunContext: admitted,
           }),
@@ -401,12 +359,11 @@ it.each([
     );
     const wrappedOutcome = wrapped.catch((error: unknown) => error);
     try {
-      const childSessionKey = await Promise.race([
+      const childSessionKey = await awaitGateBeforeSettlement(
         entered.promise,
-        wrapped.then(() => {
-          throw new Error("ACP spawn settled before runtime initialization");
-        }),
-      ]);
+        wrapped,
+        "ACP spawn settled before runtime initialization",
+      );
       expect(subagentRuns.size).toBe(0);
       expect(readChild(childSessionKey)).toBeDefined();
       if (closure === "abort") {
@@ -430,7 +387,7 @@ it.each([
         admission.close();
         expect(parent.controller.signal.aborted).toBe(false);
       }
-      expect(getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(live);
+      expect(admissionContext.getAdmittedRunDelegatedAuthority(admitted) !== undefined).toBe(live);
       release.resolve();
       const result = await forwarded;
       const sourceBoundary = {
@@ -439,13 +396,6 @@ it.each([
       };
       await wrappedOutcome;
       await work.drain();
-      expect.soft(lateMetadata, "closed parent cannot publish metadata").not.toHaveBeenCalled();
-      expect
-        .soft(ensuredSessions, "cleanup cannot reopen the runtime")
-        .toEqual(initializesRuntime ? [childSessionKey] : []);
-      expect
-        .soft(bindThread, "closed parent cannot create a thread")
-        .toHaveBeenCalledTimes(thread && live ? 1 : 0);
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
         const events = (await listSessionStateEventsSince(childSessionKey, "fixture", 0)).events;
@@ -470,27 +420,36 @@ it.each([
           spawnedBySessionId: "parent-session",
           spawnedBySenderIsOwner: true,
         });
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(subagentRuns.size).toBe(1);
         expect(subagentRuns.get(acceptedRunId!)).toMatchObject({
           childSessionKey,
           requesterSessionKey: parentSessionKey,
         });
-        expect(closeRuntime).not.toHaveBeenCalled();
       } else {
-        expect.soft(dispatch, "closed parent cannot dispatch work").not.toHaveBeenCalled();
-        expect.soft(subagentRuns.size, "closed parent cannot register work").toBe(0);
         expect.soft(socket).not.toHaveBeenCalled();
-        expect.soft(sourceBoundary.entry, "cleaned before return").toBeUndefined();
-        expect
-          .soft(sourceBoundary.closes, "runtime closed before return")
-          .toBe(initializesRuntime ? 1 : 0);
+        expect.soft(sourceBoundary, "cleaned before return").toEqual({
+          entry: undefined,
+          closes: Number(initializesRuntime),
+        });
         expect.soft(readChild(childSessionKey)).toBeUndefined();
-        expect
-          .soft(closeRuntime, "dispose only the created runtime")
-          .toHaveBeenCalledTimes(initializesRuntime ? 1 : 0);
         expect.soft(result).toMatchObject({ details: { status: "error" } });
       }
+      expect
+        .soft({
+          metadata: lateMetadata.mock.calls.length,
+          ensuredSessions,
+          threads: bindThread.mock.calls.length,
+          dispatches: dispatch.mock.calls.length,
+          registered: subagentRuns.size,
+          closed: closeRuntime.mock.calls.length,
+        })
+        .toEqual({
+          metadata: 0,
+          ensuredSessions: initializesRuntime ? [childSessionKey] : [],
+          threads: Number(thread && live),
+          dispatches: Number(live),
+          registered: Number(live),
+          closed: Number(!live && initializesRuntime),
+        });
     } finally {
       release.resolve();
       await forwarded;
@@ -502,7 +461,7 @@ it.each([
       projection?.dispose();
       await projection?.ensureMaterialized();
       if (thread) {
-        unregisterSessionBindingAdapter({
+        bindings.unregisterSessionBindingAdapter({
           channel: "discord",
           accountId: "default",
           adapter: bindingAdapter,

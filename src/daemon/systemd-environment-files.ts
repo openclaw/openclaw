@@ -1,13 +1,139 @@
 /** Native systemd environment-file serialization, reading, and effective file overlays. */
 import fs from "node:fs/promises";
-import { parseSystemdEnvironmentFileLine } from "./systemd-environment-file-parser.js";
-import { expandSystemdEnvironmentFilePattern } from "./systemd-environment-file-pattern.js";
+import { Minimatch } from "minimatch";
+import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
+import { hasErrnoCode } from "../infra/errno.js";
 
 export type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
 export type SystemdEnvironmentFilesParams = {
   environmentFileSpecs: SystemdEnvironmentFileSpec[];
   failOnUnavailable?: boolean;
 };
+
+function decodeSystemdEnvironmentFileValue(rawValue: string) {
+  type ParseState =
+    | "pre"
+    | "unquoted"
+    | "unquoted-escape"
+    | "single-quoted"
+    | "double-quoted"
+    | "double-quoted-escape";
+
+  // Match systemd parse_env_file_internal: closing quotes return to pre ("foo"bar -> foobar).
+  let state: ParseState = "pre";
+  let decoded = "";
+  let literalDollar = false;
+  let trailingWhitespaceStart: number | undefined;
+  for (const char of rawValue) {
+    const whitespace = char === " " || char === "\t" || char === "\r";
+    if (state === "pre") {
+      if (whitespace) {
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        state = char === "'" ? "single-quoted" : "double-quoted";
+        continue;
+      }
+      if (char === "\\") {
+        state = "unquoted-escape";
+        continue;
+      }
+      state = "unquoted";
+      decoded += char;
+      continue;
+    }
+    if (state === "unquoted") {
+      if (char === "\\") {
+        state = "unquoted-escape";
+        trailingWhitespaceStart = undefined;
+        continue;
+      }
+      if (whitespace) {
+        trailingWhitespaceStart ??= decoded.length;
+      } else {
+        trailingWhitespaceStart = undefined;
+      }
+      decoded += char;
+      continue;
+    }
+    if (state === "single-quoted" || state === "double-quoted") {
+      const quote = state === "single-quoted" ? "'" : '"';
+      if (char === quote) {
+        state = "pre";
+      } else if (state === "double-quoted" && char === "\\") {
+        state = "double-quoted-escape";
+      } else {
+        literalDollar ||= char === "$";
+        decoded += char;
+      }
+      continue;
+    }
+    const doubleQuoted: boolean = state === "double-quoted-escape";
+    state = doubleQuoted ? "double-quoted" : "unquoted";
+    if (doubleQuoted && !['"', "\\", "`", "$"].includes(char)) {
+      decoded += "\\";
+    }
+    literalDollar ||= char === "$";
+    decoded += char;
+  }
+  if (state === "unquoted" && trailingWhitespaceStart !== undefined) {
+    decoded = decoded.slice(0, trailingWhitespaceStart);
+  }
+  return { value: decoded, literalDollar };
+}
+
+async function expandSystemdEnvironmentFilePattern(pattern: string): Promise<string[]> {
+  const [parts] = new Minimatch(pattern, {
+    nobrace: true,
+    noext: true,
+    noglobstar: true,
+    platform: "linux",
+    optimizationLevel: 0,
+  }).set;
+  if (!parts) {
+    return [];
+  }
+  if (parts.every((part) => typeof part === "string")) {
+    return [parts.join("/")];
+  }
+  // Node's fs.glob treats backslashes as separators. Match the parsed POSIX
+  // components instead, preserving escaped literals and symlink-sensitive parent segments.
+  let pathnames = ["/"];
+  for (const part of parts.slice(1)) {
+    const matches: string[] = [];
+    for (const parent of pathnames) {
+      const prefix = parent.endsWith("/") ? parent : `${parent}/`;
+      if (typeof part === "string") {
+        matches.push(`${prefix}${part}`);
+        continue;
+      }
+      try {
+        for (const entry of await fs.readdir(parent)) {
+          if (part instanceof RegExp && part.test(entry)) {
+            matches.push(`${prefix}${entry}`);
+          }
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+          throw error;
+        }
+      }
+    }
+    pathnames = matches;
+  }
+  const existing: string[] = [];
+  for (const pathname of pathnames) {
+    try {
+      await fs.lstat(pathname);
+      existing.push(pathname);
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+        throw error;
+      }
+    }
+  }
+  return existing;
+}
 
 function serializeSystemdEnvironmentFileValue(value: string): string {
   // Quote only systemd's supported escapes so credential bytes survive EnvironmentFile parsing.
@@ -33,15 +159,21 @@ export async function readSystemdEnvironmentFile(pathname: string) {
   const literalShellReferenceKeys = new Set<string>();
   const content = await fs.readFile(pathname, "utf8");
   for (const rawLine of content.split(/\r?\n/)) {
-    const parsed = parseSystemdEnvironmentFileLine(rawLine);
-    if (!parsed) {
+    const trimmedStart = rawLine.trimStart();
+    if (!trimmedStart || trimmedStart.startsWith("#") || trimmedStart.startsWith(";")) {
       continue;
     }
-    environment[parsed.key] = parsed.value;
-    if (parsed.literalShellReference) {
-      literalShellReferenceKeys.add(parsed.key);
+    const eq = trimmedStart.indexOf("=");
+    if (eq <= 0) {
+      continue;
+    }
+    const key = trimmedStart.slice(0, eq).trim();
+    const decoded = decodeSystemdEnvironmentFileValue(trimmedStart.slice(eq + 1));
+    environment[key] = decoded.value;
+    if (decoded.literalDollar && isUnresolvedShellReference(decoded.value)) {
+      literalShellReferenceKeys.add(key);
     } else {
-      literalShellReferenceKeys.delete(parsed.key);
+      literalShellReferenceKeys.delete(key);
     }
   }
   return { environment, literalShellReferenceKeys };

@@ -15,6 +15,7 @@ import {
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
@@ -307,6 +308,41 @@ function expectSingleUser(events: unknown[], key: string) {
 }
 
 describe("SessionManager user idempotency", () => {
+  it.each([
+    { kind: "subagent-completion-direct", adopts: true },
+    { kind: "channel-final", adopts: false },
+    { kind: undefined, adopts: false },
+  ] as const)("keyed replay behind a $kind mirror (adopts: $adopts)", async ({ kind, adopts }) => {
+    const { dir, scope, user, persist } = await userSession();
+    await persist("wake-user", user);
+    expect(
+      await appendAssistantMessageToSessionTranscript({
+        ...scope,
+        text: "Synthetic child result",
+        idempotencyKey: "announce:child:text-direct",
+        ...(kind ? { deliveryMirror: { kind } } : {}),
+      }),
+    ).toMatchObject({ ok: true });
+    const manager = await SessionManager.openBoundedAsync(scope, {
+      cwd: dir,
+      maxBytes: 100_000,
+      maxEvents: 100,
+    });
+    if (adopts) {
+      expect(await manager.appendMessageAsync(user)).toBe("wake-user");
+      expect(manager.appendMessage(user)).toBe("wake-user");
+    } else {
+      // Unmarked historical mirrors and ordinary final replies still close turns.
+      await expect(manager.appendMessageAsync(user)).rejects.toThrow(
+        "Session transcript keyed user is outside the current turn",
+      );
+      expect(() => manager.appendMessage(user)).toThrow(
+        "Session transcript keyed user is outside the current turn",
+      );
+    }
+    expectSingleUser(await loadTranscriptEvents(scope), user.idempotencyKey);
+  });
+
   it("allows an explicitly caller-checked keyed user append", () => {
     const manager = SessionManager.inMemory();
     const message = {

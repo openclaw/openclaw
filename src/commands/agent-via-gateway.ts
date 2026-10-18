@@ -24,6 +24,7 @@ import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
 import {
   readGatewayDispatchConfig,
@@ -42,7 +43,6 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { READ_SCOPE } from "../gateway/operator-scopes.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   createEmbeddedStateSignalBridge,
@@ -224,6 +224,7 @@ function usesRemoteGateway(cfg: OpenClawConfig): boolean {
 async function loadRemoteGatewayRoster(cfg: OpenClawConfig): Promise<RemoteGatewayRoster> {
   const result = await callGateway<AgentsListResult>({
     method: "agents.list",
+    beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
     params: {},
     config: cfg,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -618,14 +619,6 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   };
 }
 
-async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
-  try {
-    await sleep(ms, signal);
-  } catch {
-    throw createAbortError("gateway agent retry aborted");
-  }
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -681,7 +674,7 @@ async function abortAcceptedGatewayAgentRunWithRetries(params: {
     if (isFinalAttempt) {
       return false;
     }
-    await delayMs(retryDelayMs);
+    await sleep(retryDelayMs);
   }
   return false;
 }
@@ -859,6 +852,7 @@ async function agentViaGatewayCommand(
       async () =>
         await callGateway({
           method: "agent",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
           requiredCapabilities: deferSessionId
             ? [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE]
             : undefined,
@@ -922,8 +916,9 @@ async function agentViaGatewayCommand(
         await abortGatewayRun((method, params, requestOpts) =>
           callGateway({
             method,
+            beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
             params,
-            timeoutMs: requestOpts?.timeoutMs ?? undefined,
+            timeoutMs: requestOpts?.timeoutMs,
             expectFinal: requestOpts?.expectFinal,
             config: cfg,
             ...gatewayIdentity,
@@ -1015,7 +1010,7 @@ async function agentViaGatewayCommandWithTransientRetries(
       runtime.error?.(
         `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before failing.`,
       );
-      await delayMs(retryDelayMs, signalBridge.signal);
+      await sleep(retryDelayMs, signalBridge.signal);
     }
   }
   throw new Error("Gateway agent retry loop exhausted unexpectedly.");

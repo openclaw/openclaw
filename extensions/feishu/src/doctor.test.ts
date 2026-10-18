@@ -322,7 +322,7 @@ describe("Feishu doctor state repair", () => {
     await expect(readSessionTranscriptEvents(session)).resolves.toEqual([]);
   });
 
-  it("backs up and repairs a custom support SQLite store", async () => {
+  it("backs up a live custom SQLite store without sidecars before repairing it", async () => {
     const agentId = "support";
     const target = path.join(stateDir(), "custom-sessions", "sessions.json");
     const cfg: OpenClawConfig = {
@@ -348,22 +348,53 @@ describe("Feishu doctor state repair", () => {
     expect(fs.existsSync(session.storePath)).toBe(false);
     expect(fs.existsSync(sqlitePath)).toBe(true);
 
-    const result = await runDoctor(true, cfg);
+    const walUpdatedAt = Date.now() - 1_000;
+    const writer = new DatabaseSync(sqlitePath);
+    try {
+      writer.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
+      await upsertSessionEntry({
+        ...healthy,
+        entry: { sessionId: healthy.sessionId, updatedAt: walUpdatedAt },
+      });
+      expect(fs.statSync(`${sqlitePath}-wal`).size).toBeGreaterThan(0);
+      expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
 
-    expect(result.warningNotes).toEqual([]);
-    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+      const result = await runDoctor(true, cfg);
 
-    const backups = listBackupDirs();
-    expect(backups).toHaveLength(1);
-    const backupDir = path.join(stateDir(), "backups", backups[0] ?? "");
-    expect(
-      fs.existsSync(path.join(backupDir, "session-stores", session.agentId, "sessions.json")),
-    ).toBe(false);
-    expect(
-      fs.existsSync(
-        path.join(backupDir, "session-stores", session.agentId, path.basename(sqlitePath)),
-      ),
-    ).toBe(true);
+      expect(result.warningNotes).toEqual([]);
+      expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+
+      const backups = listBackupDirs();
+      expect(backups).toHaveLength(1);
+      const backupDir = path.join(
+        stateDir(),
+        "backups",
+        backups[0]!,
+        "session-stores",
+        session.agentId,
+      );
+      expect(fs.readdirSync(backupDir)).toEqual([path.basename(sqlitePath)]);
+      const snapshot = new DatabaseSync(path.join(backupDir, path.basename(sqlitePath)), {
+        readOnly: true,
+      });
+      try {
+        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+        expect(
+          snapshot
+            .prepare("SELECT updated_at FROM session_nodes WHERE session_key = ?")
+            .get(healthy.sessionKey),
+        ).toEqual({ updated_at: walUpdatedAt });
+        expect(
+          snapshot
+            .prepare("SELECT current_session_id FROM session_nodes WHERE session_key = ?")
+            .get(session.sessionKey),
+        ).toEqual({ current_session_id: session.sessionId });
+      } finally {
+        snapshot.close();
+      }
+    } finally {
+      writer.close();
+    }
 
     expect(
       readStoreEntries(session.storePath, session.agentId)[session.sessionKey],

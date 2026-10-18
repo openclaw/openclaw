@@ -16,6 +16,14 @@ import type { HeartbeatWakeSource } from "./heartbeat-wake-contracts.js";
 
 export type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
 
+export function sanitizeCronHeartbeatOverride(
+  heartbeat: HeartbeatConfig | undefined,
+): HeartbeatConfig | undefined {
+  return heartbeat?.target === "last"
+    ? { ...heartbeat, to: undefined, accountId: undefined }
+    : heartbeat;
+}
+
 const DEFAULT_HEARTBEAT_TIMEOUT_SECONDS = 10 * 60;
 
 type HeartbeatAgent = {

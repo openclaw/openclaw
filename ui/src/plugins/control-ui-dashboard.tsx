@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { Show, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { Icon } from "../components/solid/icon.tsx";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../lib/board/provider.ts";
 import { projectBoardProvider } from "../lib/reactive/domain-board.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "./control-ui-dashboard.css";
 
 export type PluginSessionDashboardProps = {
@@ -23,17 +23,21 @@ export type PluginSessionDashboardProps = {
 };
 
 function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
-  const [expanded, setExpanded] = createSignal(false);
-  const [activeTabId, setActiveTabId] = createSignal("");
   const [viewError, setViewError] = createSignal<string | null>(null);
   const [boardView, setBoardView] =
     createSignal<typeof import("../components/board/board-view.tsx").BoardView>();
   const [viewAttempt, setViewAttempt] = createSignal(0);
-  const [expansionInitialized, setExpansionInitialized] = createSignal(false);
   const scope = createMemo(
     () =>
       props.client && props.session?.sessionKey.trim()
-        ? { client: props.client, cacheKey: boardProviderCacheKey(props.session) }
+        ? {
+            client: props.client,
+            cacheKey: boardProviderCacheKey(props.session),
+            session: props.session,
+            connected: props.connected,
+            canMutate: props.canMutate,
+            canGrant: props.canGrant,
+          }
         : null,
     {
       equals: (left, right) => left?.client === right?.client && left?.cacheKey === right?.cacheKey,
@@ -44,16 +48,14 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
     if (!current) {
       return null;
     }
-    const lease = untrack(() =>
-      acquireBoardProviderForSession(
-        props.session!,
-        current.client,
-        props.connected,
-        false,
-        false,
-        props.canMutate,
-        props.canGrant,
-      ),
+    const lease = acquireBoardProviderForSession(
+      current.session,
+      current.client,
+      current.connected,
+      false,
+      false,
+      current.canMutate,
+      current.canGrant,
     );
     onCleanup(() => lease.release());
     const projection = projectBoardProvider(lease.provider);
@@ -63,55 +65,54 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
       },
       applyOps: (ops) => lease.provider.applyOps(ops),
       grant: (name, decision) => lease.provider.grant(name, decision),
-      selectTab: setActiveTabId,
+      selectTab: (activeTabId) => setPresentation((previous) => ({ ...previous, activeTabId })),
       frameLoadFailed: (name) => lease.provider.refreshWidgetFrame(name),
       widgetAppView: (name, revision) => lease.provider.widgetAppView(name, revision),
       refreshWidgetAppView: (name, revision) => lease.provider.refreshWidgetAppView(name, revision),
     };
     return { lease, projection, callbacks };
   });
+  // Keep the shared transport and this lease's mutation authority current.
   createEffect(
     () => ({
       resource: resource(),
+      client: props.client,
       connected: props.connected,
       canMutate: props.canMutate,
       canGrant: props.canGrant,
     }),
     (current) =>
-      current.resource?.lease.update(props.client!, current.connected, {
+      current.resource?.lease.update(current.client!, current.connected, {
         canPinWidgets: false,
         canPinMcpApps: false,
         canMutate: current.canMutate,
         canGrant: current.canGrant,
       }),
   );
-  let reconciledProvider: ReturnType<typeof resource> = null;
-  createEffect(
-    () => {
-      const current = resource();
-      return { current, state: current?.projection.read() };
-    },
-    ({ current, state }) => {
-      const replaced = current !== reconciledProvider;
-      reconciledProvider = current;
-      if (replaced) {
-        setExpansionInitialized(false);
-        setActiveTabId("");
-      }
-      if (!state) {
-        return;
-      }
-      setActiveTabId((active) =>
-        !replaced && state.snapshot.tabs.some((tab) => tab.tabId === active)
-          ? active
-          : (state.snapshot.tabs[0]?.tabId ?? ""),
-      );
-      if ((replaced || !expansionInitialized()) && state.hasLoadedSnapshot) {
-        setExpansionInitialized(true);
-        setExpanded(boardExists(state.snapshot));
-      }
-    },
-  );
+  // Preserve manual choices within a scope; a replacement initializes only after its first snapshot.
+  const [presentation, setPresentation] = createSignal<{
+    scope: ReturnType<typeof scope>;
+    expanded: boolean;
+    initialized: boolean;
+    activeTabId: string;
+  }>((previous) => {
+    const current = scope();
+    const state = resource()?.projection.read();
+    const retained = previous?.scope === current;
+    const initialize = state?.hasLoadedSnapshot && (!retained || !previous?.initialized);
+    return {
+      scope: current,
+      expanded: initialize ? boardExists(state.snapshot) : (previous?.expanded ?? false),
+      initialized: initialize || (retained && previous?.initialized),
+      activeTabId:
+        previous &&
+        retained &&
+        state?.snapshot.tabs.some((tab) => tab.tabId === previous.activeTabId)
+          ? previous.activeTabId
+          : (state?.snapshot.tabs[0]?.tabId ?? ""),
+    };
+  });
+  // The lazy module loader publishes completion or failure and retires obsolete attempts.
   createEffect(viewAttempt, () => {
     let current = true;
     setViewError(null);
@@ -143,11 +144,14 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
       <button
         type="button"
         class="plugin-session-dashboard__toggle"
-        aria-expanded={expanded() ? "true" : "false"}
-        onClick={() => {
-          setExpansionInitialized(true);
-          setExpanded((value) => !value);
-        }}
+        aria-expanded={presentation().expanded ? "true" : "false"}
+        onClick={() =>
+          setPresentation((previous) => ({
+            ...previous,
+            initialized: true,
+            expanded: !previous.expanded,
+          }))
+        }
       >
         <span class="plugin-session-dashboard__title">
           <Icon name="kanban" />
@@ -157,7 +161,7 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
           <Icon name="arrowDown" />
         </span>
       </button>
-      <div class="plugin-session-dashboard__body" hidden={!expanded()}>
+      <div class="plugin-session-dashboard__body" hidden={!presentation().expanded}>
         {viewError() ? (
           <>
             <p role="alert">{viewError()}</p>
@@ -174,10 +178,10 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
               <Show when={boardView()} keyed>
                 {(BoardView) => (
                   <BoardView
-                    active={expanded() && props.presented}
+                    active={presentation().expanded && props.presented}
                     session={current().session}
                     snapshot={current().snapshot}
-                    activeTabId={activeTabId()}
+                    activeTabId={presentation().activeTabId}
                     widgetFrameUrl={(name: string, revision: number) =>
                       current().lease.provider.widgetFrameUrl(name, revision)
                     }
@@ -191,7 +195,7 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
           </Show>
         )}
       </div>
-      <Show when={!expanded() && expansionInitialized() && !board()}>
+      <Show when={!presentation().expanded && presentation().initialized && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>
       </Show>
     </section>

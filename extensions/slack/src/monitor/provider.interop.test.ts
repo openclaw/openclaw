@@ -24,10 +24,7 @@ const socketOptions = {
 
 async function createSocketApp(clientOptions: Record<string, unknown> = {}) {
   const slackBoltModule = await import("@slack/bolt");
-  const interop = resolveSlackBoltInterop({
-    defaultImport: slackBoltModule.default,
-    namespaceImport: slackBoltModule,
-  });
+  const interop = resolveSlackBoltInterop(slackBoltModule);
   const result = createSlackBoltApp({ ...socketOptions, interop, clientOptions });
   if (!(result.receiver instanceof interop.SocketModeReceiver)) {
     throw new Error("expected a Socket Mode receiver");
@@ -82,11 +79,9 @@ describe("resolveSlackBoltInterop", () => {
   it("resolves the App constructor with namespace receivers", () => {
     expect(
       resolveSlackBoltInterop({
-        defaultImport: FakeApp,
-        namespaceImport: {
-          HTTPReceiver: FakeHTTPReceiver,
-          SocketModeReceiver: FakeSocketModeReceiver,
-        },
+        default: FakeApp,
+        HTTPReceiver: FakeHTTPReceiver,
+        SocketModeReceiver: FakeSocketModeReceiver,
       }),
     ).toEqual(moduleExports);
   });

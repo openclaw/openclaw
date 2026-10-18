@@ -16,6 +16,7 @@ import {
   isClickClackDiscussionChannelRevoked,
   prepareClickClackDiscussionChannelRevocation,
 } from "./revoked-channel-store.js";
+import { prepareDiscussionSessionEntry } from "./session-authority.js";
 
 const TARGETED_SESSION_TOOLS = new Set(["sessions_history", "sessions_send", "session_status"]);
 
@@ -44,13 +45,17 @@ export function isClickClackDiscussionSessionTarget(params: {
     // The explicit tool target may not be a valid store key; unreadable authority denies access.
     return undefined;
   }
-  return currentDiscussionTarget(params, binding, (current) =>
-    isClickClackDiscussionChannelRevoked({
-      runtime,
-      serverBaseUrl: current.serverBaseUrl,
-      channelId: current.channelId,
-      binding: current,
-    }),
+  return currentDiscussionTarget(
+    params,
+    binding,
+    (current) =>
+      isClickClackDiscussionChannelRevoked({
+        runtime,
+        serverBaseUrl: current.serverBaseUrl,
+        channelId: current.channelId,
+        binding: current,
+      }),
+    (current) => bindingMatchesActiveSessionIncarnation(runtime, targetSessionKey, current),
   );
 }
 
@@ -58,6 +63,7 @@ function currentDiscussionTarget(
   params: { runtime: PluginRuntime; requesterSessionKey: string; targetSessionKey: string },
   binding: ClickClackDiscussionBinding | undefined,
   isRevoked: (binding: ClickClackDiscussionBinding) => boolean,
+  isActiveSession: (binding: ClickClackDiscussionBinding) => boolean,
 ) {
   const { runtime, targetSessionKey } = params;
   if (
@@ -65,7 +71,7 @@ function currentDiscussionTarget(
     discussionSessionKey({ runtime, mainSessionKey: targetSessionKey, ...binding }) ===
       params.requesterSessionKey &&
     !isRevoked(binding) &&
-    bindingMatchesActiveSessionIncarnation(runtime, targetSessionKey, binding) &&
+    isActiveSession(binding) &&
     resolveDiscussionBindingAccount(runtime.config.current() as CoreConfig, binding).state ===
       "active"
   ) {
@@ -86,6 +92,7 @@ export async function resolveClickClackDiscussionSessionTarget(
   let revocation:
     | Awaited<ReturnType<typeof prepareClickClackDiscussionChannelRevocation>>
     | undefined;
+  let session: Awaited<ReturnType<typeof prepareDiscussionSessionEntry>> | undefined;
   try {
     facts = await getClickClackDiscussionBindingStore(params.runtime).prepareRead(
       params.targetSessionKey,
@@ -98,10 +105,19 @@ export async function resolveClickClackDiscussionSessionTarget(
       runtime: params.runtime,
       ...binding,
     });
-    return currentDiscussionTarget(params, facts.read(), revocation.isRevoked);
+    session = await prepareDiscussionSessionEntry(params.runtime, params.targetSessionKey);
+    session.source();
+    const entry = session.entry;
+    return currentDiscussionTarget(
+      params,
+      facts.read(),
+      revocation.isRevoked,
+      (current) => entry?.sessionId === current.sessionId && entry.archivedAt === undefined,
+    );
   } catch {
     return undefined;
   } finally {
+    session?.release();
     revocation?.release();
     facts?.release();
   }

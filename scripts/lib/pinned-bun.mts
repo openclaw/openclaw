@@ -7,6 +7,7 @@ import { resolveRepoRoot } from "./repo-root.mjs";
 
 type BunPin = {
   tag: string;
+  revision: string;
   artifacts: Record<string, { executableSha256: string }>;
 };
 type PinnedBunResult = { command: string; reason?: never } | { command?: never; reason: string };
@@ -131,10 +132,34 @@ export function resolvePinnedBun(
 
 export function requirePinnedBun(env: NodeJS.ProcessEnv = process.env): string {
   const result = resolvePinnedBun(env);
+  const ciJob = isCiEnvironment(env)
+    ? `CI job ${env.GITHUB_JOB || env.OPENCLAW_VITEST_SHARD_NAME || "unknown"}: `
+    : "";
+  const recovery = ciJob
+    ? "Run .github/actions/setup-test-bun before tests."
+    : "Set OPENCLAW_BUN_PATH to an executable or OPENCLAW_VITEST_RUNTIME=node.";
   if (!result.command) {
-    throw new Error(
-      `[openclaw] Bun fork unavailable (${result.reason}). Set OPENCLAW_BUN_PATH to an executable or OPENCLAW_VITEST_RUNTIME=node.`,
-    );
+    throw new Error(`[openclaw] ${ciJob}Bun fork unavailable (${result.reason}). ${recovery}`);
+  }
+  if (ciJob) {
+    try {
+      const pin: BunPin = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, "scripts/lib/openclaw-bun.json"), "utf8"),
+      );
+      const revision = execFileSync(result.command, ["--revision"], {
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+      if (revision !== pin.revision) {
+        throw new Error(`expected ${pin.revision}, received ${JSON.stringify(revision)}`);
+      }
+    } catch (error) {
+      throw new Error(
+        `[openclaw] ${ciJob}Bun revision verification failed: ${error instanceof Error ? error.message : String(error)}. ${recovery}`,
+        { cause: error },
+      );
+    }
   }
   return result.command;
 }

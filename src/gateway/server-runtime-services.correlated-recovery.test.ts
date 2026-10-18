@@ -125,26 +125,32 @@ describe("registered correlated completion recovery custody", () => {
         return database;
       };
       const database = persist(state.stateDir);
+      const readChild = (source = database) => readSubagentRun(source, child.runId);
+      const queueStatus = () =>
+        getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir);
+      const restore = (mergeOnly = false) =>
+        restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly });
+      const expectPendingReceipt = async (settlementOutcome: typeof outcome) => {
+        expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
+          settlementOutcome,
+        });
+      };
       if (change === "hydration pending") {
         const store = await import("../state/openclaw-state-db-readonly.js");
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({
-              type: "subagents.restore",
-            });
+            expect(command).toEqual({ type: "subagents.restore" });
             throw new Error("registry hydration read unavailable");
           });
         try {
-          await expect(
-            restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true }),
-          ).rejects.toThrow("registry hydration read unavailable");
+          await expect(restore(true)).rejects.toThrow("registry hydration read unavailable");
         } finally {
           unavailable.mockRestore();
         }
       }
       if (change !== "hydration pending") {
-        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        await restore();
         child = expectDefined(subagentRuns.get(child.runId), "restored completion owner");
       }
       const replacementRoot = state.path("replacement");
@@ -152,7 +158,7 @@ describe("registered correlated completion recovery custody", () => {
         change === "default" || change === "file" || change === "default after commit";
       const replacement = replacingSource ? persist(replacementRoot) : undefined;
       const before = structuredClone(child);
-      const replacementBefore = replacement && readSubagentRun(replacement, child.runId);
+      const replacementBefore = replacement && readChild(replacement);
       let cleanupRelease: Promise<void> | undefined;
       if (change === "cleanup released at receipt") {
         const failedCompletion = vi
@@ -252,122 +258,101 @@ describe("registered correlated completion recovery custody", () => {
           },
         );
       }
-      const recover = async () => {
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-        const startServices = () =>
-          activateGatewayScheduledServices({
-            scheduler,
-            minimalTestGateway: false,
-            cfgAtStart: cfg,
-            deps: {},
-            sessionDeliveryRecoveryMaxEnqueuedAt: queued.enqueuedAt,
-            cronEnabled: false,
-            log: { ...log, child: () => log },
-          });
-        let services = startServices();
-        try {
-          await clock.advanceBy(1_250);
-          await services.stopDeliveryRecovery();
-          await cleanupRelease;
-          expect(settled).toHaveBeenCalledOnce();
-          expect(deliver).not.toHaveBeenCalled();
-          if (change === "hydration pending") {
-            expect(subagentRuns.has(child.runId)).toBe(false);
-            expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
-            expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-              settlementOutcome: "recovered",
-            });
-            expect(resume).not.toHaveBeenCalled();
-            expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true })).toBe(
-              1,
-            );
-            services.heartbeatRunner.stop();
-            services = startServices();
-            await clock.advanceBy(1_250);
-            await services.stopDeliveryRecovery();
-            expect(settled).toHaveBeenCalledTimes(2);
-            expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("delivered");
-            expect(
-              getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-            ).toBe("completed");
-            expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
-            expect(deliver).not.toHaveBeenCalled();
-          } else if (change === "default after commit") {
-            const committed = readSubagentRun(database, child.runId);
-            expect(committed?.delivery?.status).toBe("delivered");
-            expect(resume).not.toHaveBeenCalled();
-            expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-              settlementOutcome: "recovered",
-            });
-            if (replacement) {
-              expect(readSubagentRun(replacement, child.runId)).toEqual(replacementBefore);
-            }
-            database.db.exec(
-              "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
-            );
-            vi.unstubAllEnvs();
-            // Reconstitute the live owner through canonical restoration, without a receipt closure.
-            expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
-            services.heartbeatRunner.stop();
-            services = startServices();
-            await clock.advanceBy(1_250);
-            await services.stopDeliveryRecovery();
-            expect(settled).toHaveBeenCalledTimes(2);
-            expect(readSubagentRun(database, child.runId)).toEqual(committed);
-            expect(
-              getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-            ).toBe("completed");
-            expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
-            expect(deliver).not.toHaveBeenCalled();
-          } else if (replacingSource) {
-            const target =
-              change === "file" ? openOpenClawStateDatabase({ path: database.path }) : replacement!;
-            expect(readSubagentRun(target, child.runId)).toEqual(replacementBefore);
-            expect(subagentRuns.get(child.runId)).toBe(child);
-            expect(child).toEqual(before);
-            expect(resume).not.toHaveBeenCalled();
-            expect(log.error).toHaveBeenCalledWith(
-              expect.stringContaining("settled callback failed"),
-            );
-            if (change === "default") {
-              expect(await loadPendingSessionDelivery(queueId, context)).toMatchObject({
-                settlementOutcome: outcome,
-              });
-              expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe("in_progress");
-            }
-          } else {
-            expect(readSubagentRun(database, child.runId)?.delivery?.status).toBe(
-              outcome === "recovered" ? "delivered" : "suspended",
-            );
-            expect(
-              getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
-            ).toBe(outcome === "recovered" ? "completed" : "failed");
-            if (change === "cleanup released at receipt") {
-              expect(readSubagentRun(database, child.runId)?.cleanupHandled).toBe(false);
-              expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
-            }
-            if (change === "successor") {
-              expect(successor).toBeDefined();
-              expect(subagentRuns.get(child.runId)).toBe(successor);
-              expect(resume).not.toHaveBeenCalled();
-            } else if (outcome === "recovered") {
-              expect(resume).toHaveBeenCalledWith(child.runId);
-            } else {
-              expect(resume).not.toHaveBeenCalled();
-            }
-          }
-        } finally {
-          await services.stopDeliveryRecovery();
-          services.heartbeatRunner.stop();
-          await scheduler.stop();
-          subagentRuns.delete(child.runId);
-          vi.unstubAllEnvs();
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const startServices = () =>
+        activateGatewayScheduledServices({
+          scheduler,
+          minimalTestGateway: false,
+          cfgAtStart: cfg,
+          deps: {},
+          sessionDeliveryRecoveryMaxEnqueuedAt: queued.enqueuedAt,
+          cronEnabled: false,
+          log: { ...log, child: () => log },
+        });
+      let services = startServices();
+      const replaySettlement = async () => {
+        services.heartbeatRunner.stop();
+        services = startServices();
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
+        expect(settled).toHaveBeenCalledTimes(2);
+        expect(queueStatus()).toBe("completed");
+        expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
+        expect(deliver).not.toHaveBeenCalled();
+      };
+      try {
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
+        await cleanupRelease;
+        expect(settled).toHaveBeenCalledOnce();
+        expect(deliver).not.toHaveBeenCalled();
+        if (change === "hydration pending") {
+          expect(subagentRuns.has(child.runId)).toBe(false);
+          expect(readChild()?.delivery?.status).toBe("in_progress");
+          await expectPendingReceipt("recovered");
+          expect(resume).not.toHaveBeenCalled();
+          expect(await restore(true)).toBe(1);
+          await replaySettlement();
+          expect(readChild()?.delivery?.status).toBe("delivered");
+        } else if (change === "default after commit") {
+          const committed = readChild();
+          expect(committed?.delivery?.status).toBe("delivered");
+          expect(resume).not.toHaveBeenCalled();
+          await expectPendingReceipt("recovered");
           if (replacement) {
-            await closeOpenClawStateDatabaseByPathAsync(replacement.path);
+            expect(readChild(replacement)).toEqual(replacementBefore);
+          }
+          database.db.exec(
+            "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
+          );
+          vi.unstubAllEnvs();
+          // Reconstitute the live owner through canonical restoration, without a receipt closure.
+          expect(await restore()).toBe(1);
+          await replaySettlement();
+          expect(readChild()).toEqual(committed);
+        } else if (replacingSource) {
+          const target =
+            change === "file" ? openOpenClawStateDatabase({ path: database.path }) : replacement!;
+          expect(readChild(target)).toEqual(replacementBefore);
+          expect(subagentRuns.get(child.runId)).toBe(child);
+          expect(child).toEqual(before);
+          expect(resume).not.toHaveBeenCalled();
+          expect(log.error).toHaveBeenCalledWith(
+            expect.stringContaining("settled callback failed"),
+          );
+          if (change === "default") {
+            await expectPendingReceipt(outcome);
+            expect(readChild()?.delivery?.status).toBe("in_progress");
+          }
+        } else {
+          expect(readChild()?.delivery?.status).toBe(
+            outcome === "recovered" ? "delivered" : "suspended",
+          );
+          expect(queueStatus()).toBe(outcome === "recovered" ? "completed" : "failed");
+          if (change === "cleanup released at receipt") {
+            expect(readChild()?.cleanupHandled).toBe(false);
+            expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
+          }
+          if (change === "successor") {
+            expect(successor).toBeDefined();
+            expect(subagentRuns.get(child.runId)).toBe(successor);
+            expect(resume).not.toHaveBeenCalled();
+          } else if (outcome === "recovered") {
+            expect(resume).toHaveBeenCalledWith(child.runId);
+          } else {
+            expect(resume).not.toHaveBeenCalled();
           }
         }
-      };
-      await recover();
+      } finally {
+        await services.stopDeliveryRecovery();
+        services.heartbeatRunner.stop();
+        await scheduler.stop();
+        subagentRuns.delete(child.runId);
+        vi.unstubAllEnvs();
+        if (replacement) {
+          await closeOpenClawStateDatabaseByPathAsync(replacement.path);
+        }
+      }
     });
   });
 });

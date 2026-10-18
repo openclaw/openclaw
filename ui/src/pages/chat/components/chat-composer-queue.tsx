@@ -14,6 +14,7 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -24,8 +25,7 @@ import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
-import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
-import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
+import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -303,8 +303,7 @@ function ChatQueueItem(rowProps: {
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
   const edit = createMemo(() => rowProps.controls.queuedEdit);
-  const authorAvatar = createMemo(() => renderChatAuthorAvatar(item().sender));
-  const hasAuthorAvatar = createMemo(() => hasComposerContent(authorAvatar()));
+  const hasAuthorAvatar = createMemo(() => Boolean(formatSenderLabel(item().sender)));
   const images = createMemo(() =>
     item().attachments?.filter((attachment) => attachment.mimeType.startsWith("image/")),
   );
@@ -398,17 +397,9 @@ function ChatQueueItem(rowProps: {
         ? t("chat.queue.imageCount", { count: String(item().attachments?.length ?? 0) })
         : ""),
   );
-  const itemClass = createMemo(
-    () =>
-      `chat-queue__item${hasAuthorAvatar() ? "" : " chat-queue__item--no-avatar"}${previewUrl() ? " chat-queue__item--with-images" : ""}${steered() ? " chat-queue__item--steered" : ""}${
-        failed() ? " chat-queue__item--failed" : ""
-      }${reconnecting() ? " chat-queue__item--reconnect" : ""}${
-        editing() ? " chat-queue__item--editing" : ""
-      }`,
-  );
   const renderDeliveryAction = (action: "retry" | "steer", disabled = false) => (
     <button
-      class={`chat-queue__action chat-queue__${action}`}
+      class={["chat-queue__action", `chat-queue__${action}`]}
       type="button"
       disabled={disabled}
       aria-label={t(`chat.queue.${action}QueuedMessage`)}
@@ -426,7 +417,17 @@ function ChatQueueItem(rowProps: {
   // diagnostic grows the attached tray without disturbing its action rail.
   return (
     <div
-      class={itemClass()}
+      class={[
+        "chat-queue__item",
+        {
+          "chat-queue__item--no-avatar": !hasAuthorAvatar(),
+          "chat-queue__item--with-images": Boolean(previewUrl()),
+          "chat-queue__item--steered": steered(),
+          "chat-queue__item--failed": failed(),
+          "chat-queue__item--reconnect": reconnecting(),
+          "chat-queue__item--editing": editing(),
+        },
+      ]}
       data-chat-queue-item={item().id}
       onClick={(event) => {
         const row = event.currentTarget;
@@ -532,7 +533,7 @@ function ChatQueueItem(rowProps: {
           <QueueWaitingIcon />
         </span>
       )}
-      <LitContent value={authorAvatar()} />
+      <ChatAuthorAvatar sender={item().sender} />
       {previewUrl() && images() ? (
         <img
           class="chat-queue__images"
@@ -610,13 +611,11 @@ function ChatQueueItem(rowProps: {
           ) : null}
           {stateLabel() && (!failed() || !item().sendError) ? (
             <span
-              class={
-                failed()
-                  ? "chat-queue__badge"
-                  : reconnecting()
-                    ? "chat-queue__badge chat-queue__badge--reconnect"
-                    : "chat-queue__state"
-              }
+              class={{
+                "chat-queue__badge": failed() || reconnecting(),
+                "chat-queue__badge--reconnect": !failed() && reconnecting(),
+                "chat-queue__state": !failed() && !reconnecting(),
+              }}
               title={reconnecting() ? item().sendError : undefined}
             >
               {stateLabel()}

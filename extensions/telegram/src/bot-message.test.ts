@@ -2,7 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMediaRef } from "./bot-message-context.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
@@ -13,7 +13,7 @@ import {
 
 const buildTelegramMessageContext = vi.hoisted(() => vi.fn());
 const dispatchTelegramMessage = vi.hoisted(() => vi.fn());
-const telegramInboundInfo = vi.hoisted(() => vi.fn());
+const verboseLog = vi.hoisted(() => vi.fn());
 const sleepWithAbort = vi.hoisted(() =>
   vi.fn<(delayMs: number, signal?: AbortSignal) => Promise<void>>(async () => undefined),
 );
@@ -25,15 +25,11 @@ function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context
   return expectDefined(mock.invocationCallOrder[0], context);
 }
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  createSubsystemLogger: () => ({
-    child: () => ({
-      info: telegramInboundInfo,
-    }),
-  }),
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   computeBackoff: vi.fn((_policy: unknown, attempt: number) => attempt),
   danger: (message: string) => message,
-  logVerbose: vi.fn(),
+  logVerbose: verboseLog,
   shouldLogVerbose: () => false,
   sleepWithAbort,
 }));
@@ -54,46 +50,48 @@ function unexpectedBotDependency(): never {
   throw new Error("Message processor fixtures mock context construction and dispatch");
 }
 
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
+  recordInboundSession: unexpectedBotDependency,
+  upsertChannelPairingRequest,
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-activity-runtime")>()),
+  recordChannelActivity: unexpectedBotDependency,
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
+  buildChannelInboundEventContext: unexpectedBotDependency,
+}));
+
+vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
+  resolveInboundLastRouteSessionKey: unexpectedBotDependency,
+}));
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
+  resolvePinnedMainDmOwnerFromAllowlist: unexpectedBotDependency,
+}));
+
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
+  readSessionUpdatedAtAsync: unexpectedBotDependency,
+  readAmbientTranscriptWatermarkAsync: unexpectedBotDependency,
+  resolveAmbientTranscriptWatermarkKey: unexpectedBotDependency,
+  resolveStorePath: unexpectedBotDependency,
+}));
+
 describe("telegram bot message processor", () => {
   beforeEach(() => {
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
-    telegramInboundInfo.mockClear();
+    verboseLog.mockClear();
     sleepWithAbort.mockReset().mockResolvedValue(undefined);
     upsertChannelPairingRequest.mockClear();
   });
-
-  const telegramDepsForTest = {
-    upsertChannelPairingRequest,
-    getRuntimeConfig: unexpectedBotDependency,
-    getSessionEntryAsync: unexpectedBotDependency,
-    resolveStorePath: unexpectedBotDependency,
-    readChannelAllowFromStore: unexpectedBotDependency,
-    enqueueRoutedSystemEvent: unexpectedBotDependency,
-    dispatchReplyWithBufferedBlockDispatcher: unexpectedBotDependency,
-    buildModelsProviderData: unexpectedBotDependency,
-    prepareSkillCommandsForAgents: unexpectedBotDependency,
-    wasSentByBot: unexpectedBotDependency,
-    buildChannelInboundEventContext: unexpectedBotDependency,
-    readAmbientTranscriptWatermarkAsync: unexpectedBotDependency,
-    readSessionUpdatedAtAsync: unexpectedBotDependency,
-    recordInboundSession: unexpectedBotDependency,
-    resolveAmbientTranscriptWatermarkKey: unexpectedBotDependency,
-    resolveInboundLastRouteSessionKey: unexpectedBotDependency,
-    resolvePinnedMainDmOwnerFromAllowlist: unexpectedBotDependency,
-    recordChannelActivity: unexpectedBotDependency,
-    loadWebMedia: unexpectedBotDependency,
-    syncTelegramMenuCommands: unexpectedBotDependency,
-    resolveApproval: unexpectedBotDependency,
-    createTelegramDraftStream: unexpectedBotDependency,
-    deliverReplies: unexpectedBotDependency,
-    deliverStructuredReplies: unexpectedBotDependency,
-    deliverStructuredInboundReplyWithMessageSendContext: unexpectedBotDependency,
-    emitTelegramMessageSentHooks: unexpectedBotDependency,
-    editMessageTelegram: unexpectedBotDependency,
-    recordOutboundMessageForPromptContext: unexpectedBotDependency,
-    createChannelMessageReplyPipeline: unexpectedBotDependency,
-  } satisfies TelegramBotDeps;
 
   const baseTurnContext = {
     cfg: {},
@@ -116,7 +114,6 @@ describe("telegram bot message processor", () => {
     replyToMode: "auto",
     streamMode: "partial",
     textLimit: 4096,
-    telegramDeps: telegramDepsForTest,
     opts: {},
   } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
 
@@ -287,28 +284,40 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("logs media summaries without message content through the message processor", async () => {
+  it("dispatches media context without logging message content", async () => {
+    const body = "private Telegram image caption";
+    const media: TelegramMediaRef = {
+      path: "/tmp/photo.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+    };
     buildTelegramMessageContext.mockResolvedValue(
       createMessageContext({
         ctxPayload: {
           From: "telegram:group:-100",
           To: "telegram:group:-100",
           ChatType: "group",
-          RawBody: "<media:image>",
+          RawBody: body,
         },
       }),
     );
 
     const processMessage = createTelegramMessageProcessor(baseDeps);
-    await expect(
-      processSampleMessage(processMessage, undefined, {}, {}, [
-        { path: "/tmp/photo.jpg", contentType: "image/jpeg", kind: "image" },
-      ]),
-    ).resolves.toEqual({ kind: "completed" });
-
-    expect(telegramInboundInfo).toHaveBeenCalledWith(
-      "Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)",
+    await expect(processSampleMessage(processMessage, undefined, {}, {}, [media])).resolves.toEqual(
+      { kind: "completed" },
     );
+
+    expect(buildTelegramMessageContext).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [media] }),
+    );
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          ctxPayload: expect.objectContaining({ RawBody: body }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(verboseLog.mock.calls)).not.toContain(body);
   });
 
   it("keeps dispatch running when the early typing cue fails", async () => {

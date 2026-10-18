@@ -5,14 +5,12 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
-import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
-import type { PickerParams, PickerOption } from "../../components/select-picker.ts";
-import "../../components/select-picker.ts";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsPage,
   SettingsRow,
@@ -25,7 +23,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
-import { isTalkGptLiveModel, type TalkRealtimeSelection } from "./talk-schema.ts";
+import { resolveTalkModelFamilySettings, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
@@ -199,8 +197,6 @@ function ProviderRow(props: TalkViewProps) {
   );
 }
 
-type TalkModelOption = PickerOption & { provider: string };
-
 function ModelRow(props: TalkViewProps) {
   const provider = () => selectedTalkProviderOption(props.catalog, props.selection);
   const model = () => effectiveTalkValues(props.selection, provider()).model;
@@ -224,10 +220,6 @@ function ModelRow(props: TalkViewProps) {
       ...known.map((value) => ({ value, label: value })),
       ...(model() && !known.includes(model()!) ? [{ value: model()!, label: model()! }] : []),
     ].map((option) => Object.assign({}, option, { provider: selected.id }));
-    const index = values.findIndex((option) => option.value === model());
-    if (index > 0) {
-      values.unshift(...values.splice(index, 1));
-    }
     return values;
   });
   return (
@@ -237,27 +229,13 @@ function ModelRow(props: TalkViewProps) {
           title={t("talkPage.model.title")}
           description={t("talkPage.model.description")}
           control={
-            <div class="model-picker">
-              <openclaw-select-picker
-                class="settings-select picker-select model-picker__select"
-                style={{ width: "100%", "min-width": "min(138px,100%)" }}
-                prop:params={
-                  {
-                    label: t("talkPage.model.title"),
-                    value: model() ?? TALK_PICKER_UNSET,
-                    options: options(),
-                    disabled: props.configBusy,
-                    searchable: true,
-                    showOptionTooltips: false,
-                    renderLeading: (option) =>
-                      renderProviderBrandIcon(option.provider, {
-                        className: "model-picker__provider-icon",
-                      }),
-                    onChange: (value) => props.onModelChange(value || null),
-                  } satisfies PickerParams<TalkModelOption>
-                }
-              />
-            </div>
+            <ModelPicker
+              label={t("talkPage.model.title")}
+              value={model() ?? TALK_PICKER_UNSET}
+              options={options()}
+              disabled={props.configBusy}
+              onChange={(value) => props.onModelChange(value || null)}
+            />
           }
         />
       ) : (
@@ -274,9 +252,10 @@ function VoiceRow(props: TalkViewProps) {
     // Explicit reset uses public defaults until the config revision acknowledges it.
     const publicModel = props.modelDefaultPending ? provider?.defaultModel : model;
     const publicVoices = provider?.voicesByModel?.[publicModel ?? ""];
+    const family = resolveTalkModelFamilySettings(provider, model);
     const usesActiveRoute =
       props.modelDefaultPending !== true &&
-      (model === null || (isTalkGptLiveModel(model) && publicVoices === undefined));
+      (model === null || (family?.unlistedModelVoices === "active" && publicVoices === undefined));
     const voices = usesActiveRoute
       ? (provider?.activeVoices ?? provider?.voices ?? [])
       : (publicVoices ?? provider?.voices ?? []);
@@ -325,26 +304,30 @@ function VoiceRow(props: TalkViewProps) {
   );
 }
 
-function GptLiveRow(props: TalkViewProps) {
+function ModelFamilyRow(props: TalkViewProps) {
   const provider = () => selectedTalkProviderOption(props.catalog, props.selection);
-  const model = () => effectiveTalkValues(props.selection, provider()).model;
+  const settings = () =>
+    resolveTalkModelFamilySettings(
+      provider(),
+      effectiveTalkValues(props.selection, provider()).model,
+    );
   return (
-    <>
-      {provider()?.id === "openai" && isTalkGptLiveModel(model()) && (
+    <Show when={settings()}>
+      {(family) => (
         <SettingsRow
-          title={t("talkPage.gptLive.title")}
-          description={t("talkPage.gptLive.hint")}
+          title={t(family().hint.titleKey)}
+          description={t(family().hint.descriptionKey)}
           control={
             <SettingsStatus
               kind={provider()?.configured ? "ok" : "warn"}
               label={t(
-                provider()?.configured ? "talkPage.gptLive.ready" : "talkPage.status.notReady",
+                provider()?.configured ? family().hint.readyKey : "talkPage.status.notReady",
               )}
             />
           }
         />
       )}
-    </>
+    </Show>
   );
 }
 
@@ -368,7 +351,7 @@ export function Talk(props: TalkViewProps) {
           <ProviderRow {...props} />
           <ModelRow {...props} />
           <VoiceRow {...props} />
-          <GptLiveRow {...props} />
+          <ModelFamilyRow {...props} />
         </SettingsSection>
       </SettingsPage>
       {props.editor}

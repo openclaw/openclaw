@@ -93,7 +93,6 @@ describe("update repair channel warnings", () => {
         expectedVersion: "2026.10.3",
         expectedBuildId: "candidate",
         requireRunningService: true,
-        settle: { probes: 2 },
         onVerified,
       });
       expect(validation).toMatchObject({ ok: true, score: 7 });

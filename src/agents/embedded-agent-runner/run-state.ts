@@ -182,6 +182,8 @@ export type EmbeddedRunRegistration = {
   agentId?: string;
   delegatedAuthority?: AgentRunDelegatedAuthority;
   humanInputWaits?: Set<() => boolean>;
+  /** Exact-run keyed inputs retain accepted outcomes, never rejected reservations. */
+  messageAdmissions?: Map<string, Promise<EmbeddedAgentQueueMessageOutcome>>;
   onHumanInputResolved?: () => void;
 };
 
@@ -211,7 +213,6 @@ export type AbandonedEmbeddedRun = {
   sessionFile?: string;
   abandonedAtMs: number;
   reason: "timeout" | "recovering_timeout";
-  recoveryToken?: symbol;
 };
 
 const EMBEDDED_RUN_STATE_KEY = Symbol.for("openclaw.embeddedRunState");

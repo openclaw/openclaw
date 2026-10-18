@@ -1,4 +1,5 @@
 // Normalizes user-submitted model config at config mutation boundaries.
+import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   normalizeConfiguredProviderCatalogModelId,
   type ManifestModelIdNormalizationProvider,
@@ -13,7 +14,6 @@ import {
 } from "./model-input.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-const MODEL_SELECTION_KEYS = ["model", "imageModel", "voiceModel", "pdfModel"] as const;
 const MEDIA_MODEL_KEYS = ["image", "video", "music"] as const;
 
 type ModelIdNormalizationPolicies = ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
@@ -42,14 +42,17 @@ export function normalizeConfigModelSelectionParent(
   const scopeIndex = isDefaults ? 2 : isAgentEntry ? 3 : undefined;
   const isAgentModel =
     scopeIndex !== undefined &&
-    ((parentIndex === scopeIndex && path[scopeIndex] === "model") ||
+    ((parentIndex === scopeIndex &&
+      (path[scopeIndex] === "model" || path[scopeIndex] === "utilityModel")) ||
       (parentIndex === scopeIndex + 1 &&
         path[scopeIndex] === "subagents" &&
         path[parentIndex] === "model"));
   const isToolModel =
     isDefaults &&
     ((parentIndex === 2 &&
-      MODEL_SELECTION_KEYS.some((key) => key !== "model" && key === path[2])) ||
+      AGENT_MODEL_CONFIG_KEYS.some(
+        (key) => key !== "model" && key !== "utilityModel" && key === path[2],
+      )) ||
       (parentIndex === 3 &&
         path[2] === "mediaModels" &&
         MEDIA_MODEL_KEYS.some((key) => key === path[3])));
@@ -65,6 +68,9 @@ export function normalizeConfigModelSelectionParent(
     (member === "timeoutMs" && !isToolModel)
   ) {
     return undefined;
+  }
+  if (path[parentIndex] === "utilityModel") {
+    return { primary: value.trim() };
   }
   return toAgentModelListLike(value);
 }
@@ -91,10 +97,9 @@ function normalizeAgentModelScope(value: unknown): unknown {
   }
 
   let next: unknown = value;
-  for (const key of MODEL_SELECTION_KEYS) {
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
     next = normalizeNestedModelField(next, key, normalizeAgentModelSelectionForConfig);
   }
-  next = normalizeNestedModelField(next, "utilityModel", normalizeStringModelRef);
   next = normalizeNestedModelField(next, "mediaModels", (mediaModels) => {
     let nextMediaModels = mediaModels;
     for (const key of MEDIA_MODEL_KEYS) {

@@ -76,6 +76,7 @@ export function subscribeSnapshotInvalidation(listener: SnapshotInvalidationList
   return () => invalidationListeners.delete(listener);
 }
 
+// Cross-tab invalidation belongs to the module lifetime, independently of mounted pages.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === SNAPSHOT_INVALIDATION_STORAGE_KEY && event.newValue !== null) {

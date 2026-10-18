@@ -10,7 +10,6 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { prepareHostConfigSnapshot } from "../config/io.snapshot-preparation.js";
 import { resetGatewayRestartStateForInProcessRestart } from "../infra/restart.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -155,7 +154,6 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
   const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
   server = await startGatewayServer(port, {
     auth: { mode: "token", token: TOKEN },
-    prepareConfigSnapshot: prepareHostConfigSnapshot,
     controlUiEnabled: false,
     hotReloadRecovery,
   });

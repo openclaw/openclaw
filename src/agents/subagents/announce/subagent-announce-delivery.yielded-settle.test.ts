@@ -17,7 +17,10 @@ describe("yielded private settle outcomes", () => {
     },
     {
       name: "intentional silence",
-      response: { status: "ok", result: { payloads: [{ text: "NO_REPLY" }] } },
+      response: {
+        status: "ok",
+        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
+      },
       expected: { delivered: true },
     },
     ...["ok", "timeout"].map((status) => ({
@@ -59,7 +62,10 @@ describe("yielded private settle outcomes", () => {
       name: "failed silence",
       response: {
         status: "ok",
-        result: { payloads: [{ text: "NO_REPLY" }], meta: { aborted: true } },
+        result: {
+          payloads: [],
+          meta: { aborted: true, terminalReply: { disposition: "silent" } },
+        },
       },
       expected: { delivered: false, reason: "visible_reply_missing" },
     },

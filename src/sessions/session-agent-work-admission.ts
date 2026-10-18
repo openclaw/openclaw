@@ -13,11 +13,16 @@ export type AgentWorkAdmissionTarget = {
   env?: NodeJS.ProcessEnv;
 };
 export type AgentWorkAdmissionIdentity = { agentId: string; statePath: string };
+type AgentDeletionTerminalWrite = {
+  target: { agentId: string; path: string };
+  persist: (assertCurrent: () => void) => Promise<void>;
+};
 export type SessionWorkAdmissionClosure = {
   identities: readonly string[];
   agent?: AgentWorkAdmissionIdentity;
   deletionOperationId?: string;
   reason: Error;
+  terminalWrites?: Set<AgentDeletionTerminalWrite>;
 };
 
 export class AgentDeletionPendingError extends Error {}
@@ -45,12 +50,18 @@ export function publishAgentDeletionWorkAdmission(
   pending: boolean,
 ): void {
   const agent = agentWorkAdmissionIdentity(target);
+  const terminalWrites = new Set<AgentDeletionTerminalWrite>();
   for (const owner of sessionWorkAdmissionClosures) {
     if (
       owner.deletionOperationId !== undefined &&
       matchesAgentWorkAdmission(owner.agent, agent) &&
       (pending || owner.deletionOperationId === operationId)
     ) {
+      if (pending) {
+        for (const write of owner.terminalWrites ?? []) {
+          terminalWrites.add(write);
+        }
+      }
       sessionWorkAdmissionClosures.delete(owner);
     }
   }
@@ -59,10 +70,45 @@ export function publishAgentDeletionWorkAdmission(
       agent,
       identities: [],
       deletionOperationId: operationId,
+      terminalWrites,
       reason: new AgentDeletionPendingError(
         `Agent ${agent.agentId} deletion cleanup is still pending; resolve the cleanup failure, then retry agents.delete.`,
       ),
     });
+  }
+}
+
+/** The deletion fence retains terminal outcomes independently of the run's drain. */
+export function retainAgentDeletionTerminalWrite(
+  target: AgentWorkAdmissionTarget,
+  write: AgentDeletionTerminalWrite,
+): boolean {
+  const agent = agentWorkAdmissionIdentity(target);
+  const owner = [...sessionWorkAdmissionClosures].find(
+    (closure) =>
+      closure.deletionOperationId !== undefined && matchesAgentWorkAdmission(closure.agent, agent),
+  );
+  if (!owner) {
+    return false;
+  }
+  (owner.terminalWrites ??= new Set()).add(write);
+  return true;
+}
+
+/** Replay before rollback removes the journal fence; failures leave custody intact. */
+export async function replayAgentDeletionTerminalWrites(
+  target: AgentWorkAdmissionTarget,
+  replay: (write: AgentDeletionTerminalWrite) => Promise<void>,
+): Promise<void> {
+  const agent = agentWorkAdmissionIdentity(target);
+  for (const owner of sessionWorkAdmissionClosures) {
+    if (!matchesAgentWorkAdmission(owner.agent, agent)) {
+      continue;
+    }
+    for (const write of owner.terminalWrites ?? []) {
+      await replay(write);
+      owner.terminalWrites?.delete(write);
+    }
   }
 }
 

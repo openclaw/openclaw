@@ -1,23 +1,21 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
-import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import {
   PluginIconController,
   pluginIconFetchContext,
 } from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
-
-registerEnglishCatalog(registerPluginManagementEnglish);
 
 type CardPresentation = Pick<
   ClawHubRecommendation,
@@ -34,8 +32,9 @@ type Props = { recommendation?: ClawHubRecommendation; agentId?: string };
 /** Catalog owners authorize status; icon controllers own their object URLs through disposal. */
 function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
+  let active = true;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const notify = () => setRevision((value) => value + 1);
+  const notify = () => active && setRevision((value) => value + 1);
   const state: {
     dismissed: boolean;
     iconUrls: Record<string, string>;
@@ -59,7 +58,6 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
     revision();
     return state;
   };
-  let active = true;
   let generation = 0;
   let controller: AbortController | undefined;
   let previousArgs: unknown[] = [];
@@ -210,6 +208,7 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       }
     }
   }
+  // Recommendation changes refresh catalog status through the current Gateway client.
   createEffect(
     () => [
       props.recommendation?.id,
@@ -217,31 +216,31 @@ function ChatClawHubCardContent(props: Props, host: SolidBridgeElement<Props>) {
       props.recommendation?.kind === "skill" ? props.recommendation.registry : undefined,
       props.agentId,
     ],
-    () => {
-      void load();
-    },
+    () => void load(),
   );
-  const stop = context.gateway.subscribe(() =>
-    untrack(() => {
-      void load();
-    }),
-  );
-  const activate = () => {
-    if (context.gateway.snapshot.phase === "connected" && document.visibilityState === "visible") {
-      void load(true);
-    }
-  };
-  document.addEventListener("visibilitychange", activate);
-  globalThis.addEventListener("focus", activate);
-  onCleanup(() => {
-    active = false;
-    ++generation;
-    controller?.abort();
-    stop();
-    connection.dispose();
-    resetIcons();
-    document.removeEventListener("visibilitychange", activate);
-    globalThis.removeEventListener("focus", activate);
+  onSettled(() => {
+    // Connection edges retire request generations and icon URLs before later replies arrive.
+    const stop = context.gateway.subscribe(() => void load());
+    const activate = () => {
+      if (
+        context.gateway.snapshot.phase === "connected" &&
+        document.visibilityState === "visible"
+      ) {
+        void load(true);
+      }
+    };
+    const stopVisibility = listen(document, "visibilitychange", activate);
+    const stopFocus = listen(globalThis, "focus", activate);
+    return () => {
+      active = false;
+      ++generation;
+      controller?.abort();
+      stop();
+      connection.dispose();
+      resetIcons();
+      stopVisibility();
+      stopFocus();
+    };
   });
   function openListing(install = false) {
     const card = host.recommendation;

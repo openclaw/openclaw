@@ -37,25 +37,19 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 }));
 
 const authClientMocks = vi.hoisted(() => {
-  const ensureMatrixSdkLoggingConfigured = vi.fn();
   const matrixDoRequest = vi.fn();
-  const stopWithoutPersist = vi.fn(async () => {});
-  class MatrixClient {
-    async doRequest(...args: unknown[]) {
+  class MatrixAuthedHttpClient {
+    async requestJson(...args: unknown[]) {
       return await matrixDoRequest(...args);
     }
-    stopWithoutPersist() {
-      return stopWithoutPersist();
-    }
   }
-  return { ensureMatrixSdkLoggingConfigured, matrixDoRequest, stopWithoutPersist, MatrixClient };
+  return { matrixDoRequest, MatrixAuthedHttpClient };
 });
-const ensureMatrixSdkLoggingConfiguredMock = authClientMocks.ensureMatrixSdkLoggingConfigured;
 const matrixDoRequestMock = authClientMocks.matrixDoRequest;
 
-vi.mock("./sdk.js", () => ({ MatrixClient: authClientMocks.MatrixClient }));
-vi.mock("./client/logging.js", () => ({
-  ensureMatrixSdkLoggingConfigured: authClientMocks.ensureMatrixSdkLoggingConfigured,
+vi.mock("./sdk/http-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sdk/http-client.js")>()),
+  MatrixAuthedHttpClient: authClientMocks.MatrixAuthedHttpClient,
 }));
 
 function expectAuthFields(auth: unknown, fields: Record<string, unknown>) {
@@ -76,13 +70,12 @@ function expectSavedCredentials(
 }
 
 function expectMatrixLoginCall(fields: Record<string, unknown>) {
-  expect(matrixDoRequestMock).toHaveBeenNthCalledWith(
-    1,
-    "POST",
-    "/_matrix/client/v3/login",
-    undefined,
-    expect.objectContaining(fields),
-  );
+  expect(matrixDoRequestMock).toHaveBeenNthCalledWith(1, {
+    method: "POST",
+    endpoint: "/_matrix/client/v3/login",
+    timeoutMs: 60_000,
+    body: expect.objectContaining(fields),
+  });
 }
 
 describe("client constructor lazy loading", () => {
@@ -171,9 +164,7 @@ describe("resolveMatrixAuth", () => {
     touchMatrixCredentialsMock.mockReset();
     repairCurrentTokenStorageMetaDeviceIdMock.mockReset().mockReturnValue(true);
     resolveConfiguredSecretInputStringMock.mockReset().mockResolvedValue({});
-    ensureMatrixSdkLoggingConfiguredMock.mockReset();
     matrixDoRequestMock.mockReset();
-    authClientMocks.stopWithoutPersist.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -302,7 +293,11 @@ describe("resolveMatrixAuth", () => {
 
     const deviceId = await backfill();
 
-    expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
+    expect(matrixDoRequestMock).toHaveBeenCalledWith({
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 60_000,
+    });
     expectSavedCredentials(saveBackfilledMatrixDeviceIdMock, savedCredentials, "default");
     expect(repairCurrentTokenStorageMetaDeviceIdMock).toHaveBeenNthCalledWith(1, {
       ...authFixture,
@@ -331,21 +326,6 @@ describe("resolveMatrixAuth", () => {
     expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
     expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(deviceId).toBe("DEVICE123");
-  });
-
-  it("preserves request and cleanup failures when identity lookup is cancelled", async () => {
-    const abort = new AbortController();
-    const requestError = new Error("synthetic request failure");
-    const cleanupError = new Error("synthetic cleanup failure");
-    matrixDoRequestMock.mockImplementation(async () => {
-      abort.abort();
-      throw requestError;
-    });
-    authClientMocks.stopWithoutPersist.mockRejectedValue(cleanupError);
-    await expect(backfill({ abortSignal: abort.signal })).rejects.toMatchObject({
-      errors: [requestError, cleanupError],
-    });
-    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
   });
 
   it.each([null, { user_id: 7 }, { device_id: false }])(
@@ -513,7 +493,11 @@ describe("resolveMatrixAuth", () => {
         path: "channels.matrix.accessToken",
       }),
     );
-    expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
+    expect(matrixDoRequestMock).toHaveBeenCalledWith({
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 60_000,
+    });
     expectAuthFields(auth, {
       accountId: "default",
       homeserver: "https://matrix.example.org",
@@ -557,7 +541,11 @@ describe("resolveMatrixAuth", () => {
       accountId: "ops",
     });
 
-    expect(matrixDoRequestMock).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
+    expect(matrixDoRequestMock).toHaveBeenCalledWith({
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 60_000,
+    });
     expectAuthFields(auth, {
       accountId: "ops",
       homeserver: "https://matrix.example.org",

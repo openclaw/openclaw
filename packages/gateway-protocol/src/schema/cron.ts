@@ -624,7 +624,10 @@ export const CronUpdateParamsSchema = cronIdOrJobIdParams({
 });
 
 /** Removes a cron job by id or legacy jobId alias. */
-export const CronRemoveParamsSchema = cronIdOrJobIdParams({});
+export const CronRemoveParamsSchema = cronIdOrJobIdParams({
+  /** Rejects removal when the current definition differs from the caller's token. */
+  expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
+});
 
 /** Runs a cron job immediately, immediately if enabled, or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
@@ -638,6 +641,8 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
 /** Query params for cron run history. */
 export const CronRunsParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
+  /** Summary pages omit diagnostics and delivery traces; full is the default. */
+  view: Type.Optional(stringLiteralUnion(["full", "summary"])),
   scope: Type.Optional(stringLiteralUnion(["job", "all"])),
   id: Type.Optional(CronRunLogJobIdSchema),
   jobId: Type.Optional(CronRunLogJobIdSchema),

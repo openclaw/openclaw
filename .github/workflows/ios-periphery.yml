@@ -126,6 +126,21 @@ jobs:
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
 
+      - name: Identify Watch RTC cache inputs
+        id: ios-cache-inputs
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-libraries" >> "$GITHUB_ENV"
+
+      # Consume the exact cache published by trusted main CI; this workflow never writes it.
+      - name: Restore Watch RTC build inputs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ runner.temp }}/openclaw-watch-rtc-libraries
+          key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+
       - name: Install iOS Swift tooling
         run: |
           periphery_dir="$RUNNER_TEMP/openclaw-periphery"
@@ -261,7 +276,7 @@ jobs:
 
       - name: Upload Periphery report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-periphery

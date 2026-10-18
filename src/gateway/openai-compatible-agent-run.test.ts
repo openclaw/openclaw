@@ -351,7 +351,10 @@ describe("OpenAI-compatible command admission", () => {
           await opts.onAdmittedRunContext?.(context);
         }
         executed();
-        return { payloads: [{ text: "settled", mediaUrl: null }], meta: { durationMs: 0 } };
+        return {
+          payloads: [{ text: "settled", mediaUrl: null }],
+          meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "settled" } },
+        };
       });
       const pending = runOpenAiCompatibleAgentCommand({
         message: "probe",

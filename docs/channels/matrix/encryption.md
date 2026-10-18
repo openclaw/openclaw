@@ -130,6 +130,8 @@ The repair/setup command for encrypted accounts. In order, it:
 - marks and cross-signs the current device
 - creates a server-side room-key backup if one does not already exist
 
+If the local recovery key cannot be read, bootstrap stops rather than treating the key as missing and replacing secret storage. Fix the reported storage error and retry.
+
 If the homeserver requires UIA to upload cross-signing keys, OpenClaw tries no-auth first, then `m.login.dummy`, then `m.login.password` (requires `channels.matrix.password`).
 
 Useful flags:

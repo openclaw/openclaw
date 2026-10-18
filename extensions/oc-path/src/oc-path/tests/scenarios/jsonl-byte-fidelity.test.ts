@@ -20,11 +20,7 @@ describe("jsonl byte-fidelity", () => {
       kind: "number",
       value: 2,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    const rendered = result.ast.raw;
+    const rendered = result.raw;
     expect(rendered).toBe('{"a":2}\r\n{"b":2}\r\n');
     expect((rendered.match(/\r\n/g) ?? []).length).toBe(2);
     expect((rendered.match(/(?<!\r)\n/g) ?? []).length).toBe(0);
@@ -38,6 +34,6 @@ describe("jsonl byte-fidelity", () => {
       kind: "number",
       value: 2,
     });
-    expect(result.ok && result.ast.raw).toBe('{"a":2}\n{"b":2}\n');
+    expect(result.raw).toBe('{"a":2}\n{"b":2}\n');
   });
 });

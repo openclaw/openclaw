@@ -94,11 +94,7 @@ export function resolveCooldownDecision(params: {
           (!stats.blockedModel || stats.blockedModel === params.candidate.model)
         );
       });
-    shouldProbe =
-      staleRateLimit ||
-      soonest === null ||
-      !Number.isFinite(soonest) ||
-      params.now >= soonest - PROBE_MARGIN_MS;
+    shouldProbe = staleRateLimit || soonest === null || params.now >= soonest - PROBE_MARGIN_MS;
   }
 
   const isPersistentAuthIssue = inferredReason === "auth" || inferredReason === "auth_permanent";

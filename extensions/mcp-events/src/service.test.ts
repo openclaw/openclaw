@@ -26,7 +26,7 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin from "../index.js";
+import plugin, { getMcpEventsDiagnostics } from "../index.js";
 import { createCallbackHandler } from "./http.js";
 import { record } from "./protocol.js";
 import { McpEventsService } from "./service.js";
@@ -439,7 +439,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     }
     expect.soft(earlyStatus).toBe(503);
     expect.soft(subscribed).toHaveLength(1);
-    expect(current.diagnostics()).toHaveLength(1);
+    expect(getMcpEventsDiagnostics(current)).toHaveLength(1);
     expect((await post(JSON.stringify(event()), "evt-1")).status).toBe(200);
   });
 
@@ -465,7 +465,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     await Promise.all([retry, concurrent]);
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(subscribed).toHaveLength(1);
-    expect(current!.diagnostics()).toHaveLength(1);
+    expect(getMcpEventsDiagnostics(current!)).toHaveLength(1);
   });
 
   it("retries enabled sources past eight failures and recovers without a Cron edit", async () => {
@@ -497,7 +497,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     now = retry.atMs;
     await runSchedule("source:authored-job");
     expect(subscribed).toHaveLength(1);
-    expect(current!.diagnostics()).toEqual([expect.objectContaining({ status: "active" })]);
+    expect(getMcpEventsDiagnostics(current!)).toEqual([
+      expect.objectContaining({ status: "active" }),
+    ]);
     expect(schedules.has("source:authored-job")).toBe(false);
   });
 
@@ -525,9 +527,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     expect((await queue().listPending())[0]?.attempts).toBe(0);
     expect((await post(JSON.stringify(event("evt-2")), "evt-2")).status).toBe(503);
     await current!.reconcile();
-    expect(current!.diagnostics().find((entry) => entry.status === "active")?.status).toBe(
-      "active",
-    );
+    expect(
+      getMcpEventsDiagnostics(current!).find((entry) => entry.status === "active")?.status,
+    ).toBe("active");
     expect(unsubscribed).toHaveLength(0);
     authorityUnavailable = false;
     now += 1; // Distinct receipt times exercise FIFO rather than the event-ID tie breaker.
@@ -645,7 +647,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       }
       now = retry.atMs;
       await runSchedule(key);
-      expect(current!.diagnostics()).toEqual([]);
+      expect(getMcpEventsDiagnostics(current!)).toEqual([]);
       expect(unsubscribed).toHaveLength(1);
       expect(schedules.has(key)).toBe(false);
     },
@@ -681,8 +683,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
       eventId: "evt-1",
       payload: { bindingId, event: { data: event().data } },
     });
-    expect(current.diagnostics()[0]).toMatchObject({ status: "active", replayAvailable: true });
-    expect(JSON.stringify(current.diagnostics())).not.toContain(secret);
+    expect(getMcpEventsDiagnostics(current)[0]).toMatchObject({
+      status: "active",
+      replayAvailable: true,
+    });
+    expect(JSON.stringify(getMcpEventsDiagnostics(current))).not.toContain(secret);
   });
 
   it("rejects authentication, schema, envelope, control, and size failures without queue writes", async () => {
@@ -751,7 +756,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     };
     await current!.reconcile();
     await current!.reconcile();
-    expect(current!.diagnostics()).toEqual([]);
+    expect(getMcpEventsDiagnostics(current!)).toEqual([]);
     const bindings = createPluginStateKeyedStoreForTests<SubscriptionBinding>("mcp-events", {
       namespace: "subscriptions-v1",
       maxEntries: 4096,

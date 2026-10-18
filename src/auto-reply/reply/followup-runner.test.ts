@@ -151,7 +151,6 @@ function createSettledExecution(): FollowupExecutionResult {
         resolved: { provider: "anthropic", model: "claude" },
         fallback: { exhausted: false, attempts: [] },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
   };
@@ -195,6 +194,7 @@ describe("createFollowupRunner", () => {
           : {
               visibleReplySent: false,
               failed,
+              completed: !failed,
               ...(kind === "pending" ? { transportPending: true } : {}),
             },
       );
@@ -528,6 +528,7 @@ describe("createFollowupRunner", () => {
     expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
       visibleReplySent: false,
       failed: true,
+      completed: false,
     });
   });
 
@@ -537,9 +538,13 @@ describe("createFollowupRunner", () => {
     const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
     state.admit.mockResolvedValue({ kind: "deferred", reason: "active-run" });
 
-    await expect(
-      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued),
-    ).rejects.toBeInstanceOf(FollowupRunDeferredError);
+    const pending = createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
+      queued,
+    );
+    await expect(pending).rejects.toBeInstanceOf(FollowupRunDeferredError);
+    await expect(pending).rejects.toThrow(
+      "Follow-up reply lane is still active (Follow-up reply lane is still active (active-run))",
+    );
 
     expect(state.completeLifecycle).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
@@ -570,6 +575,7 @@ describe("createFollowupRunner", () => {
       expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
+        completed: false,
       });
     },
   );
@@ -916,6 +922,7 @@ describe("createFollowupRunner", () => {
       expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: visible,
         failed: false,
+        completed: true,
       });
     },
   );

@@ -1,13 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  createMemo,
-  createRenderEffect,
-  createSignal,
-  For,
-  onCleanup,
-  Show,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import type {
   McpAppMentionResult,
   McpAppResourceLink,
@@ -15,11 +7,11 @@ import type {
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { useMcpAppCatalog } from "../lib/reactive/mcp-app-catalog.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "../styles/mcp-app-extensions.css";
 
@@ -37,34 +29,15 @@ type McpAppResourcesElement = SolidBridgeElement<McpAppResourcesProps>;
 
 function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElement }) {
   const context = useApplication();
+  // The bridge host is fixed for this mounted content lifetime.
   const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => setRevision((value) => value + 1);
-  const state: {
-    expanded: boolean;
-    serverName: string;
-    query: string;
-    resources: McpAppResourceLink[];
-    busy: boolean;
-    searched: boolean;
-    error: string | null;
-  } = {
-    expanded: false,
-    serverName: "",
-    query: "",
-    resources: [],
-    busy: false,
-    searched: false,
-    error: null,
-  };
-  const view = () => {
-    revision();
-    return state;
-  };
   let generation = 0;
   let mounted = true;
-  const catalog = useMcpAppCatalog(context, () => ({
+  // Native inputs expose same-turn edits before their presentation signals settle.
+  let queryInput: HTMLInputElement | undefined;
+  let serverSelect: HTMLSelectElement | undefined;
+  const catalog = createMcpAppCatalog(context, () => ({
     sessionKey: props.sessionKey,
     agentId: props.agentId,
   }));
@@ -80,33 +53,46 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
       props.agentId,
     ]);
   });
-  createRenderEffect(identity, () => {
-    generation++;
-    state.resources = [];
-    state.error = null;
-    state.searched = false;
-    state.busy = false;
-    invalidate();
+  // Keep each committed identity distinct even while the picker has no visible consumers.
+  const requestScope = createMemo(() => ({ identity: identity() }));
+  type ResourceView = {
+    expanded: boolean;
+    query: string;
+    generation: number;
+    resources: McpAppResourceLink[];
+    busy: boolean;
+    searched: boolean;
+    error: string | null;
+  };
+  // A new scope retires results while preserving the user's disclosure and query.
+  const [view, setView] = createSignal<ResourceView>((previous) => {
+    requestScope();
+    return {
+      expanded: previous?.expanded ?? false,
+      query: previous?.query ?? "",
+      generation,
+      resources: [],
+      busy: false,
+      searched: false,
+      error: null,
+    };
   });
-  const servers = createMemo(() => {
-    return catalog().servers.filter((server) => server.mentionTool);
+  const servers = createMemo(() => catalog().servers.filter((server) => server.mentionTool));
+  const [serverName, setServerName] = createSignal<string>((previous = "") => {
+    const available = servers();
+    return available.length && !available.some((server) => server.serverName === previous)
+      ? available[0]!.serverName
+      : previous;
   });
-  createRenderEffect(servers, (available) => {
-    if (available.length && !available.some((server) => server.serverName === state.serverName)) {
-      state.serverName = available[0]!.serverName;
-      invalidate();
-    }
-  });
-  const serverName = () => view().serverName;
 
   async function search() {
     const client = context.gateway.snapshot.client;
-    const selectedServer = serverName();
-    if (!client || !selectedServer) {
+    const selectedServer = serverSelect?.value ?? serverName();
+    if (!client || !catalog().available || !selectedServer) {
       return;
     }
     const searchGeneration = ++generation;
-    const searchIdentity = identity();
+    const searchScope = requestScope();
     const sessionKey = props.sessionKey;
     const agentId = props.agentId;
     const current = () =>
@@ -114,39 +100,46 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
       host.isConnected &&
       generation === searchGeneration &&
       context.gateway.snapshot.client === client &&
-      identity() === searchIdentity;
-    state.busy = true;
-    state.error = null;
-    state.resources = [];
-    invalidate();
+      requestScope() === searchScope;
+    setView((previous) => ({
+      ...previous,
+      generation: searchGeneration,
+      busy: true,
+      error: null,
+      resources: [],
+    }));
     try {
-      const result = await client.request<McpAppMentionResult>("mcp.app.mention", {
+      const { resources } = await client.request<McpAppMentionResult>("mcp.app.mention", {
         sessionKey,
         agentId,
         serverName: selectedServer,
-        query: state.query,
+        query: queryInput?.value ?? view().query,
       });
       if (current()) {
-        state.resources = result.resources;
-        state.searched = true;
+        setView((previous) => ({ ...previous, resources, searched: true, busy: false }));
       }
     } catch (error) {
       if (current()) {
-        state.error =
-          asOptionalRecord(asOptionalRecord(error)?.details)?.code ===
-          "MCP_APP_UNSUPPORTED_MENTION_RESULT"
-            ? t("mcpApp.errors.unsupportedResources")
-            : formatUiError(error);
-      }
-    } finally {
-      if (current()) {
-        state.busy = false;
-        invalidate();
+        setView((previous) => ({
+          ...previous,
+          busy: false,
+          error:
+            asOptionalRecord(asOptionalRecord(error)?.details)?.code ===
+            "MCP_APP_UNSUPPORTED_MENTION_RESULT"
+              ? t("mcpApp.errors.unsupportedResources")
+              : formatUiError(error),
+        }));
       }
     }
   }
   function attach(resource: McpAppResourceLink) {
-    if (context.gateway.snapshot.phase !== "connected" || !state.resources.includes(resource)) {
+    const current = view();
+    // Input changes retire retained result buttons before the next DOM commit.
+    if (
+      context.gateway.snapshot.phase !== "connected" ||
+      current.generation !== generation ||
+      !current.resources.includes(resource)
+    ) {
       return;
     }
     const claimed = !host.dispatchEvent(
@@ -162,12 +155,11 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
         },
       }),
     );
-    if (claimed) {
-      state.expanded = false;
-    } else {
-      state.error = t("mcpApp.errors.mountUnavailable");
-    }
-    invalidate();
+    setView((previous) =>
+      claimed
+        ? { ...previous, expanded: false }
+        : { ...previous, error: t("mcpApp.errors.mountUnavailable") },
+    );
   }
   return (
     <Show when={servers().length}>
@@ -177,8 +169,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
           class="btn btn--sm"
           aria-expanded={view().expanded ? "true" : "false"}
           onClick={() => {
-            state.expanded = !state.expanded;
-            invalidate();
+            setView((previous) => ({ ...previous, expanded: !previous.expanded }));
           }}
         >
           <Icon name="link" /> {t("mcpApp.resources")}
@@ -193,15 +184,14 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
             }}
           >
             <select
+              ref={(element) => (serverSelect = element)}
               aria-label={t("mcpApp.title")}
               value={serverName()}
               disabled={view().busy}
               onChange={(event) => {
-                state.serverName = event.currentTarget.value;
+                setServerName(event.currentTarget.value);
                 generation++;
-                state.resources = [];
-                state.searched = false;
-                invalidate();
+                setView((previous) => ({ ...previous, resources: [], searched: false }));
               }}
             >
               <For each={servers()} keyed={(server) => server.serverName}>
@@ -209,20 +199,24 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
               </For>
             </select>
             <input
+              ref={(element) => (queryInput = element)}
               type="search"
               aria-label={t("mcpApp.resourceSearch")}
               placeholder={t("mcpApp.resourceQuery")}
               value={view().query}
               onInput={(event) => {
-                state.query = event.currentTarget.value;
+                const query = event.currentTarget.value;
                 generation++;
-                state.busy = false;
-                state.resources = [];
-                state.searched = false;
-                invalidate();
+                setView((previous) => ({
+                  ...previous,
+                  query,
+                  busy: false,
+                  resources: [],
+                  searched: false,
+                }));
               }}
             />
-            <button class="btn" type="submit" disabled={view().busy}>
+            <button class="btn" type="submit" disabled={view().busy || !catalog().available}>
               {t("mcpApp.resourceSearch")}
             </button>
           </form>
@@ -232,7 +226,7 @@ function McpAppResourcesContent(props: McpAppResourcesProps & { host: HTMLElemen
                 <button
                   type="button"
                   class="btn mcp-app-resources__result"
-                  disabled={view().busy}
+                  disabled={view().busy || !catalog().available}
                   onClick={() => attach(resource)}
                 >
                   <span>{resource.title || resource.name}</span>

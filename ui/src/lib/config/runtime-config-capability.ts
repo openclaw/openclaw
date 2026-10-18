@@ -4,7 +4,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { showToast } from "../toast.ts";
-import { createAppliedConfigRefreshController } from "./applied-refresh.ts";
+import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { clearConfigDraftTracking } from "./config-draft-model.ts";
 import {
   loadConfig,
@@ -101,7 +101,7 @@ export function createRuntimeConfigCapability(
     await (loads.get(key) ?? run(task, key));
   };
 
-  const appliedRefresh = createAppliedConfigRefreshController({
+  const appliedRefresh = createAppliedConfigRefreshOwner({
     shouldRefresh: () =>
       !disposed &&
       state.connected &&

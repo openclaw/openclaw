@@ -357,6 +357,76 @@ Keep one renderer responsible for each container's children and dispose its root
 when the view ends. Solid 2 batches reactive writes; keep synchronous request
 authority and mutation guards with their existing owners.
 
+### Packaged Settings presentations
+
+A bundled presentation can render a host-owned Settings placement without
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview and indexed-search panel,
+including when memory is off, another engine is selected, or the Gateway is offline.
+Declare the placement alongside the built entry:
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "activation": "settings-only",
+    "settingsViews": [
+      { "section": "memory", "panel": "overview" },
+      { "section": "memory", "panel": "memories" }
+    ]
+  }
+}
+```
+
+The browser module exports `pluginId` and a `settingsViews` array of
+`ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
+its `placement` and a `mount(container, context)` that returns `update(snapshot)`
+and `dispose()`. Memory views support the overview and Memories panel. A channel plugin can instead declare
+`{ "section": "channels", "panel": "detail", "channelId": "<owned-channel>" }` and export a
+`ControlUiChannelSettingsView`. The channel must appear in the declaring manifest's `channels`.
+These placements do not register arbitrary Settings routes.
+
+The host supplies the selected Settings agent, engine availability, connection
+state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
+operator RPC remains trusted native UI authority, bound to the mounted view's
+lifetime. Retained callbacks reject after that lifetime ends, including when the advertised
+method catalog changes. An absent method catalog means the method is unavailable. The host keeps
+routing, agent selection, engine decisions, and config writes; the plugin owns
+its presentation, status requests, and indexed-memory search. Search and full-file
+reads remain agent-scoped through the existing Gateway methods. Only an explicit
+user action searches memory or probes embedding readiness.
+
+A channel view receives status/account metadata, locale, connection state, and a
+`presented` flag. Its draft belongs to the Channels page: closing or switching the
+detail modal detaches its DOM without disposing the view. Same-client reconnects
+retain the draft but retire in-flight requests. Gateway/client, channel owner,
+plugin runtime, config owner, or administrator-access replacement ends the view.
+Keep pending-operation identity synchronous and stop rendering hidden updates
+until the view is presented again.
+
+`context.mountConfig(container)` mounts the real host-owned channel schema editor;
+its returned disposer releases that slot. `context.refresh(probe)` refreshes channel
+status. The channel context's `request` accepts an account ID, relative path
+segments, `PUT` or `POST`, a JSON body, and a caller cancellation signal. The host
+encodes the path once under `/api/channels/<owned-channel>/<account>/`, retains
+credentials, and checks connected administrator authority before dispatch, before
+credential retry, and after consuming the response body. Plugins never receive
+arbitrary credentialed URLs, headers, or tokens. A plugin may add its own operation
+deadline, which also covers retries and response-body consumption. The context
+returns parsed JSON plus HTTP status and a sanitized error message; backend route
+validation and mutation authority remain unchanged.
+
+The normal plugin builder preserves this declaration. The Control UI build
+loads it from the completed bundled distribution with the same package identity,
+asset revision, and immutable JavaScript/CSS generation. A Settings-only entry
+is excluded from runtime UI activation; existing `defineControlUiPlugin` entries
+keep their required `activate(host)` contract.
+
+Source-checkout `pnpm ui:build` and `pnpm ui:dev` prepare declared Settings
+presentations through the same plugin builder before reading that distribution.
+The dev server serves the validated generated JavaScript and CSS without runtime
+plugin activation. Restart the dev server after editing plugin presentation
+sources to rebuild their immutable generation.
+
 ### Bundle boundaries
 
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy

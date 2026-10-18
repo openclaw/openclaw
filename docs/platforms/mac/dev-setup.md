@@ -378,6 +378,10 @@ the rest of the run.
 If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
 check the `hdiutil` error on stderr. Routine image creation and attachment output stays
 quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
+A transient `Resource temporarily unavailable` attach failure is retried, up to three
+attempts in total. If attachment fails before mounting, cleanup detaches the snapshot image
+by device; if it stays attached, cleanup fails, retains the files, and prints the
+`hdiutil detach /dev/diskN` command to run.
 Snapshot images and build outputs stay in the checkout. Their read-only mount directories
 use macOS's per-user temporary location (`getconf DARWIN_USER_TEMP_DIR`), independently of
 `TMPDIR`, so an external checkout does not need to support nested mounts. If attachment
@@ -433,6 +437,11 @@ If the app crashes when you try to allow **Speech Recognition** or
    to force a clean slate from macOS.
 
 ### Gateway "Starting..." indefinitely
+
+During a cold start, the Gateway can briefly hold the state database for schema
+maintenance. The app waits for that custody to finish within its existing
+readiness timeout, then continues automatic setup. It does not replace the
+Gateway or create a new device identity while maintenance is active.
 
 Check whether a zombie process holds the port:
 

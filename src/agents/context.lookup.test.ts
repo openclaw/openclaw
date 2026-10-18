@@ -165,6 +165,45 @@ describe("context cache lifecycle", () => {
     ).toBe(1_000_000);
   });
 
+  it.each(["success", "failure"])(
+    "keeps refreshed discovery when an older load finishes with %s",
+    async (outcome) => {
+      const started = Promise.withResolvers<void>();
+      const older = Promise.withResolvers<{ modelCatalog: ContextWindowCatalog }>();
+      state.loadOwner.mockImplementationOnce(() => {
+        started.resolve();
+        return older.promise;
+      });
+      const pending = context.ensureContextWindowCacheLoaded();
+      await started.promise;
+
+      state.catalog.entries = [{ provider: "synthetic", id: "new-model", contextWindow: 222_000 }];
+      await context.refreshContextWindowCache({});
+      const options = { provider: "synthetic", allowAsyncLoad: false };
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
+
+      if (outcome === "failure") {
+        older.reject(new Error("old catalog unavailable"));
+      } else {
+        older.resolve({
+          modelCatalog: {
+            entries: [{ provider: "synthetic", id: "old-model", contextWindow: 111_000 }],
+          },
+        });
+      }
+      await pending;
+
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
+      expect(
+        context.resolveContextTokensForModel({ model: "old-model", ...options }),
+      ).toBeUndefined();
+    },
+  );
+
   it("warms configured, discovered, and static windows from the published owner", async () => {
     const requested = config("synthetic", model("stale-model", 111_000));
     state.config = config("synthetic", model("current-model", 222_000));

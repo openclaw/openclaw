@@ -1,3 +1,4 @@
+import type { ControlUiLinkReaderDetailParams } from "openclaw/plugin-sdk/control-ui-link-reader";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GitHubItemTarget = {
@@ -9,6 +10,73 @@ export type GitHubItemTarget = {
 export type GitHubTarget =
   | GitHubItemTarget
   | { kind: "commit"; owner: string; repo: string; sha: string };
+
+export type GitHubJobTarget = {
+  kind: "job";
+  owner: string;
+  repo: string;
+  runId: number;
+  jobId: number;
+};
+export type GitHubReadTarget = GitHubTarget | GitHubJobTarget;
+
+export function parseGitHubReadTarget(value: unknown): GitHubReadTarget | null {
+  if (!isRecord(value) || value.kind !== "job") {
+    return parseGitHubTarget(value);
+  }
+  const { owner, repo, runId, jobId } = value;
+  return typeof owner === "string" &&
+    isValidOwner(owner) &&
+    typeof repo === "string" &&
+    isValidRepo(repo) &&
+    typeof runId === "number" &&
+    Number.isSafeInteger(runId) &&
+    runId > 0 &&
+    typeof jobId === "number" &&
+    Number.isSafeInteger(jobId) &&
+    jobId > 0 &&
+    value.sha === undefined &&
+    value.number === undefined
+    ? { kind: "job", owner, repo, runId, jobId }
+    : null;
+}
+
+/** Job URLs are model-reader inputs; existing UI descriptors keep opening them externally. */
+export function parseGitHubReadParams(value: unknown): {
+  target: GitHubReadTarget;
+  refresh: boolean;
+} | null {
+  const item = parseGitHubLinkParams(value);
+  if (item) {
+    return item;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.url !== "string" ||
+    value.url.length > 4096 ||
+    (value.refresh !== undefined && typeof value.refresh !== "boolean")
+  ) {
+    return null;
+  }
+  const url = URL.parse(value.url);
+  if (!url || url.origin !== "https://github.com" || url.username || url.password) {
+    return null;
+  }
+  const match =
+    /^\/([^/]+)\/([^/]+)\/actions\/runs\/([1-9]\d{0,15})\/job\/([1-9]\d{0,15})\/?$/u.exec(
+      url.pathname,
+    );
+  const target =
+    match &&
+    parseGitHubReadTarget({
+      kind: "job",
+      owner: match[1],
+      repo: match[2],
+      runId: Number(match[3]),
+      jobId: Number(match[4]),
+    });
+  return target ? { target, refresh: value.refresh === true } : null;
+}
 
 export function isValidOwner(value: string): boolean {
   return /^(?=.{1,39}$)[a-z\d](?:[a-z\d-]*[a-z\d])?$/iu.test(value);
@@ -76,11 +144,15 @@ const GITHUB_LINK_PATH = new RegExp(
   "u",
 );
 
-export function parseGitHubLinkParams(value: unknown): {
+export function parseGitHubLinkParams(
+  value: unknown,
+  host = "github.com",
+): {
   target: GitHubTarget;
   url: string;
   agentId?: string;
   refresh: boolean;
+  section?: ControlUiLinkReaderDetailParams["section"];
   filesExpanded: boolean;
 } | null {
   if (
@@ -88,6 +160,11 @@ export function parseGitHubLinkParams(value: unknown): {
     typeof value.url !== "string" ||
     value.url.length > 4096 ||
     (value.refresh !== undefined && typeof value.refresh !== "boolean") ||
+    (value.section !== undefined &&
+      value.section !== "overview" &&
+      value.section !== "checks" &&
+      value.section !== "files" &&
+      value.section !== "discussion") ||
     (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim()))
   ) {
     return null;
@@ -96,7 +173,7 @@ export function parseGitHubLinkParams(value: unknown): {
     const url = new URL(value.url);
     if (
       url.protocol !== "https:" ||
-      url.hostname !== "github.com" ||
+      url.hostname !== host ||
       url.username ||
       url.password ||
       url.port ||
@@ -117,6 +194,7 @@ export function parseGitHubLinkParams(value: unknown): {
           url: url.href,
           ...(typeof value.agentId === "string" ? { agentId: value.agentId.trim() } : {}),
           refresh: value.refresh === true,
+          ...(value.section !== undefined ? { section: value.section } : {}),
           filesExpanded: subpage === "files",
         }
       : null;
@@ -125,7 +203,7 @@ export function parseGitHubLinkParams(value: unknown): {
   }
 }
 
-export function githubTargetUrl(target: GitHubTarget): string {
+export function githubTargetUrl(target: GitHubTarget, host = "github.com"): string {
   const id = target.kind === "commit" ? target.sha : target.number;
-  return `https://github.com/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
+  return `https://${host}/${target.owner}/${target.repo}/${target.kind === "issue" ? "issues" : target.kind}/${id}`;
 }

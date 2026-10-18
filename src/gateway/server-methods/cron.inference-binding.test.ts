@@ -373,7 +373,7 @@ function createParams() {
 
 describe("cron handler inference binding persistence", () => {
   it.each(["environment", "configuration"] as const)(
-    "rejects unowned %s credentials before persisting an unusable job",
+    "creates an unbound job on a %s key, the same rule its runs follow",
     async (source) => {
       await withFixture(async (fixture) => {
         const key = "synthetic-direct-key";
@@ -381,14 +381,8 @@ describe("cron handler inference binding persistence", () => {
         await withEnvAsync(
           { OPENAI_API_KEY: source === "environment" ? key : undefined },
           async () => {
-            const error = await fixture.invoke("cron.add", createParams(), null, {
-              expectedSuccess: false,
-            });
-            expect(error).toMatchObject({
-              message: expect.stringMatching(/stored.*account.*model@profile/i),
-            });
-            expect(JSON.stringify(error)).not.toContain(key);
-            expect(await fixture.status()).toMatchObject({ jobs: 0 });
+            await fixture.invoke("cron.add", createParams());
+            expect((await fixture.reload()).inferenceBinding).toBeUndefined();
           },
         );
       });

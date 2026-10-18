@@ -2661,11 +2661,18 @@ describe("EmbeddedTuiBackend", () => {
       expectedText: "MEDIA:./image.png",
     },
     {
-      name: "short replies after suppressing lead-fragment deltas",
+      name: "prepared short replies",
       streamedText: "No",
-      suppressDeltas: true,
+      expectStream: true,
       finalPayloads: [{ text: "No" }],
       expectedText: "No",
+    },
+    {
+      name: "a prepared literal silence marker",
+      streamedText: "NO_REPLY",
+      expectStream: true,
+      finalPayloads: [{ text: "NO_REPLY" }],
+      expectedText: "NO_REPLY",
     },
   ])(
     "preserves $name in the final answer",
@@ -2674,7 +2681,7 @@ describe("EmbeddedTuiBackend", () => {
       expectedText,
       streamedText = "Draft answer",
       mediaUrls,
-      suppressDeltas,
+      expectStream,
     }) => {
       const pending = deferred<EmbeddedAgentResult>();
       agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
@@ -2698,7 +2705,7 @@ describe("EmbeddedTuiBackend", () => {
       const chatPayloads = events
         .filter((event) => event.event === "chat")
         .map((event) => event.payload);
-      if (suppressDeltas) {
+      if (expectStream) {
         const nonEmptyDeltas = chatPayloads.filter((entry) => {
           const payload = entry as {
             state?: string;
@@ -2706,7 +2713,7 @@ describe("EmbeddedTuiBackend", () => {
           };
           return payload.state === "delta" && payload.message?.content?.[0]?.text;
         });
-        expect(nonEmptyDeltas).toHaveLength(0);
+        expect(nonEmptyDeltas).toHaveLength(1);
       }
       expect(chatPayloads.at(-1)).toStrictEqual({
         runId,
@@ -2726,7 +2733,11 @@ describe("EmbeddedTuiBackend", () => {
   registerEmbeddedBackendStreamTests({
     createBackend: () => new EmbeddedTuiBackend(),
     createPendingReply: () => deferred<EmbeddedAgentResult>(),
-    prepareReply: (reply) => agentCommandFromIngressMock.mockReturnValueOnce(reply),
+    prepareReply: (reply, onStart) =>
+      agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal: AbortSignal }) => {
+        onStart?.(opts.abortSignal);
+        return reply;
+      }),
     emitAgentEvent: (event) => registeredListener?.(event),
     flushMicrotasks,
     embeddedEventTimestamp,
@@ -3036,31 +3047,6 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
-  });
-
-  it("aborts active local runs", async () => {
-    let capturedSignal: AbortSignal | undefined;
-    agentCommandFromIngressMock.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
-      capturedSignal = opts.abortSignal;
-      return new Promise((_, reject) => {
-        opts.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
-      });
-    });
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-    await sendMainChat(backend, "long task", "run-abort-1");
-
-    const result = await backend.abortChat({
-      sessionKey: "agent:main:main",
-      runId: "run-abort-1",
-    });
-    await flushMicrotasks();
-
-    expect(result).toEqual({ ok: true, aborted: true, runIds: ["run-abort-1"] });
-    expect(capturedSignal?.aborted).toBe(true);
   });
 
   it("keeps local BTW runs alive during a session-scoped abort", async () => {

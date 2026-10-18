@@ -82,8 +82,7 @@ export function createWorktreeDiskAdmission(params: {
 }) {
   const key = randomUUID();
   const context = captureWorktreeRunEndContext(params.env);
-  const { leaseSet, assertCurrent: assertWorkerCurrent } = params.workerAuthority;
-  const predicates = structuredClone(params.workerAuthority.predicates);
+  const { leaseSet, predicates, assertCurrent: assertWorkerCurrent } = params.workerAuthority;
   const owner = {
     pid: process.pid,
     host: hostname(),

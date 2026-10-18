@@ -125,80 +125,56 @@ describe("markdownToIR", () => {
     });
   });
 
-  it("emits underline spans only for authored u and ins tags when enabled", () => {
-    const ir = markdownToIR("<u>under <ins>nested</ins></u> and __bold__", {
-      enableHtmlUnderline: true,
-    });
-    expect(ir.text).toBe("under nested and bold");
-    expect(ir.styles).toEqual([
-      { start: 0, end: 12, style: "underline" },
-      { start: 17, end: 21, style: "bold" },
-    ]);
-  });
-
-  it("keeps other HTML lexemes opaque without enabling HTML block parsing", () => {
-    const ir = markdownToIR('<div title="<u>">\n**bold**\n<!-- <u> -->\n</div>', {
-      enableHtmlUnderline: true,
-    });
-    expect(ir.text).toBe('<div title="<u>">\nbold\n<!-- <u> -->\n</div>');
-    expect(ir.styles).toEqual([{ start: 18, end: 22, style: "bold" }]);
+  it.each([
+    {
+      name: "authored u and ins tags",
+      markdown: "<u>under <ins>nested</ins></u> and __bold__",
+      text: "under nested and bold",
+      styles: [
+        { start: 0, end: 12, style: "underline" },
+        { start: 17, end: 21, style: "bold" },
+      ],
+    },
+    {
+      name: "opaque HTML attributes and comments",
+      markdown: '<div title="<u>">\n**bold**\n<!-- <u> -->\n</div>',
+      text: '<div title="<u>">\nbold\n<!-- <u> -->\n</div>',
+      styles: [{ start: 18, end: 22, style: "bold" }],
+    },
+  ])("limits HTML underline parsing to $name", ({ markdown, text, styles }) => {
+    const ir = markdownToIR(markdown, { enableHtmlUnderline: true });
+    expect(ir.text).toBe(text);
+    expect(ir.styles).toEqual(styles);
   });
 });
 
 describe("markdownToIR block metadata", () => {
   it("records whether a fenced block owns an explicit closing fence", () => {
-    const ir = markdownToIR("```ts\nunclosed");
-    const empty = markdownToIR("```ts");
-    const overIndented = markdownToIR("```\n    ```");
-    const tabIndented = markdownToIR("```\n\t```");
-    const unmatchedQuote = markdownToIR("```\n> ```");
-    const listed = markdownToIR("- ```\n  code\n  ```");
-    const quoted = markdownToIR("> ```\n> code\n> ```");
-    const listThenQuote = markdownToIR("10. >   ```\n    >   code\n    >   ```");
-    const alternating = markdownToIR("> - > 10. ```\n>   >     code\n>   >     ```");
-    const independentFenceIndent = markdownToIR("- item\n   ```\n   code\n  ```");
-    const tabQuoted = markdownToIR(">\t```\n>\tcode\n>\t```");
-    const paddedList = markdownToIR("   - ```\n     code");
-
-    expect(ir.blocks?.[0]).toMatchObject({ codeOrigin: "fenced", codeClosed: false });
-    expect(empty.blocks?.[0]).toMatchObject({
+    for (const source of ["```ts\nunclosed", "```\n    ```", "```\n\t```", "```\n> ```"]) {
+      expect(markdownToIR(source).blocks?.[0]).toMatchObject({
+        codeOrigin: "fenced",
+        codeClosed: false,
+      });
+    }
+    expect(markdownToIR("```ts").blocks?.[0]).toMatchObject({
       start: 0,
       end: 1,
       codeOrigin: "fenced",
       codeClosed: false,
     });
-    expect(overIndented.blocks?.[0]).toMatchObject({ codeOrigin: "fenced", codeClosed: false });
-    expect(tabIndented.blocks?.[0]).toMatchObject({ codeOrigin: "fenced", codeClosed: false });
-    expect(unmatchedQuote.blocks?.[0]).toMatchObject({
-      codeOrigin: "fenced",
-      codeClosed: false,
-    });
-    expect(listed.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: true,
-      depth: 2,
-    });
-    expect(quoted.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: true,
-      depth: 2,
-    });
-    expect(listThenQuote.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: true,
-      depth: 3,
-    });
-    expect(alternating.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: true,
-      depth: 5,
-    });
-    expect(
-      independentFenceIndent.blocks?.find((block) => block.kind === "code_block"),
-    ).toMatchObject({ codeClosed: true });
-    expect(tabQuoted.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: true,
-      blockquoteDepth: 1,
-    });
-    expect(paddedList.blocks?.find((block) => block.kind === "code_block")).toMatchObject({
-      codeClosed: false,
-    });
+    for (const [source, expected] of [
+      ["- ```\n  code\n  ```", { codeClosed: true, depth: 2 }],
+      ["> ```\n> code\n> ```", { codeClosed: true, depth: 2 }],
+      ["10. >   ```\n    >   code\n    >   ```", { codeClosed: true, depth: 3 }],
+      ["> - > 10. ```\n>   >     code\n>   >     ```", { codeClosed: true, depth: 5 }],
+      ["- item\n   ```\n   code\n  ```", { codeClosed: true }],
+      [">\t```\n>\tcode\n>\t```", { codeClosed: true, blockquoteDepth: 1 }],
+      ["   - ```\n     code", { codeClosed: false }],
+    ] as const) {
+      expect(
+        markdownToIR(source).blocks?.find((block) => block.kind === "code_block"),
+      ).toMatchObject(expected);
+    }
   });
 
   it("records setext headings and thematic breaks without changing rendered bytes", () => {
@@ -257,14 +233,6 @@ describe("markdownToIR block metadata", () => {
   });
 });
 
-describe("blockquote spacing", () => {
-  it("includes the configured prefix without adding spacing", () => {
-    expect(markdownToIR("> quote\n\nparagraph", { blockquotePrefix: "> " }).text).toBe(
-      "> quote\n\nparagraph",
-    );
-  });
-});
-
 const DUNDER_OPTIONS = {
   autolink: false,
   linkify: false,
@@ -272,21 +240,27 @@ const DUNDER_OPTIONS = {
 } as const;
 
 describe("markdownToIR preserveDunderIdentifiers", () => {
-  it("keeps ordinary parenthesized bold unchanged when enabled", () => {
-    expect(markdownToIR("(__warning__)", DUNDER_OPTIONS)).toEqual({
-      text: "(warning)",
-      styles: [{ start: 1, end: 8, style: "bold" }],
-      links: [],
-    });
-  });
-
-  it("preserves shortcut reference links", () => {
-    const source = "[obj.__class__]\n\n[obj.__class__]: https://example.org/python";
-    expect(markdownToIR(source, DUNDER_OPTIONS)).toEqual({
-      text: "obj.__class__",
-      styles: [],
-      links: [{ start: 0, end: 13, href: "https://example.org/python" }],
-    });
+  it.each([
+    {
+      name: "ordinary parenthesized bold",
+      source: "(__warning__)",
+      expected: {
+        text: "(warning)",
+        styles: [{ start: 1, end: 8, style: "bold" }],
+        links: [],
+      },
+    },
+    {
+      name: "shortcut reference links",
+      source: "[obj.__class__]\n\n[obj.__class__]: https://example.org/python",
+      expected: {
+        text: "obj.__class__",
+        styles: [],
+        links: [{ start: 0, end: 13, href: "https://example.org/python" }],
+      },
+    },
+  ])("preserves $name", ({ source, expected }) => {
+    expect(markdownToIR(source, DUNDER_OPTIONS)).toEqual(expected);
   });
 });
 
@@ -315,12 +289,6 @@ describe("fenced code content length", () => {
     { name: "tilde fence", text: "~~~ts\nconst answer = 42;\n~~~", count: 18 },
   ])("preserves body characters: $name", ({ text, count }) => {
     expect(countMarkdownFencedCodeChars(text)).toBe(count);
-  });
-});
-
-describe("hr (thematic break) spacing", () => {
-  it("renders between list items", () => {
-    expect(markdownToIR("- Item 1\n- ---\n- Item 2").text).toBe("• Item 1\n\n───\n\n• Item 2");
   });
 });
 
@@ -490,8 +458,19 @@ describe("nested lists", () => {
   });
 });
 
-describe("list paragraph spacing", () => {
-  it.each([
+describe("block and list paragraph spacing", () => {
+  it.each<[string, string, string, Parameters<typeof markdownToIR>[1]?]>([
+    [
+      "a configured blockquote prefix",
+      "> quote\n\nparagraph",
+      "> quote\n\nparagraph",
+      { blockquotePrefix: "> " },
+    ],
+    [
+      "thematic breaks between list items",
+      "- Item 1\n- ---\n- Item 2",
+      "• Item 1\n\n───\n\n• Item 2",
+    ],
     [
       "prose before a fence in a tight item",
       "- Run this:\n  ```sh\n  echo hello\n  ```\n- Done",
@@ -517,8 +496,8 @@ describe("list paragraph spacing", () => {
       "- parent\n\n  - child\n\n- next",
       "• parent\n\n  • child\n• next",
     ],
-  ])("separates %s", (_name, markdown, expected) => {
-    expect(markdownToIR(markdown).text).toBe(expected);
+  ])("separates %s", (_name, markdown, expected, options) => {
+    expect(markdownToIR(markdown, options).text).toBe(expected);
   });
 });
 

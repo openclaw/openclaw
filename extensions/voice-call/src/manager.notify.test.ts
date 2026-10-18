@@ -3,7 +3,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import {
   createManagerHarness,
@@ -510,7 +510,7 @@ describe("CallManager termination lifecycle", () => {
   it.each(["twilio", "plivo"] as const)(
     "keeps finalized identity for fresh %s callbacks after restart",
     async (providerName) => {
-      const config = VoiceCallConfigSchema.parse({
+      const config = normalizeVoiceCallConfig({
         enabled: true,
         provider: providerName,
         fromNumber: "+15550000000",

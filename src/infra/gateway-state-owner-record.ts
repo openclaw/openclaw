@@ -4,6 +4,7 @@ import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
@@ -31,9 +32,46 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   );
 }
 
-export class StateDatabaseAccessError extends Error {
+class StateDatabaseAccessError extends Error {
   override name = "StateDatabaseAccessError";
 }
+
+export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayStateOwnerContentionError"),
+  () =>
+    class StateOwnerContentionError extends Error {
+      constructor(
+        public readonly databasePath: string,
+        public override readonly cause?: unknown,
+        public readonly holderDetail?: string,
+        /** Recorded holder identity: diagnostic evidence for waiting, never ownership authority. */
+        public readonly holder?: Pick<LockPayload, "pid" | "role">,
+      ) {
+        super(
+          `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
+        );
+        this.name = "GatewayStateOwnerContentionError";
+      }
+    },
+);
+export type GatewayStateOwnerContentionError = InstanceType<
+  typeof GatewayStateOwnerContentionError
+>;
+
+/** A local holder exists, but the caller has no live lexical maintenance authority. */
+export const StateDatabaseMaintenanceScopeError = resolveGlobalSingleton(
+  Symbol.for("openclaw.stateDatabaseMaintenanceScopeError"),
+  () =>
+    class extends StateDatabaseAccessError {
+      override name = "StateDatabaseMaintenanceScopeError";
+
+      constructor(readonly databasePath: string) {
+        super(
+          `Internal state ownership error at ${databasePath}: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.`,
+        );
+      }
+    },
+);
 
 export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
   Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
@@ -112,7 +150,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
-  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance; retry when it finishes.`;
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes.`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }
@@ -122,6 +160,8 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
 export function defaultPayload(databasePath: string): LockPayload {
   const stateDir = resolveOpenClawStateDirForDatabasePath(databasePath);
   const startTime = getFileLockProcessStartTime(process.pid);
+  const parentPid = getCliParentPid();
+  const parentStartTime = parentPid === undefined ? null : getFileLockProcessStartTime(parentPid);
   return {
     pid: process.pid,
     ownerId: randomUUID(),
@@ -130,6 +170,8 @@ export function defaultPayload(databasePath: string): LockPayload {
     configPath: path.join(stateDir, "openclaw.json"),
     role: "sqlite-maintenance",
     processNamespace: readGatewayLockProcessNamespace(),
+    ...(parentPid === undefined ? {} : { parentPid }),
+    ...(parentStartTime === null ? {} : { parentStartTime }),
     ...(startTime === null ? {} : { startTime }),
   };
 }

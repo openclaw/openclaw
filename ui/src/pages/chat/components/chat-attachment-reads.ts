@@ -266,6 +266,7 @@ export function readChatAttachmentFile(
     timer =
       processing && !settled ? setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS) : undefined;
   };
+  // This read owns the FileReader and abort subscription through settlement, independent of rendering.
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
   reader.addEventListener("error", () => finish("error"), { once: true });

@@ -45,9 +45,9 @@ export function resolveDiscordThreadChannel(params: {
   }
   return {
     id: messageChannelId,
-    name: channelInfo?.name ?? undefined,
-    parentId: channelInfo?.parentId ?? undefined,
-    ownerId: channelInfo?.ownerId ?? undefined,
+    name: channelInfo?.name,
+    parentId: channelInfo?.parentId,
+    ownerId: channelInfo?.ownerId,
   };
 }
 
@@ -57,10 +57,10 @@ export async function resolveDiscordThreadParentInfo(params: {
   channelInfo: DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
-  let parentId = threadChannel.parentId ?? channelInfo?.parentId ?? undefined;
+  let parentId = threadChannel.parentId ?? channelInfo?.parentId;
   if (!parentId && threadChannel.id) {
     const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
-    parentId = threadInfo?.parentId ?? undefined;
+    parentId = threadInfo?.parentId;
   }
   if (!parentId) {
     return {};
@@ -162,7 +162,7 @@ function buildDiscordThreadStarterPayload(params: {
     authorName: starter.author?.username ?? undefined,
     authorTag,
     memberRoleIds: Array.isArray(starter.member?.roles) ? starter.member.roles : undefined,
-    timestamp: params.resolveTimestampMs(starter.timestamp) ?? undefined,
+    timestamp: params.resolveTimestampMs(starter.timestamp),
   };
 }
 

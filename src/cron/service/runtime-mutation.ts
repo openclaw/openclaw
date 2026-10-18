@@ -26,7 +26,6 @@ type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
 export async function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(
   params: CronRuntimeMutationParams<Type>,
 ): Promise<void> {
-  const snapshot = structuredClone(params.snapshot);
   let settled: "committed" | "not-committed" | "unknown" = "not-committed";
   const assertCurrent = () => {
     params.context.admission.assertCurrent();
@@ -40,7 +39,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
         assertCurrent();
         const command = {
           type: params.type,
-          input: { ...params.input, snapshot },
+          input: { ...params.input, snapshot: params.snapshot },
           // SAFETY: Type selects this private command's input, snapshot, and outcome together.
         } as SqliteWorkerCommand<CronRuntimeWorkerOperations>;
         settled = "unknown";

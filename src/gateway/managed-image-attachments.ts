@@ -40,7 +40,13 @@ import {
   captureChannelReadScope,
   withChannelReadAuthority,
 } from "../shared/channel-read-authority.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  assertArtifactDownloadGrantCurrent,
+  resolveArtifactDownloadGrant,
+  retainArtifactDownloadStream,
+} from "./artifact-download-grants.js";
 import { buildManagedMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import {
   createGatewayByteStream,
@@ -55,7 +61,10 @@ import {
   resolveSharedSecretHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
-import { getRemoteControlUiIngressContext } from "./ingress-attribution.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 import {
   resolveManagedImageOriginalPath,
   deleteManagedImageRecordArtifacts,
@@ -78,11 +87,7 @@ import {
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
-import {
-  createManagedOutgoingImageTicket,
-  verifyManagedOutgoingImageTicket,
-  MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS,
-} from "./managed-image-tickets.js";
+import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   buildManagedOutgoingArtifactId,
@@ -91,6 +96,7 @@ import {
 } from "./managed-outgoing-artifact-id.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { prepareRemoteIngressSessionRead } from "./remote-ingress-session-read.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
 import {
   readSessionMessagesMatchingIdAsync,
@@ -162,7 +168,6 @@ export type ManagedOutgoingMediaArtifactDownload = {
   mimeType?: string;
   sizeBytes?: number;
   url: string;
-  expiresAt: string;
 };
 
 function resolveManagedImageAttachmentLimits(
@@ -793,15 +798,6 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
         return null;
       }
       assertCurrent();
-      const ticket = createManagedOutgoingImageTicket({
-        sessionKey: record.sessionKey,
-        attachmentId: record.attachmentId,
-      });
-      if (!ticket) {
-        return null;
-      }
-      const canonicalUrl = buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full");
-      const params = new URLSearchParams({ mediaTicket: ticket.ticket });
       return {
         artifactId: buildManagedOutgoingArtifactId(record.attachmentId, kind),
         sessionKey: record.sessionKey,
@@ -809,8 +805,7 @@ async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
         title: kind === "image" ? record.alt : (record.original.filename ?? record.alt),
         ...(record.original.contentType ? { mimeType: record.original.contentType } : {}),
         ...(record.original.sizeBytes != null ? { sizeBytes: record.original.sizeBytes } : {}),
-        url: `${canonicalUrl}?${params.toString()}`,
-        expiresAt: ticket.expiresAt,
+        url: buildOutgoingVariantUrl(record.sessionKey, record.attachmentId, "full"),
       };
     },
   );
@@ -886,7 +881,7 @@ async function resolveManagedOutgoingMediaArtifactRecord(
   return record;
 }
 
-/** Resolve one transcript-backed media artifact to a short-lived HTTP capability. */
+/** Prepare a transcript-backed media source; the RPC owner grants the requesting reader access. */
 export async function resolveManagedOutgoingMediaArtifactDownload(
   params: ManagedOutgoingMediaArtifactRequest,
 ): Promise<ManagedOutgoingMediaArtifactDownload | null> {
@@ -1280,6 +1275,7 @@ export async function handleManagedOutgoingMediaHttpRequest(
   opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
     stateDir?: string;
+    clients?: ReadonlySet<GatewayClient>;
   },
 ): Promise<boolean> {
   const requestUrl = new URL(req.url ?? "/", "http://localhost");
@@ -1318,13 +1314,40 @@ export async function handleManagedOutgoingMediaHttpRequest(
   } catch {
     return respondNotFound();
   }
-  const hasValidMediaTicket = verifyManagedOutgoingImageTicket({
-    ticket: requestUrl.searchParams.get("mediaTicket"),
-    sessionKey,
-    attachmentId,
-  });
+  const mediaTicket = requestUrl.searchParams.get("mediaTicket");
+  const clients = opts.clients ?? new Set<GatewayClient>();
+  const selected = mediaTicket ? resolveArtifactDownloadGrant(clients, mediaTicket) : undefined;
+  const canonicalPath = buildOutgoingVariantUrl(sessionKey, attachmentId, "full");
+  if (
+    mediaTicket &&
+    (!selected ||
+      selected.grant.source.kind !== "managed" ||
+      selected.grant.source.path !== canonicalPath)
+  ) {
+    return respondNotFound();
+  }
+  let retained: ReturnType<typeof retainArtifactDownloadStream> | undefined;
+  const assertGrantCurrent = () => {
+    if (!selected) {
+      return;
+    }
+    const ingress = getRemoteControlUiIngressContext(req);
+    assertRemoteControlUiIngressCurrent(ingress);
+    if (
+      ingress &&
+      selected.client.internal?.remoteIngressPrincipal?.assertCurrent !==
+        ingress.resolvePrincipal().assertCurrent
+    ) {
+      throw new Error("Managed media belongs to another ingress grant");
+    }
+    if (retained) {
+      retained.assertCurrent();
+    } else {
+      assertArtifactDownloadGrantCurrent(clients, selected.client, selected.ticket, selected.grant);
+    }
+  };
   let assertRequestCurrent: (() => void) | undefined;
-  if (!hasValidMediaTicket) {
+  if (!selected) {
     const requestAuth = await authorizeGatewayHttpRequestOrReply({
       ...opts,
       req,
@@ -1360,20 +1383,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
       throw new Error("Managed media request ended");
     }
     assertRequestCurrent?.();
-    if (
-      hasValidMediaTicket &&
-      !verifyManagedOutgoingImageTicket({
-        ticket: requestUrl.searchParams.get("mediaTicket"),
-        sessionKey,
-        attachmentId,
-      })
-    ) {
-      respondNotFound();
-      throw new Error("Managed media ticket expired during retrieval");
-    }
+    assertGrantCurrent();
   };
   const stateDir = opts.stateDir ?? resolveStateDir();
   try {
+    assertCallerCurrent();
     using ingressRead = await prepareRemoteIngressSessionRead(
       getRemoteControlUiIngressContext(req)?.resolvePrincipal(),
       sessionKey,
@@ -1405,8 +1419,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
         } catch {
           return respondNotFound();
         }
-        const immutableCacheControl = hasValidMediaTicket
-          ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+        const immutableCacheControl = selected
+          ? "private, no-store"
           : "private, max-age=31536000, immutable";
         const writeMediaHeaders = (
           contentType: string,
@@ -1431,7 +1445,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
             // is a lower-fidelity representation of the same transcript attachment.
             const thumbnail =
               mediaKind === "image"
-                ? await readImageThumbnailFromFile(opened).catch(() => null)
+                ? await readImageThumbnailFromFile(
+                    opened,
+                    undefined,
+                    normalizeChatImageRenditionWidth(requestUrl.searchParams.get("width")),
+                  ).catch(() => null)
                 : null;
             await byteStream.close();
             assertCurrent?.();
@@ -1439,12 +1457,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
               respondNotFound();
               return true;
             }
-            const sourceName = path.parse(responseFilename ?? "generated-image").name;
-            res.statusCode = 200;
-            res.setHeader("content-length", String(thumbnail.byteLength));
-            writeMediaHeaders("image/png", `${sourceName}-thumbnail.png`);
-            res.end(req.method === "HEAD" ? undefined : thumbnail);
-            return true;
+            return handleManagedImageThumbnailResponse(req, res, {
+              thumbnail,
+              filename: responseFilename,
+              cacheControl: immutableCacheControl,
+            });
           }
 
           const isPlayback =
@@ -1494,16 +1511,29 @@ export async function handleManagedOutgoingMediaHttpRequest(
             method: req.method,
             request: req,
           });
-          // Stream from the verified descriptor so a path swap cannot bypass fs-safe after validation.
-          await byteStream.pipe(byteResponse, req.method, () => {
-            assertCurrent?.();
-            writeMediaHeaders(
-              responseContentType,
-              responseFilename,
-              isPlayback ? "private, no-cache" : immutableCacheControl,
+          if (selected) {
+            retained = retainArtifactDownloadStream(
+              clients,
+              selected.client,
+              selected.ticket,
+              selected.grant,
             );
-            writeByteHeaders(res, byteResponse);
-          });
+          }
+          // Stream from the verified descriptor while retaining its session and reader authority.
+          await byteStream.pipe(
+            byteResponse,
+            req.method,
+            () => {
+              assertCurrent?.();
+              writeMediaHeaders(
+                responseContentType,
+                responseFilename,
+                isPlayback && !selected ? "private, no-cache" : immutableCacheControl,
+              );
+              writeByteHeaders(res, byteResponse);
+            },
+            selected ? { assertCurrent } : undefined,
+          );
         } catch (error) {
           await byteStream.close();
           if (!res.writableEnded && !res.destroyed) {
@@ -1519,9 +1549,13 @@ export async function handleManagedOutgoingMediaHttpRequest(
       respondNotFound();
     }
   } catch (error) {
-    if (!res.writableEnded && !res.destroyed) {
+    if (selected && !res.headersSent) {
+      respondNotFound();
+    } else if (!res.writableEnded && !res.destroyed) {
       throw error;
     }
+  } finally {
+    retained?.release();
   }
   return true;
 }

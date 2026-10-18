@@ -4,6 +4,7 @@ import { createMemo, For, Show } from "solid-js";
 import "../../components/resizable-divider.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
@@ -31,6 +32,7 @@ declare module "@solidjs/web" {
         "prop:narrow": boolean;
         "prop:mergedChrome": boolean;
         "prop:navDrawerOpen": boolean;
+        "prop:gatewayStatus"?: GatewayStatusProps | null;
       };
     }
   }
@@ -48,6 +50,7 @@ type ChatPagePaneRenderOptions = {
   mergedChrome: boolean;
   narrow: boolean;
   navDrawerOpen: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   onboarding: boolean;
   onClosePane?: (paneId: string) => void;
   onFaceChange: (paneId: string, sessionKey: string, face: BoardFace) => void;
@@ -109,11 +112,7 @@ type SplitRenderOptions = {
   onResizeColumns: (columnIndex: number, ratio: number) => void;
   onResizeEnd: () => void;
 };
-export function createChatPageSnapshot(
-  layout: ChatSplitLayout,
-  options: SplitRenderOptions,
-  indicator: DropIndicator | null,
-) {
+export function createChatPageSnapshot(layout: ChatSplitLayout, options: SplitRenderOptions) {
   const cells = new Map(
     layout.columns.flatMap((column, columnIndex) =>
       column.panes.map(
@@ -134,7 +133,7 @@ export function createChatPageSnapshot(
       ),
     ),
   );
-  return { layout, options, cells, indicator };
+  return { layout, options, cells };
 }
 export type ChatPageSnapshot = ReturnType<typeof createChatPageSnapshot>;
 
@@ -166,15 +165,14 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     props.options.context &&
     (routeData()?.creation?.admitted === false ||
       readDeletedSessionStartup(props.options.context, props.sessionKey));
-  const className = () =>
-    [
-      "chat-pane-cache__pane",
-      visible() ? "chat-pane-cache__pane--visible" : "",
-      active() ? "chat-pane-cache__pane--active" : "",
-      props.options.splitMode ? "chat-split-view__pane" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
+  const className = () => [
+    "chat-pane-cache__pane",
+    {
+      "chat-pane-cache__pane--visible": visible(),
+      "chat-pane-cache__pane--active": active(),
+      "chat-split-view__pane": props.options.splitMode,
+    },
+  ];
   return (
     <Show
       when={!pending()}
@@ -188,6 +186,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           prop:narrow={props.options.narrow}
           prop:mergedChrome={props.options.mergedChrome && active()}
           prop:navDrawerOpen={props.options.navDrawerOpen && active()}
+          prop:gatewayStatus={active() ? props.options.gatewayStatus : null}
         />
       }
     >
@@ -225,6 +224,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         narrow={props.options.narrow}
         mergedChrome={props.options.mergedChrome && active()}
         navDrawerOpen={props.options.navDrawerOpen && active()}
+        gatewayStatus={active() ? (props.options.gatewayStatus ?? null) : null}
         onboarding={props.options.onboarding}
         onOpenSplitView={props.options.onOpenSplitView}
         onSplitDown={props.options.onSplitDown}
@@ -379,13 +379,17 @@ function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
   );
 }
 
-export function ChatPageBody(props: { snapshot: ChatPageSnapshot | null }) {
+export function ChatPageBody(props: {
+  snapshot: ChatPageSnapshot | null;
+  indicator: DropIndicator | null;
+  containerRef: (element: HTMLDivElement) => void;
+}) {
   return (
     <Show when={props.snapshot}>
       {(snapshot) => (
-        <div class="chat-split-view__drop-container">
+        <div class="chat-split-view__drop-container" ref={props.containerRef}>
           <SplitLayout snapshot={snapshot()} />
-          <Show when={snapshot().indicator}>
+          <Show when={props.indicator}>
             {(indicator) => (
               <div
                 class={[

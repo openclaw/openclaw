@@ -52,6 +52,11 @@ with `visible: true` are ordinary sessions in the session tree: they keep their
 parent for navigation and completion announcements, and you can always type in
 them and steer them like any other session.
 
+Visible spawned sessions can use the `message` tool for user-approved replies.
+Hidden helpers still communicate through the announce chain. Configured subagent,
+inherited sender, sandbox, and channel restrictions continue to apply, and every
+other subagent hard deny stays in place.
+
 Use ordinary subagents for internal QA, research, coding, review, and test lanes,
 with results returning to the parent task. Create a persistent visible session
 only when the user requests a separate session or needs to return to and steer

@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -492,20 +492,6 @@ describe("terminal PTY invocation", () => {
   );
 });
 
-// The PTY exit callback owns the shell, but kill() only signals foreign session members.
-async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
-    }
-    throw error;
-  }
-}
-
 describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
   it("kills a background job in a distinct process group within the PTY session", async ({
     signal,
@@ -579,7 +565,8 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       handle.kill();
       await withinTest(exited.promise, signal);
       expect(isPidAlive(shellPid)).toBe(false);
-      await waitForPidToExit(childPid, signal);
+      // The PTY exit callback owns the shell, but kill() only signals foreign session members.
+      await waitForDead(childPid, signal);
       expect(isPidAlive(childPid)).toBe(false);
     } finally {
       try {

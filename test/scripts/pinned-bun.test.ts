@@ -1,9 +1,19 @@
+import * as childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pinnedBunEnv, resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
+import pin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
+import { pinnedBunEnv, requirePinnedBun, resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
+import {
+  resolveNativeBunTestCommand,
+  resolveVitestTestCommand,
+} from "../../scripts/lib/vitest-test-runtime.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bytes = "synthetic bun executable";
@@ -152,5 +162,67 @@ describe("pinned Bun resolution", () => {
     expect(resolvePinnedBun({}, { ...deps, homedir: () => directory })).toEqual({
       command: path.join(directory, ".cache/openclaw/bun/test-pin/linux-x64/bin/bun"),
     });
+  });
+});
+
+describe("CI Bun revision admission", () => {
+  const ciEnv = {
+    CI: "1",
+    GITHUB_JOB: "node-test-shard",
+    OPENCLAW_BUN_PATH: process.execPath,
+    OPENCLAW_VITEST_RUNTIME: "bun",
+  };
+  const callers = [
+    {
+      name: "Vitest",
+      resolve: (env: NodeJS.ProcessEnv) =>
+        resolveVitestTestCommand(["node_modules/vitest/vitest.mjs", "run"], env).command,
+    },
+    {
+      name: "native Bun",
+      resolve: (env: NodeJS.ProcessEnv) =>
+        resolveNativeBunTestCommand(["./fixture.test.ts"], undefined, env).command,
+    },
+  ];
+
+  it.each(callers)(
+    "admits the pinned revision before constructing a $name launch",
+    ({ resolve }) => {
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue(`${pin.revision}\n`);
+      expect(resolve(ciEnv)).toBe(process.execPath);
+    },
+  );
+
+  it.each(callers)(
+    "rejects a different revision before constructing a $name launch",
+    ({ resolve }) => {
+      vi.spyOn(childProcess, "execFileSync").mockReturnValue("1.0.0+unqualified\n");
+      expect(() => resolve(ciEnv)).toThrow(
+        `CI job node-test-shard: Bun revision verification failed: expected ${pin.revision}, received "1.0.0+unqualified". Run .github/actions/setup-test-bun before tests.`,
+      );
+    },
+  );
+
+  it("reports a missing workflow-provisioned Bun with its job name", () => {
+    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw new Error("spawnSync bun ENOENT");
+    });
+    expect(() => requirePinnedBun({ CI: "1", GITHUB_JOB: "ui-test" })).toThrow(
+      "CI job ui-test: Bun revision verification failed: spawnSync bun ENOENT. Run .github/actions/setup-test-bun before tests.",
+    );
+  });
+
+  it("identifies an unavailable explicit override and preserves local override behavior", () => {
+    expect(() => requirePinnedBun({ ...ciEnv, OPENCLAW_BUN_PATH: "/missing/bun" })).toThrow(
+      "CI job node-test-shard: Bun fork unavailable",
+    );
+    const execute = vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
+      throw new Error("must not probe local overrides");
+    });
+    expect(requirePinnedBun({ CI: "false", OPENCLAW_BUN_PATH: process.execPath })).toBe(
+      process.execPath,
+    );
+    expect(resolveVitestTestCommand(["scripts/prepare.mts"], ciEnv).command).toBe(process.execPath);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

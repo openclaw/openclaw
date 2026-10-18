@@ -120,42 +120,47 @@ describe("native cross-root anchor geometry", () => {
     }
   });
 
-  it("opens an anchor bound in an inert template after document adoption", async () => {
-    const template = document.createElement("template");
-    template.innerHTML =
-      '<button>Open adopted menu</button><div popover="manual"><button>Adopted action</button></div>';
-    const trigger = template.content.querySelector("button")!;
-    const surface = template.content.querySelector("div")!;
-    trigger.style.cssText = "position:absolute;left:140px;top:110px;width:90px;height:30px";
-    surface.style.cssText =
-      "position:fixed;inset:auto;position-area:bottom;margin:6px 0 0;padding:0;border:0;width:120px;height:40px";
-    const owner = createOverlay(`anchor-proof-${++nextId}`);
-    owner.bindSurface(surface);
-    owner.bindTrigger(trigger);
-    owners.push(owner);
-    const binding = createOverlayAnchor(surface);
-    binding.update(trigger, "bottom");
-    bindings.push(binding);
-    document.body.append(template.content);
-    nodes.push(trigger, surface);
-    await open(owner);
-    expectAnchored(surface, trigger);
-    expect(spatialSource(surface).ownerDocument).toBe(document);
-    const action = surface.querySelector("button")!;
-    let openOnClick = false;
-    action.addEventListener("click", () => (openOnClick = owner.open));
-    await userEvent.click(action);
-    expect(openOnClick).toBe(true);
-    expect(owner.open).toBe(true);
-    await userEvent.click(trigger);
-    expect(owner.open).toBe(true);
-    const outside = document.createElement("button");
-    outside.textContent = "Outside adopted menu";
-    document.body.append(outside);
-    nodes.push(outside);
-    await userEvent.click(outside);
-    expect(owner.open).toBe(false);
-  });
+  it.each([false, true])(
+    "opens an adopted template with same-root binding %s",
+    async (sameRoot) => {
+      const template = document.createElement("template");
+      template.innerHTML =
+        '<button>Open adopted menu</button><div popover="manual"><button>Adopted action</button></div>';
+      const trigger = template.content.querySelector("button")!;
+      const surface = template.content.querySelector("div")!;
+      trigger.style.cssText = "position:absolute;left:140px;top:110px;width:90px;height:30px";
+      surface.style.cssText =
+        "position:fixed;inset:auto;position-area:bottom;margin:6px 0 0;padding:0;border:0;width:120px;height:40px";
+      const owner = createOverlay(`anchor-proof-${++nextId}`);
+      owner.bindSurface(surface);
+      owner.bindTrigger(trigger);
+      owners.push(owner);
+      const binding = createOverlayAnchor(surface, { sameRoot });
+      binding.update(trigger, "bottom");
+      bindings.push(binding);
+      document.body.append(template.content);
+      nodes.push(trigger, surface);
+      await open(owner);
+      expectAnchored(surface, trigger);
+      if (!sameRoot) {
+        expect(spatialSource(surface).ownerDocument).toBe(document);
+      }
+      const action = surface.querySelector("button")!;
+      let openOnClick = false;
+      action.addEventListener("click", () => (openOnClick = owner.open));
+      await userEvent.click(action);
+      expect(openOnClick).toBe(true);
+      expect(owner.open).toBe(true);
+      await userEvent.click(trigger);
+      expect(owner.open).toBe(true);
+      const outside = document.createElement("button");
+      outside.textContent = "Outside adopted menu";
+      document.body.append(outside);
+      nodes.push(outside);
+      await userEvent.click(outside);
+      expect(owner.open).toBe(false);
+    },
+  );
 
   it.each([
     { direction: "shadow-anchor", svg: false, mode: "open" },

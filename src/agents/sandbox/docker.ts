@@ -160,13 +160,9 @@ export async function ensureContainerImage(engine: SandboxContainerEngine, image
 
 function normalizeDockerLimit(value?: string | number) {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : undefined;
+    return String(value);
   }
   return normalizeOptionalString(value);
-}
-
-function normalizeFiniteDockerNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
 function formatUlimitValue(
@@ -177,16 +173,13 @@ function formatUlimitValue(
     return null;
   }
   if (typeof value === "number") {
-    const normalized = normalizeFiniteDockerNumber(value);
-    return normalized === undefined ? null : `${name}=${normalized}`;
+    return `${name}=${Math.max(0, value)}`;
   }
   if (typeof value === "string") {
     const raw = value.trim();
     return raw ? `${name}=${raw}` : null;
   }
-  const soft = normalizeFiniteDockerNumber(value.soft);
-  const hard = normalizeFiniteDockerNumber(value.hard);
-  const limits = [soft, hard].filter((limit) => limit !== undefined);
+  const limits = [value.soft, value.hard].filter((limit) => limit !== undefined);
   return limits.length ? `${name}=${limits.join(":")}` : null;
 }
 
@@ -269,10 +262,10 @@ export function buildSandboxCreateArgs(params: {
     }
   }
   for (const [flag, value] of [
-    ["--pids-limit", normalizeFiniteDockerNumber(params.cfg.pidsLimit)],
+    ["--pids-limit", params.cfg.pidsLimit],
     ["--memory", normalizeDockerLimit(params.cfg.memory)],
     ["--memory-swap", normalizeDockerLimit(params.cfg.memorySwap)],
-    ["--cpus", normalizeFiniteDockerNumber(params.cfg.cpus)],
+    ["--cpus", params.cfg.cpus],
     ["--gpus", params.cfg.gpus?.trim()],
   ] as const) {
     if (value) {
@@ -504,7 +497,7 @@ async function ensureSandboxContainerLifecycle(
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
-  const registryEntry = existingRegistryEntry ?? undefined;
+  const registryEntry = existingRegistryEntry;
   if (hasContainer) {
     if (registryEntry?.runtimeState === "pending") {
       throw new Error(

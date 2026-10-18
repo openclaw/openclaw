@@ -54,10 +54,7 @@ type RailPinTouchPress = {
   opened: boolean;
 };
 
-export function renderSidebarRail(
-  host: AppSidebarRenderHost,
-  TeamNewSession?: () => JSX.Element,
-): JSX.Element {
+export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
@@ -80,29 +77,24 @@ export function renderSidebarRail(
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__create">
-        <Show
-          when={host.sidebarAgentsMode === "roster"}
-          fallback={renderNewSessionLink({
-            get basePath() {
-              return host.basePath;
-            },
-            get agentId() {
-              return host.expandedAgentId();
-            },
-            className: "sidebar-rail__button sidebar-new-session",
-            get label() {
-              return t("agentChip.newConversation");
-            },
-            showShortcut: true,
-            get disabledReason() {
-              const access = newSessionAccess();
-              return access.allowed ? undefined : access.reason;
-            },
-            onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-          })}
-        >
-          {TeamNewSession ? <TeamNewSession /> : undefined}
-        </Show>
+        {renderNewSessionLink({
+          get basePath() {
+            return host.basePath;
+          },
+          get agentId() {
+            return host.expandedAgentId();
+          },
+          class: "sidebar-rail__button sidebar-new-session",
+          get label() {
+            return t("agentChip.newConversation");
+          },
+          showShortcut: true,
+          get disabledReason() {
+            const access = newSessionAccess();
+            return access.allowed ? undefined : access.reason;
+          },
+          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+        })}
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
@@ -131,7 +123,7 @@ export function renderSidebarRail(
                 ) {
                   host.onToggleSidebar?.();
                 }
-                host.requestUpdate();
+                host.invalidate();
               }}
             >
               <Icon
@@ -259,7 +251,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : (
       <Show
         when={session()}

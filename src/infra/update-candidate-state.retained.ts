@@ -1,12 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import { createAgentDatabaseDeletionClassifier } from "../state/agent-deletion-discovery.js";
 import { readRetainedAgentDeletionsFromDatabase } from "../state/agent-deletion-journal.read.js";
+import type { EngineConnection } from "./sql-connection.js";
 
 /** Classify held stores from the same private shared-state generation as the schema inventory. */
 export function readUpdateHeldAgentPaths(
-  db: DatabaseSync,
+  db: EngineConnection,
   shared: string,
   files: Iterable<{ spellings: string[] }>,
   registered: { agentId: string | null; source: string }[],

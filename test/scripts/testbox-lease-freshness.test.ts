@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -58,6 +59,7 @@ describe("Testbox lease freshness", () => {
         "scripts/testbox-lease-freshness.mts",
         ".github/actions/prepare-testbox-shell/action.yml",
         ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
+        ".github/actions/setup-android-toolchain/action.yml",
         ...(workflow ? [workflow] : []),
       ];
       for (const owner of owners) {
@@ -102,6 +104,91 @@ describe("Testbox lease freshness", () => {
       expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
     },
   );
+
+  it("reuses audited install inputs after metadata and non-install scripts change", () => {
+    const fixture = createLeaseFixture();
+    const prepared = fixture.allocate();
+    const manifest = JSON.parse(readFileSync(join(fixture.root, "package.json"), "utf8"));
+    writeFileSync(
+      join(fixture.root, "package.json"),
+      JSON.stringify(
+        {
+          ...manifest,
+          scripts: { test: "node changed-test.mjs" },
+          openclaw: { changed: true },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(fixture.reuse()?.current).toEqual(prepared?.current);
+  });
+
+  it.each(["run", "warmup"])("admits sparse dependency inputs for %s", (operation) => {
+    const fixture = createLeaseFixture();
+    mkdirSync(join(fixture.root, "patches"));
+    writeFileSync(join(fixture.root, "patches/dependency.patch"), "original patch bytes\n");
+    fixture.git(["add", "patches"]);
+    fixture.advanceBase();
+    const prepared = fixture.allocate();
+    const saved = readFileSync(fixture.statePath, "utf8");
+    fixture.git(["sparse-checkout", "init", "--cone", "--sparse-index"]);
+    fixture.git(["sparse-checkout", "set", ".github", "scripts"]);
+    expect(existsSync(join(fixture.root, "packages/example/package.json"))).toBe(false);
+    expect(existsSync(join(fixture.root, "patches/dependency.patch"))).toBe(false);
+    const reuse = () => fixture.prepare([operation, "--id", "tbx_fixture"]);
+    expect(reuse()?.current).toEqual(prepared?.current);
+    expect(() => reuse()?.assertCurrent()).not.toThrow();
+    mkdirSync(join(fixture.root, "patches"), { recursive: true });
+    writeFileSync(join(fixture.root, "patches/dependency.patch"), "changed patch bytes\n");
+    expect(() => reuse()).toThrow("dependencyDigest");
+    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+  });
+
+  it.each(["workspace manifest", "patch bytes", "install owner"])(
+    "rejects changed %s without refreshing allocation provenance",
+    (input) => {
+      const fixture = createLeaseFixture();
+      mkdirSync(join(fixture.root, "patches"));
+      const patch = join(fixture.root, "patches/dependency.patch");
+      writeFileSync(patch, "original patch bytes\n");
+      fixture.allocate();
+      const saved = readFileSync(fixture.statePath, "utf8");
+      const file =
+        input === "patch bytes"
+          ? patch
+          : join(
+              fixture.root,
+              input === "workspace manifest"
+                ? "packages/example/package.json"
+                : ".github/actions/setup-node-env/install-dependencies.sh",
+            );
+      writeFileSync(
+        file,
+        input === "workspace manifest"
+          ? '{"name":"changed-workspace"}\n'
+          : "changed install bytes\n",
+      );
+      expect(() => fixture.reuse()).toThrow("dependencyDigest");
+      expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+    },
+  );
+
+  it("fails closed on unaudited install lifecycle changes", () => {
+    const fixture = createLeaseFixture();
+    fixture.allocate();
+    const saved = readFileSync(fixture.statePath, "utf8");
+    writeFileSync(
+      join(fixture.root, "package.json"),
+      JSON.stringify({
+        name: "lease-fixture",
+        private: true,
+        scripts: { postinstall: "node arbitrary.mjs" },
+      }),
+    );
+    expect(() => fixture.reuse()).toThrow("unaudited install lifecycle scripts");
+    expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
+  });
 
   it("preserves failed-command allocation provenance across unchanged and changed source", () => {
     const fixture = createLeaseFixture();
@@ -325,6 +412,22 @@ function createLeaseFixture() {
   const git = (args: string[], input?: string) =>
     execFileSync("git", ["-C", root, ...args], { env, encoding: "utf8", input }).trim();
   git(["init", "--quiet", "--initial-branch=main"]);
+  for (const relative of [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    "scripts/lib/pnpm-lockfile-documents.mjs",
+  ]) {
+    const file = join(root, relative);
+    mkdirSync(dirname(file), { recursive: true });
+    copyFileSync(new URL("../../" + relative, import.meta.url), file);
+  }
+  writeFileSync(join(root, "package.json"), '{"name":"lease-fixture","private":true}\n');
+  mkdirSync(join(root, "packages/example"), { recursive: true });
+  writeFileSync(join(root, "packages/example/package.json"), '{"name":"workspace-fixture"}\n');
+  writeFileSync(
+    join(root, "pnpm-lock.yaml"),
+    "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/example: {}\n",
+  );
+  git(["add", "."]);
   const tree = git(["write-tree"]);
   const initial = git(["commit-tree", tree], "Initial fixture\n");
   git(["update-ref", "HEAD", initial]);

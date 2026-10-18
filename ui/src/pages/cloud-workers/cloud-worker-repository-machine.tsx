@@ -1,16 +1,23 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { normalizeCloudRepo } from "../../../../src/config/cloud-worker-project-profiles.js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readCloudWorkerProfiles } from "./cloud-worker-config.ts";
 import { buildCloudWorkerRepositoryProfilePatch } from "./cloud-worker-repositories-config.ts";
 import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
-export function CloudWorkerRepositoryMachine(props: {
+type RepositoryMachineProps = {
   repository: string;
   profileId?: string;
   defaultProfileId?: string;
   machineFacts: string;
-}) {
+};
+
+export function CloudWorkerRepositoryMachine(props: RepositoryMachineProps) {
+  // Editing and save feedback belong to one repository, including an unavailable identity.
+  return <For each={[props.repository]}>{() => <RepositoryMachine {...props} />}</For>;
+}
+
+function RepositoryMachine(props: RepositoryMachineProps) {
   const [editing, setEditing] = createSignal(false, { ownedWrite: true });
   const editor = useCloudWorkerConfig(() => setEditing(false));
   const profiles = createMemo(() => readCloudWorkerProfiles(editor.config()));
@@ -22,13 +29,6 @@ export function CloudWorkerRepositoryMachine(props: {
     [configuredProfile()?.backend, configuredProfile()?.machineClass, configuredProfile()?.target]
       .filter(Boolean)
       .join(" · ");
-  createEffect(
-    () => props.repository,
-    () => {
-      setEditing(false);
-      editor.update({ error: null, notice: null });
-    },
-  );
   const repository = () =>
     normalizeCloudRepo(`https://${props.repository}`) === props.repository
       ? props.repository

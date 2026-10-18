@@ -1,5 +1,4 @@
 /**
- * Transcript replay policy resolution.
  * Combines provider plugin replay hooks with core transport fallbacks so chat
  * history sanitization, tool IDs, thinking blocks, and turn validation align.
  */
@@ -9,7 +8,6 @@ import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { buildAnthropicReplayPolicyForModel } from "../plugins/provider-replay-helpers.js";
@@ -107,6 +105,8 @@ function buildUnownedProviderTransportReplayFallback(params: {
 }
 
 const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
   "kimi-for-coding",
   "kimi-k2.5",
   "kimi-k2.6",
@@ -158,9 +158,7 @@ function mergeTranscriptPolicy(
   return merged;
 }
 
-const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
-
-/** Resolve and cache the effective replay policy for a provider/model/config tuple. */
+/** Resolve the effective replay policy from the prepared provider and model context. */
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -173,37 +171,6 @@ export function resolveTranscriptPolicy(params: {
   directApiKey?: boolean;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheConfig = !params.env || params.env === process.env ? params.config : undefined;
-  const cacheKey = cacheConfig
-    ? JSON.stringify({
-        provider,
-        directApiKey: params.directApiKey === true,
-        baseUrl:
-          params.model?.baseUrl?.trim() ||
-          (params.env ?? process.env).ANTHROPIC_BASE_URL?.trim() ||
-          "",
-        modelApi: params.modelApi ?? "",
-        modelId: params.modelId ?? "",
-        canonicalModelId:
-          typeof params.model?.params?.canonicalModelId === "string"
-            ? params.model.params.canonicalModelId
-            : "",
-        dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
-        preservesReasoningContentReplay: params.model?.reasoning === true,
-        workspaceDir: params.workspaceDir ?? "",
-        pluginControlPlane: resolvePluginControlPlaneFingerprint({
-          config: cacheConfig,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-        }),
-      })
-    : undefined;
-  if (cacheConfig && cacheKey) {
-    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const runtimePlugin =
     params.runtimeHandle?.plugin ??
     (provider
@@ -249,14 +216,6 @@ export function resolveTranscriptPolicy(params: {
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
-  }
-  if (cacheConfig && cacheKey) {
-    let configCache = transcriptPolicyCache.get(cacheConfig);
-    if (!configCache) {
-      configCache = new Map();
-      transcriptPolicyCache.set(cacheConfig, configCache);
-    }
-    configCache.set(cacheKey, policy);
   }
   return policy;
 }

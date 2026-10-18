@@ -54,9 +54,40 @@ describe("node pending work", () => {
         (item) => item.type,
       ),
     ).toEqual(["location.request", "status.request"]);
+
+    const retired = enqueueNodePendingWork({
+      nodeId: "node-replaced",
+      type: "location.request",
+      pairingGeneration: "generation-1",
+    });
+    const replacement = enqueueNodePendingWork({
+      nodeId: "node-replaced",
+      type: "location.request",
+      pairingGeneration: "generation-2",
+    });
+    expect(
+      drainNodePendingWork("node-replaced", {
+        pairingGeneration: "generation-1",
+        includeDefaultStatus: false,
+      }).items,
+    ).toEqual([]);
+    expect(clearNodePendingWork("node-replaced", "generation-1")).toBe(false);
+    expect(
+      removeNodePendingWorkItem({
+        nodeId: "node-replaced",
+        itemId: retired.item.id,
+        pairingGeneration: "generation-1",
+      }),
+    ).toBe(false);
+    expect(
+      drainNodePendingWork("node-replaced", {
+        pairingGeneration: "generation-2",
+        includeDefaultStatus: false,
+      }).items.map((item) => item.id),
+    ).toEqual([replacement.item.id]);
   });
 
-  it("prunes expired work from retired generations on current-generation access", () => {
+  it("expires queued work when a different pairing polls", () => {
     enqueueNodePendingWork({
       nodeId: "node-retired-generation",
       type: "location.request",

@@ -8,6 +8,8 @@ import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
+import aiBuildConfig from "../tsdown.ai.config.ts";
+import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -18,8 +20,12 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  // The prepublish registry executes this shared build-and-pack lifetime by path.
+  "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
+  "scripts/generate-control-ui-validators.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
   "gateway-prewarm.mjs!",
   "apps/linux/scripts/test-runtime-boundary.mjs!",
@@ -34,6 +40,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.
   "apps/linux/scripts/test-native-control-auth.mjs!",
+  // The proof-video skill invokes these image and video CLIs by path.
+  "scripts/annotate-proof-image.mts!",
   "scripts/render-proof-video.mts!",
   "scripts/ci-shard-timings-refresh.mts!",
   // db:postgres:gen/check invoke this generator through the source loader.
@@ -73,6 +81,8 @@ const repositoryScriptEntries = [
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
+  // Maintainers invoke the isolated macOS standalone Doctor proof by path.
+  "scripts/verify-standalone-doctor.mjs!",
   "scripts/build-discord-activity-sdk.mts!",
   // Plugin package asset hooks invoke the browser builder by path.
   "scripts/build-plugin-control-ui.mts!",
@@ -201,6 +211,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
   "scripts/e2e/lib/upgrade-survivor/update-report-recovery.mjs!",
+  // run.sh wraps the legacy operator-state updater with this timeout observer.
+  "scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts!",
   "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
@@ -246,8 +258,6 @@ const repositoryScriptEntries = [
   "scripts/openclaw-release-ready.mjs!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
-  // Boundary lint loads this migration plugin by path; remove with that config entry.
-  "scripts/oxlint-solid-migration.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",
   "scripts/pre-commit/guard-staged-content.mjs!",
   // Frozen-target contract admission is invoked as a standalone Node CLI.
@@ -441,11 +451,11 @@ const rootEntries = [
   "config/knip.all-exports.config.ts!",
   "config/knip.scripts-exports.config.ts!",
   // OpenGrep rule tests read these as static source inputs; they are never executed.
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.js!",
-  "security/opengrep/rules/ghsa-82g8-464f-2mv7/skill-env.ts!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.js!",
-  "security/opengrep/rules/ghsa-fv94-qvg8-xqpw/ssh-sandbox-upload.ts!",
+  "security/opengrep/rules/*/*.{js,ts}!",
   "{openclaw,docker-entrypoint}.mjs!",
+  // Desktop service integration consumes this API in the staged builder/app cutover (#172569).
+  // Remove this audit root after those in-tree callers land.
+  "cli-invocation.mjs!",
   // update-command-node-runtime-resolution loads this package-root module by absolute URL.
   "node-runtime-recovery.mjs!",
   "src/index.ts!",
@@ -454,6 +464,9 @@ const rootEntries = [
   // audit roots once accept-input, transcript, and delivery callers activate it.
   "src/config/sessions/session-actor-contract.ts!",
   "src/config/sessions/session-actor-durable.ts!",
+  // PR #174294 stages the local credential owner without activating production consumers.
+  // Remove this audit root when the client credential cutover wires those consumers.
+  "src/infra/client-credential-store.ts!",
   // Startup metadata renders source help through a generated child module's file-URL import.
   "src/cli/program/root-help.ts!",
   // Packaged postinstall imports this private compiled entry before stage activation.
@@ -605,7 +618,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@discord/embedded-app-sdk",
   "@discordjs/opus",
   "@homebridge/ciao",
-  "@lit/context",
   "@matrix-org/matrix-sdk-crypto-wasm",
   "@mozilla/readability",
   "@openai/codex",
@@ -614,7 +626,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/codex-acp",
   "jiti",
   "json5",
-  "lit",
   "linkedom",
   "openclaw",
   "clawpdf",
@@ -644,9 +655,6 @@ const rootBundledPluginRuntimeDependencies = [
 const rootToolingAndWorkspaceDependencies = [
   "@a2ui/lit",
   "@copilotkit/aimock",
-  "@lit-labs/signals",
-  "@lit/context",
-  "@lit/task",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
@@ -654,7 +662,6 @@ const rootToolingAndWorkspaceDependencies = [
   // Keep its exact dependency available without externalizing it from packaged builds.
   "ipaddr.js",
   "jscpd",
-  "lit",
   // Runtime postbuild resolves this build input from its caller-selected root.
   "marked",
   "oxlint",
@@ -681,6 +688,10 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
 }
 
 function compileDynamicMjsConsumers(source: string, filePath: string): string {
+  // A custom TS compiler disables Knip's declaration-to-source mapping.
+  if (path.resolve(filePath) === path.resolve("config/knip-vite-consumers.mjs")) {
+    return compileViteConfigConsumers(source, filePath);
+  }
   if (path.resolve(filePath) === path.resolve("scripts/ci-build-manifest.mjs")) {
     // The trusted manifest resolves this planner from the target checkout by file URL.
     return source.replace(
@@ -696,6 +707,30 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
     );
   }
   return source;
+}
+
+function compileBundledPackageConsumers(source: string, filePath: string): string {
+  const manifestPath = path.resolve(filePath);
+  if (
+    manifestPath === path.resolve("package.json") ||
+    manifestPath === path.resolve("packages/ai/package.json")
+  ) {
+    // The bundled SDK imports these runtime externals. Project the real build
+    // policy into each shipping manifest; the root config alone has one owner.
+    const manifest: {
+      dependencies?: Record<string, string>;
+    } = JSON.parse(source);
+    const neverBundle = aiBuildConfig.deps?.neverBundle;
+    if (typeof neverBundle !== "function") {
+      throw new Error("Expected the AI build's externalization callback.");
+    }
+    return Object.keys(manifest.dependencies ?? {})
+      .filter((dependency) => neverBundle(dependency, undefined, false))
+      .map((dependency) => `import ${JSON.stringify(dependency)};`)
+      .join("\n");
+  }
+  // JSON has no import graph in Knip unless a compiler supplies one.
+  return "";
 }
 
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
@@ -768,6 +803,7 @@ const config = {
     yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileDynamicMjsConsumers,
+    json: compileBundledPackageConsumers,
   },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
@@ -777,6 +813,9 @@ const config = {
     "packages/*/dist/**",
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
+    // MCP compatibility tests launch these subprocess fixtures by path; the full-tree scan owns them.
+    "extensions/browser/src/browser/chrome-mcp.v1-peer.fixture.mjs",
+    "extensions/qa-lab/src/suite-runtime-agent-tools.v1-peer.fixture.mjs",
     "**/live-*.ts",
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
@@ -831,10 +870,9 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
-    // The Lit/Solid presentation fixture and focused UI tests consume these seams;
+    // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/provider-icon.ts": ["exports"],
-    "ui/src/components/settings-ui.ts": ["exports"],
     "ui/src/components/terminal/terminal-panel.ts": ["types"],
     "ui/src/pages/chat/components/chat-attachment-card-solid.tsx": ["exports"],
     "ui/src/pages/chat/components/chat-camera-capture.tsx": ["types"],
@@ -927,6 +965,7 @@ const config = {
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "config/**/*.{ts,mts,cts}!",
+        "config/knip-vite-consumers.mjs!",
         "docs/**/*.js!",
         "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -936,7 +975,7 @@ const config = {
         "*.config.{js,mjs,cjs,ts,mts,cts}!",
         "*.mjs!",
       ],
-      entry: rootEntries,
+      entry: ["package.json!", ...rootEntries],
     },
     "examples/ai-chat": {
       entry: ["index.mjs!"],
@@ -975,6 +1014,8 @@ const config = {
     "packages/ai": {
       // Mirror the published export map so knip sees every dist entry point.
       entry: [
+        // The JSON compiler models the shared build's external runtime consumers.
+        "package.json!",
         "src/index.ts!",
         "src/provider-types.ts!",
         "src/providers.ts!",

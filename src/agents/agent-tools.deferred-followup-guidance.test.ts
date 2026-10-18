@@ -38,6 +38,21 @@ function findToolDescription(
 }
 
 describe("createOpenClawCodingTools availability guidance", () => {
+  it.each([false, true])(
+    "directs inter-session messages only to an available sessions_send (available=%s)",
+    (hasSessionsSend) => {
+      const [tool] = applyToolAvailabilityDescriptions([
+        createSessionsYieldTool(),
+        ...(hasSessionsSend
+          ? [{ name: "sessions_send", description: "send" } as AnyAgentTool]
+          : []),
+      ]);
+
+      expect(tool?.description).toContain("Does not message other sessions");
+      expect(tool?.description.includes("use sessions_send")).toBe(hasSessionsSend);
+    },
+  );
+
   it.each([
     { available: [], mode: "suggest", deferred: false },
     { available: ["sessions_yield", "agents_wait"], mode: "prefer", deferred: true },

@@ -12,30 +12,10 @@ import {
   pairSessionDiffLines,
   type SessionSplitDiffRow,
 } from "../../../lib/chat/session-diff-split.ts";
-import type { DiffFilePaths, DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
+import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { DiffHighlightToken } from "./chat-diff-highlight.runtime.ts";
-
-export function DiffStatChips(props: { stat: DiffStat & { modified?: number } }) {
-  const showZeros = () => props.stat.modified === undefined;
-  return (
-    <>
-      {showZeros() || props.stat.added || props.stat.removed || props.stat.modified ? (
-        <span class="chat-diffstat">
-          {(showZeros() || props.stat.added > 0) && (
-            <span class="chat-diffstat__add">+{props.stat.added}</span>
-          )}
-          {(showZeros() || props.stat.removed > 0) && (
-            <span class="chat-diffstat__del">-{props.stat.removed}</span>
-          )}
-          {(props.stat.modified ?? 0) > 0 && (
-            <span class="chat-diffstat__mod">~{props.stat.modified}</span>
-          )}
-        </span>
-      ) : null}
-    </>
-  );
-}
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 
 export function createDiffPresentation(props: {
   active?: boolean;

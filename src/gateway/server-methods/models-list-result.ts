@@ -224,7 +224,7 @@ async function prepareOwnedModelsListResult({
   const catalog = dedupeModelCatalogEntries([
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,
-  ]);
+  ]).filter((entry) => entry.inference?.chat !== false);
   const { evaluateNative } = projector;
   const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
     config: cfg,

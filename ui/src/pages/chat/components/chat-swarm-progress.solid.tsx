@@ -159,7 +159,7 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
                           <For each={markers()}>
                             {(status) => (
                               <span
-                                class={`chat-swarm__marker chat-swarm__marker--${status}`}
+                                class={["chat-swarm__marker", `chat-swarm__marker--${status}`]}
                                 aria-hidden="true"
                               />
                             )}
@@ -207,7 +207,7 @@ export function ChatSwarmProgress(props: ChatSwarmProgressProps) {
                     {(task) => (
                       <div class="chat-swarm__task" role="listitem">
                         <span
-                          class={`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}
+                          class={["chat-swarm__task-icon", `chat-swarm__task-icon--${task.status}`]}
                           role="img"
                           aria-label={t(SWARM_STATUS_PRESENTATION[task.status][0])}
                         >

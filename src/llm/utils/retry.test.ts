@@ -39,6 +39,7 @@ describe("isRetryableAssistantError", () => {
   // replay windows, and incomplete-stream regressions at this adapter boundary.
   it.each([
     ["google-sse-eof-incomplete-frame", true],
+    ["openai-sdk-malformed-sse", true],
     ["google-sse-malformed-json-frame", false],
     ["billing-rate-limit-too-many", true],
     ["billing-service-capacity", true],
@@ -80,6 +81,7 @@ describe("isRetryableAssistantError", () => {
     PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
     PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
     "openclaw_repeated_tool_error",
+    "openclaw_repetitive_output",
   ])("does not retry terminal outcome %s", (errorCode) => {
     const message = {
       ...errorMessage("The WebSocket closed after dispatch"),

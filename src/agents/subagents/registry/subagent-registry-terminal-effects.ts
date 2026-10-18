@@ -115,7 +115,8 @@ export async function completeTerminalEffects(
   }
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
-  if (!suppressSessionEffects) {
+  // Duplicate receipts drain cleanup without replaying best-effort timing writes.
+  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted === true)) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {

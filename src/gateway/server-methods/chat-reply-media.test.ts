@@ -262,6 +262,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
     });
     expect(assistantContent).toEqual([
+      { type: "text", text: "NO_REPLY" },
       expect.objectContaining({
         type: "attachment_error",
         attachment: expect.objectContaining({

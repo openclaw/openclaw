@@ -1,24 +1,17 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   openAttachmentCardFromClick,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
-import { ChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
+import { createChatAttachmentViewportRef } from "./chat-attachment-viewport.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 
 type ChatVideoPlayerProps = {
   src: string;
@@ -43,46 +36,30 @@ function ChatVideoPlayerContent(
   host.style.display = "contents";
   // Buffering can lower readyState after the first frame without another loadeddata event.
   const [frameReady, setFrameReady] = createSignal(false);
-  const [revision, setRevision] = createSignal(0);
-  const sourceController = new ChatMediaSourceController();
+  const sourceController = new ChatMediaSourceOwner();
+  const sourceState = projectOwner(sourceController, (owner) => owner);
   let media: HTMLVideoElement | undefined;
   let mediaVisible = false;
-  let active = true;
-  const publish = () => setRevision((value) => value + 1);
-  const sourceState = () => {
-    revision();
-    return sourceController;
-  };
+  let expandButton: HTMLButtonElement | undefined;
   const syncSource = () => {
     const currentMedia = media;
     if (!currentMedia || !host.isConnected || !mediaVisible) {
       return;
     }
-    // The source effect tracks changes; imperative ref/event calls sample current props.
-    const pending = untrack(() =>
-      sourceController.sync(
-        currentMedia,
-        props.src,
-        props.sourceIdentity,
-        props.playback,
-        props.authToken,
-      ),
+    // The bridge holds current synchronous inputs for ref, event, and async callbacks.
+    void sourceController.sync(
+      currentMedia,
+      host.src,
+      host.sourceIdentity,
+      host.playback,
+      host.authToken,
     );
-    publish();
-    void pending?.then(() => {
-      if (active) {
-        publish();
-      }
-    });
   };
-  const viewport = new ChatAttachmentViewportRef(() => {
-    mediaVisible = true;
-    syncSource();
-  });
   const sourceSnapshot = createMemo(
     () => [props.src, props.sourceIdentity, props.playback, props.authToken] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
+  // Synchronize the browser media resource when its authorized source changes.
   createEffect(sourceSnapshot, ([src]) => {
     if (!src && media) {
       sourceController.cancel();
@@ -90,26 +67,20 @@ function ChatVideoPlayerContent(
     }
     if (sourceController.readiness === "unavailable") {
       sourceController.cancel();
-      publish();
     }
     syncSource();
   });
-  onSettled(syncSource);
-  onCleanup(() => {
-    active = false;
-    sourceController.cancel();
+  onSettled(() => {
+    syncSource();
+    return () => {
+      sourceState.dispose();
+      sourceController.cancel();
+    };
   });
   const setMedia = (element: HTMLVideoElement) => {
     setFrameReady(false);
     media = element;
     syncSource();
-  };
-  const adoptPendingSource = (currentMedia: HTMLVideoElement) => {
-    if (!sourceController.applyPendingSource(currentMedia)) {
-      return false;
-    }
-    publish();
-    return true;
   };
   const expand = () => {
     const source = sourceController.readySource;
@@ -118,9 +89,7 @@ function ChatVideoPlayerContent(
     }
     media?.pause();
     // Touch activation need not focus a button; the modal still needs a return target.
-    host
-      .querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")
-      ?.focus({ preventScroll: true });
+    expandButton?.focus({ preventScroll: true });
     props.onExpand?.(source);
   };
   const downloadHref = () => safeMediaAttachmentHref(props.src);
@@ -131,9 +100,9 @@ function ChatVideoPlayerContent(
     sizeBytes: props.sizeBytes,
     downloadHref: downloadHref(),
   });
-  const preparing = () => sourceState().readiness === "preparing" && !props.preview;
+  const preparing = () => sourceState.read().readiness === "preparing" && !props.preview;
   const loading = () => props.preview && !frameReady();
-  const onExpand = () => (props.onExpand && sourceState().readySource ? expand : undefined);
+  const onExpand = () => (props.onExpand && sourceState.read().readySource ? expand : undefined);
   const dimensions = createMemo(() =>
     props.mediaWidth && props.mediaHeight
       ? { "aspect-ratio": `${props.mediaWidth} / ${props.mediaHeight}` }
@@ -142,9 +111,13 @@ function ChatVideoPlayerContent(
         : {},
   );
   const Player = () => {
+    const viewport = createChatAttachmentViewportRef(() => {
+      mediaVisible = true;
+      syncSource();
+    });
     onCleanup(() => {
-      viewport.disconnect();
       mediaVisible = false;
+      expandButton = undefined;
       const previousMedia = media;
       media = undefined;
       if (previousMedia) {
@@ -159,7 +132,7 @@ function ChatVideoPlayerContent(
           { "chat-assistant-attachment-card--loading": loading() },
         ]}
         aria-busy={loading() ? "true" : undefined}
-        ref={viewport.setElement}
+        ref={viewport}
         data-openable={onExpand() ? "" : undefined}
         onClick={(event) => openAttachmentCardFromClick(event, onExpand())}
       >
@@ -169,6 +142,9 @@ function ChatVideoPlayerContent(
           loading={loading()}
           expandLabel={t("chat.mediaPlayer.openVideo", { filename: props.label })}
           onExpand={onExpand()}
+          expandRef={(element) => {
+            expandButton = element;
+          }}
           visualMode="preview-with-favicon"
         />
         <Show when={preparing()}>
@@ -204,26 +180,15 @@ function ChatVideoPlayerContent(
               sourceController.handleLoadedMetadata(event.currentTarget);
               props.onMediaLoaded?.();
             }}
-            onEnded={(event) => {
-              if (sourceController.handleEnded(event.currentTarget)) {
-                publish();
-              }
-            }}
-            onPlay={(event) => adoptPendingSource(event.currentTarget)}
+            onEnded={(event) => sourceController.handleEnded(event.currentTarget)}
+            onPlay={(event) => sourceController.applyPendingSource(event.currentTarget)}
             onSeeking={(event) => {
               const currentMedia = event.currentTarget;
-              if (
-                !adoptPendingSource(currentMedia) &&
-                currentMedia.error &&
-                sourceController.handleError(currentMedia)
-              ) {
-                publish();
+              if (!sourceController.applyPendingSource(currentMedia) && currentMedia.error) {
+                sourceController.handleError(currentMedia);
               }
             }}
-            onError={(event) => {
-              sourceController.handleError(event.currentTarget);
-              publish();
-            }}
+            onError={(event) => sourceController.handleError(event.currentTarget)}
           />
         </div>
       </div>
@@ -231,7 +196,7 @@ function ChatVideoPlayerContent(
   };
   return (
     <Show
-      when={sourceState().readiness !== "unavailable"}
+      when={sourceState.read().readiness !== "unavailable"}
       fallback={<CompactAttachmentCard {...card()} onExpand={props.onFallbackExpand} />}
     >
       <Player />

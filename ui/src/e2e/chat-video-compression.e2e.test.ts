@@ -131,7 +131,11 @@ suite.define(() => {
       });
       await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
       const invalidError = "Could not compress this video. Try again or choose a smaller file.";
-      await page.getByRole("status").filter({ hasText: invalidError }).waitFor();
+      await page
+        .locator(".chat-attachment-thumb")
+        .getByRole("status")
+        .filter({ hasText: invalidError })
+        .waitFor();
       await page.getByRole("alert").getByText(invalidError, { exact: true }).waitFor();
       await page.getByRole("button", { name: "Remove invalid.mp4", exact: true }).click();
       await picker.setInputFiles({
@@ -142,7 +146,11 @@ suite.define(() => {
       await page.getByRole("button", { name: "Compress to fit", exact: true }).click();
       const unsupportedError =
         "This browser cannot compress this video with its audio. Try another browser or a smaller file.";
-      await page.getByRole("status").filter({ hasText: unsupportedError }).waitFor();
+      await page
+        .locator(".chat-attachment-thumb")
+        .getByRole("status")
+        .filter({ hasText: unsupportedError })
+        .waitFor();
       await page.getByRole("alert").getByText(unsupportedError, { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       expect(

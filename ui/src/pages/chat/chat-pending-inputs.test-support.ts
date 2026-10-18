@@ -1,4 +1,3 @@
-import { vi } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
@@ -29,7 +28,7 @@ export function makeChatPageHost({
   const context = { ...createInitializationContext(), sessions };
   const host = createPageState(
     context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     { dispatchEvent: () => true, querySelector: () => null },
   );
   Object.assign(host, { client, hello, connected: true }, overrides);

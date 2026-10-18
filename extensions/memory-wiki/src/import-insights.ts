@@ -307,7 +307,7 @@ export function buildMemoryWikiImportInsights(input: MemoryWikiImportInsightItem
     .map(([key, clusterItems]) => {
       const updatedAt = clusterItems
         .map((item) => item.updatedAt ?? item.createdAt)
-        .find((value): value is string => typeof value === "string" && value.length > 0);
+        .find((value): value is string => value !== undefined && value.length > 0);
       return Object.assign(
         {
           key,

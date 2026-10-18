@@ -18,9 +18,9 @@ import { splitMediaFromOutput } from "../../../media/parse.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
-import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
   getGatewayAgentResult,
   hasCommittedSourceReplyDeliveryEvidence,
@@ -31,7 +31,7 @@ import {
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
-import type { ReplyExpectation } from "../../reply-completion.js";
+import { MISSING_REPLY_NOTICE_TEXT, type ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   hasAnnounceSendEvidence,
@@ -166,9 +166,6 @@ export async function runAnnounceAgentCall(params: {
   }
 }
 
-const FAILED_COMPLETION_NOTICE =
-  "A delegated task failed before it could report a result. Please retry the task.";
-
 export function isGatewayAgentRunPending(response: unknown): boolean {
   return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
 }
@@ -290,7 +287,7 @@ function collectDirectCompletionContent(params: {
   contentKind: "completed_result" | "failed_notice";
 }): DirectCompletionContent | undefined {
   if (params.contentKind === "failed_notice") {
-    return { content: FAILED_COMPLETION_NOTICE, mediaUrls: [] };
+    return { content: MISSING_REPLY_NOTICE_TEXT, mediaUrls: [] };
   }
   const collect = (payloads: readonly unknown[]): DirectCompletionContent | undefined => {
     const textParts: string[] = [];
@@ -306,7 +303,6 @@ function collectDirectCompletionContent(params: {
           {
             includeErrorPayloads: false,
             includeReasoningPayloads: false,
-            includeSilentReplyPayloads: false,
             requireTerminalContent: true,
           },
         )
@@ -321,7 +317,7 @@ function collectDirectCompletionContent(params: {
       if (parsed.audioAsVoice === true || record.audioAsVoice === true) {
         audioAsVoice = true;
       }
-      const text = sanitizeAgentRunTerminalReplyText(sanitizePendingFinalDeliveryText(parsed.text));
+      const text = sanitizePendingFinalDeliveryText(parsed.text);
       // A result that only reads like the producer's placeholder is still a real
       // result: absence is recorded on the event fact, never matched here.
       if (text) {
@@ -376,6 +372,7 @@ function collectDirectCompletionContent(params: {
 export async function deliverCompletionDirect(params: {
   cfg: OpenClawConfig;
   requesterSessionKey: string;
+  requesterSessionId?: string;
   requesterAgentId?: string;
   directIdempotencyKey: string;
   deliveryTarget: {
@@ -465,10 +462,14 @@ export async function deliverCompletionDirect(params: {
           // Bookkeeping failure cannot make a fully sent result retryable.
         });
       },
+      // The requester lane may already belong to its next turn.
       mirror: {
         sessionKey: params.requesterSessionKey,
         agentId,
         idempotencyKey,
+        expectedSessionId: params.requesterSessionId,
+        deliveryMirror: { kind: SUBAGENT_COMPLETION_DIRECT_DELIVERY_KIND },
+        deferToSessionLane: true,
       },
     });
     if (committedDelivery) {

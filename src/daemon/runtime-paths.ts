@@ -111,12 +111,6 @@ function buildBunCandidates(
   return candidates;
 }
 
-type ExecFileAsync = (
-  file: string,
-  args: readonly string[],
-  options: { encoding: "utf8"; timeoutMs: number; env: NodeJS.ProcessEnv },
-) => Promise<{ stdout: string; stderr: string }>;
-
 const RUNTIME_PROBE_TIMEOUT_MS = 5_000;
 
 // The probe only needs to launch the runtime and, on Bun, run SQLite library selection
@@ -133,13 +127,6 @@ const RUNTIME_PROBE_ENV_KEYS = [
   "HOMEBREW_PREFIX",
   "OPENCLAW_SQLITE_LIBRARY",
 ] as const;
-
-const execFileAsync: ExecFileAsync = async (file, args, options) =>
-  await runExec(file, [...args], {
-    baseEnv: options.env,
-    logOutput: false,
-    timeoutMs: options.timeoutMs,
-  });
 
 export function buildRuntimeProbeEnv(env: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const probeEnv: NodeJS.ProcessEnv = {};
@@ -206,7 +193,6 @@ type SystemNodeInfo = RuntimeInfo & { path: string };
 async function resolveRuntimeInfo(
   runtimePath: string,
   runtime: "node" | "bun",
-  execFileImpl: ExecFileAsync,
   env: Record<string, string | undefined>,
   timeoutMs = RUNTIME_PROBE_TIMEOUT_MS,
 ): Promise<RuntimeInfo> {
@@ -220,10 +206,10 @@ async function resolveRuntimeInfo(
         ? fileURLToPath(resolveRuntimeProcessEntrypointUrl("bunSqliteLibrary"))
         : undefined,
     );
-    const { stdout } = await execFileImpl(runtimePath, ["-e", script], {
-      encoding: "utf8",
+    const { stdout } = await runExec(runtimePath, ["-e", script], {
+      baseEnv: buildRuntimeProbeEnv(env),
+      logOutput: false,
       timeoutMs,
-      env: buildRuntimeProbeEnv(env),
     });
     const parsed: unknown = JSON.parse(stdout);
     if (!isRecord(parsed)) {
@@ -298,10 +284,9 @@ async function resolveRuntimeInfo(
 
 export function resolveBunRuntimeInfo(
   bunPath: string,
-  execFileImpl: ExecFileAsync = execFileAsync,
   env: Record<string, string | undefined> = process.env,
 ) {
-  return resolveRuntimeInfo(bunPath, "bun", execFileImpl, env);
+  return resolveRuntimeInfo(bunPath, "bun", env);
 }
 
 /** Probes a recorded Node executable without inheriting service preloads or secrets. */
@@ -310,7 +295,7 @@ export function resolveNodeRuntimeInfo(
   env: Record<string, string | undefined> = process.env,
   timeoutMs = RUNTIME_PROBE_TIMEOUT_MS,
 ) {
-  return resolveRuntimeInfo(nodePath, "node", execFileAsync, env, timeoutMs);
+  return resolveRuntimeInfo(nodePath, "node", env, timeoutMs);
 }
 
 /** Probe the recorded executable without substituting a discovered runtime. */
@@ -329,7 +314,7 @@ export async function resolveRecordedDaemonRuntime(
   if (!runtime) {
     return undefined;
   }
-  const info = await resolveRuntimeInfo(runtimePath, runtime, execFileAsync, env);
+  const info = await resolveRuntimeInfo(runtimePath, runtime, env);
   return { ...info, runtime, path: runtimePath };
 }
 
@@ -384,12 +369,10 @@ export async function resolveSystemNodePath(
 export async function resolveSystemNodeInfo(params: {
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
-  execFile?: ExecFileAsync;
   acceptNodeVersion?: (version: string | null) => boolean;
 }): Promise<SystemNodeInfo | null> {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const execFileImpl = params.execFile ?? execFileAsync;
   let firstAvailable: SystemNodeInfo | null = null;
   for (const systemNode of buildSystemNodeCandidates(env, platform)) {
     try {
@@ -400,7 +383,7 @@ export async function resolveSystemNodeInfo(params: {
     if (await isVersionManagedRealNodePath(systemNode, platform)) {
       continue;
     }
-    const runtime = await resolveRuntimeInfo(systemNode, "node", execFileImpl, env);
+    const runtime = await resolveRuntimeInfo(systemNode, "node", env);
     const info = { path: systemNode, ...runtime };
     if (info.status === "supported" && (params.acceptNodeVersion?.(info.version) ?? true)) {
       return info;
@@ -445,7 +428,6 @@ type RuntimePathOptions = {
   env?: Record<string, string | undefined>;
   runtime?: string;
   platform?: NodeJS.Platform;
-  execFile?: ExecFileAsync;
   execPath?: string;
 };
 
@@ -459,9 +441,8 @@ export async function resolvePreferredNodePath(
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
-  const execFileImpl = params.execFile ?? execFileAsync;
   const currentNode = isNodeRuntime(currentExecPath)
-    ? await resolveRuntimeInfo(currentExecPath, "node", execFileImpl, env)
+    ? await resolveRuntimeInfo(currentExecPath, "node", env)
     : null;
   if (
     currentNode?.status === "supported" &&
@@ -496,7 +477,6 @@ export async function resolvePreferredBunPath(
 
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const execFileImpl = params.execFile ?? execFileAsync;
   const currentExecPath = params.execPath ?? process.execPath;
   let probeFailure: Error | undefined;
   let selectionError: string | undefined;
@@ -508,7 +488,7 @@ export async function resolvePreferredBunPath(
         continue;
       }
     }
-    const runtime = await resolveBunRuntimeInfo(candidate, execFileImpl, env);
+    const runtime = await resolveBunRuntimeInfo(candidate, env);
     if (runtime.status === "probe-failed") {
       probeFailure ??= runtime.error;
     } else {
@@ -563,7 +543,7 @@ export async function resolvePinnedDaemonRuntimePath(
   } catch (cause) {
     throw new Error(`Pinned runtime is not executable: ${runtimePath}`, { cause });
   }
-  const info = await resolveRuntimeInfo(runtimePath, runtime, execFileAsync, env);
+  const info = await resolveRuntimeInfo(runtimePath, runtime, env);
   if (info.status === "probe-failed") {
     throw info.error;
   }

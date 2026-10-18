@@ -20,6 +20,16 @@ describe("openclaw probes", () => {
     expect(result.version).toHaveLength(64);
   });
 
+  it("distinguishes a missing command from an unsuccessful version probe", async () => {
+    expect(await probeLocalCommand("openclaw-test-missing-command-703e8602")).toMatchObject({
+      found: false,
+      failure: "not-found",
+    });
+    expect(
+      await probeLocalCommand(process.execPath, ["-e", "process.exit(7)"], { timeoutMs: 1_000 }),
+    ).toMatchObject({ found: false, error: "exited 7", failure: "error" });
+  });
+
   it.runIf(process.platform !== "win32")(
     "force-kills timed-out local command probes that ignore SIGTERM",
     async () => {
@@ -33,6 +43,7 @@ describe("openclaw probes", () => {
       expect(result).toMatchObject({
         command: process.execPath,
         error: "timed out after 25ms",
+        failure: "error",
         found: true,
         timedOut: true,
       });

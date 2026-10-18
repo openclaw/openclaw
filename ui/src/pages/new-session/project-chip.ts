@@ -97,7 +97,10 @@ export type ProjectChipOptions = {
   deviceFolder?: boolean;
   onDeviceFolder?: () => void;
   deviceFolderDisabledReason?: string;
-  gatewayLabel: string;
+  /** Present when the selected device folder can be chosen from a node listing. */
+  deviceBrowseLabel?: string;
+  onBrowseDevice?: () => void;
+  browserLabel: string;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;

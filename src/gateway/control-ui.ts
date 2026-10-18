@@ -8,6 +8,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import {
   replacePlaybackFileExtension,
@@ -15,6 +16,7 @@ import {
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -90,6 +92,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -114,10 +117,8 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(JSON.stringify(body));
+  sendJsonResponse(res, status, body);
 }
 
 function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
@@ -333,21 +334,26 @@ export async function handleControlUiAssistantMediaRequest(
           )
         : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
+    // Local assistant-media previews retain their original animation bytes.
     if (
       media.reference.kind === "inbound" &&
       mediaKind === "image" &&
       url.searchParams.get("variant") === "thumbnail"
     ) {
       const { readImageThumbnailFromFile } = await import("./managed-image-thumbnail-cache.js");
-      const thumbnail = await readImageThumbnailFromFile(opened);
+      const thumbnail = await readImageThumbnailFromFile(
+        opened,
+        undefined,
+        normalizeChatImageRenditionWidth(url.searchParams.get("width")),
+      );
       await byteStream.close();
       await publishResponse(() => {
-        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Type", "image/webp");
         res.setHeader("Content-Length", String(thumbnail.byteLength));
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader(
           "Content-Disposition",
-          buildAssistantMediaContentDisposition(`${filename}-preview.png`, "image/png"),
+          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
         );
         res.end(req.method === "HEAD" ? undefined : thumbnail);
       });
@@ -577,6 +583,7 @@ async function prepareControlUiBootstrapConfig(
     res,
     cfg: opts?.cfg ?? opts?.config,
     replyOnFailure,
+    requiredOperatorMethod: "sessions.list",
     onPluginFrameGrants: (grants) => {
       pluginFrameGrants = grants;
     },
@@ -605,13 +612,15 @@ async function prepareControlUiBootstrapConfig(
           : { avatar: identity.avatar, resolution: null };
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
-    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog().then(
-        ({ plugins }) => plugins,
-        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-        () => [],
-      ),
-    ),
+    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
+      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+          listControlUiPluginCatalog().then(
+            ({ plugins }) => plugins,
+            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+            () => [],
+          ),
+        )
+      : [],
     resolveDevInstallGitBranch(),
     import("./control-ui-bootstrap-preferences.js").then(
       ({ prepareControlUiBootstrapPreferences }) =>

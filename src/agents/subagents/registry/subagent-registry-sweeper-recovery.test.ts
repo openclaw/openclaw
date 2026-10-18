@@ -23,7 +23,6 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
@@ -553,7 +552,7 @@ describe("subagent registry recovery scheduling", () => {
     expect(recoverRow).toHaveBeenCalledOnce();
   });
 
-  it("rechecks deferred ownership when the runtime becomes available", async () => {
+  it("rechecks deferred ownership at its next bounded retry when the runtime becomes available", async () => {
     const runtime: { current?: GatewayRecoveryRuntime } = {};
     recoverRow.mockImplementation(async ({ gatewayRuntime }) =>
       gatewayRuntime ? { status: "ignored" } : { status: "deferred" },
@@ -565,6 +564,8 @@ describe("subagent registry recovery scheduling", () => {
     runtime.current = createMockGatewayRecoveryRuntime();
     await sweeper.sweepOnce();
 
+    expect(recoverRow).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(recoverRow).toHaveBeenCalledTimes(3);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
@@ -595,33 +596,6 @@ describe("subagent registry recovery scheduling", () => {
     expect(calls()).toBe(9);
     expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
-
-  it.each(["session", "registry", "generation"] as const)(
-    "rechecks a changed %s without waiting for the row's backoff",
-    async (change) => {
-      recoverRow.mockResolvedValue({ status: "deferred" });
-      const { entry, runs, sweeper } = createHarness({});
-      await sweeper.sweepOnce();
-      await vi.advanceTimersByTimeAsync(7_000);
-      expect(recoverRow).toHaveBeenCalledTimes(4);
-      recoverRow.mockResolvedValue({ status: "handled" });
-      if (change === "session") {
-        sessionChanges.emit({ sessionKey: entry.childSessionKey, scope: "session-entry" });
-        await vi.advanceTimersByTimeAsync(1_000);
-      } else {
-        if (change === "registry") {
-          runs.set(entry.runId, {
-            ...entry,
-            execution: { ...entry.execution, status: "interrupted" },
-          });
-        } else {
-          rotateAgentEventLifecycleGeneration();
-        }
-        await sweeper.sweepOnce();
-      }
-      expect(recoverRow).toHaveBeenCalledTimes(5);
-    },
-  );
 
   it("does not terminalize a durable kill intent while runtime abort is rejected", async () => {
     const runtime = { current: createMockGatewayRecoveryRuntime() };

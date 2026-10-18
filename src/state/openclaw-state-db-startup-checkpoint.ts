@@ -39,7 +39,10 @@ import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.
 import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateSchemaRepairAllowed } from "./openclaw-state-db-schema-policy.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  assertSupportedStateSchemaVersion,
+} from "./openclaw-state-db-schema-version.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
@@ -83,19 +86,32 @@ const STARTUP_CHECKPOINT_SCHEMA = `
     ON state_leases(expires_at, scope, lease_key)
     WHERE expires_at IS NOT NULL;
   CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-    ON state_leases(owner, updated_at DESC);
+    ON state_leases(owner);
 `;
 const checkpointAdmission = createStateSchemaAdmission("state.startup-checkpoint", (value) =>
   value === true ? true : undefined,
 );
 
 export function isUninitializedNativeStartupDatabase(db: DatabaseSync): boolean {
-  if ((getStateSchemaVersionAdmission(db)?.userVersion ?? readSqliteUserVersion(db)) !== 0) {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  if (
+    (getStateSchemaVersionAdmission(db)?.userVersion ??
+      schema?.userVersion ??
+      readSqliteUserVersion(db)) !== 0
+  ) {
     return false;
   }
-  const objects = db // sqlite-allow-raw -- Pre-bootstrap schema ownership is checked before Kysely exposure.
-    .prepare("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
-    .all();
+  // Reuse admission's physical catalog across the read and initialization handles.
+  const objects = schema
+    ? [
+        ...[...schema.tables].map((name) => ({ type: "table", name })),
+        ...[...schema.indexes].map((name) => ({ type: "index", name })),
+        ...[...schema.views].map((name) => ({ type: "view", name })),
+        ...[...schema.triggers.keys()].map((name) => ({ type: "trigger", name })),
+      ].filter(({ name }) => !name.startsWith("sqlite_"))
+    : db // sqlite-allow-raw -- Cold checkpoint admission can precede the shared catalog.
+        .prepare("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'")
+        .all();
   if (
     objects.some(
       ({ type, name }) =>
@@ -327,14 +343,20 @@ export function initializeNativeOpenClawStateConnection(
   const env = options.env ?? process.env;
   const pathname = resolveDatabasePath(options);
   withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
+    const initialization = prepareStateDatabaseInitialization(
+      pathname,
+      env,
+      options.initializationAgentPaths,
+    );
     const db = openNodeSqliteDatabase(pathname);
     try {
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      admitStateSchemaFacts(db, pathname);
       if (!isUninitializedNativeStartupDatabase(db)) {
         return;
       }
       assertStateDatabaseIntegrityOnce(db, pathname);
-      initializeCanonicalSchema(db, pathname, env, { kind: "existing" });
+      initializeCanonicalSchema(db, pathname, env, initialization);
     } finally {
       clearNodeSqliteKyselyCacheForDatabase(db);
       db.close();

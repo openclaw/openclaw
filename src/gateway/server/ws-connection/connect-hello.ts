@@ -1,4 +1,5 @@
 // Gateway WebSocket connect completion sends hello-ok and commits post-handshake state.
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   GATEWAY_SERVER_CAPS,
   ErrorCodes,
@@ -15,6 +16,7 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/device-pairing-node.js";
+import { recordPairedDeviceAccess } from "../../../infra/device-pairing.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { commitPresence } from "../../../infra/system-presence.js";
 import { getGatewaySuspendAdmissionPhase } from "../../../process/gateway-work-admission.js";
@@ -131,7 +133,7 @@ export async function sendGatewayHello(
     sessionRowProjection,
   });
   const cachedHealth = getHealthCache();
-  if (cachedHealth) {
+  if (cachedHealth && !connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND)) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
@@ -359,6 +361,16 @@ export async function sendGatewayHello(
     return;
   }
   onHelloDelivered();
+  const metadata = context.pendingDeviceMetadata;
+  if (metadata) {
+    context.runDetachedConnectWork(
+      () => recordPairedDeviceAccess(metadata.deviceId, metadata.patch, metadata.identity),
+      (err) =>
+        logGateway.warn(
+          `device access metadata refresh failed conn=${connId}: ${formatForLog(err)}`,
+        ),
+    );
+  }
   try {
     const client = context.handler.getClient();
     if (

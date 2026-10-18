@@ -1,5 +1,7 @@
+import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildSessionContext,
@@ -10,6 +12,22 @@ import {
 } from "./session-manager-codec.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+
+it("shares checkpoint prefixes and releases prepared transcript history", async ({ signal }) => {
+  const result = await runNodeScript(
+    [
+      "--expose-gc",
+      "--import",
+      "./scripts/tsx.mjs",
+      fileURLToPath(new URL("./system-prompt-pool.retention.test-support.ts", import.meta.url)),
+    ],
+    process.env,
+    undefined,
+    { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+});
 
 describe("session manager codec compatibility", () => {
   it("selects the new projection only for a genuinely new session", () => {

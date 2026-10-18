@@ -1,11 +1,15 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  AgentActivityItemSchema,
+  ChatRunStartupPhaseSchema,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
+const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
 const CHAT_RUN_PROGRESS_MAX_BYTES = 128 * 1024;
 const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
@@ -112,19 +116,15 @@ export function updateChatRunProgressSnapshot(
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId.trim() : "";
   const review = asNullableRecord(data.review) ?? undefined;
   const reviewId = typeof review?.id === "string" ? review.id.trim() : "";
-  const isStartupStatus =
+  const isStartupStatus = event.stream === "run_status" && STARTUP_PHASES.has(phase);
+  const isModelWait =
     event.stream === "run_status" &&
-    [
-      "waiting_for_state",
-      "preparing_workspace",
-      "naming_worktree",
-      "creating_worktree",
-      "running_setup",
-      "provisioning_environment",
-      "preparing_context",
-      "memory_flushing",
-      "starting_model",
-    ].includes(phase);
+    (phase === "waiting_for_model" ||
+      (phase === "starting_model" &&
+        snapshot?.events.some(
+          (candidate) =>
+            candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
+        )));
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
@@ -180,6 +180,7 @@ export function updateChatRunProgressSnapshot(
         candidate.data.reviewId === data.reviewId,
     );
   const isSummaryProgress =
+    isModelWait ||
     isTool ||
     isItem ||
     isUsage ||
@@ -239,6 +240,7 @@ export function updateChatRunProgressSnapshot(
 
   if (
     isStartupStatus &&
+    !isModelWait &&
     next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
   ) {
     return next;

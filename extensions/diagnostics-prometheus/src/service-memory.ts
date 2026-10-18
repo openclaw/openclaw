@@ -2,6 +2,25 @@ import { asNonNegativeFiniteNumber as numericValue } from "openclaw/plugin-sdk/n
 import type { DiagnosticEventPayload } from "../api.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+const WORKER_MEMORY_METRICS = [
+  ["heapUsed", "openclaw_worker_heap_used_bytes", "heap usage"],
+  ["external", "openclaw_worker_external_bytes", "external memory"],
+  [
+    "arrayBuffers",
+    "openclaw_worker_array_buffers_bytes",
+    "ArrayBuffer memory (included in external)",
+  ],
+] as const;
+
+type WorkerMemoryTotals = {
+  count: number;
+  sampled: number;
+  heapUsed?: number;
+  external?: number;
+  arrayBuffers?: number;
+  heapSpaces?: Map<string, number>;
+};
+
 export function recordMemorySample(
   store: PrometheusMetricStore,
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
@@ -84,11 +103,9 @@ export function recordMemorySample(
     }
   }
   // The resource owner supplies bounded script names and retires stale/exit samples.
-  const workers = new Map<
-    string,
-    { count: number; sampled: number; heapUsed: number | undefined }
-  >();
+  const workers = new Map<string, WorkerMemoryTotals>();
   store.clearGauges("openclaw_code_mode_worker_heap_bytes");
+  store.clearGauges("openclaw_code_mode_worker_memory_bytes");
   for (const worker of memory.workerHeaps ?? []) {
     if (worker.workerSlot !== undefined) {
       for (const [kind, value] of [
@@ -102,22 +119,45 @@ export function recordMemorySample(
           value,
         );
       }
+      for (const [kind, value] of [
+        ["external", worker.external],
+        ["array_buffers", worker.arrayBuffers],
+      ] as const) {
+        store.gauge(
+          "openclaw_code_mode_worker_memory_bytes",
+          "Latest live Code Mode isolate external and ArrayBuffer memory (included in external) by reusable worker slot.",
+          { slot: String(worker.workerSlot), kind },
+          value,
+        );
+      }
     }
-    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    const totals: WorkerMemoryTotals = workers.get(worker.script) ?? { count: 0, sampled: 0 };
     totals.count++;
     totals.sampled++;
-    const heapUsed = numericValue(worker.heapUsed);
-    if (heapUsed !== undefined) {
-      totals.heapUsed = (totals.heapUsed ?? 0) + heapUsed;
+    for (const [field] of WORKER_MEMORY_METRICS) {
+      const value = worker[field];
+      if (value !== undefined) {
+        totals[field] = (totals[field] ?? 0) + value;
+      }
+    }
+    for (const space of worker.heapSpaces ?? []) {
+      totals.heapSpaces ??= new Map();
+      totals.heapSpaces.set(
+        space.space_name,
+        (totals.heapSpaces.get(space.space_name) ?? 0) + space.space_used_size,
+      );
     }
     workers.set(worker.script, totals);
   }
   for (const worker of memory.workerMemoryMissing ?? []) {
-    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0, heapUsed: undefined };
+    const totals = workers.get(worker.script) ?? { count: 0, sampled: 0 };
     totals.count++;
     workers.set(worker.script, totals);
   }
-  store.clearGauges("openclaw_worker_heap_used_bytes");
+  for (const [, name] of WORKER_MEMORY_METRICS) {
+    store.clearGauges(name);
+  }
+  store.clearGauges("openclaw_worker_heap_space_used_bytes");
   for (const [script, totals] of workers) {
     store.gauge("openclaw_worker_count", "Worker isolate counts.", { script }, totals.count);
     store.gauge(
@@ -126,12 +166,22 @@ export function recordMemorySample(
       { script },
       totals.sampled,
     );
-    store.gauge(
-      "openclaw_worker_heap_used_bytes",
-      "Latest live Worker heap usage by bounded script basename.",
-      { script },
-      totals.heapUsed,
-    );
+    for (const [field, name, description] of WORKER_MEMORY_METRICS) {
+      store.gauge(
+        name,
+        `Latest live Worker ${description} by bounded script basename.`,
+        { script },
+        totals[field],
+      );
+    }
+    for (const [space, bytes] of totals.heapSpaces ?? []) {
+      store.gauge(
+        "openclaw_worker_heap_space_used_bytes",
+        "Latest live Worker V8 heap space usage by bounded script basename.",
+        { script, space },
+        bytes,
+      );
+    }
   }
   store.histogram(
     "openclaw_memory_rss_bytes",

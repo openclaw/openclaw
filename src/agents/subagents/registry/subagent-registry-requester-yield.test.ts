@@ -23,6 +23,7 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const REQUESTER = "agent:main:main";
 const REQUESTER_TURN = "run-requester";
@@ -361,6 +362,38 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
+  it.each(["yield intent", "cohort release"] as const)(
+    "keeps a selected child's current requester turn at %s",
+    async (kind) => {
+      const child = makeRun("run-child");
+      const runs = new Map([[child.runId, child]]);
+      const commit = createRequesterInitialTransferFixture(runs);
+      const transfer: Parameters<
+        typeof settleRequesterTurnAfterSessionSpawns
+      >[0]["transfer"] = async (params) => {
+        runs.set(
+          child.runId,
+          copySubagentRunRuntimeOwner(child, { ...child, requesterTurnRunId: "run-other" }),
+        );
+        await commit(params);
+      };
+      const operation =
+        kind === "yield intent"
+          ? markRequesterTurnYieldedInRuns({
+              preparedAuthority: null,
+              requesterSessionKey: REQUESTER,
+              requesterTurnRunId: REQUESTER_TURN,
+              runs,
+              transfer,
+            })
+          : settleRuns([child], { runs, transfer });
+
+      await expect(operation).rejects.toThrow(/Requester (child changed its turn|spawn receipt)/);
+      expect(runs.get(child.runId)?.requesterTurnRunId).toBe("run-other");
+      expect(runs.get(child.runId)?.requesterSettleWake).toBeUndefined();
+    },
+  );
+
   function nestedRequester(delivery: "pending" | "delivered" = "delivered"): SubagentRunRecord {
     return {
       ...makeRun(REQUESTER_TURN),

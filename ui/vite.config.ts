@@ -5,7 +5,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
 import {
   runnerImport,
@@ -34,7 +35,6 @@ import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
-import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -78,21 +78,23 @@ const controlUiPrecompressedAssetExtensions = new Set([
   ".webmanifest",
 ]);
 
-export function createControlUiPrecompressedAssetVariants(
+const compressBrotli = promisify(brotliCompress);
+
+export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
-): Array<{ fileName: string; source: Buffer }> {
+): Promise<Array<{ fileName: string; source: Buffer }>> {
   if (
     !fileName.startsWith("assets/") ||
     !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
   ) {
     return [];
   }
-  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
+  const body = typeof source === "string" ? Buffer.from(source) : source;
   return [
     {
       fileName: `${fileName}.br`,
-      source: brotliCompressSync(body, {
+      source: await compressBrotli(body, {
         params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
       }),
     },
@@ -511,7 +513,13 @@ export async function refreshControlUiBuildOutput(
   // Embed only build-owned HTML, never a fetched Gateway document (which may
   // contain identity, route metadata, or an HTTP login response). The measured
   // route graph also warms assets loaded before the first worker controls a tab.
+  const { module: routes } = await runnerImport<typeof import("./src/app-route-paths.ts")>(
+    path.join(here, "src/app-route-paths.ts"),
+    { configFile: false, resolve: { alias: resolveSourcePackageAliasesForVite() } },
+  );
   const offlineShell = {
+    routes: routes.APP_ROUTE_PATHS,
+    routePrefixes: routes.APP_ROUTE_OFFLINE_PREFIXES,
     html: fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
     // Public fonts and theme styles are selected at runtime by preferences.
     // Keep this bounded build inventory, not all lazy pages, locales, or plugins.
@@ -593,14 +601,14 @@ function controlUiBuildOutputPlugin(
       let sidecars = 0;
       let lastProgressAt = performance.now();
       logger.info("Control UI precompression: starting");
-      for (const output of Object.values(bundle)) {
+      const compressAsset = async (output: (typeof bundle)[string]) => {
         // Vite's post-build import analysis rewrites lazy preload markers in a
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
         const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
+        const variants = await createControlUiPrecompressedAssetVariants(output.fileName, source);
         if (variants.length === 0) {
-          continue;
+          return;
         }
         for (const variant of variants) {
           fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
@@ -615,6 +623,18 @@ function controlUiBuildOutputPlugin(
             `Control UI precompression: ${completed} assets (${sidecars} sidecars) written`,
           );
           lastProgressAt = now;
+        }
+      };
+      const outputs = Object.values(bundle);
+      for (let index = 0; index < outputs.length; index += 4) {
+        // Bound native compression memory and join every writer before failed-build cleanup.
+        const results = await Promise.allSettled(
+          outputs.slice(index, index + 4).map(compressAsset),
+        );
+        for (const result of results) {
+          if (result.status === "rejected") {
+            throw result.reason;
+          }
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
@@ -726,11 +746,11 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
+        plugins: [controlUiHoverGuardPlugin()],
       },
     },
     optimizeDeps: {
-      include: ["ipaddr.js", "lit/directives/repeat.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", ...commonJsOptimizeDeps],
     },
     resolve: {
       alias: [

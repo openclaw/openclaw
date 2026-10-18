@@ -235,8 +235,13 @@ export function resolveAssistantAttachmentAvailability(
 export async function loadAssistantAttachmentAvailability(
   source: string,
   options: ImageRenderOptions = {},
+  retryFailed = false,
 ): Promise<AssistantAttachmentAvailability | null> {
-  const availability = resolveAssistantAttachmentAvailability(source, options);
+  let availability = resolveAssistantAttachmentAvailability(source, options);
+  if (retryFailed && availability.status === "unavailable" && availability.recoverable) {
+    retryAssistantAttachmentAvailability(source, options);
+    availability = resolveAssistantAttachmentAvailability(source, options);
+  }
   if (availability.status !== "checking") {
     return availability;
   }
@@ -251,7 +256,7 @@ export function retryAssistantAttachmentAvailability(
   allowImage = false,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
-    options.onRequestUpdate?.();
+    options.onMediaChange?.();
     return;
   }
   const resource = observeAssistantAttachment(source, options);
@@ -260,7 +265,7 @@ export function retryAssistantAttachmentAvailability(
     resolveAssistantAttachmentAvailability(source, options, true);
   }
   notifyChatMediaResourceSubscribers(resource);
-  options.onRequestUpdate?.();
+  options.onMediaChange?.();
 }
 
 export function reportAssistantImageFailure(
@@ -363,6 +368,7 @@ export function retainAssistantImage(
   image: HTMLImageElement,
   options: ImageRenderOptions = {},
   filename?: string,
+  previewWidth: 480 | 960 | 1920 = 960,
 ) {
   const resource = readRetainedAssistantAttachment(source, options);
   const availability = resource?.value;
@@ -379,6 +385,7 @@ export function retainAssistantImage(
         options,
         filename,
         "thumbnail",
+        previewWidth,
       )
   ) {
     resource.retainedImage = image;
@@ -390,7 +397,7 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     JSON.stringify([cacheScope, options.policyKey]),
-    options.onRequestUpdate,
+    options.onMediaChange,
     source,
     cacheScope,
   );

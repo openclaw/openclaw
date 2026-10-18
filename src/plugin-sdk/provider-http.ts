@@ -1,6 +1,47 @@
 // Shared provider-facing HTTP helpers. Keep generic transport utilities here so
 // capability SDKs do not depend on each other.
 
+import { resolveProviderHttpRequestConfig } from "../media-understanding/shared.js";
+
+type ProviderApiKeyRequest = {
+  cfg?: Parameters<typeof import("./provider-auth-runtime.js").resolveApiKeyForProvider>[0]["cfg"];
+  agentDir?: string;
+  authStore?: Parameters<
+    typeof import("./provider-auth-runtime.js").resolveApiKeyForProvider
+  >[0]["store"];
+};
+
+/** Resolve current provider auth and the common Bearer-authenticated HTTP request policy. */
+export async function resolveProviderApiKeyHttpRequestConfig(
+  params: Omit<Parameters<typeof resolveProviderHttpRequestConfig>[0], "transport"> & {
+    provider: string;
+    req: ProviderApiKeyRequest;
+    missingApiKeyMessage: string;
+    jsonContentType?: boolean;
+  },
+) {
+  const { req, missingApiKeyMessage, jsonContentType = true, ...http } = params;
+  const { resolveApiKeyForProvider } = await import("./provider-auth-runtime.js");
+  const auth = await resolveApiKeyForProvider({
+    provider: http.provider,
+    cfg: req.cfg,
+    agentDir: req.agentDir,
+    store: req.authStore,
+  });
+  if (!auth.apiKey) {
+    throw new Error(missingApiKeyMessage);
+  }
+  return resolveProviderHttpRequestConfig({
+    ...http,
+    transport: "http",
+    defaultHeaders: {
+      Authorization: `Bearer ${auth.apiKey}`,
+      ...(jsonContentType ? { "Content-Type": "application/json" } : {}),
+      ...http.defaultHeaders,
+    },
+  });
+}
+
 export {
   inspectTlsCertificateError,
   type TlsCertificateErrorDetails,
@@ -52,6 +93,7 @@ export {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { postJsonResponse } from "../media-understanding/provider-json-post.js";
 export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export {
   runHttpTlsPreflight,
@@ -92,6 +134,7 @@ export type {
 } from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
+export { fetchWithProviderHttpGuard } from "../agents/provider-transport-dispatcher-pool.js";
 export {
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,

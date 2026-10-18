@@ -38,7 +38,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
@@ -48,6 +48,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
 import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
+import { prepareCliRunTerminalReply } from "../cli-runner/terminal-reply.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createCronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
@@ -81,18 +82,13 @@ import {
 } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 import { registerCommandReplyPolicyTests } from "./attempt-execution.reply-policy.test-support.js";
+import {
+  restrictedCompletionCases,
+  type RestrictedCompletion,
+} from "./attempt-execution.restricted-completion.test-fixtures.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
 import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
-
-type TrustedHandoff = NonNullable<RunCliAgentParams["trustedInternalHandoff"]>;
-type RestrictedCompletion = {
-  name: string;
-  providerName?: string;
-  execHost?: "node";
-  seedChildLineage?: boolean;
-  forge?: (handoff: TrustedHandoff) => TrustedHandoff | undefined;
-};
 
 const runAgentAttempt = (params: RunAgentAttemptOverrides) => {
   const prepared = makeRunAgentAttemptParams(params);
@@ -292,7 +288,8 @@ describe("CLI attempt execution", () => {
   }
 
   beforeEach(async () => {
-    homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
+    homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CONFIG_DIR"]);
+    deleteTestEnvValue("CLAUDE_CONFIG_DIR");
     setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
     setRuntimeConfigSnapshot({ session: { store: storePath } });
     tmpDir = await fixtureRoot.make();
@@ -957,6 +954,7 @@ describe("CLI attempt execution", () => {
     const cliResult = buildCliRunResult({
       context,
       output,
+      preparedReply: prepareCliRunTerminalReply(context, output),
       effectiveCliSessionId: output.sessionId,
       bindingFlushOk: false,
       usedHistoryPrompt: false,
@@ -1102,6 +1100,7 @@ describe("CLI attempt execution", () => {
         return buildCliRunResult({
           context,
           output: { text: "partial reply", terminalInterruption: { reason } },
+          preparedReply: prepareCliRunTerminalReply(context, { text: "partial reply" }),
           effectiveCliSessionId: replacement ? successorCliSessionId : cliSessionId,
           bindingFlushOk: true,
           usedHistoryPrompt: false,
@@ -1362,6 +1361,33 @@ describe("CLI attempt execution", () => {
 
     expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(concurrentCliSessionId);
     expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(concurrentCliSessionId);
+  });
+
+  it("preserves a stopped Claude session whose transcript is in CLAUDE_CONFIG_DIR", async () => {
+    const sessionKey = "agent:main:direct:claude-config-root";
+    const cliSessionId = "configured-root-session";
+    const configDir = path.join(tmpDir, "claude-config");
+    setTestEnvValue("HOME", path.join(tmpDir, "home"));
+    setTestEnvValue("CLAUDE_CONFIG_DIR", configDir);
+    const workspaceKey = (await fs.realpath(tmpDir)).normalize("NFC").replace(/[^a-zA-Z0-9]/g, "-");
+    const projectDir = path.join(configDir, "projects", workspaceKey);
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "prior answer" } })}\n`,
+    );
+    const sessionEntry = makeClaudeCliSessionEntry("configured-root-chat", cliSessionId);
+    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
+    runCliAgentMock.mockImplementationOnce(async () => {
+      expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(cliSessionId);
+      expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
+      return makeCliResult("continued answer", cliSessionId);
+    });
+
+    await runCli();
+
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
   });
 
   it("clears the persisted Claude CLI binding but still forwards the candidate when the stored transcript is missing", async () => {
@@ -2245,7 +2271,7 @@ describe("CLI attempt execution", () => {
     });
 
     expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
-    expect(embeddedArg.terminalReplyExpectation).toBe("required");
+    expect(embeddedArg.terminalReplyExpectation).toBe("result-required");
     expect(embeddedArg.cronCreatorAuthorityCapability).toBe(capability);
     const callback = embeddedArg.onExecutionStarted;
     if (typeof callback !== "function") {
@@ -2315,16 +2341,7 @@ describe("CLI attempt execution", () => {
       });
     },
   );
-  it.each([
-    { name: "a non-Claude CLI runtime", providerName: "google-gemini-cli", execHost: undefined },
-    { name: "a node-hosted Claude CLI requester", providerName: "claude-cli", execHost: "node" },
-    { name: "a missing capability", seedChildLineage: true, forge: () => undefined },
-    {
-      name: "a capability without persisted child lineage",
-      seedChildLineage: false,
-      forge: (handoff: TrustedHandoff) => handoff,
-    },
-  ] satisfies RestrictedCompletion[])(
+  it.each(restrictedCompletionCases)(
     "restricts completion tools for $name",
     async ({
       providerName = "claude-cli",

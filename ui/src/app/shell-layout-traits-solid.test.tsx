@@ -3,7 +3,7 @@ import { Show, createEffect, createSignal, flush, onSettled } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { SettingsPage, SettingsPageHeader } from "../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../components/solid/settings-workspace.tsx";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { renderModelProvidersPageShell } from "../pages/model-providers/view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { ShellLayoutOwner } from "./shell-layout-owner.ts";
@@ -99,6 +99,58 @@ it("publishes settings layout before descendants render and measure updates", ()
   expect(content.className).toBe("content");
 });
 
+it("keeps layout traits through shell class updates and retires them with their reporter", () => {
+  const owner = new ShellLayoutOwner();
+  const [chat, setChat] = createSignal(false);
+  const [shown, setShown] = createSignal(true);
+  let content!: HTMLElement;
+  const measurements: string[] = [];
+  function Measure() {
+    measurements.push(content.className);
+    createEffect(chat, () => {
+      measurements.push(content.className);
+    });
+    return <span>Measured</span>;
+  }
+  render(() => (
+    <main
+      class={["content", { "content--chat": chat() }]}
+      ref={(element) => {
+        content = element;
+        owner.contentRef(element);
+      }}
+    >
+      <ShellLayoutProvider
+        value={{
+          owner,
+          get host() {
+            return content;
+          },
+        }}
+      >
+        <Show when={shown()}>
+          <SettingsPage wide>
+            <SettingsPageHeader title="Settings" />
+            <Measure />
+          </SettingsPage>
+        </Show>
+      </ShellLayoutProvider>
+    </main>
+  ));
+  expect(measurements[0]).toContain("content--settings-wide");
+  setChat(true);
+  flush();
+  expect(content.classList.contains("content--chat")).toBe(true);
+  expect(content.classList.contains("content--settings-page")).toBe(true);
+  expect(measurements.at(-1)).toContain("content--settings-wide");
+  setShown(false);
+  flush();
+  expect(content.classList.contains("content--chat")).toBe(true);
+  expect(content.classList.contains("content--settings-page")).toBe(false);
+  expect(content.classList.contains("content--settings-wide")).toBe(false);
+  expect(content.classList.contains("content--toolbar-header")).toBe(false);
+});
+
 it("retires only the departing Solid reporter and preserves retained sibling facts", () => {
   const content = document.createElement("main");
   content.className = "content";
@@ -137,12 +189,13 @@ const BridgedSettingsPage = defineSolidBridge(
 );
 
 it.each([
-  { bridged: false, detached: false },
-  { bridged: true, detached: false },
-  { bridged: true, detached: true },
+  { bridged: false, detached: false, stacked: false },
+  { bridged: false, detached: false, stacked: true },
+  { bridged: true, detached: false, stacked: false },
+  { bridged: true, detached: true, stacked: false },
 ])(
-  "publishes initial page layout ($bridged bridge, $detached detached)",
-  async ({ bridged, detached }) => {
+  "publishes initial page layout ($bridged bridge, $detached detached, $stacked stacked)",
+  async ({ bridged, detached, stacked }) => {
     const owner = new ShellLayoutOwner();
     let content!: HTMLElement;
     const container = detached ? document.createElement("div") : undefined;
@@ -167,7 +220,7 @@ it.each([
               <BridgedSettingsPage />
             ) : (
               <SettingsPage wide>
-                <SettingsPageHeader title="Native settings" />
+                <SettingsPageHeader title="Native settings" stacked={stacked} />
               </SettingsPage>
             )}
           </ShellLayoutProvider>
@@ -184,6 +237,6 @@ it.each([
     });
     expect(content.classList.contains("content--settings-page")).toBe(true);
     expect(content.classList.contains("content--settings-wide")).toBe(true);
-    expect(content.classList.contains("content--toolbar-header")).toBe(true);
+    expect(content.classList.contains("content--toolbar-header")).toBe(!stacked);
   },
 );

@@ -137,6 +137,9 @@ rewritten by security sanitization, the text reports the omission rather than
 showing a partial or altered path. A listing that cannot display its first entry
 explicitly reports that pagination cannot advance.
 
+If a saved file's metadata cannot be read, `dir_fetch` fails instead of reporting
+a successful transfer with an incomplete manifest.
+
 Directory fetch policy checks the source-tree descendants and then the archive
 member identities admitted by the same bounded parser and policy planner used
 for extraction. It does not use human-readable `tar` listings: admitted Unicode

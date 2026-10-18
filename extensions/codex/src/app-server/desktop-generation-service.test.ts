@@ -51,8 +51,6 @@ function createHarness(initialFingerprint: string, initialWatchFailures = 0) {
     {
       platform: "darwin",
       readFingerprint,
-      resolveWatchPaths: () => ["/Applications", "/Applications/ChatGPT.app"],
-      pathExists: () => true,
       watchPath: (watchedPath, options, listener) => {
         watchAttempts += 1;
         if (watchFailures > 0) {
@@ -105,30 +103,21 @@ describe("Codex desktop generation service", () => {
     vi.useRealTimers();
   });
 
-  it.each([1, Infinity])(
-    "retries failed watch registration once (%s failures)",
-    async (failures) => {
-      vi.useFakeTimers();
-      const harness = createHarness("desktop-rearm", failures);
-      current = harness;
-      await harness.service.start(harness.context);
-      expect(harness.watchAttempts).toBe(2);
-      await vi.advanceTimersByTimeAsync(1_100);
-      expect(harness.watchAttempts).toBe(4);
-      expect(harness.registrations).toHaveLength(failures === 1 ? 3 : 0);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(harness.watchAttempts).toBe(4);
-      if (failures === Infinity) {
-        harness.setFingerprint("updated-without-watcher");
-        const next = waitForCodexDesktopGeneration();
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(await next).toMatchObject({ fingerprint: "updated-without-watcher" });
-        expect(harness.watchAttempts).toBe(4);
-      }
-    },
-  );
+  it("refreshes on acquisition when the stable root cannot be watched", async () => {
+    vi.useFakeTimers();
+    const harness = createHarness("desktop-unwatched", Infinity);
+    current = harness;
+    await harness.service.start(harness.context);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.reportFailure).toHaveBeenCalledOnce();
+    harness.setFingerprint("updated-without-watcher");
+    const next = waitForCodexDesktopGeneration();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await next).toMatchObject({ fingerprint: "updated-without-watcher" });
+    expect(harness.watchAttempts).toBe(1);
+  });
 
-  it("rearms stable directory watches and publishes a settled root replacement", async () => {
+  it("keeps the stable parent watch and publishes a settled bundle replacement", async () => {
     vi.useFakeTimers();
     const harness = createHarness("desktop-x");
     current = harness;
@@ -141,10 +130,9 @@ describe("Codex desktop generation service", () => {
 
     harness.setFingerprint("desktop-y");
     applications?.listener("rename", "ChatGPT.app");
-    await vi.advanceTimersByTimeAsync(100);
-    expect(oldArm.every((entry) => entry.watcher.close.mock.calls.length === 1)).toBe(true);
-    expect(harness.registrations).toHaveLength(4);
     await vi.advanceTimersByTimeAsync(1_000);
+    expect(oldArm.every((entry) => entry.watcher.close.mock.calls.length === 0)).toBe(true);
+    expect(harness.registrations).toHaveLength(1);
     await vi.waitFor(() => expect(harness.onGenerationChange).toHaveBeenCalledOnce());
     expect(harness.onGenerationChange).toHaveBeenCalledWith({
       epoch: expect.any(Number),
@@ -152,7 +140,7 @@ describe("Codex desktop generation service", () => {
     });
   });
 
-  it("ignores unrelated application events and recovers a watcher error", async () => {
+  it("ignores unrelated applications and refreshes on demand after a watcher error", async () => {
     vi.useFakeTimers();
     const harness = createHarness("desktop-errors");
     current = harness;
@@ -162,14 +150,16 @@ describe("Codex desktop generation service", () => {
 
     applications?.listener("rename", "Safari.app");
     await vi.advanceTimersByTimeAsync(100);
-    expect(harness.registrations).toHaveLength(2);
+    expect(harness.registrations).toHaveLength(1);
 
     oldArm[0]?.watcher.emit("error", new Error("watch lost"));
     expect(harness.reportFailure).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(100);
-    expect(harness.registrations).toHaveLength(4);
+    harness.setFingerprint("desktop-after-watch-error");
+    const next = waitForCodexDesktopGeneration();
     await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => expect(harness.clearFailure).toHaveBeenCalledTimes(2));
+    expect(await next).toMatchObject({ fingerprint: "desktop-after-watch-error" });
+    expect(oldArm[0]?.watcher.close).toHaveBeenCalledOnce();
+    expect(harness.registrations).toHaveLength(1);
   });
 
   it("does not publish a generation after service stop during settling", async () => {
@@ -206,7 +196,7 @@ describe("Codex desktop generation service", () => {
         }
       }).not.toThrow();
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(harness.watchAttempts).toBe(2);
+      expect(harness.watchAttempts).toBe(1);
       expect(harness.readFingerprint).toHaveBeenCalledOnce();
     },
   );

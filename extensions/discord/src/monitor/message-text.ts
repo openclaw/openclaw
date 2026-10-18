@@ -98,7 +98,7 @@ export function resolveDiscordMessageHistoryText(
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({
-    attachments: message.attachments ?? undefined,
+    attachments: message.attachments,
     stickers: resolveDiscordMessageStickers(message),
   });
   return [text, mediaText].filter(Boolean).join("\n");

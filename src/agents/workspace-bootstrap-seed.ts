@@ -17,6 +17,8 @@ type SeedWorkspaceBootstrapParams = {
   content: Buffer;
   nowMs?: number;
   stateOptions?: OpenClawStateDatabaseOptions;
+  beforePersistentApply?: () => void;
+  mergeSetupState?: typeof mergeWorkspaceSetupState;
 };
 
 export async function seedWorkspaceBootstrap(
@@ -58,6 +60,10 @@ async function seedWorkspaceBootstrapOwned(
   params: SeedWorkspaceBootstrapParams,
   assertCurrent: () => void,
 ): Promise<"seeded" | "already-seeded" | "consumed"> {
+  const assertSeedCurrent = () => {
+    assertCurrent();
+    params.beforePersistentApply?.();
+  };
   const dir = params.dir;
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const initialState = (
@@ -74,6 +80,7 @@ async function seedWorkspaceBootstrapOwned(
     return "consumed";
   }
 
+  assertSeedCurrent();
   await fs.mkdir(dir, { recursive: true });
   assertCurrent();
   const workspaceRoot = await fsSafeRoot(dir, {
@@ -86,7 +93,7 @@ async function seedWorkspaceBootstrapOwned(
     try {
       await workspaceRoot.write(DEFAULT_BOOTSTRAP_FILENAME, params.content, {
         overwrite: false,
-        assertBeforeMutation: assertCurrent,
+        assertBeforeMutation: assertSeedCurrent,
       });
       created = true;
     } catch (error) {
@@ -121,13 +128,14 @@ async function seedWorkspaceBootstrapOwned(
 
   if (!initialState.bootstrapSeededAt) {
     const nowMs = params.nowMs ?? Date.now();
-    await mergeWorkspaceSetupState(
+    assertSeedCurrent();
+    await (params.mergeSetupState ?? mergeWorkspaceSetupState)(
       dir,
       {
         bootstrapSeededAt: new Date(nowMs).toISOString(),
       },
       nowMs,
-      { ...params.stateOptions, assertCurrent },
+      { ...params.stateOptions, assertCurrent: assertSeedCurrent },
     );
   }
   assertCurrent();

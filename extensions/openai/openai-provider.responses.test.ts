@@ -90,18 +90,15 @@ describe("Daybreak Responses requests", () => {
   );
 });
 
-it.each([false, true])(
-  "uses host-admitted prompt updates on native Responses (enabled=%s)",
-  (inHistorySystemUpdates) => {
-    const policy = buildOpenAIReplayPolicy({
-      provider: "openai",
-      modelApi: "openai-responses",
-      modelId: "gpt-5.4",
-      inHistorySystemUpdates,
-    });
-    expect(policy.inHistorySystemUpdates).toBe(inHistorySystemUpdates || undefined);
-  },
-);
+it("uses host-admitted prompt updates on native Responses", () => {
+  const policy = buildOpenAIReplayPolicy({
+    provider: "openai",
+    modelApi: "openai-responses",
+    modelId: "gpt-5.4",
+    inHistorySystemUpdates: true,
+  });
+  expect(policy.inHistorySystemUpdates).toBe(true);
+});
 
 it("owns replay policy for OpenAI and Codex transports", () => {
   const provider = buildOpenAIProvider();

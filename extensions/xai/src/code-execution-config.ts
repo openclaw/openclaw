@@ -8,28 +8,24 @@ type CodeExecutionConfig = {
   timeoutSeconds?: number;
 };
 
-export function readPluginCodeExecutionConfig(cfg?: unknown): CodeExecutionConfig | undefined {
-  if (!cfg || typeof cfg !== "object") {
-    return undefined;
-  }
-  const plugins = (cfg as OpenClawConfig).plugins;
-  const entries = plugins && typeof plugins === "object" ? plugins.entries : undefined;
-  const entry = entries && entries.xai;
-  const config = entry && typeof entry === "object" ? entry.config : undefined;
+export function readPluginCodeExecutionConfig(
+  cfg?: OpenClawConfig,
+): CodeExecutionConfig | undefined {
+  const config = cfg?.plugins?.entries?.xai?.config;
   const value = config && typeof config === "object" ? config.codeExecution : undefined;
   return value && typeof value === "object" ? (value as CodeExecutionConfig) : undefined;
 }
 
 export function resolveCodeExecutionEnabled(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
+  sourceConfig?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
   auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
     enabled: params.config?.enabled,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.sourceConfig as never,
+    runtimeConfig: params.runtimeConfig,
+    sourceConfig: params.sourceConfig,
     auth: params.auth,
   });
 }

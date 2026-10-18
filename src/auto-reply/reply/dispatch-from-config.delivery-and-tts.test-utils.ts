@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -32,7 +33,6 @@ import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createPluginBindingRecord } from "./conversation-binding.test-fixtures.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
-import { buildNoVisibleReplyFallbackText } from "./dispatch-from-config.payloads.js";
 import { registerPreparedSettlementTests } from "./dispatch-from-config.prepared-settlement.test-support.js";
 import {
   createDispatcher,
@@ -52,6 +52,7 @@ import {
   automaticGroupReplyConfig,
   dispatchReplyFromConfig,
   installCaptionedVoiceTestPlugin,
+  installThreadingTestPlugin,
   setNoAbort,
   firstFinalReplyPayload,
   firstMockArg,
@@ -66,7 +67,7 @@ import { usesFullReplyRuntime } from "./reply-config-runtime-mode.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-const NO_VISIBLE_REPLY_FALLBACK_TEXT = buildNoVisibleReplyFallbackText();
+const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
 
 beforeAll(globalBeforeAll0);
 
@@ -83,6 +84,7 @@ describe("dispatchReplyFromConfig", () => {
     "keeps a held native final with its delivery owner (primary=%s)",
     async (primary) => {
       setNoAbort();
+      installThreadingTestPlugin({ id: "qa-channel" });
       const error = Object.assign(
         new OutboundDeliveryError("still queued", {
           cause: new PlatformMessageNotDispatchedError("offline before dispatch", {
@@ -1707,6 +1709,7 @@ describe("dispatchReplyFromConfig", () => {
     "settles $deliveryPath $outcome blocks before identical final=$finalReturned later=$laterFinal and observation",
     async ({ deliveryPath, outcome, finalReturned, laterFinal }) => {
       setNoAbort();
+      installThreadingTestPlugin({ id: "qa-channel" });
       const attempts: string[] = [];
       const onBlockReplyQueued = vi.fn();
       const noSend = new PlatformMessageNotDispatchedError("block was not dispatched", {
@@ -1987,7 +1990,7 @@ describe("dispatchReplyFromConfig", () => {
         text: "generated",
         mediaUrls: ["https://example.com/generated.png"],
       });
-      return { text: "NO_REPLY" };
+      return {};
     };
 
     await dispatchReplyFromConfig({
@@ -3144,11 +3147,6 @@ describe("dispatchReplyFromConfig", () => {
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     }
   });
-
-  it.each(["run\nprivate detail", "<@everyone>", "https://example.com/private", "x".repeat(129)])(
-    "omits unsafe fallback references: %j",
-    (runId) => expect(buildNoVisibleReplyFallbackText(runId)).toBe(NO_VISIBLE_REPLY_FALLBACK_TEXT),
-  );
 
   it("skips fallback when directives stay visible", () =>
     expect(needsTtsFallback(false, "[[tts:text]]x", "x")).toBe(false));

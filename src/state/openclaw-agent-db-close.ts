@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
+import { isPostgresSqlConnection, sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   prepareSqliteDatabaseCleanClose,
@@ -26,14 +27,16 @@ export function createAgentDatabaseHandleCloser(cache: {
     const lease = cache.leases.get(database.path);
     const alreadyClosed = !database.db.isOpen;
     const priorCheckpointError = database.walMaintenance.health?.state === "error";
-    using seal = !alreadyClosed ? prepareSqliteDatabaseCleanClose(database.db) : undefined;
+    const postgres = isPostgresSqlConnection(database.db);
+    const anchor = sqlPublicationAnchor(database.db);
+    using seal = !alreadyClosed && !postgres ? prepareSqliteDatabaseCleanClose(anchor) : undefined;
     let clean: { path: string; publishSeal: () => boolean } | undefined;
     let retainRuntimeProof: boolean;
     try {
-      if (!alreadyClosed) {
-        setSqliteBusyTimeout(database.db, 0);
+      if (!alreadyClosed && !postgres) {
+        setSqliteBusyTimeout(anchor, 0);
       }
-      disposeNodeSqliteDependents(database.db);
+      disposeNodeSqliteDependents(anchor);
       database.walMaintenance.close({ checkpointMode: "TRUNCATE" });
       const healthy =
         !cache.failures.has(database.path) &&
@@ -45,7 +48,10 @@ export function createAgentDatabaseHandleCloser(cache: {
       if (database.db.isOpen) {
         database.db.close();
       }
-      if (pathCurrent) {
+      if (postgres && anchor.isOpen) {
+        anchor.close();
+      }
+      if (pathCurrent && !postgres) {
         const { canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
         // Native last-close may finish a checkpoint; a pinned WAL must remain unsealed.
         const closedWithEmptyWal =

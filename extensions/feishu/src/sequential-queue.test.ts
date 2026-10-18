@@ -11,10 +11,12 @@ describe("createSequentialQueue", () => {
   it("serializes tasks for the same key", async () => {
     const enqueue = createSequentialQueue();
     const gate = createDeferred<void>();
+    const started = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
       order.push("first:start");
+      started.resolve();
       await gate.promise;
       order.push("first:end");
     });
@@ -23,7 +25,7 @@ describe("createSequentialQueue", () => {
       order.push("second:end");
     });
 
-    await Promise.resolve();
+    await started.promise;
     expect(order).toEqual(["first:start"]);
 
     gate.resolve();
@@ -36,20 +38,24 @@ describe("createSequentialQueue", () => {
     const enqueue = createSequentialQueue();
     const gateA = createDeferred<void>();
     const gateB = createDeferred<void>();
+    const startedA = createDeferred<void>();
+    const startedB = createDeferred<void>();
     const order: string[] = [];
 
     const first = enqueue("feishu:default:chat-1", async () => {
       order.push("chat-1:start");
+      startedA.resolve();
       await gateA.promise;
       order.push("chat-1:end");
     });
     const second = enqueue("feishu:default:chat-1:btw:om_2", async () => {
       order.push("btw:start");
+      startedB.resolve();
       await gateB.promise;
       order.push("btw:end");
     });
 
-    await Promise.resolve();
+    await Promise.all([startedA.promise, startedB.promise]);
     expect(order).toEqual(["chat-1:start", "btw:start"]);
 
     gateA.resolve();

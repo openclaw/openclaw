@@ -2,6 +2,7 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import type { CommandInteraction, CommandWithSubcommands } from "../internal/discord.js";
+import { createDiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./voice-runtime.js";
 
@@ -118,7 +119,7 @@ describe("createDiscordVoiceCommand", () => {
   it.each([
     { owner: "100000000000000001", authorized: true },
     { owner: "discord:100000000000000001", authorized: true },
-    { owner: "discord:user:100000000000000001", authorized: false },
+    { owner: "discord:user:100000000000000001", authorized: true },
     { owner: "user:100000000000000001", authorized: true },
     { owner: "pk:100000000000000001", authorized: true },
     { owner: "user:*", authorized: false },
@@ -147,6 +148,59 @@ describe("createDiscordVoiceCommand", () => {
         : "You are not authorized to use this command.",
       ephemeral: true,
     });
+  });
+
+  it("runs vc leave only for the current typed owner", async () => {
+    const ownerId = "100000000000000001";
+    const otherId = "100000000000000002";
+    const discordConfig: DiscordAccountConfig = { dmPolicy: "disabled", allowFrom: ["*"] };
+    let cfg: OpenClawConfig = {
+      commands: { ownerAllowFrom: [`discord:user:${ownerId}`] },
+      channels: { discord: discordConfig },
+    };
+    const leaveSpy = vi.fn(async () => ({ ok: true, message: "Left voice." }));
+    const manager = { status: () => [], leave: leaveSpy } as unknown as DiscordVoiceManager;
+    const leave = findVoiceSubcommand(
+      createDiscordVoiceCommand({
+        cfg,
+        discordConfig,
+        accountId: "default",
+        groupPolicy: "open",
+        getManager: () => manager,
+        ephemeralDefault: true,
+        readPolicy: createDiscordLivePolicyReader({
+          cfg,
+          readConfig: () => cfg,
+          accountId: "default",
+          token: "discord-test-token",
+          discordConfig,
+          resolvedAllowlist: { guildEntries: undefined, allowFrom: ["*"] },
+        }),
+      }),
+      "leave",
+    );
+    const runAs = async (id: string) => {
+      const { interaction, reply } = createInteraction({
+        guild: { id: "g1", name: "Guild" } as CommandInteraction["guild"],
+        user: { id, username: "member" } as CommandInteraction["user"],
+      });
+      await leave.run(interaction);
+      return reply.mock.calls[0]?.[0];
+    };
+
+    expect(await runAs(otherId)).toMatchObject({
+      content: "You are not authorized to use this command.",
+    });
+    expect(leaveSpy).not.toHaveBeenCalled();
+    expect(await runAs(ownerId)).toMatchObject({ content: "Left voice." });
+    expect(leaveSpy).toHaveBeenCalledTimes(1);
+
+    // The live policy reader sees owner reassignment before the next privileged effect.
+    cfg = { ...cfg, commands: { ownerAllowFrom: [`discord:user:${otherId}`] } };
+    expect(await runAs(ownerId)).toMatchObject({
+      content: "You are not authorized to use this command.",
+    });
+    expect(leaveSpy).toHaveBeenCalledTimes(1);
   });
 
   it("normalizes an account wildcard before admitting vc commands", async () => {

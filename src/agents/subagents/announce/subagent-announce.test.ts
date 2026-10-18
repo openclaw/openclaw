@@ -260,47 +260,50 @@ describe("subagent announce seam flow", () => {
     outputTesting.setDepsForTest();
   });
 
-  it("delivers the terminal result while deleting the encoded child owner", async () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:subagent:test": {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
-      },
-    });
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childRunId: "run-direct-skip-whitespace",
-      childAgentId: "main",
-      childSessionIdentity: {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
-      },
-      cleanup: "delete",
-      roundOneReply: "  child result  ",
-      terminalReply: { disposition: "visible", text: "child result" },
-      fallbackReply: "stale result",
-    });
+  it.each(["  child result  ", "child result"])(
+    "delivers the result while deleting the encoded child owner: reply=%j",
+    async (roundOneReply) => {
+      loadSessionStoreMock.mockReturnValue({
+        "agent:main:subagent:test": {
+          sessionId: "child-session-id",
+          lifecycleRevision: "child-lifecycle-revision",
+        },
+      });
+      const didAnnounce = await runAnnounceFlow({
+        startedAt: 10,
+        endedAt: 20,
+        childRunId: "run-direct-skip-whitespace",
+        childAgentId: "main",
+        childSessionIdentity: {
+          sessionId: "child-session-id",
+          lifecycleRevision: "child-lifecycle-revision",
+        },
+        cleanup: "delete",
+        roundOneReply,
+        terminalReply: { disposition: "visible", text: "child result" },
+        fallbackReply: "stale result",
+      });
 
-    expect(didAnnounce).toBe("delivered");
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(requireAgentCall().params?.message).toContain("child result");
-    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
-    expect(sessionsDeleteSpy).toHaveBeenCalledWith({
-      method: "sessions.delete",
-      params: {
-        key: "agent:main:subagent:test",
-        agentId: "main",
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-        expectedSessionId: "child-session-id",
-        expectedLifecycleRevision: "child-lifecycle-revision",
-      },
-      timeoutMs: 10_000,
-      prepareDispatchCurrent: expect.any(Function),
-      assertDispatchCurrent: expect.any(Function),
-    });
-  });
+      expect(didAnnounce).toBe("delivered");
+      expect(agentSpy).toHaveBeenCalledTimes(1);
+      expect(requireAgentCall().params?.message).toContain("child result");
+      expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+      expect(sessionsDeleteSpy).toHaveBeenCalledWith({
+        method: "sessions.delete",
+        params: {
+          key: "agent:main:subagent:test",
+          agentId: "main",
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+          expectedSessionId: "child-session-id",
+          expectedLifecycleRevision: "child-lifecycle-revision",
+        },
+        timeoutMs: 10_000,
+        prepareDispatchCurrent: expect.any(Function),
+        assertDispatchCurrent: expect.any(Function),
+      });
+    },
+  );
 
   it("skips delete cleanup when the lifecycle owner invalidates the attempt", async () => {
     const didAnnounce = await runAnnounceFlow({
@@ -346,6 +349,7 @@ describe("subagent announce seam flow", () => {
           },
           cleanup: "delete",
           terminalReply: { disposition: "visible", text: "Research result" },
+          roundOneReply: "Research result",
         }),
       ).toBe("delivered");
       expect(sessionsDeleteSpy).toHaveBeenCalledExactlyOnceWith(
@@ -381,6 +385,7 @@ describe("subagent announce seam flow", () => {
         cleanup: "delete",
         outcome: { status: "error", error: "interrupted by restart" },
         roundOneReply: "frozen terminal result",
+        terminalReply: { disposition: "visible", text: "frozen terminal result" },
         suppressChildSessionEffects: reason === "explicit",
         isChildSessionEffectsAllowed: () => reason !== "host",
         prepareChildSessionEffects: async () => reason !== "currency",
@@ -401,6 +406,7 @@ describe("subagent announce seam flow", () => {
       task: "recover interrupted work",
       outcome: { status: "error", error: "interrupted by restart" },
       roundOneReply: "stale frozen terminal result",
+      terminalReply: { disposition: "visible", text: "stale frozen terminal result" },
       suppressChildSessionEffects: true,
       isCompletionDeliveryAllowed: () => false,
     });
@@ -427,6 +433,7 @@ describe("subagent announce seam flow", () => {
       cleanup: "keep" as const,
       outcome: { status: "ok" as const },
       roundOneReply: "private child result",
+      terminalReply: { disposition: "visible" as const, text: "private child result" },
       expectsCompletionMessage: true,
       startedAt: 10,
       endedAt: 20,

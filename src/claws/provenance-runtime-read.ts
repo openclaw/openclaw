@@ -34,7 +34,7 @@ type ClawInstallSchemaVersionReadOptions = OpenClawStateDatabaseOptions & {
   artifactPreservingReadOnly?: boolean;
 };
 
-// Config preparation publishes reads; in-process Claw writes publish their committed changes.
+// Config preparation publishes legacy ownership reads.
 const snapshotsByPath = new Map<string, ClawInstallSchemaVersionSnapshot>();
 const snapshotListeners = new Set<() => void>();
 const handedOffFacts = resolveGlobalSingleton(
@@ -249,7 +249,7 @@ export async function prepareClawInstallSchemaVersions(
     path,
     publish: () => {
       const current = snapshotsByPath.get(path);
-      // Lifecycle changes and committed Claw writes supersede the staged read.
+      // Lifecycle changes and newer preparation supersede the staged read.
       if (current !== previous) {
         return;
       }
@@ -270,31 +270,4 @@ export async function prepareClawInstallSchemaVersions(
 export function registerClawInstallSchemaVersionSnapshotListener(listener: () => void): () => void {
   snapshotListeners.add(listener);
   return () => snapshotListeners.delete(listener);
-}
-
-export function cacheClawInstallSchemaVersion(
-  agentId: string,
-  schemaVersion: ReturnType<typeof parseClawInstallRecordSchemaVersion>,
-  agentConfigDigest: string,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  const snapshot = snapshotsByPath.get(resolveSnapshotPath(options));
-  if (snapshot?.kind !== "ready") {
-    return;
-  }
-  snapshot.schemaVersions.set(agentId, { kind: "ok", schemaVersion, agentConfigDigest });
-  snapshotsByPath.set(resolveSnapshotPath(options), { ...snapshot });
-  notifySnapshotListeners();
-}
-
-export function deleteCachedClawInstallSchemaVersion(
-  agentId: string,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  const snapshot = snapshotsByPath.get(resolveSnapshotPath(options));
-  if (snapshot?.kind !== "ready" || !snapshot.schemaVersions.delete(agentId)) {
-    return;
-  }
-  snapshotsByPath.set(resolveSnapshotPath(options), { ...snapshot });
-  notifySnapshotListeners();
 }

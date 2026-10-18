@@ -12,5 +12,5 @@ export const ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD = {
   docsPath: "/concepts/streaming#text-phases-and-final-replies",
   surfaces: ["AssistantMessage.openclawDelivery.textPhaseRequiresTerminal"],
   diagnostics: ["TypeScript @deprecated annotation; no runtime warning for the ignored field"],
-  tests: ["src/plugin-sdk/assistant-message-compat.test.ts"],
+  tests: ["test/type-contracts/assistant-message-compat.ts"],
 } as const satisfies PluginCompatRecord;

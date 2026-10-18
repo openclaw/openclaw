@@ -17,7 +17,6 @@ const warnHookFailure = (hook: string) => (error: unknown) => {
   return undefined;
 };
 
-/** Prompt/developer-instruction pair after harness prompt-build hooks run. */
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
@@ -34,7 +33,6 @@ type AgentHarnessDeveloperInstructionBuilder = {
   build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
 };
 
-/** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;
@@ -76,10 +74,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
   const promptEvent = {
     prompt: inputPrompt,
-    ...(typeof currentUserMessageText === "string"
-      ? { currentUserMessage: currentUserMessageText }
-      : {}),
-    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
+    ...(currentUserMessageText !== undefined ? { currentUserMessage: currentUserMessageText } : {}),
+    ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
     messages:
       hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
         ? typeof params.messages === "function"

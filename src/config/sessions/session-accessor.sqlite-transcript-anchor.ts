@@ -1,4 +1,6 @@
+import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
@@ -246,7 +248,11 @@ function selectActiveTranscriptEntryAnchor(
         ),
       )
       // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where("status.needs_reconcile", "is not", 1),
+      .where(
+        "status.needs_reconcile",
+        "is not",
+        isPostgresSqlConnection(params.database.db) ? sql.lit(true) : 1,
+      ),
   );
 }
 

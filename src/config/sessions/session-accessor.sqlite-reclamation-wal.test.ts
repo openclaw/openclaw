@@ -25,6 +25,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
@@ -335,7 +336,7 @@ test("periodic vacuum waits for an admitted reclamation to settle", async () => 
   const scheduled = observeSqliteWalPeriodicWork();
   let maintenance: ReturnType<typeof configureSqliteWalMaintenance>;
   try {
-    maintenance = configureSqliteWalMaintenance(database.db, {
+    maintenance = configureSqliteWalMaintenance(requireNativeSqliteDatabase(database.db), {
       busyTimeoutMs: 1_000,
       onCheckpointError: (error) => maintenanceErrors.push(error),
     });

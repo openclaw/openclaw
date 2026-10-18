@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -12,10 +12,7 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import {
-  formatKeyboardShortcutCombo,
-  KEYBOARD_SHORTCUT_COMBOS,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -26,20 +23,20 @@ import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
-// Tooltip still owns Lit contentTemplate rendering until its overlay port lands.
-import { renderShortcutHint } from "./kbd.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAgentCard } from "./sidebar-agent-card.tsx";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
-import { renderGatewayStatus } from "./solid/gateway-status.tsx";
+import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
-import "./theme-brand-icon.ts";
+import "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
-  readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
+  readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
+  readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
   toggleSection(sectionId: string): void;
 };
@@ -124,13 +121,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
             host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
           }
           onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onContextMenu={(event) => {
+          onContextMenu={(trigger, event) => {
             event.preventDefault();
             if (host.sidebarMenus.agentMenuPosition !== null) {
               return;
             }
-            const card = event.currentTarget;
-            const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
             host.sidebarMenus.toggleAgentMenu(trigger);
           }}
         />
@@ -269,7 +264,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
   const buildSubtitle = () => formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
   const gatewayPrimaryTag = () => (gateway()?.isPrimary ? t("nav.gateway.primaryTag") : null);
   const identityMenuLabel = () => t("profilePage.identity.menuButtonLabel", { name: selfLabel() });
-  const statusLabel = () => (connectionStatus() ? t(`connection.${connectionStatus()}`) : null);
+  const statusLabel = () =>
+    host.gatewayStatus?.kind && (host.gatewayStatus.kind !== "connected" || host.connectionRecovery)
+      ? gatewayStatusLabel(host.gatewayStatus.kind, host.gatewayStatus.queuedCount)
+      : connectionStatus()
+        ? t(`connection.${connectionStatus()}`)
+        : null;
   const identityDetail = () => {
     const status = statusLabel();
     const selectedGateway = gateway();
@@ -280,20 +280,71 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
         : buildSubtitle())
     );
   };
-  const announcement = () => statusLabel() ?? (host.connected ? t("nav.gateway.connected") : "");
+  const identityLabel = () =>
+    identityDetail() ? `${identityMenuLabel()}: ${identityDetail()}` : identityMenuLabel();
+  let identityAnchor!: HTMLDivElement;
+  let flag!: HTMLDivElement;
+  const [hovered, setHovered] = createSignal(false);
+  const [focused, setFocused] = createSignal(false);
+  const [flagOpen, setFlagOpen] = createSignal(false);
+  const flagKind = createMemo(() => (host.connectionFlagAllowed ? host.gatewayStatus?.kind : null));
+  createEffect(
+    () => ({
+      kind: flagKind(),
+      transition: host.connectionFlagVisible,
+      hover: hovered(),
+      focus: focused(),
+    }),
+    (request, previous) => {
+      if (!request.kind || !(request.transition || request.hover || request.focus)) {
+        setFlagOpen(false);
+        return;
+      }
+      // Measure only new open requests, not exits held open by another input.
+      if (
+        previous &&
+        request.kind === previous.kind &&
+        (!request.transition || previous.transition) &&
+        (!request.hover || previous.hover) &&
+        (!request.focus || previous.focus)
+      ) {
+        return;
+      }
+      const anchor = identityAnchor.getBoundingClientRect();
+      const { width, height } = flag.getBoundingClientRect();
+      // The hidden flag has a box; anchor its resting rect without the slide transform.
+      const surfaces = identityAnchor
+        .closest(".shell")
+        ?.querySelectorAll<HTMLElement>(
+          "main.content :is(.chat-footer .agent-chat__composer-shell, .new-session-page__composer, .creation-composer, .cron-editor-actions)",
+        );
+      const overlaps = Array.from(surfaces ?? []).some((surface) => {
+        if (!surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
+          return false;
+        }
+        const rect = surface.getBoundingClientRect();
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.left < anchor.right + width &&
+          rect.right > anchor.right &&
+          rect.top < anchor.bottom &&
+          rect.bottom > anchor.bottom - height
+        );
+      });
+      setFlagOpen(!overlaps);
+    },
+  );
   return (
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
-      <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {announcement()}
-      </span>
       <span class="sidebar-footer-actions">
-        <openclaw-tooltip
-          prop:content={`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
-          prop:contentTemplate={renderShortcutHint(
-            t("assistantPanel.toggle"),
-            KEYBOARD_SHORTCUT_COMBOS.homePanel,
-          )}
-        >
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("assistantPanel.toggle")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
+            />
+          </span>
           <button
             type="button"
             class="sidebar-brand__icon sidebar-footer-bar__home"
@@ -326,12 +377,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
                       ),
                     }).leadingIndicator
                   }
-                  {
-                    <SessionRowBadges
-                      outboxAttentionCount={session().outboxAttentionCount}
-                      hasComposerDraft={session().hasComposerDraft}
-                    />
-                  }
+                  <SessionRowBadges
+                    outboxAttentionCount={session().outboxAttentionCount}
+                    hasComposerDraft={session().hasComposerDraft}
+                  />
                 </>
               )}
             </Show>
@@ -343,47 +392,59 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
           watchUpdateProgress={host.watchUpdateProgress}
         />
       </span>
-      <button
-        type="button"
-        class="sidebar-identity-card"
-        aria-haspopup="menu"
-        aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
-        title={
-          identityDetail() ? `${identityMenuLabel()}: ${identityDetail()}` : identityMenuLabel()
+      <div
+        ref={(element) => (identityAnchor = element)}
+        class="sidebar-identity-anchor"
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
+        onFocusIn={() => setFocused(true)}
+        onFocusOut={(event) =>
+          setFocused(
+            event.relatedTarget instanceof Node &&
+              event.currentTarget.contains(event.relatedTarget),
+          )
         }
-        data-connection-status={connectionStatus() ?? undefined}
-        aria-label={
-          identityDetail() ? `${identityMenuLabel()}: ${identityDetail()}` : identityMenuLabel()
-        }
-        onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
       >
-        <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
-        <span class="sidebar-identity-card__text">
-          <HoverMarquee
-            content={selfLabel()}
-            class="sidebar-identity-card__name"
-            options={{ loop: true, delay: 300, speed: 35 }}
-          />
-          {connectionStatus() ? (
-            renderGatewayStatus({
-              get kind() {
-                return connectionStatus();
-              },
-              get lastError() {
-                return host.lastError;
-              },
-              announce: false,
-            })
-          ) : gateway() ? (
-            <span class="sidebar-identity-card__gateway" aria-hidden="true">
-              <span class="sidebar-gateway-name">{gateway()?.name}</span>
-              {gatewayPrimaryTag() ? (
-                <span class="sidebar-gateway-primary">{gatewayPrimaryTag()}</span>
-              ) : undefined}
-            </span>
-          ) : undefined}
-        </span>
-      </button>
+        <button
+          type="button"
+          class="sidebar-identity-card"
+          aria-haspopup="menu"
+          aria-expanded={host.sidebarMenus.identityMenuPosition !== null ? "true" : "false"}
+          title={flagOpen() ? "" : identityLabel()}
+          data-connection-status={connectionStatus() ?? (host.connected ? "connected" : undefined)}
+          aria-label={identityLabel()}
+          onClick={(event) => host.sidebarMenus.toggleIdentityMenu(event.currentTarget)}
+        >
+          <span class="sidebar-identity-card__avatar">
+            <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
+            <span class="sidebar-identity-card__status" aria-hidden="true" />
+          </span>
+          <span class="sidebar-identity-card__text">
+            <HoverMarquee
+              content={selfLabel()}
+              class="sidebar-identity-card__name"
+              options={{ loop: true, delay: 300, speed: 35 }}
+            />
+            {gateway() ? (
+              <span class="sidebar-identity-card__gateway" aria-hidden="true">
+                <span class="sidebar-gateway-name">{gateway()?.name}</span>
+                {gatewayPrimaryTag() ? (
+                  <span class="sidebar-gateway-primary">{gatewayPrimaryTag()}</span>
+                ) : undefined}
+              </span>
+            ) : undefined}
+          </span>
+        </button>
+        <Show when={flagKind()}>
+          <div
+            ref={(element) => (flag = element)}
+            class="sidebar-connection-flag"
+            data-open={flagOpen() ? "" : undefined}
+          >
+            <GatewayStatus {...host.gatewayStatus!} row />
+          </div>
+        </Show>
+      </div>
     </div>
   );
 }
@@ -402,7 +463,7 @@ export function renderAppSidebarPageEntry(
   const pinnedSession = () => (entry.type === "session" ? sessionRows().get(entry.key) : undefined);
   const content =
     entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : entry.type === "plugin" ? (
       <Show
         when={pluginTab()}
@@ -482,7 +543,7 @@ export function renderAppSidebarPluginTab(
   );
   return (
     <Show when={routeId()} fallback={link}>
-      {(route) => host.sidebarMenus.renderRoute(route())}
+      {(route) => host.sidebarMenus.renderRoute(route(), host)}
     </Show>
   );
 }

@@ -440,6 +440,12 @@ still use the explicit re-approval flow. Scope upgrades (read to
 write/admin) and public key changes are **not** eligible for
 metadata-upgrade auto-approval; they stay explicit re-approval requests.
 
+The Gateway loads paired devices once during startup. Reconnects use those
+committed, process-owned records for pairing lookups. Pairing writes publish updated records before the next authorization
+check. Access metadata is recorded after the hello response and coalesced across
+tabs of the same device; last-seen-only refreshes within one minute may be skipped.
+This bookkeeping never grants access and cannot update a replacement approval.
+
 ## QR pairing helpers
 
 `/pair qr` renders the pairing payload as structured media so mobile and

@@ -13,6 +13,7 @@ import {
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
@@ -33,7 +34,7 @@ import {
   resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -46,6 +47,7 @@ type NodeStepParams = {
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
   abortController?: AbortController;
+  signal?: AbortSignal;
   abortKillGraceMs?: number;
   env?: NodeJS.ProcessEnv;
   onStdoutLine?: (line: string) => boolean;
@@ -55,7 +57,6 @@ type NodeStep = Omit<NodeStepParams, "abortController"> & {
   label: string;
   timeoutMs: number;
 };
-const activeNodeSteps = new Set<Promise<number>>();
 let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
@@ -113,6 +114,7 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
+  params.signal?.throwIfAborted();
   if (params.abortController?.signal.aborted || nodeStepParentSignal) {
     throw new Error(`${label} canceled before starting`);
   }
@@ -130,7 +132,10 @@ export async function runNodeStep(
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
-    signal: params.abortController?.signal,
+    signal:
+      params.signal && params.abortController
+        ? AbortSignal.any([params.signal, params.abortController.signal])
+        : (params.signal ?? params.abortController?.signal),
     abortKillGraceMs: Math.max(
       0,
       Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
@@ -146,9 +151,12 @@ export async function runNodeStep(
       child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
     },
   });
-  activeNodeSteps.add(command);
   try {
     const code = await command;
+    params.signal?.throwIfAborted();
+    if (nodeStepParentSignal) {
+      throw new DOMException(`${label} canceled after parent signal`, "AbortError");
+    }
     if (code !== 0) {
       throw new Error(`${label} failed with exit code ${code}`);
     }
@@ -158,11 +166,10 @@ export async function runNodeStep(
       code === "ETIMEDOUT"
         ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
         : code === "ABORT_ERR"
-          ? new Error(`${label} canceled after sibling failure`, { cause: error })
+          ? Object.assign(new Error(`${label} canceled after sibling failure`, { cause: error }), {
+              code: "ABORT_ERR",
+            })
           : error;
-    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
-      console.error(failure);
-    }
     if (params.abortController && !params.abortController.signal.aborted) {
       params.abortController.abort(failure);
     }
@@ -170,11 +177,8 @@ export async function runNodeStep(
   } finally {
     stdoutWriter.flush();
     stderrWriter.flush();
-    activeNodeSteps.delete(command);
-    // The last sibling exits only after all managed cancellation has joined.
-    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
-      process.exit(signalExitCode(nodeStepParentSignal));
-    }
+    // Let the caller join sibling steps and release artifact ownership before exiting.
+    // A leaf process.exit() bypasses both that release and the inherited child claim.
   }
 }
 
@@ -284,9 +288,11 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: AbortSignal) {
+  signal.throwIfAborted();
   const mode = parseMode(argv);
   await ensureKyselyTypes(repoRoot);
+  signal.throwIfAborted();
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
@@ -304,7 +310,9 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
+    signal.throwIfAborted();
     preparation = await discoverPreparation(repoRoot, selected);
+    signal.throwIfAborted();
     process.stdout.write(
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
@@ -334,6 +342,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     }),
   );
   const prepareBatch = async (batch: (typeof batches)[number]) => {
+    signal.throwIfAborted();
     if (!batch.length) {
       return;
     }
@@ -382,6 +391,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           label: `${unit.id} boundary dts`,
           args: unit.args,
           env: compilerEnv,
+          signal,
           timeoutMs: Math.min(
             unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
             compilerTimeoutMs ?? Number.POSITIVE_INFINITY,
@@ -396,6 +406,8 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         };
       }),
     );
+    // Cancellation in an async gap must not admit compilers or publish receipts.
+    signal.throwIfAborted();
     if (!pending.length) {
       return;
     }
@@ -448,6 +460,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     const discovered = await discoverPreparation!(repoRoot, selected!, {
       preparedSdk: true,
     });
+    signal.throwIfAborted();
     if (sharedSdk) {
       if (discovered.sdkRoots.length) {
         throw new Error(
@@ -476,5 +489,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   // The private entry must observe cleanup metadata before releasing its claim.
-  await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
+  process.exitCode = await runCancelableCommand(async (signal) => {
+    await withDistArtifactOwnership(
+      repoRoot,
+      () => prepareExtensionPackageBoundaryArtifacts(process.argv.slice(2), signal),
+      signal,
+    );
+    return 0;
+  });
 }

@@ -28,7 +28,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
+import type { CodexServerNotification } from "./protocol.js";
+import {
+  assistantMessage,
+  createCodexTestModel,
+  createCodexTestToolTerminalObserver,
+} from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
@@ -70,26 +76,6 @@ export function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-}
-
-function assistantMessage(text: string, timestamp: number) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    model: "gpt-5.4-codex",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp,
-  };
 }
 
 export async function createParams(): Promise<EmbeddedRunAttemptParams> {
@@ -278,10 +264,10 @@ export function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotification {
@@ -304,7 +290,7 @@ export function appServerError(params: {
 }
 
 export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method: "account/rateLimits/updated",
     params: {
       rateLimits: {
@@ -317,7 +303,7 @@ export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
         rateLimitReachedType: "rate_limit_reached",
       },
     },
-  } as ProjectorNotification;
+  });
 }
 
 export function turnCompleted(items: unknown[] = []): ProjectorNotification {
@@ -325,13 +311,13 @@ export function turnCompleted(items: unknown[] = []): ProjectorNotification {
 }
 
 export function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
-  return {
+  return prepareCodexServerNotification({
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
       turn: { id: TURN_ID, status, items },
     },
-  } as ProjectorNotification;
+  } as CodexServerNotification);
 }
 
 export function pendingCommandStarted(id: string): ProjectorNotification {

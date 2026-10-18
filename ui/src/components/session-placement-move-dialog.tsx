@@ -53,11 +53,7 @@ export function showSessionPlacementTargetDialog(
     return Promise.resolve(null);
   }
   active = true;
-  return withPromiseModalHost<SessionMoveTarget | null>(undefined, (modal) => {
-    const finish = (result: SessionMoveTarget | null) => {
-      modal.finish(result);
-      active = false;
-    };
+  return withPromiseModalHost<SessionMoveTarget | null>(undefined, ({ finish, render }) => {
     function Dialog() {
       const loaded = createMemo<Catalog | string | null>(
         () =>
@@ -268,6 +264,8 @@ export function showSessionPlacementTargetDialog(
         </openclaw-modal-dialog>
       );
     }
-    modal.render(() => <Dialog />);
+    render(() => <Dialog />);
+  }).finally(() => {
+    active = false;
   });
 }

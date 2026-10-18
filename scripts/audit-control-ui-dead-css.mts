@@ -26,8 +26,6 @@ const EXTERNAL_CLASS_PREFIXES = [
   // CodeMirror owns cm-* editor DOM; its Lezer highlighter owns tok-* spans.
   "cm-",
   "tok-",
-  // Web Awesome owns wa-* classes inside its component implementation.
-  "wa-",
   // ProseMirror owns the editor-root and state classes it adds to its DOM.
   "ProseMirror",
 ];

@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
@@ -98,6 +102,11 @@ describe("original caller through Cron creator transports", () => {
     ["recovered operator", "role downgrade"],
     ["recovered operator", "access grant revocation"],
     ["recovered operator", "claim retirement"],
+    ["recovered native operator", "none"],
+    ["recovered native operator", "device token rotation"],
+    ["recovered native operator", "role downgrade"],
+    ["recovered native operator", "access grant revocation"],
+    ["recovered native operator", "claim retirement"],
   ] as const)(
     "retains the %s scope boundary through real automation creation (%s)",
     async ([source, revocation], { signal }) => {
@@ -135,6 +144,8 @@ describe("original caller through Cron creator transports", () => {
         });
         stageActivePluginRegistry(registry, null, "default");
       }
+      const native = source === "recovered native operator";
+      const isRecovered = source === "recovered operator" || native;
       const recovery = await createOperatorRecoveryFixture({
         stateDir,
         context: fixture.context,
@@ -142,6 +153,12 @@ describe("original caller through Cron creator transports", () => {
         config,
         sessionKey: SESSION,
         sessionId: "requester-session",
+        ...(native
+          ? {
+              clientInfo: { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+              localOperator: true,
+            }
+          : {}),
         gatewayAccessGrant: revocation === "access grant revocation" ? accessGrant : undefined,
         device: {
           deviceId: "recovery-proof-device",
@@ -160,7 +177,7 @@ describe("original caller through Cron creator transports", () => {
           approvedAtMs: 1,
         },
       });
-      const restored = source === "recovered operator" ? await recovery.restore() : undefined;
+      const restored = isRecovered ? await recovery.restore() : undefined;
       const client =
         source === "fresh operator"
           ? recovery.client
@@ -171,8 +188,7 @@ describe("original caller through Cron creator transports", () => {
               operatorRunAuthority: restored?.authority,
               scopes: restored ? [...restored.authority.scopes] : ["operator.write"],
             });
-      const runId =
-        source === "recovered operator" ? recovery.target.recoveryRunId : "automation-recovery";
+      const runId = isRecovered ? recovery.target.recoveryRunId : "automation-recovery";
       const creator = resolveGatewayCronCreatorAuthorityAdmission({
         runId,
         resolvedSessionKey: SESSION,
@@ -185,6 +201,11 @@ describe("original caller through Cron creator transports", () => {
       });
       if (source === "legacy System") {
         expect(creator).toBeUndefined();
+      } else if (native) {
+        expect(recovery.entry.restartRecoverySourceIngress).toBe("internal");
+        expect(recovery.entry.restartRecoveryOperatorSource?.snapshot.controlUiAdmin).toBe(false);
+        expect(creator?.callerOrigin).toEqual({ kind: "local" });
+        expect(creator?.managementEntitlement).toBeUndefined();
       } else {
         expect(creator?.managementEntitlement?.source).toBe("control-ui-admin");
       }
@@ -202,7 +223,9 @@ describe("original caller through Cron creator transports", () => {
                     transport: "embedded",
                     config,
                     admitted,
-                    senderIsOwner: true,
+                    // The legacy negative case deliberately exposes the tool; its
+                    // untrusted owner hint must not confer the real Gateway admin scope.
+                    senderIsOwner: source === "legacy System" || hasGatewayAdminScope(client),
                   });
                   const created = tools.invoke(AUTOMATIONS_TOOL_NAME, {
                     action: "add",

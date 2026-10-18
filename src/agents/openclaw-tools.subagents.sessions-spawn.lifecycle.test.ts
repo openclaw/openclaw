@@ -4,12 +4,15 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "./agent-bundle-mcp-manager-api.js";
 import {
   getOrCreateSessionMcpRuntime,
+  getSessionMcpRuntimeTestManager,
   unopenedMcpConfig,
 } from "./agent-bundle-mcp-manager.test-support.js";
-import { testing as bundleMcpRuntimeTesting } from "./agent-bundle-mcp-runtime.js";
 import {
   getCallGatewayMock,
   getSessionsSpawnTool,
@@ -56,7 +59,7 @@ async function waitForCleanup(childSessionKey: string) {
 describe("sessions_spawn lifecycle", () => {
   let scheduler: ReturnType<typeof createTestGatewayScheduler>;
   beforeEach(async () => {
-    await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    await disposeAllSessionMcpRuntimes();
     scheduler = createTestGatewayScheduler();
     await setSessionMcpRuntimeScheduler(scheduler);
     resetSessionsSpawnAnnounceFlowOverride();
@@ -85,7 +88,7 @@ describe("sessions_spawn lifecycle", () => {
     resetSessionsSpawnHookRunnerOverride();
     resetSessionsSpawnConfigOverride();
     await resetSubagentRegistryForTests({ persist: false });
-    await bundleMcpRuntimeTesting.resetSessionMcpRuntimeManager();
+    await disposeAllSessionMcpRuntimes();
     await scheduler.stop();
     clearRuntimeConfigSnapshot();
   });
@@ -124,7 +127,7 @@ describe("sessions_spawn lifecycle", () => {
         workspaceDir: "/tmp/openclaw-subagent-mcp-retire",
         cfg: unopenedMcpConfig,
       });
-      expect(bundleMcpRuntimeTesting.getCachedSessionIds()).toContain(childSessionId);
+      expect(getSessionMcpRuntimeTestManager().listSessionIds()).toContain(childSessionId);
     } finally {
       gate.resolve("delivered");
       const key = ctx.getChild().sessionKey;
@@ -139,7 +142,7 @@ describe("sessions_spawn lifecycle", () => {
     assert(childSessionId);
     await waitForSessionsSpawnEvent(
       "bundle MCP runtime retirement",
-      () => !bundleMcpRuntimeTesting.getCachedSessionIds().includes(childSessionId),
+      () => !getSessionMcpRuntimeTestManager().listSessionIds().includes(childSessionId),
     );
   });
 

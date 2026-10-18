@@ -2,6 +2,7 @@ import {
   asFiniteNumber as normalizeFiniteNumber,
   asNonNegativeFiniteNumber as normalizeNonNegativeNumber,
   asPositiveFiniteNumber as normalizePositiveNumber,
+  asPositiveInteger as normalizePositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -9,15 +10,18 @@ import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { normalizeModelCatalogContextWindowSelection } from "./model-catalog-context-windows.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS as MODEL_CATALOG_INPUT_VALUES,
+  MODEL_CATALOG_STATUSES as MODEL_CATALOG_STATUS_VALUES,
+  MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
   MODEL_CATALOG_THINKING_LEVELS,
   isModelCatalogThinkingFormat,
   type ModelCatalog,
   type ModelCatalogApi,
   type ModelCatalogCompatConfig,
+  type ModelCatalogContextWindowOption,
   type ModelCatalogCost,
   type ModelCatalogDiscovery,
   type ModelCatalogImageInputConfig,
@@ -34,12 +38,13 @@ import {
   type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 import { normalizeProviderId } from "./provider-id.js";
 export { normalizeOpenRouterModelReasoning } from "./model-catalog-reasoning.js";
 
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "video", "document"]);
+const MODEL_CATALOG_INPUTS = new Set<string>(MODEL_CATALOG_INPUT_VALUES);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
-const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
+const MODEL_CATALOG_STATUSES = new Set<string>(MODEL_CATALOG_STATUS_VALUES);
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
@@ -99,8 +104,50 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
   return inputs.length > 0 ? inputs : undefined;
 }
 
-function normalizePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+function normalizeModelCatalogContextWindows(
+  value: unknown,
+): ModelCatalogContextWindowOption[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const contextWindows = value.slice(0, MODEL_CATALOG_MAX_CONTEXT_WINDOWS).flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const id = normalizeOptionalString(entry.id) ?? "";
+    const label = normalizeOptionalString(entry.label) ?? "";
+    const contextWindow = normalizePositiveInteger(entry.contextWindow);
+    if (!id || !label || contextWindow === undefined || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [{ id, label, contextWindow }];
+  });
+  return contextWindows.length > 0
+    ? contextWindows.toSorted(
+        (left, right) =>
+          left.contextWindow - right.contextWindow || left.id.localeCompare(right.id),
+      )
+    : undefined;
+}
+
+function normalizeModelCatalogContextWindowSelection(value: {
+  contextWindows?: unknown;
+  contextWindowDefault?: unknown;
+}): {
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+} {
+  const contextWindows = normalizeModelCatalogContextWindows(value.contextWindows);
+  const contextWindowDefault = normalizeOptionalString(value.contextWindowDefault);
+  // Options and default are one atomic tuple: options without a valid default
+  // would advertise a capability the picker cannot render a selection for, so
+  // a missing or invalid default drops the option list with it.
+  return contextWindowDefault &&
+    contextWindows?.some((option) => option.id === contextWindowDefault)
+    ? { contextWindows, contextWindowDefault }
+    : {};
 }
 
 function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost[] | undefined {
@@ -403,6 +450,14 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   if (!id) {
     return undefined;
   }
+  const inference =
+    value.inference === undefined
+      ? undefined
+      : ModelInferenceCapabilitiesSchema.safeParse(value.inference);
+  // Dropping an invalid task declaration could turn a classifier into a legacy chat row.
+  if (inference && !inference.success) {
+    return undefined;
+  }
   const name = normalizeOptionalString(value.name) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
@@ -412,6 +467,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const contextWindow = normalizePositiveNumber(value.contextWindow);
   const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
+  const parameterCount = normalizePositiveInteger(value.parameterCount);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);
@@ -425,6 +481,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   return {
     id,
     ...(name ? { name } : {}),
+    ...(inference?.success ? { inference: inference.data } : {}),
     ...(api ? { api } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(headers ? { headers } : {}),
@@ -433,6 +490,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(cost ? { cost } : {}),
@@ -450,12 +508,20 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   if (!isRecord(value)) {
     return undefined;
   }
+  if (
+    value.authScope !== undefined &&
+    value.authScope !== "agent" &&
+    value.authScope !== "plugin"
+  ) {
+    throw new Error("Invalid model catalog credential ownership metadata");
+  }
+  const authScope = value.authScope;
   const models = Array.isArray(value.models)
     ? value.models
         .map((entry) => normalizeModelCatalogModel(entry))
         .filter((entry): entry is ModelCatalogModel => Boolean(entry))
     : [];
-  if (models.length === 0) {
+  if (models.length === 0 && authScope === undefined) {
     return undefined;
   }
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
@@ -464,6 +530,7 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
+    ...(authScope ? { authScope } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),

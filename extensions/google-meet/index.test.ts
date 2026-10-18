@@ -1153,15 +1153,8 @@ describe("google-meet plugin", () => {
   });
 
   it("serializes concurrent identical Twilio joins", async () => {
-    let finishDial:
-      | ((result: { callId: string; dtmfSent: boolean; introSent: boolean }) => void)
-      | undefined;
-    const dialing = new Promise<{ callId: string; dtmfSent: boolean; introSent: boolean }>(
-      (resolve) => {
-        finishDial = resolve;
-      },
-    );
-    voiceCallMocks.joinMeetViaVoiceCallGateway.mockReturnValueOnce(dialing);
+    const dialing = createDeferred<{ callId: string; dtmfSent: boolean; introSent: boolean }>();
+    voiceCallMocks.joinMeetViaVoiceCallGateway.mockReturnValueOnce(dialing.promise);
     const runtime = meetRuntime({ defaultTransport: "twilio" }, noopLogger);
     const request = {
       url: MEET_URL,
@@ -1177,7 +1170,7 @@ describe("google-meet plugin", () => {
     await Promise.resolve();
     expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledOnce();
 
-    finishDial?.({ callId: "call-1", dtmfSent: true, introSent: true });
+    dialing.resolve({ callId: "call-1", dtmfSent: true, introSent: true });
     const [first, second] = await Promise.all([firstJoin, secondJoin]);
 
     expect(second.session.id).toBe(first.session.id);
@@ -1645,25 +1638,19 @@ describe("google-meet plugin", () => {
   });
 
   it("does not let a late active read replace the finalized leave snapshot", async () => {
-    let releaseRead: (() => void) | undefined;
-    let markReadStarted: (() => void) | undefined;
-    const readGate = new Promise<void>((resolve) => {
-      releaseRead = resolve;
-    });
-    const readStarted = new Promise<void>((resolve) => {
-      markReadStarted = resolve;
-    });
+    const readGate = createDeferred<void>();
+    const readStarted = createDeferred<void>();
     let activeReads = 0;
     let gateNonFinalTranscriptReads = false;
     await withLocalChromeMeetSession(
       {
         transcript: { lines: [{ text: "partial" }] },
         finalTranscript: { lines: [{ text: "partial" }, { text: "complete caption" }] },
-        nonFinalTranscriptGate: readGate,
+        nonFinalTranscriptGate: readGate.promise,
         shouldGateNonFinalTranscriptRead: () => gateNonFinalTranscriptReads,
         onNonFinalTranscriptRead: () => {
           activeReads += 1;
-          markReadStarted?.();
+          readStarted.resolve();
         },
       },
       async ({ callGatewayFromCli, methods, joined }) => {
@@ -1671,7 +1658,7 @@ describe("google-meet plugin", () => {
         const lateRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
           sessionId: joined.session.id,
         });
-        await readStarted;
+        await readStarted.promise;
         const secondRead = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.transcript", {
           sessionId: joined.session.id,
         });
@@ -1685,7 +1672,7 @@ describe("google-meet plugin", () => {
         const repeatedLeave = invokeGoogleMeetGatewayMethodForTest(methods, "googlemeet.leave", {
           sessionId: joined.session.id,
         });
-        releaseRead?.();
+        readGate.resolve();
         await Promise.allSettled([lateRead, secondRead, leaving, repeatedLeave]);
         const finalCaptures = callGatewayFromCli.mock.calls.filter((call) => {
           const request = call[2] as { body?: { fn?: string } };
@@ -2225,36 +2212,27 @@ describe("google-meet plugin", () => {
   });
 
   it("preserves plugin ownership from browser create through join and leave", async () => {
-    const createMeet = vi
-      .spyOn(GOOGLE_MEET_PLATFORM_ADAPTER.create!, "browser")
-      .mockResolvedValueOnce({
+    const meetings = [
+      { targetId: "created-meet-tab-a", meetingUri: "https://meet.google.com/drf-ihtb-pad" },
+      { targetId: "created-meet-tab-b", meetingUri: "https://meet.google.com/qwe-rtyu-iop" },
+    ];
+    const createMeet = vi.spyOn(GOOGLE_MEET_PLATFORM_ADAPTER.create!, "browser");
+    const launchChromeMeetOnNode = vi.spyOn(chromeTransport, "launchChromeMeetOnNode");
+    for (const { targetId, meetingUri } of meetings) {
+      createMeet.mockResolvedValueOnce({
         source: "browser",
         nodeId: "meet-node",
-        targetId: "created-meet-tab-a",
+        targetId,
         openedByPlugin: true,
-        meetingUri: "https://meet.google.com/drf-ihtb-pad",
-      })
-      .mockResolvedValueOnce({
-        source: "browser",
-        nodeId: "meet-node",
-        targetId: "created-meet-tab-b",
-        openedByPlugin: true,
-        meetingUri: "https://meet.google.com/qwe-rtyu-iop",
+        meetingUri,
       });
-    const launchChromeMeetOnNode = vi
-      .spyOn(chromeTransport, "launchChromeMeetOnNode")
-      .mockResolvedValueOnce({
+      launchChromeMeetOnNode.mockResolvedValueOnce({
         nodeId: "meet-node",
         launched: true,
-        tab: { targetId: "created-meet-tab-a", openedByPlugin: false },
-        browser: { inCall: true, micMuted: true },
-      })
-      .mockResolvedValueOnce({
-        nodeId: "meet-node",
-        launched: true,
-        tab: { targetId: "created-meet-tab-b", openedByPlugin: false },
+        tab: { targetId, openedByPlugin: false },
         browser: { inCall: true, micMuted: true },
       });
+    }
     const leaveChromeMeet = vi
       .spyOn(chromeTransport, "leaveChromeMeet")
       .mockResolvedValue({ left: true, note: "left created tab" });
@@ -2288,24 +2266,17 @@ describe("google-meet plugin", () => {
       });
       await runtime.leave(joinedA.session.id);
       await runtime.leave(joinedB.session.id);
-      expect(leaveChromeMeet).toHaveBeenNthCalledWith(1, {
-        runtime: expect.any(Object),
-        transport: "chrome-node",
-        nodeId: "meet-node",
-        config: expect.any(Object),
-        meetingSessionId: expect.any(String),
-        meetingUrl: "https://meet.google.com/drf-ihtb-pad",
-        tab: { targetId: "created-meet-tab-a", openedByPlugin: true },
-      });
-      expect(leaveChromeMeet).toHaveBeenNthCalledWith(2, {
-        runtime: expect.any(Object),
-        transport: "chrome-node",
-        nodeId: "meet-node",
-        config: expect.any(Object),
-        meetingSessionId: expect.any(String),
-        meetingUrl: "https://meet.google.com/qwe-rtyu-iop",
-        tab: { targetId: "created-meet-tab-b", openedByPlugin: true },
-      });
+      for (const [index, { targetId, meetingUri }] of meetings.entries()) {
+        expect(leaveChromeMeet).toHaveBeenNthCalledWith(index + 1, {
+          runtime: expect.any(Object),
+          transport: "chrome-node",
+          nodeId: "meet-node",
+          config: expect.any(Object),
+          meetingSessionId: expect.any(String),
+          meetingUrl: meetingUri,
+          tab: { targetId, openedByPlugin: true },
+        });
+      }
     } finally {
       leaveChromeMeet.mockRestore();
       launchChromeMeetOnNode.mockRestore();
@@ -2394,20 +2365,11 @@ describe("google-meet plugin", () => {
   });
 
   it("does not let a leave tear down a tab while another session adopts it", async () => {
-    let resolveReplacementLaunch:
-      | ((result: {
-          launched: true;
-          tab: { targetId: string; openedByPlugin: boolean };
-          browser: { inCall: true; micMuted: true };
-        }) => void)
-      | undefined;
-    const replacementLaunch = new Promise<{
+    const replacementLaunch = createDeferred<{
       launched: true;
       tab: { targetId: string; openedByPlugin: boolean };
       browser: { inCall: true; micMuted: true };
-    }>((resolve) => {
-      resolveReplacementLaunch = resolve;
-    });
+    }>();
     const launchChromeMeet = vi
       .spyOn(chromeTransport, "launchChromeMeet")
       .mockResolvedValueOnce({
@@ -2415,7 +2377,7 @@ describe("google-meet plugin", () => {
         tab: { targetId: "shared-meet-tab", openedByPlugin: true },
         browser: { inCall: true, micMuted: true },
       })
-      .mockReturnValueOnce(replacementLaunch);
+      .mockReturnValueOnce(replacementLaunch.promise);
     const leaveChromeMeet = vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({
       left: true,
       note: "left browser",
@@ -2444,7 +2406,7 @@ describe("google-meet plugin", () => {
       await Promise.resolve();
       expect(leaveChromeMeet).not.toHaveBeenCalled();
 
-      resolveReplacementLaunch?.({
+      replacementLaunch.resolve({
         launched: true,
         tab: { targetId: "shared-meet-tab", openedByPlugin: false },
         browser: { inCall: true, micMuted: true },

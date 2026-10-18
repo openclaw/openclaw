@@ -20,6 +20,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { parseNodeWorkerResponse } from "./node-worker-response.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -156,7 +157,8 @@ export function createNodeWorkspaceRetainCoordinator(
   const publishPreparedSnapshot = async (
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
-    preparedPlacements: PreparedPlacementFacts,
+    preparedPlacements: Map<string, PreparedPlacement>,
+    dispatch: { started: boolean },
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
     // Persistent hosts keep the current build when installed; maintenance never installs it.
@@ -317,6 +319,7 @@ export function createNodeWorkspaceRetainCoordinator(
         if (!isDispatchAuthorized()) {
           return;
         }
+        dispatch.started = true;
         const result = await currentTransport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
@@ -382,26 +385,39 @@ export function createNodeWorkspaceRetainCoordinator(
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
   ): Promise<void> => {
-    const prepared = new Map<string, PreparedPlacement>();
-    try {
-      const sessionIds = new Set(
-        nodeEnvironments(options, node.nodeId).flatMap((environment) =>
-          !isTerminalWorkerEnvironmentState(environment.state) &&
-          environment.attachedSessionIds.length === 1
-            ? environment.attachedSessionIds
-            : [],
-        ),
-      );
-      for (const sessionId of sessionIds) {
-        if (stopped) {
-          return;
+    for (let attempt = 0; ; attempt += 1) {
+      const prepared = new Map<string, PreparedPlacement>();
+      const dispatch = { started: false };
+      try {
+        const sessionIds = new Set(
+          nodeEnvironments(options, node.nodeId).flatMap((environment) =>
+            !isTerminalWorkerEnvironmentState(environment.state) &&
+            environment.attachedSessionIds.length === 1
+              ? environment.attachedSessionIds
+              : [],
+          ),
+        );
+        for (const sessionId of sessionIds) {
+          if (stopped) {
+            return;
+          }
+          prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
         }
-        prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
-      }
-      await publishPreparedSnapshot(currentTransport, node, prepared);
-    } finally {
-      for (const facts of prepared.values()) {
-        facts.release();
+        await publishPreparedSnapshot(currentTransport, node, prepared, dispatch);
+        return;
+      } catch (error) {
+        // Retry one stale preparation, never an invoked or partially applied pruning pass.
+        if (
+          attempt > 0 ||
+          dispatch.started ||
+          !(error instanceof WorkerPlacementInventoryChangedError)
+        ) {
+          throw error;
+        }
+      } finally {
+        for (const facts of prepared.values()) {
+          facts.release();
+        }
       }
     }
   };

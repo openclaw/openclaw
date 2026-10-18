@@ -112,7 +112,7 @@ function resolveGemini38LiveExtendedThinkingLevel(
     default:
       break;
   }
-  if (typeof config.thinkingBudget !== "number" || config.thinkingBudget < 0) {
+  if (config.thinkingBudget === undefined || config.thinkingBudget < 0) {
     return undefined;
   }
   if (config.thinkingBudget <= 2048) {
@@ -143,7 +143,7 @@ export function buildThinkingConfig(
     const thinkingLevel = resolveGemini38LiveExtendedThinkingLevel(config);
     return thinkingLevel ? { thinkingLevel } : undefined;
   }
-  if (typeof config.thinkingBudget === "number") {
+  if (config.thinkingBudget !== undefined) {
     return { thinkingBudget: config.thinkingBudget };
   }
   return undefined;

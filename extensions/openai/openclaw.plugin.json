@@ -22,6 +22,8 @@
       "name": "GPT-6 Luna",
       "capabilities": {
         "questionTypes": ["boolean", "choice", "score"],
+        "maxQuestions": 200,
+        "maxChoiceAlternatives": 255,
         "confidence": "provider-specific"
       }
     }

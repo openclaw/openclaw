@@ -1,8 +1,8 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { SessionBackground } from "../../components/session-background.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { AppearanceBackgroundController } from "./appearance-background-controller.ts";
+import { createAppearanceBackground } from "./appearance-background-state.ts";
 import { AppearanceBackground as AppearanceBackgroundView } from "./view-appearance-background.tsx";
 
 export type AppearanceBackgroundProps = { context?: ApplicationContext };
@@ -10,24 +10,14 @@ export type AppearanceBackgroundProps = { context?: ApplicationContext };
 export function AppearanceBackground(props: AppearanceBackgroundProps) {
   let host!: HTMLElement;
   const context = createMemo(() => props.context ?? useApplication());
-  // Plain controllers can notify while a descendant owns the current scope.
-  const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const controller = new AppearanceBackgroundController(() => publish((value) => value + 1));
   let preview!: SessionBackground;
-  const viewProps = createMemo(() => {
-    revision();
-    return controller.viewProps;
-  });
-  onSettled(() => {
-    controller.attach(host, context());
-  });
-  createEffect(context, (current) => controller.connect(current));
-  createEffect(revision, () => {
-    controller.afterUpdate();
-    // Reapply after a same-turn dismiss/reopen, as the former Lit live() binding did.
-    preview.presented = controller.canvasPreview;
-  });
-  onCleanup(() => controller.dispose());
+  let fileInput: HTMLInputElement | undefined;
+  const state = createAppearanceBackground(
+    context,
+    () => host,
+    () => preview,
+    () => fileInput,
+  );
   return (
     <openclaw-appearance-background ref={(element) => (host = element)}>
       <SessionBackground
@@ -38,9 +28,14 @@ export function AppearanceBackground(props: AppearanceBackgroundProps) {
         }}
         context={context()}
         surface="preview"
-        preferenceOverride={(revision(), controller.previewPreference)}
+        preferenceOverride={state.previewPreference()}
       />
-      <AppearanceBackgroundView {...viewProps()} />
+      <AppearanceBackgroundView
+        {...state.viewProps()}
+        fileRef={(element) => {
+          fileInput = element;
+        }}
+      />
     </openclaw-appearance-background>
   );
 }

@@ -83,6 +83,16 @@ describe("Control UI document shell", () => {
 });
 
 describe("Control UI mount fallback", () => {
+  it("removes only the native-auth navigation hint before the app starts", async () => {
+    const frameWindow = createIsolatedWindow(
+      "http://localhost:3000/settings/connection?openclaw_http_auth=1&view=compact#details",
+    );
+    installFallbackShell(frameWindow, await readIndexHtml());
+    expect(frameWindow.location.pathname).toBe("/settings/connection");
+    expect(frameWindow.location.search).toBe("?view=compact");
+    expect(frameWindow.location.hash).toBe("#details");
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+  });
   beforeEach(() => {
     // JSDOM's iframe timers use the host timer functions.
     vi.useFakeTimers();
@@ -280,8 +290,8 @@ describe("Control UI mount fallback", () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(fetch.mock.calls.length).toBeGreaterThan(6);
-    expect(unregister).toHaveBeenCalled();
-    expect(getRegistrations).toHaveBeenCalled();
+    expect(unregister).not.toHaveBeenCalled();
+    expect(getRegistrations).not.toHaveBeenCalled();
     expect(
       requireElementById(
         frameWindow,

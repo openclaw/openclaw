@@ -211,11 +211,11 @@ class TeamReportsDatabase {
   }
 
   aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]): ReportDocument {
-    // Both metadata and payload passes must observe the same accepted daily reports.
+    // Stream accepted daily reports from one snapshot without retaining their full payloads.
     return runEngineStoreReadSnapshot(this.db, () =>
       aggregateDays({
         ...input,
-        days: () => this.dayReports(input.period.sinceMs, input.period.untilMs),
+        days: this.dayReports(input.period.sinceMs, input.period.untilMs),
       }),
     );
   }

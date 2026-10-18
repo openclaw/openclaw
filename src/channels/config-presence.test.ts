@@ -11,23 +11,27 @@ import {
   listPotentialConfiguredChannelPresenceSignalsAsync,
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
-import * as persistedAuthState from "./plugins/persisted-auth-state.js";
+import * as packageState from "./plugins/package-state-probes.js";
 
 const tempDirs: string[] = [];
 
 const configAndEnvOnly = { includePersistedAuthState: false };
 
 beforeEach(() => {
-  vi.spyOn(persistedAuthState, "listBundledChannelIdsWithPersistedAuthState").mockReturnValue([
-    "matrix",
-  ]);
-  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthState").mockImplementation(
-    ({ channelId, env }) =>
-      channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  vi.spyOn(packageState, "listBundledChannelIdsForPackageState").mockImplementation(
+    (metadataKey) => (metadataKey === "persistedAuthState" ? ["matrix"] : []),
   );
-  vi.spyOn(persistedAuthState, "hasBundledChannelPersistedAuthStateAsync").mockImplementation(
-    async ({ channelId, env }) =>
-      channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  vi.spyOn(packageState, "hasBundledChannelPackageState").mockImplementation(
+    ({ metadataKey, channelId, env }) =>
+      metadataKey === "persistedAuthState" &&
+      channelId === "matrix" &&
+      Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  );
+  vi.spyOn(packageState, "hasBundledChannelPackageStateAsync").mockImplementation(
+    async ({ metadataKey, channelId, env }) =>
+      metadataKey === "persistedAuthState" &&
+      channelId === "matrix" &&
+      Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
   );
 });
 
@@ -111,7 +115,7 @@ describe("config presence", () => {
           persistedAuthChannelIds: channelIds && new Set(channelIds),
         }),
       ).toEqual(["mattermost", ...expectedIds]);
-      vi.mocked(persistedAuthState.hasBundledChannelPersistedAuthState).mockImplementation(() => {
+      vi.mocked(packageState.hasBundledChannelPackageState).mockImplementation(() => {
         throw new Error("runtime discovery must not invoke the synchronous checker");
       });
       const signals = await listPotentialConfiguredChannelPresenceSignalsAsync({}, env, {

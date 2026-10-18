@@ -129,6 +129,11 @@ matches you can inspect before choosing one to write.
 | `validate <oc-path>`    | Parse-only; print the structural breakdown (file / section / item / field). |
 | `emit <file>`           | Round-trip a file through parse + emit (byte-fidelity diagnostic).          |
 
+When updating an existing YAML numeric field, `set` accepts finite decimal
+values, including scientific notation such as `1e-7` or `2.5E+3`. You can
+write the numeric `valueText` returned by `resolve` back to the same field.
+Malformed or non-finite numeric values are rejected without changing the file.
+
 ## Global flags
 
 | Flag            | Applies to                       | Purpose                                                                  |

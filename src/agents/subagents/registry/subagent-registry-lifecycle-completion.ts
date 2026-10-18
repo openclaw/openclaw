@@ -37,6 +37,7 @@ import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
+import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -246,6 +247,7 @@ export async function completeSubagentRunAttempt(
             const entry = planned.entry;
             const outcomeStatus = entry.execution.outcome?.status;
             const terminalEvents =
+              (planned.mutated || completeParams.recoverInterrupted === true) &&
               !planned.suppressSessionEffects &&
               !planned.sessionSuperseded &&
               entry.killReconciliation === undefined &&
@@ -283,6 +285,7 @@ export async function completeSubagentRunAttempt(
                 const published = postimages.get(planned.entry.runId) ?? planned.entry;
                 completeParams.recoveryCurrent?.onPublished?.(published);
                 clearPublishedSwarmCollectorOutput(published);
+                context.resumeAncestorCleanup(published);
               }
             },
             assertCurrent: () => {
@@ -348,10 +351,7 @@ function planTerminalCompletion(
   },
 ) {
   const params = context.options;
-  if (
-    currentEntry.pauseReason === "sessions_yield" &&
-    completeParams.reason !== SUBAGENT_ENDED_REASON_KILLED
-  ) {
+  if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
   const entry = structuredClone(currentEntry);
@@ -434,10 +434,12 @@ function planTerminalCompletion(
     if (
       !entry.collect &&
       entry.expectsCompletionMessage === false &&
-      entry.completionRequesterSessionId &&
-      entry.completionRequesterLifecycleRevision
+      entry.completionRequesterSessionId
     ) {
       // The original requester owns this notice even when the child was replaced.
+      // Sessions created without a lifecycle revision (for example by the `agent`
+      // RPC) bind by session id plus the absent revision; a later reset assigns one,
+      // so the requester identity check still rejects replacements.
       entry.completionTarget = "parent";
       entry.requesterTurnRunId = undefined;
     }
