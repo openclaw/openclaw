@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { hasNodeErrorCode } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 import {
   buildQaCoverageInventory,
