@@ -130,7 +130,7 @@ describe("FaceTime helper supervisor", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(run).not.toHaveBeenCalled();
     expectStatus({ stale: true, staleProcessId: 9012 });
-    vi.mocked(process.kill).mockImplementation(processExited);
+    vi.spyOn(process, "kill").mockImplementation(processExited);
     await vi.advanceTimersByTimeAsync(2_001);
     expect(run).toHaveBeenCalledWith(injection, expect.objectContaining(cancellable));
   });
@@ -138,7 +138,7 @@ describe("FaceTime helper supervisor", () => {
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
     const { promise, resolve } = Promise.withResolvers<CommandResult>();
     onlyFaceTimeInstalled();
-    vi.mocked(process.kill).mockImplementation(processExited);
+    vi.spyOn(process, "kill").mockImplementation(processExited);
     const { supervisor, run } = createSupervisor();
     run.mockReturnValueOnce(promise);
     supervisor.start();

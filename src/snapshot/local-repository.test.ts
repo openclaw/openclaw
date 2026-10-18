@@ -215,7 +215,7 @@ describe("local SQLite snapshot repository", () => {
     const { repositoryPath, create } = await repositoryFixture();
     let syncFailed = false;
     interceptOpen(async (filePath, flags, handle) => {
-      if (!syncFailed && flags === "wx+" && path.basename(String(filePath)) === ".pending") {
+      if (!syncFailed && flags === "wx+" && path.basename(filePath) === ".pending") {
         vi.spyOn(handle, "sync").mockImplementation(async () => {
           syncFailed = true;
           throw Object.assign(new Error("pending sync failed"), { code: "EIO" });
@@ -243,7 +243,7 @@ describe("local SQLite snapshot repository", () => {
       }
     };
     interceptOpen(async (filePath, flags, handle) => {
-      const resolvedPath = path.resolve(String(filePath));
+      const resolvedPath = path.resolve(filePath);
       if (flags === "wx+" && path.basename(resolvedPath) === ".pending") {
         snapshotDir = path.dirname(resolvedPath);
         const originalSync = handle.sync.bind(handle);
@@ -282,8 +282,8 @@ describe("local SQLite snapshot repository", () => {
       events.indexOf("pending-unlink"),
       snapshotSyncs[2] ?? -1,
     ];
-    for (let i = 1; i < ordered.length; i++) {
-      expect(ordered[i - 1]).toBeLessThan(ordered[i]);
+    for (let index = 1; index < ordered.length; index++) {
+      expect(ordered[index - 1]).toBeLessThan(ordered[index] ?? -1);
     }
   });
 
@@ -960,8 +960,8 @@ describe("local SQLite snapshot repository", () => {
     interceptOpen(async (filePath, flags) => {
       if (
         flags === "wx+" &&
-        path.basename(String(filePath)) === SNAPSHOT_SQLITE_FILENAME &&
-        path.basename(path.dirname(String(filePath))).startsWith(".tmp-restore-")
+        path.basename(filePath) === SNAPSHOT_SQLITE_FILENAME &&
+        path.basename(path.dirname(filePath)).startsWith(".tmp-restore-")
       ) {
         withDatabase(file(), (database) => {
           database.prepare("INSERT INTO entries (value) VALUES (?)").run("raced");
@@ -1113,7 +1113,7 @@ describe("snapshot manifest parser", () => {
       createdAt?: string;
       extra?: boolean;
       database?: Partial<SnapshotManifest["database"]>;
-      artifact?: Partial<SnapshotManifest["artifact"]>;
+      artifact?: Omit<Partial<SnapshotManifest["artifact"]>, "path"> & { path?: string };
     } = {},
   ) {
     return {

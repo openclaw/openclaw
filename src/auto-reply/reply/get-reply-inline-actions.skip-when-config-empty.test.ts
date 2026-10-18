@@ -64,8 +64,8 @@ const {
 
 vi.mock("./commands.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./commands.js")>()),
-  handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
-  buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
+  handleCommands: handleCommandsMock,
+  buildStatusReply: buildStatusReplyMock,
 }));
 
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
@@ -669,7 +669,7 @@ describe("handleInlineActions", () => {
     { name: "allowlist exclusion", tools: { allow: ["sessions_list"] }, extraTool: true },
     { name: "sender deny", tools: { toolsBySender: { "id:sender-1": { deny: ["message"] } } } },
   ])("blocks inline dispatch under $name", async ({ tools, extraTool }) => {
-    const fixture = toolFixture("send_status", "message", "hello", async () => ({
+    const fixture = toolFixture("send_status", async () => ({
       content: "sent",
     }));
     const sessionsExecute = vi.fn(async () => ({ content: "listed" }));
@@ -882,7 +882,6 @@ describe("handleInlineActions", () => {
     ).toEqual([body]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("sender command dispatch ownership", () => {
   beforeEach(() => {

@@ -50,6 +50,7 @@ vi.mock("../src/helper-rpc.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: keep native helper processes outside the synthetic runtime fixture.
 vi.mock("../src/helper-supervisor.js", () => ({
   FaceTimeHelperSupervisor: class FaceTimeHelperSupervisor {
     start() {}
@@ -89,6 +90,7 @@ vi.mock("../src/setup.js", () => ({
   runFaceTimeSetup: vi.fn(async () => ({ status: "ready", checks: [] })),
 }));
 
+// mock-isolation: the fixture supplies audio lifecycle events without native audio devices.
 vi.mock("../src/talk-driver.js", () => ({ startFaceTimeTalkDriver: mocks.startTalk }));
 
 vi.mock("../src/config.js", async (importOriginal) => {

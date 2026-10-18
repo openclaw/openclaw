@@ -280,8 +280,8 @@ describe("qa-channel plugin", () => {
     expect(route).toMatchObject({
       sessionKey: "agent:main:main",
       baseSessionKey: "agent:main:main",
-      threadId: undefined,
     });
+    expect(route?.threadId).toBeUndefined();
   });
 
   it("backs declared message adapter capabilities with qa bus sends", async () => {

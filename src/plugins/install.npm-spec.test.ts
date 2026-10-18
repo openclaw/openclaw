@@ -32,6 +32,7 @@ import { registerNpmUpdateMetadataTests } from "./update-npm-metadata.test-suppo
 const runCommandMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
 
+// mock-isolation: npm installation tests supply command results without invoking npm.
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandMock(...args),
 }));
@@ -445,7 +446,7 @@ function mockPackages(packages: MockNpmPackage[]) {
     if (response) {
       return successfulSpawn(JSON.stringify(response()));
     }
-    if (isNpmInstallCommand(argv)) {
+    if (npmArgs[0] === "install") {
       const planner = isNpmPeerPlannerInstallCommand(argv);
       const projectRoot = options?.cwd;
       if (!projectRoot) {

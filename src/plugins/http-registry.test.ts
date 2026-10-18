@@ -232,9 +232,10 @@ describe("registerPluginHttpRoute", () => {
     }
     expectRoutes(
       pluginRegistry.registry,
-      { pluginId: "plain-http", gatewayMethodDispatchAllowed: undefined },
+      { pluginId: "plain-http" },
       { pluginId: "admin-http", gatewayMethodDispatchAllowed: true },
     );
+    expect(pluginRegistry.registry.httpRoutes[0]?.gatewayMethodDispatchAllowed).toBeUndefined();
   });
 
   it.each([false, true])("rejects a missing path (strict: %s)", (throwOnFailure) => {

@@ -128,7 +128,6 @@ async function backupFixture(name = "repository") {
   const state = createStateDatabaseFixture(root);
   const repo = repositoryContext(root, name);
   return {
-    root,
     ...state,
     ...repo,
     create: (extra: Partial<Parameters<typeof createGitBackup>[0]> = {}) =>

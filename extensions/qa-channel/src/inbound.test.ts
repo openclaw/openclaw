@@ -200,12 +200,12 @@ describe("handleQaInbound", () => {
     );
     const assembled = await assembledTurn(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-    await assembled.delivery.onError?.(new Error("dispatch\r\nforged\u2029next"), {
+    assembled.delivery.onError?.(new Error("dispatch\r\nforged\u2029next"), {
       kind: "final",
     });
 
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
-    await assembled.delivery.onError?.(undefined, { kind: "final" });
+    assembled.delivery.onError?.(undefined, { kind: "final" });
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(3));
     const output = warn.mock.calls.flat().join(" ");
     expect(

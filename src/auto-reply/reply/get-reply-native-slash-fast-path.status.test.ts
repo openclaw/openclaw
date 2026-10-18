@@ -325,11 +325,9 @@ it.each([false, true])(
     });
     expect(fixture.read(parentSessionKey)).toEqual(parentBefore);
     const persistedChild = fixture.read(sessionKey);
-    expect(persistedChild).toMatchObject({
-      parentSessionKey,
-      providerOverride: undefined,
-      modelOverride: undefined,
-    });
+    expect(persistedChild).toMatchObject({ parentSessionKey });
+    expect(persistedChild?.providerOverride).toBeUndefined();
+    expect(persistedChild?.modelOverride).toBeUndefined();
     if (explicitDefault) {
       expect(persistedChild?.modelOverrideSource).toBe("default");
     }

@@ -294,7 +294,7 @@ describe("slack native approval adapter", () => {
       work: {
         ...workAccount,
         mode: "http",
-        signingSecret: { source: "env", id: "SLACK_SIGNING_SECRET" },
+        signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
       },
     });
     const request = buildPluginRequest({}, "plugin:req-http-secret-ref");

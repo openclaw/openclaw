@@ -14,22 +14,6 @@ function installColdLoadProbes(
   createEventStream: typeof createColdLoadEventStream,
 ) {
   Reflect.set(Error, "stackTraceLimit", 40);
-  const isRecord = (value: unknown): value is Record<string, unknown> =>
-    typeof value === "object" && value !== null;
-  function matchesOwner(
-    host: unknown,
-    owner: unknown,
-    tag: string,
-    elementKey: string,
-  ): owner is Record<string, unknown> {
-    return (
-      host instanceof HTMLElement &&
-      host.localName === tag &&
-      isRecord(owner) &&
-      owner[elementKey] === host &&
-      typeof owner.isConnected === "boolean"
-    );
-  }
   const rpcs: Array<{
     method: string;
     requestBytes: number;
@@ -52,25 +36,7 @@ function installColdLoadProbes(
   let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
   let originalLiveInvalidator: ProbeInit.ProbeMethod | undefined;
   const chatOwners = new Map<HTMLElement, ProbeInit.ChatOwnerRecord>();
-  function lifecycleCounter() {
-    const groups = new Map<string, Map<string, { count: number; ms: number }>>();
-    return {
-      record(method: string, ms: number) {
-        const methods = groups.get(liveKind) ?? new Map();
-        const stats = methods.get(method) ?? { count: 0, ms: 0 };
-        stats.count++;
-        stats.ms += ms;
-        methods.set(method, stats);
-        groups.set(liveKind, methods);
-        lastActivity = performance.now();
-      },
-      read: () =>
-        Object.fromEntries(
-          [...groups].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
-        ),
-    };
-  }
-  const chatLifecycle = new Map<string, ReturnType<typeof lifecycleCounter>>();
+  const chatLifecycle = new Map<string, Map<string, Map<string, { count: number; ms: number }>>>();
   const chatProducerStacks = new Map<string, number>();
   const frameProbe = createFrameProbe(() => ({
     startedAt: liveStartedAt,
@@ -96,14 +62,28 @@ function installColdLoadProbes(
     installed: false,
     matches(host: unknown, owner: unknown): owner is ProbeInit.ChatProbeOwner {
       return (
-        matchesOwner(host, owner, "openclaw-chat-pane", "element") &&
+        host instanceof HTMLElement &&
+        host.localName === "openclaw-chat-pane" &&
+        typeof owner === "object" &&
+        owner !== null &&
+        "element" in owner &&
+        owner.element === host &&
+        "isConnected" in owner &&
+        typeof owner.isConnected === "boolean" &&
+        "render" in owner &&
         typeof owner.render === "function"
       );
     },
     record(tag: string, method: string, ms = 0) {
-      const counter = chatLifecycle.get(tag) ?? lifecycleCounter();
-      counter.record(method, ms);
-      chatLifecycle.set(tag, counter);
+      const kinds = chatLifecycle.get(tag) ?? new Map();
+      const methods = kinds.get(liveKind) ?? new Map();
+      const stats = methods.get(method) ?? { count: 0, ms: 0 };
+      stats.count++;
+      stats.ms += ms;
+      methods.set(method, stats);
+      kinds.set(liveKind, methods);
+      chatLifecycle.set(tag, kinds);
+      lastActivity = performance.now();
     },
     producer(record: ProbeInit.ChatOwnerRecord, source: string) {
       const stack = new Error().stack?.split("\n").slice(3, 18).join(" <- ") ?? "";
@@ -222,7 +202,12 @@ function installColdLoadProbes(
         measurement: "pane-render-passes-and-explicit-lifecycle-notifications",
         unmeasured: ["page snapshot computations", "fine-grained Solid bindings"],
         lifecycle: Object.fromEntries(
-          [...chatLifecycle].map(([tag, counter]) => [tag, counter.read()]),
+          [...chatLifecycle].map(([tag, kinds]) => [
+            tag,
+            Object.fromEntries(
+              [...kinds].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
+            ),
+          ]),
         ),
         producerStacks: Object.fromEntries(chatProducerStacks),
         requests: Object.fromEntries(chatRequests),
@@ -239,7 +224,10 @@ function installColdLoadProbes(
   const sidebarLifecycleOriginals = new Map<ProbeInit.SidebarLifecycle, () => void>();
   const sidebarPasses: Array<{ method: ProbeInit.SidebarLifecycle; kind: string; atMs: number }> =
     [];
-  const sidebarLifecycle = lifecycleCounter();
+  const sidebarLifecycle = new Map<
+    string,
+    Map<ProbeInit.SidebarLifecycle, { count: number; ms: number }>
+  >();
   const sidebarOwnerStacks = new Map<string, number>();
   const OriginalWeakMap = window.WeakMap;
   class RegistrationWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {
@@ -252,11 +240,24 @@ function installColdLoadProbes(
   const sidebarRegistration = {
     matches(host: unknown, owner: unknown): owner is ProbeInit.SolidSidebarProbeOwner {
       return (
-        matchesOwner(host, owner, "openclaw-app-sidebar", "hostElement") &&
+        host instanceof HTMLElement &&
+        host.localName === "openclaw-app-sidebar" &&
+        typeof owner === "object" &&
+        owner !== null &&
+        "hostElement" in owner &&
+        owner.hostElement === host &&
+        "isConnected" in owner &&
+        typeof owner.isConnected === "boolean" &&
+        "invalidate" in owner &&
         typeof owner.invalidate === "function" &&
+        "prepareRender" in owner &&
         typeof owner.prepareRender === "function" &&
+        "commitRender" in owner &&
         typeof owner.commitRender === "function" &&
-        isRecord(owner.sessionData) &&
+        "sessionData" in owner &&
+        typeof owner.sessionData === "object" &&
+        owner.sessionData !== null &&
+        "requestSessionDataUpdate" in owner.sessionData &&
         typeof owner.sessionData.requestSessionDataUpdate === "function"
       );
     },
@@ -305,12 +306,6 @@ function installColdLoadProbes(
   let liveRpcOffset = 0;
   let liveFinishedAt = 0;
   let liveKind = "idle";
-  const recordStack = (counts: Map<string, number>, stack: string | undefined) => {
-    const key = `${liveKind} :: ${stack?.split("\n").slice(2, 14).join(" <- ") ?? ""}`;
-    if (counts.has(key) || counts.size < 100) {
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-  };
   const Original = window.WebSocket;
   window.WebSocket = new Proxy(Original, {
     construct(target, args) {
@@ -417,7 +412,11 @@ function installColdLoadProbes(
           owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
             if (method === "invalidate" && connected) {
-              recordStack(sidebarOwnerStacks, new Error().stack);
+              const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
+              const key = `${liveKind} :: ${stack}`;
+              if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {
+                sidebarOwnerStacks.set(key, (sidebarOwnerStacks.get(key) ?? 0) + 1);
+              }
             }
             const started = performance.now();
             try {
@@ -425,7 +424,13 @@ function installColdLoadProbes(
             } finally {
               if (connected) {
                 sidebarPasses.push({ method, kind: liveKind, atMs: started - liveStartedAt });
-                sidebarLifecycle.record(method, performance.now() - started);
+                const group = sidebarLifecycle.get(liveKind) ?? new Map();
+                const stats = group.get(method) ?? { count: 0, ms: 0 };
+                stats.count++;
+                stats.ms += performance.now() - started;
+                group.set(method, stats);
+                sidebarLifecycle.set(liveKind, group);
+                lastActivity = performance.now();
               }
             }
           };
@@ -437,7 +442,11 @@ function installColdLoadProbes(
       if (owner) {
         const original = owner.requestSessionDataUpdate;
         owner.requestSessionDataUpdate = function (...args: unknown[]) {
-          recordStack(liveOrigins, new Error().stack);
+          const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
+          const key = `${liveKind} :: ${stack}`;
+          if (liveOrigins.has(key) || liveOrigins.size < 100) {
+            liveOrigins.set(key, (liveOrigins.get(key) ?? 0) + 1);
+          }
           return original.apply(this, args);
         };
         liveInvalidatorOwner = owner;
@@ -475,7 +484,9 @@ function installColdLoadProbes(
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",
               passes: sidebarPasses,
-              lifecycle: sidebarLifecycle.read(),
+              lifecycle: Object.fromEntries(
+                [...sidebarLifecycle].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
+              ),
               invalidationStacks: Object.fromEntries(sidebarOwnerStacks),
             }
           : null,

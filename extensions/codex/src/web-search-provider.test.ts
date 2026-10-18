@@ -48,7 +48,7 @@ function createFakeClient(options?: {
         const notify = (eventMethod: string, eventParams: JsonValue) =>
           handler({ method: eventMethod, params: eventParams });
         if (options?.emitWebSearch !== false) {
-          notify("item/completed", {
+          await notify("item/completed", {
             ...scope,
             item: {
               id: "search-1",
@@ -58,12 +58,12 @@ function createFakeClient(options?: {
             },
           });
         }
-        notify("item/agentMessage/delta", {
+        await notify("item/agentMessage/delta", {
           ...scope,
           itemId: "msg-1",
           delta: "Two current providers: Example One and Example Two.",
         });
-        notify("turn/completed", {
+        await notify("turn/completed", {
           ...scope,
           turn: baseTurnStartResult("turn-1", "completed").turn,
         });

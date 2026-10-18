@@ -89,13 +89,13 @@ it(
         gateway,
         identity,
         operator,
-        onEvent: firstInbox.onEvent,
+        onEvent: (event) => firstInbox.onEvent(event),
       });
 
       replacementNode = await connectNode({
         gateway,
         identity,
-        onEvent: replacementInbox.onEvent,
+        onEvent: (event) => replacementInbox.onEvent(event),
       });
       await waitForConnectedNode(operator, identity.deviceId, gateway.logs);
 

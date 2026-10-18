@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: exercise approval routing without initializing the live Slack sender.
 vi.mock("./send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
 
 const { slackApprovalNativeRuntime } = await import("./approval-handler.runtime.js");

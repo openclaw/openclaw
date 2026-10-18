@@ -10,6 +10,7 @@ import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
+// mock-isolation: approval rendering and routing use the controlled transport fixture.
 vi.mock("./send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
 
 const { presentation, transport } = slackApprovalNativeRuntime;
