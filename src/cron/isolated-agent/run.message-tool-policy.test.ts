@@ -489,6 +489,36 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       expect(prompt).not.toMatch(/\bsummary\b/i);
     });
 
+    it("binds an announce wake into a chat session like its chat turns", async () => {
+      // An announce target rule in the binding facts reset the chat's CLI session
+      // on the wake and again on the next chat turn (reason=message-policy).
+      mockCliAnnounce();
+      const sessionKey = "agent:main:webchat-chat";
+      await runCronIsolatedAgentTurn({
+        ...makeParams(makeJob(announce, {}, { sessionTarget: `session:${sessionKey}` })),
+        sessionKey,
+      });
+      const runParams = expectFields(
+        mockCall(runCliAgentMock)[0],
+        { sessionKey, requireExplicitMessageTarget: true },
+        "CLI run params",
+      );
+      expect(runParams.cliSessionBindingFacts).toEqual({
+        extraSystemPromptStatic: runParams.extraSystemPrompt,
+        sourceReplyDeliveryMode: "automatic",
+      });
+    });
+
+    it("keeps the delivery policy in the binding facts of an isolated run", async () => {
+      mockCliAnnounce();
+      await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
+      expectFields(
+        requireRecord(mockCall(runCliAgentMock)[0], "CLI run params").cliSessionBindingFacts,
+        { sourceReplyDeliveryMode: undefined, requireExplicitMessageTarget: true },
+        "CLI binding facts",
+      );
+    });
+
     it.each([true])(
       "keeps a successful isolated turn at status ok when post-run delivery fails (bestEffort=%s)",
       async (bestEffort) => {
