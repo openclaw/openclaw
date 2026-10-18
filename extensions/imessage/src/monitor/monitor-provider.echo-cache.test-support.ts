@@ -52,22 +52,15 @@ describe("iMessage sent-message echo cache", () => {
     },
   );
 
-  it("keeps attributedBody corruption cleanup leading-only", async () => {
+  it.each([
+    ["attributedBody", ["Delayed \uFFFD echo reply", "Delayed\techo reply", "Delayed\necho reply"]],
+    ["NUL", ["Delayed\u0000echo reply"]],
+  ] as const)("keeps %s corruption cleanup leading-only", async (_name, variants) => {
     const cache = timedCache();
-
     cache.remember(scope, { text: "Delayed echo reply" });
-
-    expect(await cache.has(scope, { text: "Delayed \uFFFD echo reply" })).toBe(false);
-    expect(await cache.has(scope, { text: "Delayed\techo reply" })).toBe(false);
-    expect(await cache.has(scope, { text: "Delayed\necho reply" })).toBe(false);
-  });
-
-  it("keeps NUL corruption cleanup leading-only", async () => {
-    const cache = timedCache();
-
-    cache.remember(scope, { text: "Delayed echo reply" });
-
-    expect(await cache.has(scope, { text: "Delayed\u0000echo reply" })).toBe(false);
+    for (const text of variants) {
+      expect(await cache.has(scope, { text })).toBe(false);
+    }
   });
 
   it("matches a delayed reflected echo with leading corruption markers via the persisted cache", async () => {

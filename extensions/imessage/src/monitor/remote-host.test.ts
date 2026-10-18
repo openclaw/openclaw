@@ -10,46 +10,21 @@ import { getCachedIMessageRemoteHost, resolveIMessageRemoteHost } from "../remot
 
 const execFileAsync = promisify(execFile);
 const cliPathModuleUrl = new URL("../cli-path.ts", import.meta.url).href;
-const userPathProbeSource = [
-  'import fs from "node:fs/promises";',
-  'import os from "node:os";',
-  'import path from "node:path";',
-  "const { expandIMessageUserPath } = await import(process.argv[1]);",
-  "const expanded = expandIMessageUserPath(process.argv[2]);",
-  "const content = await fs.readFile(expanded, 'utf8').catch(() => null);",
-  "process.stdout.write(JSON.stringify({",
-  "  accountHome: os.userInfo().homedir,",
-  "  expanded,",
-  "  content,",
-  "  systemHome: os.homedir(),",
-  "}));",
-].join("\n");
-
-type UserPathProbeResult = {
-  accountHome: string;
-  expanded: string;
-  content: string | null;
-  systemHome: string;
-};
-
-async function runUserPathProbe(params: {
-  cliPath: string;
-  home: string | undefined;
-  cwd?: string;
-}): Promise<UserPathProbeResult> {
-  const env = { ...process.env };
-  if (params.home === undefined) {
-    delete env.HOME;
-  } else {
-    env.HOME = params.home;
-  }
-
+async function runUserPathProbe(cliPath: string, cwd: string) {
+  const source = [
+    'import fs from "node:fs/promises";',
+    'import os from "node:os";',
+    "const { expandIMessageUserPath } = await import(process.argv[1]);",
+    "const expanded = expandIMessageUserPath(process.argv[2]);",
+    "const content = await fs.readFile(expanded, 'utf8').catch(() => null);",
+    "process.stdout.write(JSON.stringify({ accountHome: os.userInfo().homedir, expanded, content }));",
+  ].join("\n");
   const { stdout } = await execFileAsync(
     process.execPath,
-    ["--input-type=module", "--eval", userPathProbeSource, cliPathModuleUrl, params.cliPath],
-    { cwd: params.cwd, env },
+    ["--input-type=module", "--eval", source, cliPathModuleUrl, cliPath],
+    { cwd, env: { ...process.env, HOME: "" } },
   );
-  return JSON.parse(stdout) as UserPathProbeResult;
+  return JSON.parse(stdout) as { accountHome: string; expanded: string; content: string | null };
 }
 
 describe("detectRemoteHostFromCliPath", () => {
@@ -92,15 +67,13 @@ describe("detectRemoteHostFromCliPath", () => {
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {
     const cwd = await tempDir();
     const basename = `imsg-${randomUUID()}`;
-    const shadowPath = path.join(cwd, "~", ".openclaw", basename);
-    await fs.mkdir(path.dirname(shadowPath), { recursive: true });
-    await fs.writeFile(shadowPath, "#!/bin/sh\nexec ssh rogue@example.test imsg\n", "utf8");
+    await wrapper(
+      "#!/bin/sh\nexec ssh rogue@example.test imsg\n",
+      path.join(cwd, "~", ".openclaw"),
+      basename,
+    );
 
-    const result = await runUserPathProbe({
-      cliPath: `~/.openclaw/${basename}`,
-      home: "",
-      cwd,
-    });
+    const result = await runUserPathProbe(`~/.openclaw/${basename}`, cwd);
 
     expect(result.expanded).toBe(path.join(result.accountHome, ".openclaw", basename));
     expect(result.content).toBeNull();
@@ -108,15 +81,10 @@ describe("detectRemoteHostFromCliPath", () => {
 
   it.each([
     ["missing argument forwarding", "#!/bin/sh\nexec ssh bot@messages-mac imsg\n"],
-    [
-      "continued simple ssh",
-      ["#!/bin/sh", "exec \\", 'ssh bot@messages-mac imsg "$@"', ""].join("\n"),
-    ],
+    ["continued simple ssh", '#!/bin/sh\nexec \\\nssh bot@messages-mac imsg "$@"\n'],
     [
       "quoted ssh in a complex script",
-      ["#!/bin/sh", "if true; then", '  "/usr/bin/ssh" bot@messages-mac imsg "$@"', "fi", ""].join(
-        "\n",
-      ),
+      '#!/bin/sh\nif true; then\n  "/usr/bin/ssh" bot@messages-mac imsg "$@"\nfi\n',
     ],
   ])("caches %s as ambiguous", async (_label, content) => {
     const wrapperPath = await wrapper(content);
@@ -138,13 +106,10 @@ describe("detectRemoteHostFromCliPath", () => {
     );
     const readFile = vi.spyOn(fs, "readFile");
 
-    await expect(
-      resolveIMessageRemoteHost({ cliPath: wrapperPath, remoteHost: "bot@messages-mac" }),
-    ).resolves.toBe("bot@messages-mac");
+    const params = { cliPath: wrapperPath, remoteHost: "bot@messages-mac" };
+    await expect(resolveIMessageRemoteHost(params)).resolves.toBe("bot@messages-mac");
     expect(readFile).not.toHaveBeenCalled();
-    expect(
-      getCachedIMessageRemoteHost({ cliPath: wrapperPath, remoteHost: "bot@messages-mac" }),
-    ).toBe("bot@messages-mac");
+    expect(getCachedIMessageRemoteHost(params)).toBe("bot@messages-mac");
   });
 
   it("returns undefined when the wrapper does not exist", async () => {
@@ -179,11 +144,7 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("caches a non-SSH wrapper as local across concurrent callers", async () => {
-    const wrapperPath = await wrapper(
-      '#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n',
-      undefined,
-      "imsg-local",
-    );
+    const wrapperPath = await wrapper('#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n');
     const readFile = vi.spyOn(fs, "readFile");
 
     await expect(
@@ -197,19 +158,14 @@ describe("detectRemoteHostFromCliPath", () => {
 
   it("never resolves a remote dbPath against the Gateway home", () => {
     vi.stubEnv("HOME", "/Users/gateway");
-
+    const params = { cliPath: "imsg", dbPath: "~/Library/Messages/chat.db" };
     expect(
       resolveIMessageChatDbLookupPath({
+        ...params,
         cliPath: "/gateway/imsg-ssh",
-        dbPath: "~/Library/Messages/chat.db",
         remoteHost: "messages-mac",
       }),
     ).toBeUndefined();
-    expect(
-      resolveIMessageChatDbLookupPath({
-        cliPath: "imsg",
-        dbPath: "~/Library/Messages/chat.db",
-      }),
-    ).toBe("/Users/gateway/Library/Messages/chat.db");
+    expect(resolveIMessageChatDbLookupPath(params)).toBe("/Users/gateway/Library/Messages/chat.db");
   });
 });

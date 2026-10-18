@@ -40,13 +40,9 @@ describe("iMessage recovery cursor", () => {
     expect(await loadCursor("default", DB)).toBeNull();
   });
 
-  it("persists the last dispatched rowid", async () => {
-    await advanceCursor("default", DB, 100);
-    expect(await loadCursor("default", DB)).toBe(100);
-  });
-
   it("advances forward only and never rewinds", async () => {
     await advanceCursor("default", DB, 100);
+    expect(await loadCursor("default", DB)).toBe(100);
     await advanceCursor("default", DB, 50);
     expect(await loadCursor("default", DB)).toBe(100);
     await advanceCursor("default", DB, 150);
@@ -125,36 +121,26 @@ describe("iMessage recovery cursor", () => {
     const home = (process.env.HOME || os.homedir()).trim();
     const defaultIdentity = `local:${path.resolve(path.join(home, "Library", "Messages", "chat.db"))}`;
 
-    expect(resolveIMessageRecoveryCursorDbIdentity({ cliPath: "imsg" })).toBe(defaultIdentity);
-    expect(resolveIMessageRecoveryCursorDbIdentity({ cliPath: "/opt/homebrew/bin/imsg" })).toBe(
-      defaultIdentity,
-    );
-    expect(
-      resolveIMessageRecoveryCursorDbIdentity({
-        dbPath: path.join(home, "Library/Messages/chat.db"),
-      }),
-    ).toBe(defaultIdentity);
-    expect(resolveIMessageRecoveryCursorDbIdentity({ dbPath: "~/Library/Messages/chat.db" })).toBe(
-      defaultIdentity,
-    );
+    for (const params of [
+      { cliPath: "imsg" },
+      { cliPath: "/opt/homebrew/bin/imsg" },
+      { dbPath: path.join(home, "Library/Messages/chat.db") },
+      { dbPath: "~/Library/Messages/chat.db" },
+    ]) {
+      expect(resolveIMessageRecoveryCursorDbIdentity(params)).toBe(defaultIdentity);
+    }
   });
 
   it("keeps distinct databases, wrappers, and remotes on separate identities", () => {
-    const defaultId = resolveIMessageRecoveryCursorDbIdentity({ cliPath: "imsg" });
-    const otherDb = resolveIMessageRecoveryCursorDbIdentity({ dbPath: "/Users/other/chat.db" });
-    const wrapperA = resolveIMessageRecoveryCursorDbIdentity({
-      cliPath: "/usr/local/bin/imsg-a.sh",
-    });
-    const wrapperB = resolveIMessageRecoveryCursorDbIdentity({
-      cliPath: "/usr/local/bin/imsg-b.sh",
-    });
-    const remote = resolveIMessageRecoveryCursorDbIdentity({
-      remoteHost: "bot@host",
-      dbPath: "/Users/b/chat.db",
-    });
-    expect(new Set([defaultId, otherDb, wrapperA, wrapperB, remote]).size).toBe(5);
-    expect(otherDb).toBe(
-      resolveIMessageRecoveryCursorDbIdentity({ dbPath: "/Users/other/chat.db" }),
-    );
+    const params = [
+      { cliPath: "imsg" },
+      { dbPath: "/Users/other/chat.db" },
+      { cliPath: "/usr/local/bin/imsg-a.sh" },
+      { cliPath: "/usr/local/bin/imsg-b.sh" },
+      { remoteHost: "bot@host", dbPath: "/Users/b/chat.db" },
+    ] as const;
+    const identities = params.map(resolveIMessageRecoveryCursorDbIdentity);
+    expect(new Set(identities).size).toBe(5);
+    expect(identities[1]).toBe(resolveIMessageRecoveryCursorDbIdentity(params[1]));
   });
 });

@@ -19,7 +19,7 @@ function buildCfgWithGroups(
 
 function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionParams {
   return {
-    cfg: overrides.cfg ?? {},
+    cfg: {},
     accountId: "default",
     message: {
       id: 1,
@@ -41,9 +41,6 @@ function buildDecisionParams(overrides: Partial<DecisionParams> = {}): DecisionP
     storeAllowFrom: [],
     historyLimit: 0,
     groupHistories: new Map(),
-    echoCache: undefined,
-    selfChatCache: undefined,
-    logVerbose: undefined,
     ...overrides,
   };
 }

@@ -25,20 +25,12 @@ function resolveDecision(
   } = {},
 ) {
   const { message: messageOverrides, ...restOverrides } = overrides;
-  const message = {
-    id: 42,
-    sender: "+15555550123",
-    text: "ok",
-    is_from_me: false,
-    is_group: false,
-    ...messageOverrides,
-  };
+  const message = makeMessage(messageOverrides);
   const messageText = restOverrides.messageText ?? message.text ?? "";
   const bodyText = restOverrides.bodyText ?? messageText;
   return resolveIMessageInboundDecision({
     cfg,
     accountId: "default",
-    opts: undefined,
     allowFrom: ["*"],
     groupAllowFrom: [],
     groupPolicy: "open",
@@ -46,10 +38,7 @@ function resolveDecision(
     storeAllowFrom: [],
     historyLimit: 0,
     groupHistories: new Map(),
-    echoCache: undefined,
-    selfChatCache: undefined,
     isKnownFromMeMessageId: () => false,
-    logVerbose: undefined,
     ...restOverrides,
     message,
     messageText,
@@ -58,10 +47,11 @@ function resolveDecision(
 }
 
 async function buildContext(
-  message: InboundDecisionParams["message"],
-  decision?: Awaited<ReturnType<typeof resolveDecision>>,
+  messageOverrides: Partial<InboundDecisionParams["message"]>,
+  overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const admitted = decision ?? (await resolveDecision({ message }));
+  const message = makeMessage(messageOverrides);
+  const admitted = await resolveDecision({ ...overrides, message });
   expect(admitted.kind).toBe("dispatch");
   if (admitted.kind !== "dispatch") {
     throw new Error("expected context fixture admission");
@@ -76,14 +66,11 @@ async function buildContext(
   });
 }
 
-function contextMessage(overrides: Partial<InboundDecisionParams["message"]>) {
+function makeMessage(overrides: Partial<InboundDecisionParams["message"]> = {}) {
   return {
-    id: 12344,
-    guid: "p:0/GUID-contact-name",
+    id: 42,
     sender: "+15555550123",
-    sender_name: "Alice",
-    chat_name: "",
-    text: "Hello",
+    text: "ok",
     is_from_me: false,
     is_group: false,
     ...overrides,
@@ -91,30 +78,25 @@ function contextMessage(overrides: Partial<InboundDecisionParams["message"]>) {
 }
 
 describe("buildIMessageInboundContext presentation", () => {
-  it("uses provider-resolved contact names for direct session and sender presentation", async () => {
-    const { ctxPayload, fromLabel } = await buildContext(contextMessage({}));
-
-    expect(fromLabel).toBe("Alice id:+15555550123");
-    expect(ctxPayload.ConversationLabel).toBe("Alice");
-    expect(ctxPayload.SenderName).toBe("Alice");
-    expect(ctxPayload.CommandSource).toBeUndefined();
-    expect(ctxPayload.CommandTurn).toMatchObject({ kind: "normal", source: "message" });
-  });
-
-  it("keeps group route IDs out of named session presentation", async () => {
-    const { ctxPayload, fromLabel } = await buildContext(
-      contextMessage({
-        id: 12345,
-        guid: "p:0/GUID-group-name",
-        chat_id: 13,
-        chat_name: "Family",
-        is_group: true,
-      }),
-    );
-
-    expect(fromLabel).toBe("Family id:13");
-    expect(ctxPayload.ConversationLabel).toBe("Family");
-    expect(ctxPayload.GroupSubject).toBe("Family");
+  it.each([
+    [
+      { sender_name: "Alice", chat_name: "" },
+      "Alice id:+15555550123",
+      {
+        ConversationLabel: "Alice",
+        SenderName: "Alice",
+        CommandTurn: { kind: "normal", source: "message" },
+      },
+    ],
+    [
+      { sender_name: "Alice", chat_name: "Family", chat_id: 13, is_group: true },
+      "Family id:13",
+      { ConversationLabel: "Family", GroupSubject: "Family" },
+    ],
+  ] as const)("presents named conversation %s", async (message, fromLabel, ctxPayload) => {
+    const actual = await buildContext(message);
+    expect(actual).toMatchObject({ fromLabel, ctxPayload });
+    expect(actual.ctxPayload.CommandSource).toBeUndefined();
   });
 });
 
@@ -129,33 +111,16 @@ describe("resolveIMessageInboundDecision command auth", () => {
   });
 
   it("marks authorized iMessage control commands as text command turns", async () => {
-    const decision = await resolveDecision({
-      message: { id: 102, text: "/new" },
-      allowFrom: [],
-      dmPolicy: "pairing",
-      storeAllowFrom: ["+15555550123"],
-    });
-
     const { ctxPayload } = await buildContext(
-      {
-        id: 102,
-        guid: "p:0/GUID-command",
-        sender: "+15555550123",
-        text: "/new",
-        is_from_me: false,
-        is_group: false,
-      },
-      decision,
+      { id: 102, guid: "p:0/GUID-command", text: "/new" },
+      { allowFrom: [], dmPolicy: "pairing", storeAllowFrom: ["+15555550123"] },
     );
 
-    expect(ctxPayload.CommandAuthorized).toBe(true);
-    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
-    expect(ctxPayload.CommandSource).toBe("text");
-    expect(ctxPayload.CommandTurn).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "new",
+    expect(ctxPayload).toMatchObject({
+      CommandAuthorized: true,
+      ConversationRoutePeerId: "+15555550123",
+      CommandSource: "text",
+      CommandTurn: { kind: "text-slash", source: "text", authorized: true, commandName: "new" },
     });
   });
 });

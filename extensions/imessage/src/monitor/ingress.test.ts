@@ -282,49 +282,36 @@ describe("iMessage durable ingress", () => {
       }),
     });
     ingress.start();
-    // Catchup rows must reach dispatch flagged: the monitor skips the live
-    // Push-flush age fence for them, or operator-requested history older
-    // than the live threshold would be suppressed AND tombstoned.
+    // Catchup bypasses the live Push age fence so old history is not tombstoned.
     await ingress.receive(rawRow({ guid: "GUID-CATCHUP", id: 900 }), { catchup: true });
     await ingress.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
     await vi.waitFor(() => expect(provenances).toHaveLength(2));
-    expect(provenances[0]).toEqual({ catchup: true });
-    expect(provenances[1]).toEqual({});
+    expect(provenances).toEqual([{ catchup: true }, {}]);
   });
 
-  it("dead-letters malformed persisted payloads without retry", async () => {
-    await queue.enqueue(
-      "GUID-bad",
-      {
-        version: 1,
-        receivedAt: Date.now(),
-        raw: rawRow({ guid: "GUID-bad", text: 123 }),
-      },
-      { laneKey: "chat:42" },
-    );
-    const dispatch = vi.fn();
-    const ingress = createIngress({ dispatch });
-    ingress.start();
-    await ingress.waitForIdle();
-    expect((await queue.enqueue("GUID-bad", {} as IMessageIngressPayload)).kind).toBe("failed");
-    expect(dispatch).not.toHaveBeenCalled();
-  });
-
-  it("dead-letters a persisted row whose inspected identity is malformed", async () => {
-    await queue.enqueue(
-      "GUID-missing",
-      {
-        version: 1,
-        receivedAt: Date.now(),
-        raw: rawRow({ guid: undefined }),
-      },
-      { laneKey: "chat:42" },
-    );
-    const ingress = createIngress();
-    ingress.start();
-    await ingress.waitForIdle();
-    expect((await queue.enqueue("GUID-missing", {} as IMessageIngressPayload)).kind).toBe("failed");
-  });
+  it.each([
+    ["GUID-bad", { guid: "GUID-bad", text: 123 }],
+    ["GUID-missing", { guid: undefined }],
+  ] as const)(
+    "dead-letters malformed persisted payload %s without retry",
+    async (id, overrides) => {
+      await queue.enqueue(
+        id,
+        {
+          version: 1,
+          receivedAt: Date.now(),
+          raw: rawRow(overrides),
+        },
+        { laneKey: "chat:42" },
+      );
+      const dispatch = vi.fn();
+      const ingress = createIngress({ dispatch });
+      ingress.start();
+      await ingress.waitForIdle();
+      expect((await queue.enqueue(id, {} as IMessageIngressPayload)).kind).toBe("failed");
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
 
   it("dead-letters permanent Full Disk Access failures", async () => {
     const ingress = createIngress({

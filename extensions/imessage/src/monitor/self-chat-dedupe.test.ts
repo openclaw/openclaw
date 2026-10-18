@@ -82,7 +82,7 @@ function useFakeTimersAt(iso = DEFAULT_FAKE_TIME): void {
   vi.setSystemTime(new Date(iso));
 }
 
-describe("self-chat dedupe — #47830", () => {
+describe("self-chat dedupe", () => {
   it("does NOT drop a user message that matches recently-sent agent text (self-chat scope collision)", async () => {
     useFakeTimersAt();
 
@@ -97,9 +97,6 @@ describe("self-chat dedupe — #47830", () => {
 
     expect(decision.kind).toBe("dispatch");
   });
-});
-
-describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
   it("drops DM false positives even when participant lists include the local handle", async () => {
     const decision = await resolveDecision({
       message: selfChatMessage({
@@ -280,47 +277,29 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
 });
 
 describe("echo cache — text fallback for null-id inbound messages", () => {
-  it("does not drop normal DM text from a pending pre-send marker", async () => {
-    await rememberPersistedIMessageEcho({
-      scope: SELF_CHAT_SCOPE,
-      text: "same pending text",
-      ttlMs: 155_000,
-      pending: true,
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 12001,
-        chat_identifier: "+15551234567",
-        destination_caller_id: "+15550001111",
-        text: "same pending text",
-      },
-      echoCache,
-    });
-
-    expect(decision.kind).toBe("dispatch");
-  });
-
-  it("drops self-chat reflected text from a pending pre-send marker", async () => {
-    await rememberPersistedIMessageEcho({
-      scope: SELF_CHAT_SCOPE,
-      text: "pending self-chat reply",
-      ttlMs: 155_000,
-      pending: true,
-    });
-
-    const decision = await resolveDecision({
-      message: {
-        id: 12002,
-        chat_identifier: "+15551234567",
-        destination_caller_id: "tel:+15551234567",
-        text: "pending self-chat reply",
-      },
-      echoCache,
-    });
-
-    expect(decision).toEqual({ kind: "drop", reason: "echo" });
-  });
+  it.each([
+    ["normal DM", 12001, "same pending text", "+15550001111", false],
+    ["self-chat reflection", 12002, "pending self-chat reply", "tel:+15551234567", true],
+  ] as const)(
+    "limits pending pre-send matching to self-chat: %s",
+    async (_name, id, text, destination_caller_id, isEcho) => {
+      await rememberPersistedIMessageEcho({
+        scope: SELF_CHAT_SCOPE,
+        text,
+        ttlMs: 155_000,
+        pending: true,
+      });
+      const decision = await resolveDecision({
+        message: { id, chat_identifier: SELF_CHAT_HANDLE, destination_caller_id, text },
+        echoCache,
+      });
+      if (isEcho) {
+        expect(decision).toEqual({ kind: "drop", reason: "echo" });
+      } else {
+        expect(decision.kind).toBe("dispatch");
+      }
+    },
+  );
 
   it("still identifies echo via text when inbound message has id: null", async () => {
     useFakeTimersAt();
