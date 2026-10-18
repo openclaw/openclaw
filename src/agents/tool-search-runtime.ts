@@ -34,6 +34,7 @@ import {
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
@@ -73,15 +74,7 @@ type ToolSearchExactCallOptions = Pick<
 >;
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
-  const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
-    fullInstructions: true,
-  });
-  return {
-    ...descriptor,
-    parameters: entry.parameters ?? {},
-    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
-    ...(mcp ? { mcp } : {}),
-  };
+  return describeToolSearchCatalogEntry(entry);
 }
 
 function findEntry(

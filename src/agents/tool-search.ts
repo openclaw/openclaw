@@ -10,6 +10,7 @@ import {
 } from "./runtime/internal-hooks.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
+  INCOMPLETE_INSTRUCTIONS_HINT,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
   resolveCatalog,
@@ -78,9 +79,6 @@ type ToolSearchBatchGroup = {
 const MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS = 180;
 const MAX_BATCH_CANDIDATE_DESCRIPTION_SCAN_CHARS = MAX_BATCH_CANDIDATE_DESCRIPTION_CHARS * 4;
 const MAX_BATCH_CANDIDATE_METADATA_CHARS = 2_000;
-const INCOMPLETE_INSTRUCTIONS_HINT =
-  "Call tool_describe before use to load the complete server instructions.";
-
 function compactBatchCandidateDescription(candidate: ToolSearchCandidate): ToolSearchCandidate {
   // Remote catalog descriptions are untrusted. Bound the scanned prefix before
   // normalization so repeated batch matches cannot amplify attacker-sized text.
@@ -149,13 +147,15 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
       }
     : undefined;
   const output = retain(candidate.output);
+  const instructionsHint =
+    candidate.instructionsHint ?? (omittedInstructions ? INCOMPLETE_INSTRUCTIONS_HINT : undefined);
   return {
     ...compactBatchCandidateDescription(candidate),
     sourceName,
     label,
     mcp: batchMcp,
     output,
-    ...(omittedInstructions ? { instructionsHint: INCOMPLETE_INSTRUCTIONS_HINT } : {}),
+    ...(instructionsHint ? { instructionsHint } : {}),
   };
 }
 

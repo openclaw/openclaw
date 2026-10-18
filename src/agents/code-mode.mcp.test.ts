@@ -690,6 +690,48 @@ describe.each(["interactive", "headless"])("Code Mode %s MCP discovery", (mode) 
     }
     expect(denied.execute).not.toHaveBeenCalled();
   });
+
+  it("directs truncated server instructions to handle.describe()", async () => {
+    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
+    const instructions = `${"Do not omit this guidance. ".repeat(40)}\nNever retry monthly_quota_exceeded.`;
+    const target = mcpTool({
+      name: "research__search",
+      serverName: "research",
+      toolName: "search",
+      description: "Search research sources.",
+      instructions,
+      execute: vi.fn(async () =>
+        projectMcpCallToolResult({ content: [{ type: "text", text: "result" }] }),
+      ),
+    });
+    applyCodeModeCatalog({ tools: [...tools, target], config, catalogRef });
+    const code = `
+      const [tool] = await catalog.search("MCP.research.search", { limit: 1 });
+      const described = await tool.describe();
+      return {
+        instructions: tool.instructions,
+        hint: tool.instructionsHint,
+        serializedHint: tool.toJSON().instructionsHint,
+        described: described.server.instructions,
+      };
+    `;
+    const result =
+      mode === "headless"
+        ? await runCodeModeScriptHeadless({ ctx, code })
+        : await runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        instructions: expect.stringMatching(/\.\.\.$/u),
+        hint: "Call handle.describe() before invocation to load the complete server instructions.",
+        serializedHint:
+          "Call handle.describe() before invocation to load the complete server instructions.",
+        described: instructions,
+      },
+    });
+    expect(target.execute).not.toHaveBeenCalled();
+  });
 });
 
 it("bounds MCP discovery and wraps remote metadata before any tool executes", async () => {

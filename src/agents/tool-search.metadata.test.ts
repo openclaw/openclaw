@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool, pluginTool } from "./code-mode.test-support.js";
 import {
+  INCOMPLETE_INSTRUCTIONS_HINT,
+  UNRETRIEVABLE_INSTRUCTIONS_HINT,
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
@@ -193,12 +195,21 @@ describe("Tool Search metadata provenance", () => {
       required: ["requiredField"],
     };
 
+    const search = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("metadata-search-schema", {
+      query: entry.id,
+      limit: 1,
+    });
+    const searchText = modelText(search);
+    expect(searchText).toContain(UNRETRIEVABLE_INSTRUCTIONS_HINT);
+    expect(searchText).not.toContain(INCOMPLETE_INSTRUCTIONS_HINT);
+
     const result = await tool(TOOL_DESCRIBE_RAW_TOOL_NAME).execute("metadata-describe-schema", {
       id: entry.id,
     });
     const text = modelText(result);
 
     expect(text).toContain("requiredField");
+    expect(text).toContain("[truncated]");
     expect(result.details).toMatchObject({ parameters: entry.parameters, mcp: { instructions } });
   });
 
