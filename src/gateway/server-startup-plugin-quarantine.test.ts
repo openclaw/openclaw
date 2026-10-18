@@ -3,11 +3,10 @@ import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { preparePostCorePluginConfig } from "../cli/update-cli/update-command-config.js";
 import { updatePluginsAfterCoreUpdate } from "../cli/update-cli/update-command-plugins.js";
 import { applyPostPluginConfigValidation } from "../cli/update-cli/update-command-post-plugin-validation.js";
@@ -78,7 +77,7 @@ async function disposeFixturePlugins(): Promise<void> {
 describe("Gateway startup plugin quarantine", () => {
   let cache: PluginCache;
   let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-  const tempDirs: string[] = [];
+  const tempDirs = createTempDirTracker();
   const importChannel = channel(`openclaw.test.plugin-quarantine.${randomUUID()}`);
   const imported = new Set<unknown>();
   const observeImport = (id: unknown) => imported.add(id);
@@ -87,8 +86,7 @@ describe("Gateway startup plugin quarantine", () => {
     id: string,
     { main = "./index.cjs", peer = false, fails = false, payload = true } = {},
   ) {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-quarantine-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-quarantine-");
     const write = (name: string, value: unknown) =>
       fs.writeFileSync(path.join(root, name), JSON.stringify(value), "utf8");
     write("package.json", {
@@ -162,9 +160,7 @@ module.exports = { id: '${id}', register() {} };`,
       setActiveDegradedPlugins([]);
       importChannel.unsubscribe(observeImport);
       imported.clear();
-      for (const dir of tempDirs.splice(0)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
+      tempDirs.cleanup();
     }
   });
 
@@ -244,62 +240,44 @@ module.exports = { id: '${id}', register() {} };`,
     expect(imported.has(validPluginId)).toBe(true);
   });
 
-  it("does not quarantine a healthy explicit root that shadows a broken install with the same id", async () => {
-    const pluginId = "shadowed-payload";
-    const brokenRoot = fixturePlugin(pluginId, { main: "./missing-main.cjs", payload: false });
-    const selectedRoot = fixturePlugin(pluginId);
-    await quarantine(pluginId, brokenRoot);
+  it.each([false, true])(
+    "clears quarantine only for a healthy explicit override (import fails: %s)",
+    async (fails) => {
+      const pluginId = fails ? "failed-shadow" : "shadowed-payload";
+      const brokenRoot = fixturePlugin(pluginId, { main: "./missing-main.cjs", payload: false });
+      const selectedRoot = fixturePlugin(pluginId, { fails });
+      await quarantine(pluginId, brokenRoot);
 
-    const config = explicitPluginConfig(pluginId, selectedRoot);
-    const registry = await loadRegistry(config, [pluginId]);
+      const config = explicitPluginConfig(pluginId, selectedRoot);
+      const registry = await loadRegistry(config, [pluginId]);
 
-    expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("loaded");
-    expect(imported.has(pluginId)).toBe(true);
-    expect(listActiveDegradedPlugins()).toEqual([]);
-    const replacement = await loadRegistry(config, [pluginId], registry);
-    expect(replacement.plugins.find((plugin) => plugin.id === pluginId)).toBe(
-      registry.plugins.find((plugin) => plugin.id === pluginId),
-    );
-  });
-
-  it("keeps the broken install visible when its explicit override fails to load", async () => {
-    const pluginId = "failed-shadow";
-    const brokenRoot = fixturePlugin(pluginId, { main: "./missing-main.cjs", payload: false });
-    const selectedRoot = fixturePlugin(pluginId, { fails: true });
-    await quarantine(pluginId, brokenRoot);
-
-    const registry = await loadRegistry(explicitPluginConfig(pluginId, selectedRoot), [pluginId]);
-
-    expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe("error");
-    expect(listActiveDegradedPlugins()).toMatchObject([
-      { pluginId, diagnostic: { installPath: brokenRoot } },
-    ]);
-  });
-});
-
-describe("updater plugin degradation with a running source Gateway", () => {
-  let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-    afterEach(async () => {
-      try {
-        await server?.close();
-      } finally {
-        server = undefined;
-        await disposeFixturePlugins();
-        setActiveDegradedPlugins([]);
-        cleanup();
+      expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe(
+        fails ? "error" : "loaded",
+      );
+      if (fails) {
+        expect(listActiveDegradedPlugins()).toMatchObject([
+          { pluginId, diagnostic: { installPath: brokenRoot } },
+        ]);
+      } else {
+        expect(imported.has(pluginId)).toBe(true);
+        expect(listActiveDegradedPlugins()).toEqual([]);
+        const replacement = await loadRegistry(config, [pluginId], registry);
+        expect(replacement.plugins.find((plugin) => plugin.id === pluginId)).toBe(
+          registry.plugins.find((plugin) => plugin.id === pluginId),
+        );
       }
-    });
-  });
-
+    },
+  );
   it("keeps the core ready and authored state intact while a broken optional payload is repaired", async () => {
     const root = tempDirs.make("openclaw-plugin-degradation-");
     const pluginId = "optional-update-fixture";
     const sourceDir = path.join(root, "source");
     const extensionsDir = path.join(root, "extensions");
     await fsPromises.mkdir(sourceDir);
-    await fsPromises.writeFile(
-      path.join(sourceDir, "package.json"),
+    const write = (name: string, contents: string) =>
+      fsPromises.writeFile(path.join(sourceDir, name), contents);
+    await write(
+      "package.json",
       JSON.stringify({
         name: pluginId,
         version: "1.0.0",
@@ -307,17 +285,14 @@ describe("updater plugin degradation with a running source Gateway", () => {
         openclaw: { extensions: ["./index.cjs"] },
       }),
     );
-    await fsPromises.writeFile(
-      path.join(sourceDir, "openclaw.plugin.json"),
+    await write(
+      "openclaw.plugin.json",
       JSON.stringify({
         id: pluginId,
         configSchema: { type: "object", additionalProperties: true },
       }),
     );
-    await fsPromises.writeFile(
-      path.join(sourceDir, "index.cjs"),
-      `module.exports = { id: '${pluginId}', register() {} };\n`,
-    );
+    await write("index.cjs", `module.exports = { id: '${pluginId}', register() {} };\n`);
     const archivePath = path.join(root, "fixture.tgz");
     await createTar({ gzip: true, file: archivePath, cwd: sourceDir }, ["."]);
     const installed = await installPluginFromPath({ path: archivePath, extensionsDir });
@@ -329,12 +304,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
     // Fault injection affects only an optional payload. Its repair source and user state survive.
     const dataPath = path.join(root, "plugin-user-data.txt");
     await fsPromises.writeFile(dataPath, "newer state must survive\n");
-    const config = {
-      gateway: {
-        mode: "local" as const,
-        bind: "loopback" as const,
-        auth: { mode: "none" as const },
-      },
+    const config: OpenClawConfig = {
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
       plugins: {
         enabled: true,
         allow: [pluginId],
@@ -362,8 +333,7 @@ describe("updater plugin degradation with a running source Gateway", () => {
         }),
       );
     const result = await update();
-    expect(result.status).toBe("warning");
-    expect(result.reason).toBeUndefined();
+    expect([result.status, result.reason]).toEqual(["warning", undefined]);
     expect(result.assessment).toMatchObject({
       kind: "unsafe",
       reason: "plugin-requirement-unknown",
@@ -382,8 +352,8 @@ describe("updater plugin degradation with a running source Gateway", () => {
       await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
     const loadGeneration = () =>
       withPluginCache(createFixturePluginCache(), async () => {
-        const quarantine = await refreshStartupPluginQuarantine({ cfg: config, env: process.env });
-        setActiveDegradedPlugins(quarantine.quarantinedPlugins);
+        const refreshed = await refreshStartupPluginQuarantine({ cfg: config, env: process.env });
+        setActiveDegradedPlugins(refreshed.quarantinedPlugins);
         const registry = loadOpenClawPlugins({ cache: false, config, onlyPluginIds: [pluginId] });
         registries.push(registry);
         return registry;
@@ -414,8 +384,7 @@ describe("updater plugin degradation with a running source Gateway", () => {
     // Repair does not stop the viable core. The existing reload/startup owner clears quarantine.
     expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
     const repairedResult = await update();
-    expect(repairedResult.status).toBe("ok");
-    expect(repairedResult.reason).toBeUndefined();
+    expect([repairedResult.status, repairedResult.reason]).toEqual(["ok", undefined]);
     expect(repairedResult.assessment).toEqual({ kind: "no-payload-repair" });
     const repairedRegistry = await loadGeneration();
     expect(listActiveDegradedPlugins()).toEqual([]);
