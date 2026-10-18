@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { getByRole } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -27,21 +28,10 @@ function mockFailedRead(
 }
 const failedRead = () =>
   expect(fetchControlUiResource("/nested/__openclaw__/assistant-media")).rejects.toThrow();
-function observeRestored() {
-  const restored = vi.fn();
-  onTestFinished(subscribeBrowserAuthRestored(restored));
-  return restored;
-}
 
 function button(label: string) {
   flush();
-  const result = [...document.querySelectorAll("button")].find(
-    (entry) => entry.textContent?.trim() === label,
-  );
-  if (!result) {
-    throw new Error(`Missing button: ${label}`);
-  }
-  return result;
+  return getByRole<HTMLButtonElement>(document.body, "button", { name: label, hidden: true });
 }
 
 async function finishRenewal() {
@@ -58,12 +48,17 @@ describe("browser sign-in recovery", () => {
   let stop: () => void;
   let restoreDialog: () => void;
   let now: number;
+  let restored = vi.fn();
+  let getAuth: NonNullable<Parameters<typeof startBrowserAuthRecovery>[1]>;
 
   beforeEach(() => {
     now = 100_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     restoreDialog = installDialogPolyfill();
-    stop = startBrowserAuthRecovery("/nested");
+    getAuth = () => ({});
+    stop = startBrowserAuthRecovery("/nested", () => getAuth());
+    restored = vi.fn();
+    onTestFinished(subscribeBrowserAuthRestored(restored));
   });
 
   afterEach(() => {
@@ -96,7 +91,6 @@ describe("browser sign-in recovery", () => {
           ? new Response(null, { headers: { "content-type": "application/json" } })
           : redirectResponse(),
       );
-      const restored = observeRestored();
       const opened = vi.spyOn(window, "open").mockReturnValue(null);
       const initialLocation = window.location.href;
       const requests = ["image-a", "image-b"].map((name) =>
@@ -109,7 +103,6 @@ describe("browser sign-in recovery", () => {
       expect(dialog.getAttribute("aria-label")).toBe("Sign in to continue loading content");
       expect(document.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
       const probes = fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD");
-      expect(probes).toHaveLength(2);
       expect(probes).toEqual(
         Array.from({ length: 2 }, () => [
           `${window.location.origin}/nested/control-ui-config.json`,
@@ -173,12 +166,11 @@ describe("browser sign-in recovery", () => {
   );
 
   it("verifies renewed website access using the current stored-password credential", async () => {
-    stop();
-    stop = startBrowserAuthRecovery("/nested", () => ({
+    getAuth = () => ({
       hello: { auth: { deviceToken: "expired-device-token" } },
       settings: { token: "stored-token" },
       password: "stored-password",
-    }));
+    });
     let signedIn = false;
     const credentials: string[] = [];
     mockFailedRead((init) => {
@@ -192,7 +184,6 @@ describe("browser sign-in recovery", () => {
         ? new Response(null, { headers: { "content-type": "application/json" } })
         : new Response(null, { status: 401 });
     });
-    const restored = observeRestored();
     await failedRead();
     await finishRenewal();
     const { dialog: pendingDialog } = await getRenderedModalDialog(document.body);
@@ -211,12 +202,11 @@ describe("browser sign-in recovery", () => {
   });
 
   it.each(["navigation", "probe"])("discards credentials replaced during %s", async (phase) => {
-    stop();
     let token = "original-token";
     if (phase === "probe") {
       vi.spyOn(window, "open").mockReturnValue(null);
     }
-    stop = startBrowserAuthRecovery("/nested", () => ({ settings: { token } }));
+    getAuth = () => ({ settings: { token } });
     const probe = createDeferred<Response>();
     const success = () => new Response(null, { headers: { "content-type": "application/json" } });
     let probes = 0;
@@ -231,7 +221,6 @@ describe("browser sign-in recovery", () => {
       expect(new Headers(init.headers).get("Authorization")).toBe("Bearer replacement-token");
       return success();
     });
-    const restored = observeRestored();
     await failedRead();
     if (phase === "navigation") {
       await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
@@ -286,7 +275,6 @@ describe("browser sign-in recovery", () => {
   it.each(["timeout", "stop"])("cleans up a pending renewal on %s", async (outcome) => {
     vi.useFakeTimers();
     const fetchMock = mockFailedRead();
-    const restored = observeRestored();
     await failedRead();
     await vi.advanceTimersByTimeAsync(0);
     expect(document.querySelector("iframe")).not.toBeNull();

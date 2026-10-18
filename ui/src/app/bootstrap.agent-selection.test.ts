@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../api/types.ts";
 import { resolveInitialApplicationLocation } from "./bootstrap-location.ts";
+import { makeLocation, makeRoutingGateway } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
-import type { ApplicationContext } from "./context.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -29,10 +29,7 @@ function roster(
   return { defaultId, mainKey: "main", scope, agents: ids.map((id) => ({ id, kind: "agent" })) };
 }
 function readyGateway<T extends object>(client: T) {
-  return {
-    snapshot: { phase: "connected", client, hello: hello() },
-    subscribe: vi.fn(() => () => undefined),
-  };
+  return makeRoutingGateway({ client, hello: hello() });
 }
 function saveSelection(
   sessionKey: string,
@@ -45,18 +42,13 @@ function resolveLocation(
   subscribe = vi.fn(() => () => undefined),
 ) {
   return resolveInitialApplicationLocation({
-    location: { pathname: "/", search: "", hash: "" },
+    location: makeLocation("/"),
     basePath: "",
     sessionKey: "global",
     gateway: {
-      snapshot: {
-        phase: "connected",
-        client: {},
-        sessionKey: "global",
-        hello: hello("dummy", true),
-      },
+      ...makeRoutingGateway({ sessionKey: "global", hello: hello("dummy", true) }).gateway,
       subscribe,
-    } as unknown as ApplicationContext["gateway"],
+    },
     agentsList: () => roster(["dummy"], "dummy", "global"),
     signal: new AbortController().signal,
     ...overrides,
@@ -88,7 +80,7 @@ it.each([
     await expect(
       resolveLocation(
         {
-          location: { pathname: "/chat", search: "", hash: "" },
+          location: makeLocation("/chat"),
           selectedAgentId,
           agentsList: () => roster(ids, "dummy", "global"),
         },
@@ -107,11 +99,11 @@ it("refreshes a cached roster and its default before accepting a remembered agen
   await expect(
     resolveLocation({
       sessionKey: "agent:retired:main",
-      gateway: readyGateway({ request: vi.fn() }) as unknown as ApplicationContext["gateway"],
+      gateway: readyGateway({ request: vi.fn() }).gateway,
       agentsList: () => cachedList,
       ensureAgentsList,
     }),
-  ).resolves.toEqual({ pathname: "/chat/next", search: "", hash: "" });
+  ).resolves.toEqual(makeLocation("/chat/next"));
   expect(ensureAgentsList).toHaveBeenCalledOnce();
 });
 
@@ -122,28 +114,23 @@ it("validates a remembered session again after the Gateway client changes", asyn
     async (): Promise<{ ok: boolean; key?: string; agentId?: string }> => ({ ok: false }),
   );
   const gatewayState = readyGateway({ request: firstRequest });
-  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
+  const gateway = gatewayState.gateway;
   const rememberedKey = "agent:research:thread:12345678-0000-4000-8000-000000000001";
 
   const pending = resolveLocation({
-    location: { pathname: "/", search: "?draft=hello", hash: "" },
+    location: makeLocation("/", "?draft=hello"),
     sessionKey: rememberedKey,
     gateway,
     agentsList: () => roster(["main", "research"]),
   });
   await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce());
-  gatewayState.snapshot = {
-    ...gatewayState.snapshot,
+  gatewayState.publish({
     client: { request: replacementRequest },
     hello: hello(),
-  };
+  });
   first.resolve({ ok: true, key: rememberedKey, agentId: "research" });
 
-  await expect(pending).resolves.toEqual({
-    pathname: "/chat/research",
-    search: "?draft=hello",
-    hash: "",
-  });
+  await expect(pending).resolves.toEqual(makeLocation("/chat/research", "?draft=hello"));
   expect(replacementRequest).toHaveBeenCalledExactlyOnceWith(
     "sessions.resolve",
     { key: rememberedKey, agentId: "research", allowMissing: true },
@@ -160,7 +147,7 @@ it("loads the agent roster again after the Gateway client changes", async () => 
     .mockReturnValueOnce(first.promise)
     .mockResolvedValue(currentList);
   const gatewayState = readyGateway({});
-  const gateway = gatewayState as unknown as ApplicationContext["gateway"];
+  const gateway = gatewayState.gateway;
 
   const pending = resolveLocation({
     sessionKey: "agent:research:main",
@@ -169,14 +156,13 @@ it("loads the agent roster again after the Gateway client changes", async () => 
     ensureAgentsList,
   });
   await vi.waitFor(() => expect(ensureAgentsList).toHaveBeenCalledOnce());
-  gatewayState.snapshot = {
-    ...gatewayState.snapshot,
+  gatewayState.publish({
     client: {},
     hello: hello(),
-  };
+  });
   first.resolve(oldList);
 
-  await expect(pending).resolves.toEqual({ pathname: "/chat/main", search: "", hash: "" });
+  await expect(pending).resolves.toEqual(makeLocation("/chat/main"));
   expect(ensureAgentsList).toHaveBeenCalledTimes(2);
 });
 

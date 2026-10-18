@@ -9,6 +9,7 @@ import {
   type BootRecord,
 } from "./boot-record.ts";
 import { subscribeWarmBootConnection } from "./bootstrap-warm-boot.ts";
+import { makeBootRecord } from "./bootstrap.test-support.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 let connection: ReturnType<typeof createGatewayStoreTestStore> | undefined;
@@ -35,18 +36,8 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-const record = (scope: string, recoveryScope = "account-a"): BootRecord => ({
-  version: 2,
-  authMethod: "trusted-proxy",
-  credential: "",
-  recoveryScope,
-  scope,
-  savedAt: Date.now(),
-  profileId: "profile-a",
-  agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
-  groups: [],
-  sectionOrder: [],
-});
+const record = (scope: string, recoveryScope = "account-a") =>
+  makeBootRecord(scope, { authMethod: "trusted-proxy", credential: "", recoveryScope });
 
 function storageChange(key: string | null, oldRecord: BootRecord | null, next: BootRecord | null) {
   window.dispatchEvent(
@@ -167,17 +158,14 @@ it.each(["unreplaced", "local replacement", "peer replacement"])(
     disposers.push(subscribeWarmBootConnection(gateway, legacy, rejected));
     gateway.connect();
     hello(current());
-    if (publication === "unreplaced") {
-      persistBootRecord(record(scope));
-    }
-    if (publication !== "unreplaced") {
-      const next = record(scope);
+    const next = record(scope);
+    if (publication === "peer replacement") {
+      localStorage.setItem(key, JSON.stringify(next));
+      storageChange(key, legacy, next);
+    } else {
+      persistBootRecord(next);
       if (publication === "local replacement") {
-        persistBootRecord(next);
         window.dispatchEvent(new Event("pagehide"));
-      } else {
-        localStorage.setItem(key, JSON.stringify(next));
-        storageChange(key, legacy, next);
       }
     }
     storageChange(key, { ...legacy, credential: "foreign-fingerprint" }, null);
@@ -191,8 +179,7 @@ it.each(["unreplaced", "local replacement", "peer replacement"])(
       localStorage.removeItem(key);
       window.dispatchEvent(new Event("pagehide"));
       expect(localStorage.getItem(key)).toBeNull();
-    }
-    if (!retired) {
+    } else {
       storageChange(key, record(scope), null);
       expect(gateway.snapshot.phase).toBe("stopped");
       expect(rejected).toHaveBeenCalledOnce();

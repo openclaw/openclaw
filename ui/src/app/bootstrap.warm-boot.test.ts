@@ -8,6 +8,7 @@ import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";
+import { makeBootRecord, makeBootRoster, makeLocation } from "./bootstrap.test-support.ts";
 import { bootstrapApplication as createApplication } from "./bootstrap.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import * as gatewayStore from "./gateway-store.ts";
@@ -43,28 +44,8 @@ function captureGatewayConnection<T extends object>(fields: () => T, revision?: 
 
 const BOOT_RECORD_PREFIX = "openclaw.control.bootRecord.v1:";
 
-function seedBootRecord({
-  agents,
-  ...overrides
-}: Omit<Partial<BootRecord>, "agents"> & { agents?: Partial<AgentsListResult> } = {}): BootRecord {
-  const record: BootRecord = {
-    version: 2,
-    authMethod: "token",
-    credential: "9d17676d",
-    scope: gatewayCredentialScope(loadSettings().gatewayUrl),
-    savedAt: Date.now(),
-    profileId: "profile-a",
-    agents: {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "main" }],
-      ...agents,
-    },
-    groups: [],
-    sectionOrder: [],
-    ...overrides,
-  };
+function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
+  const record = makeBootRecord(gatewayCredentialScope(loadSettings().gatewayUrl), overrides);
   localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
   return record;
 }
@@ -82,7 +63,6 @@ describe("warm boot profile validation", () => {
     window.history.replaceState({}, "", previousUrl);
     clearBootRecords();
     vi.restoreAllMocks();
-    vi.clearAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -93,7 +73,7 @@ describe("warm boot profile validation", () => {
       authMethod: "trusted-proxy",
       credential: "",
       recoveryScope: "account-a",
-      agents: { mainKey: "workspace" },
+      agents: makeBootRoster({ mainKey: "workspace" }),
     });
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
@@ -113,7 +93,7 @@ describe("warm boot profile validation", () => {
     await expect(
       loadChatRoute(
         runtime.context,
-        { pathname: "/chat/main", search: "", hash: "" },
+        makeLocation("/chat/main"),
         "chat",
         new AbortController().signal,
       ),
@@ -161,23 +141,17 @@ describe("warm boot profile validation", () => {
   it("keeps a version2 roster private until live discovery, including same-profile reconnect failure", async () => {
     const record = seedBootRecord({
       recoveryScope: "test-recovery-scope",
-      agents: {
+      agents: makeBootRoster({
         defaultId: "private",
         agents: [{ id: "private", name: "Private agent" }, { id: "shared" }],
-      },
+      }),
       groups: [{ name: "Personal", position: 0 }],
       sectionOrder: ["Personal"],
     });
     const discovery = createDeferred<AgentsListResult>();
-    let discoveryFailed = false;
+    const discover = vi.fn(() => discovery.promise);
     const request = vi.fn(async (method: string) => {
-      if (method !== "agents.list") {
-        return {};
-      }
-      if (discoveryFailed) {
-        throw new Error("roster unavailable");
-      }
-      return discovery.promise;
+      return method === "agents.list" ? discover() : {};
     });
     const client = createTestGatewayClient(request);
     const publish = captureGatewayConnection(() => ({
@@ -212,7 +186,7 @@ describe("warm boot profile validation", () => {
       mainKey: "workspace",
       scope: "global",
     });
-    discoveryFailed = true;
+    discover.mockRejectedValue(new Error("roster unavailable"));
     publish("connected");
     await agents.ensureList();
     expect(agents.state.agentsList).toBeNull();

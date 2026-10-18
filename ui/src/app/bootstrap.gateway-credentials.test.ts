@@ -6,6 +6,7 @@ import type { ConnectParams } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { MockWebSocket, wsInstances } from "../api/gateway-socket.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { fetchControlUiResource } from "./browser-http.ts";
@@ -52,6 +53,7 @@ function rejectAuth(store: ReturnType<typeof useGateway>, code: string) {
 }
 
 beforeEach(() => {
+  wsInstances.length = 0;
   vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
@@ -59,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   runtime?.stop();
+  wsInstances.length = 0;
   runtime = undefined;
   delete window[NATIVE_AUTH_KEY];
   window.history.replaceState({}, "", originalUrl);
@@ -106,40 +109,27 @@ describe("pending Gateway credentials", () => {
     "binds a reloaded bootstrap after another tab selects a remote ($decision, query: $queryGatewayUrl)",
     async ({ decision, queryGatewayUrl }) => {
       const sockets: RecordingWebSocket[] = [];
-      class RecordingWebSocket extends EventTarget {
-        static OPEN = 1;
-        readyState = 0;
-        sent: Array<{ id: string; method: string; params: ConnectParams }> = [];
-
+      class RecordingWebSocket extends MockWebSocket {
         constructor(readonly url: string) {
-          super();
+          super(url);
           sockets.push(this);
         }
-
-        send(data: string) {
-          this.sent.push(JSON.parse(data));
+        override close(code = 1000, reason = "") {
+          this.emitClose(code, reason);
         }
-
-        close(code = 1000, reason = "") {
-          this.readyState = 3;
-          this.dispatchEvent(new CloseEvent("close", { code, reason }));
-        }
-
-        deliver(frame: unknown) {
-          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
-        }
-
         async connectFrame() {
-          this.readyState = RecordingWebSocket.OPEN;
-          this.dispatchEvent(new Event("open"));
-          this.deliver({
+          this.emitOpen();
+          this.emitMessage({
             type: "event",
             event: "connect.challenge",
             payload: { nonce: "synthetic-challenge", ts: Date.now() },
           });
           await vi.waitFor(() => expect(this.sent).toHaveLength(1));
-          expect(this.sent[0]?.method).toBe("connect");
-          return this.sent[0]!;
+          const frame: { id: string; method: string; params: ConnectParams } = JSON.parse(
+            this.sent[0]!,
+          );
+          expect(frame.method).toBe("connect");
+          return frame;
         }
       }
       vi.stubGlobal("WebSocket", RecordingWebSocket);
@@ -173,7 +163,7 @@ describe("pending Gateway credentials", () => {
           `/settings/appearance?gatewayUrl=${encodeURIComponent(queryGatewayUrl)}`,
         );
       }
-      originalSocket.deliver({
+      originalSocket.emitMessage({
         type: "res",
         id: firstConnect.id,
         ok: false,
@@ -219,7 +209,7 @@ describe("pending Gateway credentials", () => {
         runtime!.cancelPendingGatewayConnection();
         runtime!.confirmPendingGatewayConnection();
         expect(sockets).toHaveLength(2);
-        expect(remoteSocket.sent).toEqual([remoteConnect]);
+        expect(remoteSocket.sent).toEqual([JSON.stringify(remoteConnect)]);
         expect(runtime!.context.gateway.connection.gatewayUrl).toBe(remoteGatewayUrl);
         expect(loadUiPreferences().gatewayUrl).toBe(remoteGatewayUrl);
       }
