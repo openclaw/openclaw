@@ -930,6 +930,15 @@ describe("scripts/pr wrappers", () => {
   const itExchange = mvHelp?.includes("--exchange") && mvHelp.includes("--no-copy") ? it : it.skip;
   function recoveryFixture() {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    const runtime = spawnSync(
+      requireNodeTool("node"),
+      [
+        "-p",
+        "JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch })",
+      ],
+      { env: fixture.env, encoding: "utf8" },
+    );
+    expect(runtime.status, runtime.stderr).toBe(0);
     parkCanonicalOffAnchor(fixture);
     const anchor = materializeAnchor(fixture);
     fixture.git(fixture.canonical, ["checkout", "main"]);
@@ -1001,7 +1010,7 @@ describe("scripts/pr wrappers", () => {
       version: 1,
       pr: 123,
       revision: fixture.git(donor, ["rev-parse", "HEAD"]).stdout.trim(),
-      runtime: { node: process.version, platform: process.platform, arch: process.arch },
+      runtime: JSON.parse(runtime.stdout),
       anchor: {
         path: anchor,
         identity: identity(anchor),
