@@ -14,24 +14,43 @@ import {
   waitForStarts,
 } from "./tunnel.test-support.js";
 
+function quiescenceRunner(nonce: string, acquireArgs: string, renewArgs: string) {
+  return fakeRunner((argv) => {
+    const command = argv.at(-1) ?? "";
+    if (command.endsWith(acquireArgs)) {
+      return success(`quiesced ${nonce}\n`);
+    }
+    if (command.endsWith(renewArgs)) {
+      return success(`renewed ${nonce}\n`);
+    }
+    return undefined;
+  });
+}
+
+function pendingIdentityTunnel(environmentId = "worker:pending") {
+  const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+  const entered = deferred<void>();
+  const fake = fakeRunner();
+  const manager = createWorkerTunnelManager({ runner: fake.runner });
+  const request = {
+    environmentId,
+    ownerEpoch: 1,
+    bundleHash: "a".repeat(64),
+    ssh: SSH,
+    resolveIdentity: () => {
+      entered.resolve();
+      return identity.promise;
+    },
+  };
+  return { identity, entered, fake, manager, request };
+}
+
 describe("worker tunnel manager", () => {
   it.each(["connected", "initializing"] as const)(
     "rejects a revoked caller reusing a %s tunnel without stopping its owner",
     async (phase) => {
-      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
-      const entered = deferred<void>();
-      const fake = fakeRunner();
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
-      const request = {
-        environmentId: "worker:shared-authority",
-        ownerEpoch: 1,
-        bundleHash: "a".repeat(64),
-        ssh: SSH,
-        resolveIdentity: () => {
-          entered.resolve();
-          return identity.promise;
-        },
-      };
+      const { identity, entered, manager, request } =
+        pendingIdentityTunnel("worker:shared-authority");
       const first = manager.start(request);
       await entered.promise;
       if (phase === "connected") {
@@ -114,19 +133,8 @@ describe("worker tunnel manager", () => {
   );
 
   it("joins workspace cleanup before reporting a desktop stopAll failure", async () => {
-    const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
-    const entered = deferred<void>();
-    const manager = createWorkerTunnelManager({ runner: fakeRunner().runner });
-    const starting = manager.start({
-      environmentId: "worker:pending",
-      ownerEpoch: 1,
-      bundleHash: "a".repeat(64),
-      ssh: SSH,
-      resolveIdentity: () => {
-        entered.resolve();
-        return identity.promise;
-      },
-    });
+    const { identity, entered, manager, request } = pendingIdentityTunnel();
+    const starting = manager.start(request);
     const rejectedStart = expect(starting).rejects.toThrow("no longer connected");
     await entered.promise;
     const failure = new Error("desktop cleanup failed");
@@ -182,16 +190,7 @@ describe("worker tunnel manager", () => {
     const nonce = "a".repeat(32);
     const acquireArgs = "'/home/worker/workspace' '720000' 'dedicated'";
     const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'heartbeat' 'dedicated'`;
-    const fake = fakeRunner((argv) => {
-      const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.endsWith(acquireArgs)) {
-        return success(`quiesced ${nonce}\n`);
-      }
-      if (remoteCommand.endsWith(renewArgs)) {
-        return success(`renewed ${nonce}\n`);
-      }
-      return undefined;
-    });
+    const fake = quiescenceRunner(nonce, acquireArgs, renewArgs);
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const handle = await startTestTunnel(manager, "worker:quiescence-renewal", 3);
 
@@ -211,16 +210,7 @@ describe("worker tunnel manager", () => {
     const nonce = "b".repeat(32);
     const acquireArgs = "'/home/worker/workspace' '720000' 'shared-host'";
     const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'final' 'shared-host'`;
-    const fake = fakeRunner((argv) => {
-      const remoteCommand = argv.at(-1) ?? "";
-      if (remoteCommand.endsWith(acquireArgs)) {
-        return success(`quiesced ${nonce}\n`);
-      }
-      if (remoteCommand.endsWith(renewArgs)) {
-        return success(`renewed ${nonce}\n`);
-      }
-      return undefined;
-    });
+    const fake = quiescenceRunner(nonce, acquireArgs, renewArgs);
     const manager = createWorkerTunnelManager({ runner: fake.runner });
     const handle = await startTestTunnel(manager, "worker:shared-quiescence", 3, SSH, true);
 
@@ -260,24 +250,15 @@ describe("worker tunnel manager", () => {
   it.each(["stop", "stopAll"] as const)(
     "joins %s while identity preparation drains",
     async (operation) => {
-      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
-      const preparing = deferred<void>();
-      const fake = fakeRunner();
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const { identity, entered, manager, request } = pendingIdentityTunnel();
       const starting = manager.start({
-        environmentId: "worker:pending",
-        ownerEpoch: 1,
-        bundleHash: "a".repeat(64),
-        ssh: SSH,
-        resolveIdentity: async () => {
-          preparing.resolve();
-          return await identity.promise;
-        },
+        ...request,
+        resolveIdentity: async () => await request.resolveIdentity(),
       });
       const rejected = expect(starting).rejects.toThrow(
         "Worker tunnel owner is no longer connected",
       );
-      await preparing.promise;
+      await entered.promise;
       const stops = [
         operation === "stop" ? manager.stop("worker:pending", 1) : manager.stopAll(),
         manager.stop("worker:pending", 1),

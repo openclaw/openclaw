@@ -12,7 +12,7 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerPortalToolExecutor } from "./worker-portal-tool-executor.js";
 
 const SOURCE = {
@@ -52,6 +52,7 @@ describe("worker portal tool execution", () => {
   const portalCarrierConnect = vi.fn();
   const portalCarrierClose = vi.fn();
   const portalChanged = vi.fn();
+  const carrier = { connect: portalCarrierConnect, close: portalCarrierClose };
   const actualServices = new Set<ReturnType<typeof createGatewayPortalService>>();
   const sourceAuthorities = new Map<
     string,
@@ -70,20 +71,23 @@ describe("worker portal tool execution", () => {
     const authority =
       sourceAuthorities.get(claim.claimId) ?? (await placements.prepareTurnClaimAuthority(claim));
     sourceAuthorities.set(claim.claimId, authority);
-    return {
-      resultJson: JSON.stringify(
-        await execute(
-          { identity: workerIdentity, toolName: "portal", request, signal },
-          { sessionId: claim.sessionId, turnClaim: { ...claim, owner: claim.owner } },
-          () => {
-            if (!authority.isCurrent()) {
-              throw new Error("Worker source session placement changed");
-            }
-          },
-        ),
-      ),
-    };
+    return execute(
+      { identity: workerIdentity, toolName: "portal", request, signal },
+      { sessionId: claim.sessionId, turnClaim: { ...claim, owner: claim.owner } },
+      () => {
+        if (!authority.isCurrent()) {
+          throw new Error("Worker source session placement changed");
+        }
+      },
+    );
   }
+
+  const openPortal = (workerIdentity = identity, signal?: AbortSignal) =>
+    runPortal(
+      { toolCallId: "open-worker-portal", action: "open", port: 4321 },
+      workerIdentity,
+      signal,
+    );
 
   function useActualPortalService() {
     const httpServers: import("node:http").Server[] = [];
@@ -98,42 +102,11 @@ describe("worker portal tool execution", () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-portal-"));
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
-    let placement = await placements.startDispatch(SOURCE);
-    placement = await placements.transition({
-      sessionId: SOURCE.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: SOURCE.environmentId },
-    });
-    placement = await placements.transition({
-      sessionId: SOURCE.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = await placements.transition({
-      sessionId: SOURCE.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `manifest-${SOURCE.sessionId}`,
-        remoteWorkspaceDir: `/workspace/${SOURCE.sessionId}`,
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+    await advancePlacementFixtureToActive(placements, database, SOURCE, {
       environmentId: SOURCE.environmentId,
-      sessionId: SOURCE.sessionId,
       ownerEpoch: SOURCE.ownerEpoch,
-    });
-    await placements.transition({
-      sessionId: SOURCE.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: SOURCE.ownerEpoch },
+      workspaceBaseManifestRef: `manifest-${SOURCE.sessionId}`,
+      remoteWorkspaceDir: `/workspace/${SOURCE.sessionId}`,
     });
     sourceClaim = await placements.claimTurn({
       sessionId: SOURCE.sessionId,
@@ -170,10 +143,7 @@ describe("worker portal tool execution", () => {
     portalClose.mockReset().mockResolvedValue(undefined);
     portalCarrierConnect.mockReset();
     portalCarrierClose.mockReset().mockResolvedValue(undefined);
-    portalCarrierOpen.mockReset().mockResolvedValue({
-      connect: portalCarrierConnect,
-      close: portalCarrierClose,
-    });
+    portalCarrierOpen.mockReset().mockResolvedValue(carrier);
     portalChanged.mockReset();
     sourceEnvironmentEpoch = SOURCE.ownerEpoch;
     sourceNodeDeviceId = "worker-node";
@@ -231,7 +201,7 @@ describe("worker portal tool execution", () => {
       path: "/app",
     });
 
-    expect(JSON.parse(opened.resultJson)).toMatchObject({
+    expect(opened).toMatchObject({
       details: { id: "worker-source-4321", origin: "cloud-profile", port: 4321 },
       content: [
         {
@@ -265,7 +235,7 @@ describe("worker portal tool execution", () => {
     });
 
     const listed = await runPortal({ toolCallId: "list-worker-portals", action: "list" });
-    expect(JSON.parse(listed.resultJson).details.portals).toHaveLength(1);
+    expect(listed.details).toHaveProperty("portals.length", 1);
     expect(portalWorkerList).toHaveBeenCalledWith(
       SOURCE.environmentId,
       SOURCE.ownerEpoch,
@@ -277,7 +247,7 @@ describe("worker portal tool execution", () => {
       action: "close",
       id: "worker-source-4321",
     });
-    expect(JSON.parse(closed.resultJson).details).toEqual({ closed: true });
+    expect(closed.details).toEqual({ closed: true });
     expect(portalClose).toHaveBeenCalledWith("worker-source-4321", expect.any(Function));
     expect(portalChanged).toHaveBeenCalledTimes(2);
   });
@@ -295,11 +265,11 @@ describe("worker portal tool execution", () => {
 
     const result = await runPortal({ toolCallId: "list-owned-worker-portals", action: "list" });
 
-    expect(JSON.parse(result.resultJson).details.portals).toEqual([
+    expect(result.details).toHaveProperty("portals", [
       expect.objectContaining({ id: "worker-source-4321" }),
     ]);
-    expect(result.resultJson).not.toContain("local-secret");
-    expect(result.resultJson).not.toContain("foreign-secret");
+    expect(JSON.stringify(result)).not.toContain("local-secret");
+    expect(JSON.stringify(result)).not.toContain("foreign-secret");
     expect(portalList).not.toHaveBeenCalled();
     expect(portalWorkerList).toHaveBeenCalledWith(
       SOURCE.environmentId,
@@ -320,32 +290,22 @@ describe("worker portal tool execution", () => {
   });
 
   it("rejects stale owner epochs and replaced source placements before opening a portal", async () => {
-    await expect(
-      runPortal(
-        { toolCallId: "stale-worker-portal", action: "open", port: 4321 },
-        { ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 },
-      ),
-    ).rejects.toThrow("Worker source environment changed");
+    await expect(openPortal({ ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 })).rejects.toThrow(
+      "Worker source environment changed",
+    );
 
     await placements.releaseTurn(sourceClaim);
-    await expect(
-      runPortal({ toolCallId: "replaced-worker-portal", action: "open", port: 4321 }),
-    ).rejects.toThrow("Worker source session placement changed");
+    await expect(openPortal()).rejects.toThrow("Worker source session placement changed");
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });
 
   it("closes a prepared worker portal carrier when its owner epoch changes while opening", async () => {
     portalCarrierOpen.mockImplementationOnce(async () => {
       sourceEnvironmentEpoch += 1;
-      return {
-        connect: portalCarrierConnect,
-        close: portalCarrierClose,
-      };
+      return carrier;
     });
 
-    await expect(
-      runPortal({ toolCallId: "replaced-worker-forward", action: "open", port: 4321 }),
-    ).rejects.toThrow("Worker source environment changed");
+    await expect(openPortal()).rejects.toThrow("Worker source environment changed");
     expect(portalCarrierClose).toHaveBeenCalledOnce();
     expect(portalOpen).not.toHaveBeenCalled();
   });
@@ -354,15 +314,9 @@ describe("worker portal tool execution", () => {
     const abort = new AbortController();
     portalCarrierOpen.mockImplementationOnce(async () => {
       abort.abort(new Error("portal cancelled"));
-      return { connect: portalCarrierConnect, close: portalCarrierClose };
+      return carrier;
     });
-    await expect(
-      runPortal(
-        { toolCallId: "cancelled-portal", action: "open", port: 4321 },
-        identity,
-        abort.signal,
-      ),
-    ).rejects.toThrow("portal cancelled");
+    await expect(openPortal(identity, abort.signal)).rejects.toThrow("portal cancelled");
     expect(portalCarrierClose).toHaveBeenCalledOnce();
     expect(portalOpen).not.toHaveBeenCalled();
     expect(portalChanged).not.toHaveBeenCalled();
@@ -376,9 +330,7 @@ describe("worker portal tool execution", () => {
       return portal;
     });
 
-    await expect(
-      runPortal({ toolCallId: "created-worker-portal", action: "open", port: 4321 }),
-    ).rejects.toThrow("Worker source session placement changed");
+    await expect(openPortal()).rejects.toThrow("Worker source session placement changed");
 
     expect(service.list()).toHaveLength(1);
     expect(httpServers[0]?.listening).toBe(true);
@@ -432,11 +384,10 @@ describe("worker portal tool execution", () => {
       await successorOpening.promise;
       releaseBind();
       await firstRejected;
-      const result = JSON.parse((await successor).resultJson);
-
-      expect(service.list()).toEqual([
-        expect.objectContaining({ id: result.details.id, title: "Successor app" }),
-      ]);
+      const result = await successor;
+      const [portal] = service.list();
+      expect(service.list()).toEqual([expect.objectContaining({ title: "Successor app" })]);
+      expect(result.details).toHaveProperty("id", portal?.id);
       expect(httpServers).toHaveLength(1);
       expect(httpServers[0]?.listening).toBe(true);
     } finally {
@@ -449,18 +400,16 @@ describe("worker portal tool execution", () => {
     sourceNodeDeviceId = null;
     sourceSshEndpoint = { host: "worker.example" };
 
-    await expect(
-      runPortal({ toolCallId: "ssh-worker-portal", action: "open", port: 4321 }),
-    ).rejects.toThrow("move the session back to the gateway with sessions.move");
+    await expect(openPortal()).rejects.toThrow(
+      "move the session back to the gateway with sessions.move",
+    );
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });
 
   it("rejects worker portal access when the active turn was not granted portal authority", async () => {
     await placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
 
-    await expect(
-      runPortal({ toolCallId: "unauthorized-worker-portal", action: "open", port: 4321 }),
-    ).rejects.toThrow("Worker session tool authority changed");
+    await expect(openPortal()).rejects.toThrow("Worker session tool authority changed");
     expect(portalCarrierOpen).not.toHaveBeenCalled();
   });
 });

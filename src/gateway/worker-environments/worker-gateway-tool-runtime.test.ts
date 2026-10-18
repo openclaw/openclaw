@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WorkerToolSurfaceSchema,
@@ -46,6 +46,11 @@ const policy: WorkerToolSurface["policy"] = {
 const success = { content: [{ type: "text" as const, text: "done" }], details: { status: "ok" } };
 const sink = { send: () => {} };
 const presentation = createToolSurfacePresentationForTest();
+const runtimes = new Set<ReturnType<typeof createWorkerGatewayToolRuntime>>();
+afterEach(async () => {
+  await Promise.all([...runtimes].map((runtime) => runtime.close()));
+  runtimes.clear();
+});
 
 function tool(
   name = "remote",
@@ -76,6 +81,7 @@ function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy, 
     signal: controller.signal,
     prepare: prepareTools,
   });
+  runtimes.add(runtime);
   return {
     runtime,
     controller,
@@ -84,6 +90,20 @@ function fixture(tools: AnyAgentTool[], prepare = async () => ({ tools, policy, 
       current = false;
     },
   };
+}
+
+function controlledExecution() {
+  const entered = createDeferredCore<AbortSignal>();
+  const release = createDeferredCore();
+  const execute = vi.fn<AnyAgentTool["execute"]>(async (_id, _args, signal) => {
+    if (!signal) {
+      throw new Error("Fixture requires a call signal");
+    }
+    entered.resolve(signal);
+    await release.promise;
+    return success;
+  });
+  return { entered, release, execute };
 }
 
 function request(
@@ -112,22 +132,18 @@ describe("worker Gateway tool runtime", () => {
         tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
       }),
     }));
-    try {
-      const projection = await runtime.getPromptProjection(identity);
-      expect(projection.tools.map(({ name }) => name)).toEqual([
-        "tool_search",
-        "tool_describe",
-        "dispatch_action",
-      ]);
-      expect(projection.toolSchemaDirectoryPrompt).toContain(
-        "Deferred names are not directly callable.",
-      );
-      expect(projection.toolSchemaDirectoryPrompt).not.toContain(
-        "Call a unique deferred tool name directly",
-      );
-    } finally {
-      await runtime.close();
-    }
+    const projection = await runtime.getPromptProjection(identity);
+    expect(projection.tools.map(({ name }) => name)).toEqual([
+      "tool_search",
+      "tool_describe",
+      "dispatch_action",
+    ]);
+    expect(projection.toolSchemaDirectoryPrompt).toContain(
+      "Deferred names are not directly callable.",
+    );
+    expect(projection.toolSchemaDirectoryPrompt).not.toContain(
+      "Call a unique deferred tool name directly",
+    );
   });
 
   it("issues one finite surface and invokes only an issued Gateway handle with valid arguments", async () => {
@@ -185,7 +201,6 @@ describe("worker Gateway tool runtime", () => {
     expect(execute).not.toHaveBeenCalled();
     await expect(runtime.invoke(identity, invocation, sink)).resolves.toEqual(success);
     expect(execute).toHaveBeenCalledTimes(1);
-    await runtime.close();
   });
 
   it.each(["tool count", "definition bytes"] as const)(
@@ -205,7 +220,6 @@ describe("worker Gateway tool runtime", () => {
       }
       const { runtime } = fixture(tools);
       await expect(runtime.getSurface(identity)).rejects.toThrow();
-      await runtime.close();
     },
   );
 
@@ -229,7 +243,6 @@ describe("worker Gateway tool runtime", () => {
       await expect(surface).rejects.toThrow(expected);
       await expect(f.runtime.getSurface(identity)).rejects.toThrow(expected);
       expect(f.prepareTools).toHaveBeenCalledTimes(1);
-      await f.runtime.close();
     },
   );
 
@@ -258,7 +271,6 @@ describe("worker Gateway tool runtime", () => {
       }
       await expect(invocation).rejects.toThrow("turn authority lost");
       expect(execute).toHaveBeenCalledTimes(stage === "before execution" ? 0 : 1);
-      await f.runtime.close();
     },
   );
 
@@ -299,7 +311,6 @@ describe("worker Gateway tool runtime", () => {
     expect(first.map(({ payload }) => payload.seq)).toEqual([1, 2]);
     expect(second.map(({ payload }) => payload.seq)).toEqual([2]);
     expect(first[1]).toEqual(second[0]);
-    await runtime.close();
   });
 
   it("respects sequential barriers around parallel batches within the four-call bound", async () => {
@@ -352,20 +363,10 @@ describe("worker Gateway tool runtime", () => {
       runtime.invoke(identity, request(surface, "parallel-1", 1), sink),
     ).resolves.toEqual(success);
     expect(order).toHaveLength(5);
-    await runtime.close();
   });
 
   it("cancels an active call and close waits for cooperative settlement while fencing queued work", async () => {
-    const entered = createDeferredCore<AbortSignal>();
-    const release = createDeferredCore();
-    const execute = vi.fn<AnyAgentTool["execute"]>(async (_id, _args, signal) => {
-      if (!signal) {
-        throw new Error("Fixture needs its call signal");
-      }
-      entered.resolve(signal);
-      await release.promise;
-      return success;
-    });
+    const { entered, release, execute } = controlledExecution();
     const { runtime } = fixture([tool("remote", execute)]);
     const surface = await runtime.getSurface(identity);
     const invocation = request(surface);
@@ -399,16 +400,8 @@ describe("worker Gateway tool runtime", () => {
     "fences cancelled calls while retaining socket-independent replays (%s)",
     async (cancellation) => {
       const connectionScoped = cancellation === "socket read";
-      const entered = createDeferredCore<AbortSignal>();
-      const release = createDeferredCore();
-      const remote = tool("remote", async (_id, _args, signal) => {
-        if (!signal) {
-          throw new Error("Fixture requires a call signal");
-        }
-        entered.resolve(signal);
-        await release.promise;
-        return success;
-      });
+      const { entered, release, execute } = controlledExecution();
+      const remote = tool("remote", execute);
       bindAgentToolExecutionLocation(remote, {
         kind: "gateway",
         ...(connectionScoped ? { connectionScoped: true } : { replay: true }),
@@ -438,7 +431,6 @@ describe("worker Gateway tool runtime", () => {
       } else {
         await expect(results).resolves.toEqual([success, success]);
       }
-      await runtime.close();
     },
   );
 
@@ -448,19 +440,15 @@ describe("worker Gateway tool runtime", () => {
       throw new Error(message);
     });
     const { runtime } = fixture([tool("remote", execute)]);
-    try {
-      const surface = await runtime.getSurface(identity);
-      const result = await runtime.invoke(identity, request(surface), sink);
-      expect(result).toEqual({
-        content: [
-          { type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) },
-        ],
-        details: { status: "error", error: message },
-      });
-      expect(execute).toHaveBeenCalledOnce();
-    } finally {
-      await runtime.close();
-    }
+    const surface = await runtime.getSurface(identity);
+    const result = await runtime.invoke(identity, request(surface), sink);
+    expect(result).toEqual({
+      content: [
+        { type: "text", text: JSON.stringify({ status: "error", error: message }, null, 2) },
+      ],
+      details: { status: "error", error: message },
+    });
+    expect(execute).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])("bounds result and update control bytes with images=%s", async (image) => {
@@ -492,6 +480,5 @@ describe("worker Gateway tool runtime", () => {
     for (const frame of updates) {
       expect(isWorkerGatewayToolFrameWithinBudget(frame, frame.payload.result)).toBe(true);
     }
-    await runtime.close();
   });
 });

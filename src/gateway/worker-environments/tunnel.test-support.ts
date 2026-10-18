@@ -9,6 +9,7 @@ import {
   type CommandOptions,
   type SpawnResult,
 } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
@@ -162,14 +163,9 @@ export function workspaceSetup(
 }
 
 export function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  void promise.catch(() => undefined);
-  return { promise, resolve, reject };
+  const pending = createDeferredCore<T>();
+  void pending.promise.catch(() => undefined);
+  return pending;
 }
 
 export function memoryWorkspaceJournal(
@@ -267,81 +263,70 @@ export function localWorkspaceRunner(
   ) => Promise<SpawnResult | undefined>,
   onCommandCompleted?: (argv: readonly string[], result: SpawnResult) => void,
 ) {
-  const starts: Array<{ argv: string[]; options: CommandOptions; process: FakeProcess }> = [];
-  const runs: Array<{ argv: string[]; options: CommandOptions }> = [];
-  const runner: WorkerSshRunner = {
-    start(argv, options) {
-      const process = new FakeProcess();
-      starts.push({ argv, options, process });
-      return process;
-    },
-    async run(argv, options) {
-      runs.push({ argv, options });
-      if (argv[0] === "git") {
-        return await runCommandWithTimeout(argv, options);
-      }
-      if (argv[0] === "rsync") {
-        if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
-          const boundary = await prepareLocalWorkspaceRsyncBoundary(remoteHome, argv);
-          const boundaryOptions = {
-            ...options,
-            baseEnv: { ...options.baseEnv, HOME: remoteHome },
-          };
-          const intercepted = await onRsync?.(
-            argv,
-            boundary.argv,
-            boundaryOptions,
-            boundary.receiverTarget,
-          );
-          return intercepted ?? (await runCommandWithTimeout(boundary.argv, boundaryOptions));
-        }
-        const localArgv = [...argv];
-        const remoteShellIndex = localArgv.indexOf("-e");
-        if (remoteShellIndex >= 0) {
-          localArgv.splice(remoteShellIndex, 2);
-        }
-        for (let index = localArgv.indexOf("--") + 1; index < localArgv.length; index += 1) {
-          const candidate = localArgv[index];
-          const separator = candidate?.indexOf(":") ?? -1;
-          if (!candidate || separator < 0) {
-            continue;
-          }
-          const remotePath = candidate.slice(separator + 1);
-          // Map both outbound destinations and inbound sources into the fake HOME.
-          localArgv[index] = path.isAbsolute(remotePath)
-            ? remotePath
-            : path.join(remoteHome, remotePath);
-        }
-        const localDestination = localArgv.at(-1);
-        if (!localDestination) {
-          throw new Error("missing test rsync destination");
-        }
-        await fs.mkdir(
-          localDestination.endsWith("/") ? localDestination : path.dirname(localDestination),
-          { recursive: true },
-        );
-        const intercepted = await onRsync?.(argv, localArgv, options);
-        if (intercepted) {
-          return intercepted;
-        }
-        return await runCommandWithTimeout(localArgv, options);
-      }
-      if (argv[0] === "ssh") {
-        const remoteCommand = argv.at(-1);
-        if (!remoteCommand) {
-          throw new Error("missing test SSH remote command");
-        }
-        const result = await runCommandWithTimeout(["sh", "-c", remoteCommand], {
+  return fakeRunner(async (argv, options) => {
+    if (argv[0] === "git") {
+      return await runCommandWithTimeout(argv, options);
+    }
+    if (argv[0] === "rsync") {
+      if (argv.some((arg) => arg.startsWith("--rsync-path="))) {
+        const boundary = await prepareLocalWorkspaceRsyncBoundary(remoteHome, argv);
+        const boundaryOptions = {
           ...options,
           baseEnv: { ...options.baseEnv, HOME: remoteHome },
-        });
-        onCommandCompleted?.(argv, result);
-        return result;
+        };
+        const intercepted = await onRsync?.(
+          argv,
+          boundary.argv,
+          boundaryOptions,
+          boundary.receiverTarget,
+        );
+        return intercepted ?? (await runCommandWithTimeout(boundary.argv, boundaryOptions));
       }
-      throw new Error(`unexpected test command: ${argv[0] ?? "missing"}`);
-    },
-  };
-  return { runner, runs, starts };
+      const localArgv = [...argv];
+      const remoteShellIndex = localArgv.indexOf("-e");
+      if (remoteShellIndex >= 0) {
+        localArgv.splice(remoteShellIndex, 2);
+      }
+      for (let index = localArgv.indexOf("--") + 1; index < localArgv.length; index += 1) {
+        const candidate = localArgv[index];
+        const separator = candidate?.indexOf(":") ?? -1;
+        if (!candidate || separator < 0) {
+          continue;
+        }
+        const remotePath = candidate.slice(separator + 1);
+        // Map both outbound destinations and inbound sources into the fake HOME.
+        localArgv[index] = path.isAbsolute(remotePath)
+          ? remotePath
+          : path.join(remoteHome, remotePath);
+      }
+      const localDestination = localArgv.at(-1);
+      if (!localDestination) {
+        throw new Error("missing test rsync destination");
+      }
+      await fs.mkdir(
+        localDestination.endsWith("/") ? localDestination : path.dirname(localDestination),
+        { recursive: true },
+      );
+      const intercepted = await onRsync?.(argv, localArgv, options);
+      if (intercepted) {
+        return intercepted;
+      }
+      return await runCommandWithTimeout(localArgv, options);
+    }
+    if (argv[0] === "ssh") {
+      const remoteCommand = argv.at(-1);
+      if (!remoteCommand) {
+        throw new Error("missing test SSH remote command");
+      }
+      const result = await runCommandWithTimeout(["sh", "-c", remoteCommand], {
+        ...options,
+        baseEnv: { ...options.baseEnv, HOME: remoteHome },
+      });
+      onCommandCompleted?.(argv, result);
+      return result;
+    }
+    throw new Error(`unexpected test command: ${argv[0] ?? "missing"}`);
+  });
 }
 
 export async function git(root: string, ...args: string[]): Promise<string> {

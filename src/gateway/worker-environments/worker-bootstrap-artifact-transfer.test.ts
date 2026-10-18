@@ -87,6 +87,35 @@ describe("worker bootstrap artifact transfer", () => {
     };
   }
 
+  async function expectNotFound(response: Response) {
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "not_found" });
+  }
+
+  function closeTransfer(
+    closure: "owner" | "expiry" | "signal" | "revoke" | "shutdown",
+    owner: AbortController,
+    receipt: { token: string; expiresAtMs: number },
+  ) {
+    switch (closure) {
+      case "owner":
+        authorized = false;
+        break;
+      case "expiry":
+        now = receipt.expiresAtMs;
+        break;
+      case "signal":
+        owner.abort();
+        break;
+      case "revoke":
+        service.revoke(receipt.token);
+        break;
+      case "shutdown":
+        service.closeAll();
+        break;
+    }
+  }
+
   it("rejects an empty archive before granting download authority", async () => {
     await expect(prepare("")).rejects.toThrow("Worker artifact archive is invalid");
   });
@@ -99,9 +128,8 @@ describe("worker bootstrap artifact transfer", () => {
       `${origin}/__openclaw__/worker-bootstrap/other`,
     ]) {
       const response = await fetch(rejectedUrl, { headers });
-      expect(response.status).toBe(404);
       expect(response.headers.get("cache-control")).toBe("no-store");
-      await expect(response.json()).resolves.toEqual({ error: "not_found" });
+      await expectNotFound(response);
     }
     expect((await fetch(url)).status).toBe(404);
     const response = await fetch(url, { headers });
@@ -117,21 +145,8 @@ describe("worker bootstrap artifact transfer", () => {
     async (closure) => {
       const owner = new AbortController();
       const { url, headers, receipt } = await prepare("source-runtime", owner.signal);
-      if (closure === "owner") {
-        authorized = false;
-      }
-      if (closure === "expiry") {
-        now = receipt.expiresAtMs;
-      }
-      if (closure === "signal") {
-        owner.abort();
-      }
-      if (closure === "shutdown") {
-        service.closeAll();
-      }
-      const response = await fetch(url, { headers });
-      expect(response.status).toBe(404);
-      await expect(response.json()).resolves.toEqual({ error: "not_found" });
+      closeTransfer(closure, owner, receipt);
+      await expectNotFound(await fetch(url, { headers }));
       authorized = true;
       now = 1_000;
       expect((await fetch(url, { headers })).status).toBe(404);
@@ -146,9 +161,7 @@ describe("worker bootstrap artifact transfer", () => {
       authorized = false;
       return handle;
     });
-    const response = await fetch(url, { headers });
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({ error: "not_found" });
+    await expectNotFound(await fetch(url, { headers }));
   });
 
   it("streams the verified descriptor even when the archive path is replaced", async () => {
@@ -177,9 +190,7 @@ describe("worker bootstrap artifact transfer", () => {
           await fs.symlink(path.join(root, "original.tgz"), artifact.tarballPath);
         }
       }
-      const response = await fetch(url, { headers });
-      expect(response.status).toBe(404);
-      await expect(response.json()).resolves.toEqual({ error: "not_found" });
+      await expectNotFound(await fetch(url, { headers }));
     },
   );
 
@@ -191,21 +202,7 @@ describe("worker bootstrap artifact transfer", () => {
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
       expect((await fetch(url, { headers })).status).toBe(503);
-      if (closure === "owner") {
-        authorized = false;
-      }
-      if (closure === "expiry") {
-        now = receipt.expiresAtMs;
-      }
-      if (closure === "signal") {
-        owner.abort();
-      }
-      if (closure === "revoke") {
-        service.revoke(receipt.token);
-      }
-      if (closure === "shutdown") {
-        service.closeAll();
-      }
+      closeTransfer(closure, owner, receipt);
       await expect(response.arrayBuffer()).rejects.toThrow();
     },
   );

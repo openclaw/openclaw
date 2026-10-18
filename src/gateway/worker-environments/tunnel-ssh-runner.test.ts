@@ -10,8 +10,7 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 import { createWorkerSshRunner, WORKER_TUNNEL_READY_MARKER } from "./tunnel-ssh-runner.js";
 
-// Returned as the fake-typed union (not ChildProcessWithoutNullStreams) so `child.kill`
-// stays a plain vi.fn property; casting to the real type makes kill an unbound method for lint.
+// Keep kill a mock property rather than an unbound ChildProcess method.
 function createChild() {
   const child = new EventEmitter() as EventEmitter & {
     stdin: PassThrough;
@@ -39,19 +38,31 @@ function createChild() {
 }
 
 describe("worker SSH process runner", () => {
+  let child: ReturnType<typeof createChild>;
   beforeEach(() => {
-    spawnMock.mockReset();
+    child = createChild();
+    spawnMock.mockReset().mockReturnValue(child);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
+  const start = (signal?: AbortSignal) =>
+    createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000, signal });
+  async function expectPending(process: ReturnType<typeof start>) {
+    let settled = false;
+    void process.exited.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  }
+
   it("settles with the real exit when close lags after SIGKILL", async () => {
     vi.useFakeTimers();
-    const child = createChild();
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
 
     const stopping = process.stop();
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
@@ -68,9 +79,7 @@ describe("worker SSH process runner", () => {
   it.each(["same turn", "after poll"])(
     "rejects a post-exit ready marker while retaining the final redacted diagnostic (%s)",
     async (delivery) => {
-      const child = createChild();
-      spawnMock.mockReturnValue(child);
-      const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+      const process = start();
       const bearer = "secret-credential-value";
 
       child.emit("exit", 255, null);
@@ -94,9 +103,7 @@ describe("worker SSH process runner", () => {
 
   it("fails stop when a SIGKILLed child never reports exit", async () => {
     vi.useFakeTimers();
-    const child = createChild();
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
 
     const stopping = process.stop();
     const rejection = expect(stopping).rejects.toThrow("did not exit after SIGKILL");
@@ -107,10 +114,8 @@ describe("worker SSH process runner", () => {
 
   it("treats a post-exit kill failure as terminal when close is delayed", async () => {
     vi.useFakeTimers();
-    const child = createChild();
     child.kill = vi.fn(() => false);
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
 
     child.emit("exit", 255, null);
     const stopping = process.stop();
@@ -124,10 +129,8 @@ describe("worker SSH process runner", () => {
 
   it("propagates a stop failure when SIGKILL delivery fails", async () => {
     vi.useFakeTimers();
-    const child = createChild();
     child.kill = vi.fn(() => false);
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
 
     const stopping = process.stop();
     const rejection = expect(stopping).rejects.toThrow("SIGKILL delivery failed");
@@ -135,13 +138,7 @@ describe("worker SSH process runner", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await rejection;
 
-    let exitedSettled = false;
-    void process.exited.then(() => {
-      exitedSettled = true;
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(exitedSettled).toBe(false);
+    await expectPending(process);
 
     child.emit("close", null, "SIGKILL");
     await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
@@ -149,30 +146,20 @@ describe("worker SSH process runner", () => {
   });
 
   it("keeps exited pending when a live child emits error without close", async () => {
-    const child = createChild();
     (child as { pid?: number }).pid = 4242;
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
 
     child.emit("error", new Error("kill delivery failed"));
 
     await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
-    let exitedSettled = false;
-    void process.exited.then(() => {
-      exitedSettled = true;
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(exitedSettled).toBe(false);
+    await expectPending(process);
 
     child.emit("close", 0, null);
     await expect(process.exited).resolves.toEqual({ code: 0, signal: null });
   });
 
   it("retains a bounded redacted stderr tail after a ready child exits", async () => {
-    const child = createChild();
-    spawnMock.mockReturnValue(child);
-    const process = createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000 });
+    const process = start();
     const bearer = "secret-credential-value";
 
     child.stdout.write(`${WORKER_TUNNEL_READY_MARKER}\n`);
@@ -188,7 +175,6 @@ describe("worker SSH process runner", () => {
   });
 
   it("passes the owner signal to spawn so abort terminates and settles the child", async () => {
-    const child = createChild();
     spawnMock.mockImplementation((_command: string, _args: string[], options: SpawnOptions) => {
       options.signal?.addEventListener(
         "abort",
@@ -201,10 +187,7 @@ describe("worker SSH process runner", () => {
       return child;
     });
     const controller = new AbortController();
-    const process = createWorkerSshRunner().start(["ssh"], {
-      timeoutMs: 10_000,
-      signal: controller.signal,
-    });
+    const process = start(controller.signal);
 
     controller.abort();
 
