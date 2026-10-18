@@ -114,9 +114,9 @@ function withFixture(work: (home: string) => Promise<void>) {
 }
 const withLinuxFixture = (work: (home: string) => Promise<void>) =>
   withMockedPlatform("linux", () => withFixture(work));
-const publication = (root: string, env: Record<string, string>) =>
+const publication = (checkoutRoot: string, env: Record<string, string>) =>
   assertManagedGatewayArtifactPublication({
-    roots: [root],
+    roots: [checkoutRoot],
     env,
     timeoutMs: 5_000,
     assertCurrent() {},
@@ -479,6 +479,7 @@ it("preserves both failed inspection and connection cleanup", async () => {
   nativeBus.close.mockRejectedValueOnce(cleanup);
   await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
     errors: [inspection, cleanup],
+    cause: cleanup,
   });
   expect(nativeBus.close).toHaveBeenCalledOnce();
   expect(busctl).not.toHaveBeenCalled();

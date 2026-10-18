@@ -260,19 +260,21 @@ export async function listLoadedSystemdUnits(
       connection?.verify();
     } catch (error) {
       failure = { error };
-      throw error;
-    } finally {
-      try {
-        await connection?.close();
-      } catch (error) {
-        if (failure) {
-          throw new AggregateError(
-            [failure.error, error],
-            "Systemd inventory inspection and cleanup failed.",
-          );
-        }
-        throw error;
+    }
+    try {
+      await connection?.close();
+    } catch (error) {
+      if (failure) {
+        throw new AggregateError(
+          [failure.error, error],
+          "Systemd inventory inspection and cleanup failed.",
+          { cause: error },
+        );
       }
+      throw error;
+    }
+    if (failure) {
+      throw failure.error;
     }
     if (budget.now() >= deadline) {
       throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
