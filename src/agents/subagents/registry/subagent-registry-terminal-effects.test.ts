@@ -315,7 +315,9 @@ it.for(["queued", "pre-commit"] as const)(
       await withinTest(loaderEntered.promise, signal);
       holdNextWrite = true;
       if (barrier === "queued") {
-        pendingWrite = mutateLifecycleRun(entry, () => {});
+        pendingWrite = mutateLifecycleRun(entry, (row) => {
+          row.label = "preceding durable write";
+        });
         await withinTest(writeEntered.promise, signal);
       }
       releaseLoader.resolve();

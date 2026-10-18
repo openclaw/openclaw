@@ -17,7 +17,9 @@ type StatusScanSharedMocks = {
   readBestEffortConfigSnapshot: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
-  getAgentLocalStatuses: UnknownMock;
+  getAgentLocalStatuses: Mock<
+    (cfg: OpenClawConfig) => Promise<{ defaultId: string | null; agents: unknown[] }>
+  >;
   getStatusSummary: UnknownMock;
   getMemorySearchManager: UnknownMock;
   buildGatewayConnectionDetails: UnknownMock;
@@ -148,21 +150,27 @@ function createStatusAgentLocalModuleMock(
 ): {
   collectStatusLocalSnapshot: (
     cfg: OpenClawConfig,
-  ) => Promise<{ agentStatus: unknown; sessionStores: undefined }>;
+  ) => Promise<{ defaultId: string | null; publish: () => unknown; sessionStores: undefined }>;
 } {
   return {
-    collectStatusLocalSnapshot: async (cfg) => ({
-      agentStatus: await mocks.getAgentLocalStatuses(cfg),
-      sessionStores: undefined,
-    }),
+    collectStatusLocalSnapshot: async (cfg) => {
+      const agentStatus = await mocks.getAgentLocalStatuses(cfg);
+      return {
+        defaultId: agentStatus.defaultId,
+        publish: () => agentStatus,
+        sessionStores: undefined,
+      };
+    },
   };
 }
 
-function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">): {
-  getStatusSummary: StatusScanSharedMocks["getStatusSummary"];
-} {
+function createStatusSummaryModuleMock(mocks: Pick<StatusScanSharedMocks, "getStatusSummary">) {
   return {
     getStatusSummary: mocks.getStatusSummary,
+    prepareStatusSummary: async (...args: unknown[]) => {
+      const summary = await mocks.getStatusSummary(...args);
+      return { publish: () => ({ summary, sessionStores: undefined }) };
+    },
   };
 }
 

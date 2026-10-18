@@ -179,6 +179,7 @@ function renderSessionCatalog(params: {
       onCatalogMenuTriggerRendered={(key, element) =>
         host().sidebarMenus.catalogMenu.retargetTrigger(key, element)
       }
+      onMountRow={(key) => host().sessionProjection.mountCatalogRow(key)}
       isMenuOpen={(key) => host().sidebarMenus.catalogMenuView.isOpenFor(key)}
     />
   );

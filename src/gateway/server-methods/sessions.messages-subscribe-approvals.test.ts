@@ -202,70 +202,31 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect([...registry.getApprovals(key)]).toEqual([]);
   });
 
-  it("reprepares a stale replay before acknowledging a paired approval reviewer", async () => {
-    const currentReplay = approvalReplay();
-    const staleReplay = {
-      ...currentReplay,
-      updatedAtMs: 41,
-      approvals: [
-        {
-          id: "terminal-before-ack",
-          status: "pending",
-          presentation: {
-            kind: "exec",
-            commandText: "printf old",
-            allowedDecisions: ["allow-once", "deny"],
-          },
-          urlPath: "/approve/terminal-before-ack",
-          createdAtMs: 1,
-          expiresAtMs: 60_000,
-        },
-      ],
-    } satisfies SessionApprovalReplay;
-    const { context, listSessionPendingApprovals } = createContext({ replay: currentReplay });
-    listSessionPendingApprovals.mockResolvedValueOnce({
-      replay: staleReplay,
-      isCurrent: () => false,
-      release: vi.fn(),
-    });
-
-    const respond = await subscribe(
-      context,
-      { key: "child", includeApprovals: true },
-      createClient({ scopes: ["operator.approvals"], deviceId: "phone" }),
-    );
-
-    expect(listSessionPendingApprovals).toHaveBeenCalledTimes(2);
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      {
-        subscribed: true,
-        key: currentReplay.sessionKey,
-        agentId: "main",
-        approvalReplay: currentReplay,
-      },
-      undefined,
-    );
-  });
-
-  it("rolls back after one retry when replay keeps changing", async () => {
+  it("rolls back a stale approval replay and releases its snapshot without another read", async () => {
     const replay = approvalReplay();
-    const { context, listSessionPendingApprovals, rollbackSubscription } = createContext({
+    const client = createClient({ scopes: ["operator.approvals"], deviceId: "phone" });
+    const registry = createSessionMessageSubscriberRegistry();
+    registry.subscribe(client.connId!, replay.sessionKey);
+    const { context, listSessionPendingApprovals } = createContext({ replay });
+    context.subscribeSessionMessageEvents = registry.subscribe;
+    const release = vi.fn();
+    listSessionPendingApprovals.mockResolvedValueOnce({
       replay,
+      isCurrent: () => false,
+      release,
     });
-    listSessionPendingApprovals
-      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() })
-      .mockResolvedValueOnce({ replay, isCurrent: () => false, release: vi.fn() });
 
-    const respond = await subscribe(context, { key: "child", includeApprovals: true });
+    const respond = await subscribe(context, { key: "child", includeApprovals: true }, client);
 
-    expect(listSessionPendingApprovals).toHaveBeenCalledTimes(2);
-    expect(rollbackSubscription).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       false,
       undefined,
       expect.objectContaining({ code: "UNAVAILABLE" }),
     );
+    expect([...registry.get(replay.sessionKey)]).toEqual([client.connId]);
+    expect([...registry.getApprovals(replay.sessionKey)]).toEqual([]);
+    expect(release).toHaveBeenCalledOnce();
+    expect(listSessionPendingApprovals).toHaveBeenCalledOnce();
   });
 
   it.each([

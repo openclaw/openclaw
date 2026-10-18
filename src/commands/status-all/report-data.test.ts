@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillReadiness: vi.fn<
     typeof import("../../skills/discovery/status.js").buildWorkspaceSkillReadiness
   >(() => ({ workspaceDir: "/tmp/mock-skills", eligible: 0, missing: 0 })),
-  resolveStatusSummaryFromOverview: vi.fn(async () => ({})),
+  resolveStatusSummaryFromOverview: vi.fn(async (_params: unknown) => ({})),
 }));
 
 // mock-isolation: Database inspection is covered at its owner, not by unrelated local diagnostics.
@@ -128,7 +128,10 @@ vi.mock("../status.gateway-connection.ts", () => ({
 // mock-isolation: Reuse fixed scan facts while retaining the real downstream report rendering.
 vi.mock("../status.scan-overview.ts", () => ({
   collectStatusScanOverview: mocks.collectStatusScanOverview,
-  resolveStatusSummaryFromOverview: mocks.resolveStatusSummaryFromOverview,
+  prepareStatusSummaryFromOverview: async (params: unknown) => {
+    const summary = await mocks.resolveStatusSummaryFromOverview(params);
+    return { publish: () => ({ summary, sessionStores: undefined }) };
+  },
 }));
 
 vi.mock("../../daemon/restart-logs.js", () => ({
@@ -570,9 +573,8 @@ describe("statusAllCommand local diagnosis", () => {
     vi.mocked(terminalTable.renderTable).mockImplementation(actual.renderTable);
     const diagnosisSpy = vi
       .spyOn(statusDiagnosis, "appendStatusAllDiagnosis")
-      .mockImplementation(async ({ lines }) => {
+      .mockImplementation(({ lines }) => {
         renderingEvents.push("diagnosis");
-        await Promise.resolve();
         lines.push("diagnosis body", "");
       });
     mocks.buildStatusAllOverviewRows.mockReturnValueOnce([
