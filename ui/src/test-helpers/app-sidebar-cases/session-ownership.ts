@@ -101,9 +101,15 @@ describe("AppSidebar session ownership", () => {
       expect(sharedRow().querySelector(".session-owner-stack")).not.toBeNull();
 
       // The complete count, not just the bounded sample, preserves collaboration.
-      shared.participants = [];
-      shared.participantCount = 5;
-      harness.publishList({ result, agentId: "main" });
+      harness.publishList({
+        result: {
+          ...result,
+          sessions: result.sessions.map((row) =>
+            row === shared ? { ...row, participants: [], participantCount: 5 } : row,
+          ),
+        },
+        agentId: "main",
+      });
       await sidebar.sessionData.refreshSidebarSessions();
       await sidebar.updateComplete;
       expect(sharedRow().querySelector(".session-owner-stack__overflow")?.textContent).toBe("+5");
@@ -240,9 +246,21 @@ describe("AppSidebar session ownership", () => {
       ).toBeNull();
 
       // A second human participant enables attribution even without another owner.
-      result.sessions[1]!.participants = [{ identity: { type: "profile", id: "profile-bob" } }];
-      result.sessions[1]!.participantCount = 1;
-      harness.publishList({ result, agentId: "main" });
+      harness.publishList({
+        result: {
+          ...result,
+          sessions: result.sessions.map((row, index) =>
+            index === 1
+              ? {
+                  ...row,
+                  participants: [{ identity: { type: "profile", id: "profile-bob" } }],
+                  participantCount: 1,
+                }
+              : row,
+          ),
+        },
+        agentId: "main",
+      });
       await sidebar.updateComplete;
       expect(
         sidebar.querySelector('[data-session-key="agent:main:a"] openclaw-session-owner-chip'),

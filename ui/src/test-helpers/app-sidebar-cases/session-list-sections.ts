@@ -189,8 +189,16 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:alpha"]')).toBeNull();
 
     // Membership changes reveal and hide groups without changing the preference.
-    alpha.category = "Empty";
-    harness.publish({ groups: ["Empty", "Alpha"] });
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        sessions: result.sessions.map((row) =>
+          row.key === alpha.key ? { ...row, category: "Empty" } : row,
+        ),
+      },
+      groups: ["Empty", "Alpha"],
+    });
     await settleLitElement(sidebar);
     expect(groupNames()).toEqual(["category:Empty"]);
     await chooseEmptyGroups("never");
