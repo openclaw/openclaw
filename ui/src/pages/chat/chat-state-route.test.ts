@@ -59,7 +59,12 @@ it("reuses the selected row without rescanning an unchanged session result", () 
 });
 
 it("recomputes selected rows when routing defaults change in place", () => {
-  const agentsList = { defaultId: "main", mainKey: "home", scope: "per-sender" };
+  const agentsList: NonNullable<LookupState["agentsList"]> = {
+    defaultId: "main",
+    mainKey: "home",
+    scope: "per-sender",
+    agents: [],
+  };
   const home = { key: "agent:main:home" };
   const work = { key: "agent:work:home" };
   const global = { key: "global", agentId: "work" };
