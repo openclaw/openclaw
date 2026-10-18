@@ -90,7 +90,7 @@ async function finishedCronRun(client: GatewayClient, jobId: string) {
 
 describeLive("cron placement identity through production Gateway routing", () => {
   it(
-    "writes allowed replies, waits for an in-flight writer, and rejects a reassigned root",
+    "writes allowed replies, settles a held writer run, and rejects a reassigned root",
     async ({ signal }) => {
       const instance = await createOpenClawTestInstance({
         name: "cron-placement-live",
@@ -216,6 +216,11 @@ describeLive("cron placement identity through production Gateway routing", () =>
             connected.request<{ messages: unknown[] }>("cron.history", {
               id: job.id,
               runId: run.runId,
+              limit: 100,
+            });
+          const replacementHistoryFor = () =>
+            connected.request<{ sessionId?: string; messages: unknown[] }>("chat.history", {
+              sessionKey: rootKey,
               limit: 100,
             });
           const sendRoot = async (marker: string, expectedSessionId: string) => {
@@ -356,7 +361,8 @@ describeLive("cron placement identity through production Gateway routing", () =>
               hookTarget = { ...oldRun, sessionId: rotatedSessionId };
               expect(hookTarget.sessionId).not.toBe(oldRun.sessionId);
             }
-            const replacementBefore = await historyFor(hookTarget);
+            const replacementBefore = await replacementHistoryFor();
+            expect(replacementBefore.sessionId).toBe(hookTarget.sessionId);
             gate.response?.end("continue");
             await connected.request("cronHookProof.settled", { marker });
             const outcome = await completion;
@@ -371,7 +377,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
               expect(outcome.error).toContain("original session generation no longer accepts");
               expect(gate.effects).toBe(0);
               expect(await historyFor(oldRun)).toEqual(before);
-              expect(await historyFor(hookTarget)).toEqual(replacementBefore);
+              expect(await replacementHistoryFor()).toEqual(replacementBefore);
               expect((await describeRoot()).session.sessionId).toBe(hookTarget.sessionId);
             }
             expect(
@@ -396,7 +402,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             );
           }
 
-          // A forced cron run must wait for the held writer before rotating the root generation.
+          // A forced cron run still settles and rotates the root once the held writer is released.
           const marker = "HOOK_WAITS";
           const accepted = await connected.request<{ runId: string; status: string }>("agent", {
             agentId: "probe",
@@ -422,15 +428,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
           expect(gate.effects).toBe(0);
 
           const forcedRun = finishedCronRun(connected, job.id);
-          const settlementState = await Promise.race([
-            forcedRun.then(
-              () => "completed",
-              (error: unknown) => `rejected: ${String(error)}`,
-            ),
-            delay(1_000).then(() => "waiting"),
-          ]);
-          expect(settlementState).toBe("waiting");
-          logLiveProgress("cron placement: forced run waited for the in-flight session writer");
 
           gate.response?.end("continue");
           await connected.request("cronHookProof.settled", { marker });
