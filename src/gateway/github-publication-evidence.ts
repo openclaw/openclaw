@@ -74,17 +74,27 @@ export async function uploadGitHubPublicationEvidence(params: {
   if (!mimeType) {
     throw new Error("Evidence must be a PNG, JPEG, GIF, WebP, MP4, MOV or WebM image/video.");
   }
-  const selected = await resolveSandboxedBridgeMediaPath({
-    sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge, workspaceOnly: true },
-    mediaPath: evidence.path,
-  });
-  params.assertCurrent();
-  const media = await sandbox.fsBridge.readFileWithSource({
-    filePath: selected.resolved,
-    cwd: sandbox.workspaceDir,
-    maxBytes: evidence.sizeBytes,
-    signal: params.signal,
-  });
+  let media: Awaited<ReturnType<typeof sandbox.fsBridge.readFileWithSource>>;
+  try {
+    const selected = await resolveSandboxedBridgeMediaPath({
+      sandbox: { root: sandbox.workspaceDir, bridge: sandbox.fsBridge, workspaceOnly: true },
+      mediaPath: evidence.path,
+    });
+    params.assertCurrent();
+    media = await sandbox.fsBridge.readFileWithSource({
+      filePath: selected.resolved,
+      cwd: sandbox.workspaceDir,
+      maxBytes: evidence.sizeBytes,
+      signal: params.signal,
+    });
+  } catch (error) {
+    params.assertCurrent();
+    // Filesystem diagnostics may name private host paths; only the cause retains them.
+    throw new Error(
+      "Evidence could not be read from this conversation's workspace; no upload was attempted.",
+      { cause: error },
+    );
+  }
   params.assertCurrent();
   // The bridge pins this provenance to the read itself, including remote mounts and aliases.
   if (media.workspaceRelativePath === undefined) {

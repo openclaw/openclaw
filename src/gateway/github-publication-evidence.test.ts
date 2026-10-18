@@ -224,7 +224,12 @@ describe("workspace evidence through the guest tool and registered publication a
     const foreign = path.join(path.dirname(f.local!.cwd), "foreign.png");
     await fs.writeFile(foreign, f.bytes);
     await fs.symlink(foreign, path.join(f.local!.cwd, "foreign.png"));
-    await expect(f.upload({ evidence: { ...f.evidence, path: "foreign.png" } })).rejects.toThrow();
+    const foreignUpload = f.upload({ evidence: { ...f.evidence, path: "foreign.png" } });
+    await expect(foreignUpload).rejects.toThrow(
+      "Evidence could not be read from this conversation's workspace; no upload was attempted.",
+    );
+    await expect(foreignUpload).rejects.not.toThrow(f.local!.cwd);
+    await expect(foreignUpload).rejects.not.toThrow(path.dirname(f.local!.cwd));
     await expect(f.upload({ publishingSessionKey: "agent:main:foreign" })).rejects.toThrow();
     await expect(f.upload({ requestId: randomUUID() })).rejects.toThrow("publication changed");
     await expect(
