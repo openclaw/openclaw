@@ -2,7 +2,7 @@ import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
-import { resolveSandboxPathMapping } from "../agents/path-policy.js";
+import { relativePathInsideSandboxRoot, resolveSandboxPathMapping } from "../agents/path-policy.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
@@ -40,6 +40,28 @@ export function normalizeAssistantMediaSource(source: string): string | null {
 
 type AssistantMediaPolicy = NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
+
+/** Keep relative sandbox references in their namespace for reads, association and tickets. */
+export function resolveAssistantMediaSource(
+  source: string,
+  policy: AssistantMediaPolicy,
+): string | null {
+  if (path.isAbsolute(source) || /^[a-z][a-z0-9+.-]*:/iu.test(source)) {
+    return source;
+  }
+  if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
+    return null;
+  }
+  const resolved = path.resolve(policy.executionCwd, source);
+  const sandbox = policy.sandboxWorkspace;
+  if (!sandbox) {
+    return resolved;
+  }
+  const relative = relativePathInsideSandboxRoot(sandbox.hostRoot, resolved);
+  return relative === null
+    ? null
+    : path.posix.join(sandbox.containerRoot, ...relative.split(path.sep));
+}
 
 function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
   return (

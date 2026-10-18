@@ -651,9 +651,10 @@ it.each(["tmpfs", "bind", "volume"] as const)(
         RW: true,
       },
     ]);
-    const source = "/workspace/cache/screenshot.png";
-    await expectMetadata(source, { available: false });
-    await expectWithheld(source, { bytes: true });
+    for (const source of ["/workspace/cache/screenshot.png", "cache/screenshot.png"]) {
+      await expectMetadata(source, { available: false });
+      await expectWithheld(source, { bytes: true });
+    }
   },
 );
 
@@ -668,6 +669,8 @@ it("contains mapped managed sandbox images and revokes tickets when the workspac
   const source = "/project/screenshot.png";
   const ticket = await mediaTicket(source);
   await expectBytes(source, { ticket });
+  const relativeSource = "../screenshot.png";
+  await expectBytes(relativeSource, { ticket: await mediaTicket(relativeSource) });
   await expectWithheld(local, { ticket, bytes: true });
   const outside = await image("outside.png", temp);
   await fs.symlink(outside, path.join(project, "escape.png"));

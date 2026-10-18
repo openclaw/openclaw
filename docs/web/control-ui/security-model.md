@@ -136,9 +136,10 @@ remains available.
 Assistant `MEDIA:` attachments in local project chats resolve relative paths
 inside the session workspace, including managed worktrees. Absolute paths in
 that workspace are staged for delivery under the same file-access checks.
-For a managed project running in a local Docker or Podman sandbox, absolute
-container-workspace references (such as `/workspace/screenshots/result.png`)
-resolve through that session's worktree after pending workspace changes settle.
+For a managed project running in a local Docker or Podman sandbox, relative and
+absolute container-workspace references (such as `screenshots/result.png` or
+`/workspace/screenshots/result.png`) resolve through that session's worktree
+after pending workspace changes settle.
 The existing sandbox must identify the same visible workspace bind; container-only,
 obscured, or unverifiable backing stays unavailable. Stopped containers retain
 previews when their saved mount metadata still establishes that workspace bind.

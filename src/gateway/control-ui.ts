@@ -45,6 +45,7 @@ import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
   resolveAssistantMediaAvailability,
+  resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
 import { prepareAssistantMessageMedia } from "./control-ui-assistant-message-media.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
@@ -240,13 +241,12 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.release() };
-  if (relativeSource) {
-    if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
-      respondControlUiNotFound(res);
-      return true;
-    }
-    source = path.resolve(policy.executionCwd, source);
+  const resolvedSource = resolveAssistantMediaSource(source, policy);
+  if (!resolvedSource) {
+    respondControlUiNotFound(res);
+    return true;
   }
+  source = resolvedSource;
   const ticket = ticketCandidate?.source === source ? ticketCandidate : undefined;
   if (explicitAllow && !policy.canAllow) {
     sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });

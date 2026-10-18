@@ -605,13 +605,11 @@ describe("saved message attachment response authority", () => {
     ] as const) {
       const query = { source: imageSource, messageId };
       const mediaTicket = await metadata(query);
-      if (messageId === "sandbox-screenshot") {
-        const payload = Buffer.from(mediaTicket.split(".")[1]!, "base64url").toString("utf8");
-        expect(JSON.parse(payload)).toMatchObject({
-          source: "/workspace/.artifacts/proof/screenshot.png",
-        });
-        expect(payload).not.toContain(workspaceDir);
-      }
+      const payload = Buffer.from(mediaTicket.split(".")[1]!, "base64url").toString("utf8");
+      expect(JSON.parse(payload)).toMatchObject({
+        source: "/workspace/.artifacts/proof/screenshot.png",
+      });
+      expect(payload).not.toContain(workspaceDir);
       const preview = await request({ ...query, mediaTicket }, { ticketOnly: true });
       expect(preview.status).toBe(200);
       expect(preview.headers.get("content-type")).toBe("image/png");
@@ -656,6 +654,31 @@ describe("saved message attachment response authority", () => {
       }
     },
   );
+
+  it("withholds relative screenshot aliases when workspace backing is obscured", async () => {
+    const query = {
+      source: ".artifacts/proof/screenshot.png",
+      messageId: "relative-screenshot",
+    };
+    const mediaTicket = await metadata(query);
+    await mockStoppedWorkspaceContainer(projection, "/workspace", [
+      { Type: "tmpfs", Destination: "/workspace/.artifacts", RW: true },
+    ]);
+    const denied = await request({ ...query, meta: "1" });
+    expect(denied.status).toBe(200);
+    expect(await denied.json()).toMatchObject({ available: false });
+    for (const [imageSource, ticketStatus] of [
+      [query.source, 404],
+      ["/workspace/.artifacts/proof/screenshot.png", 404],
+      // A virtual-path ticket cannot authenticate a host-path request.
+      [path.join(workspaceDir, ".artifacts", "proof", "screenshot.png"), 401],
+    ] as const) {
+      const imageQuery = { ...query, source: imageSource };
+      expect((await request(imageQuery)).status).toBe(404);
+      const ticketResponse = await request({ ...imageQuery, mediaTicket }, { ticketOnly: true });
+      expect(ticketResponse.status).toBe(ticketStatus);
+    }
+  });
 
   it("reads saved assistant media directives without treating user text as an attachment", async () => {
     const query = {
