@@ -551,10 +551,11 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
-      // The Gateway RPC mirrors only replies into the requester's own session;
+      // The Gateway RPC mirrors only replies into the requester's source session;
       // a send to another conversation is mirrored here, like local plugin sends.
       const mirror = resolveTranscriptMirror();
-      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== input.sessionKey) {
+      const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== sourceSessionKey) {
         await mirrorPluginHandledDelivery({ cfg, mirror });
       }
     }
