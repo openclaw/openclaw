@@ -51,12 +51,12 @@ export async function prepareMSTeamsInboundContent(params: {
     return null;
   }
 
-  let mediaList: MSTeamsInboundMedia[] = [];
+  let resolvedMedia: MSTeamsInboundMedia[] = [];
   // Media is message content with its own transfer budget, separate from
   // optional enrichment, so slow Bot Framework downloads still reach the agent.
   const deadline = createMSTeamsInboundMediaDeadline();
   try {
-    mediaList = await withMSTeamsRequestDeadline({
+    resolvedMedia = await withMSTeamsRequestDeadline({
       deadline,
       label: "MS Teams inbound media",
       work: async () => {
@@ -177,10 +177,10 @@ export async function prepareMSTeamsInboundContent(params: {
     });
   }
 
-  const inboundMedia = mergeMSTeamsMediaFacts(params.advertisedMedia, mediaList);
+  const inboundMedia = mergeMSTeamsMediaFacts(params.advertisedMedia, resolvedMedia);
   const nativeMediaForComparison = [
     ...params.advertisedMedia,
-    ...mediaList.slice(params.advertisedMedia.length).map((media) => ({
+    ...resolvedMedia.slice(params.advertisedMedia.length).map((media) => ({
       contentType: media.contentType,
       kind: media.kind,
     })),

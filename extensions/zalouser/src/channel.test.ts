@@ -379,6 +379,7 @@ it.each([
     cfg: {},
     accountId: "default",
     groupId,
+    runtime: createNonExitingRuntimeEnv(),
   });
   expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
 });
