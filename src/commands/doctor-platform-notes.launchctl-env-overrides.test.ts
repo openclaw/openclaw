@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   findJobs: vi.fn(),
 }));
 
-vi.mock("../process/exec.js", () => ({ runExec: mocks.runExec }));
+vi.mock("../process/exec.js", () => ({
+  runExec: mocks.runExec,
+}));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readCommand }),
@@ -25,30 +27,6 @@ import {
 } from "./doctor-platform-notes.js";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-const tokenConfig: OpenClawConfig = { gateway: { auth: { token: "config-token" } } };
-const startupEnv = {
-  NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
-  OPENCLAW_NO_RESPAWN: "1",
-};
-const temporaryCache = { NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache" };
-const startupSuggestions = [
-  "- Suggested env for low-power hosts:",
-  `  export NODE_COMPILE_CACHE=${startupEnv.NODE_COMPILE_CACHE}`,
-  `  mkdir -p ${startupEnv.NODE_COMPILE_CACHE}`,
-  "  export OPENCLAW_NO_RESPAWN=1",
-];
-
-function expectMacNote(includes: string[], excludes: string[] = []) {
-  expect(mocks.note).toHaveBeenCalledTimes(1);
-  const [message, actualTitle] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
-  expect(actualTitle).toBe("Gateway (macOS)");
-  for (const text of includes) {
-    expect(message).toContain(text);
-  }
-  for (const text of excludes) {
-    expect(message).not.toContain(text);
-  }
-}
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -69,117 +47,187 @@ afterEach(() => {
   }
 });
 
-const password = { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" } as const;
-it.each([
-  [
-    "TOKEN",
-    tokenConfig,
-    [
-      "Host-wide launchctl gateway auth overrides detected",
-      "Current managed Gateway installs do not need these values",
-      "launchctl unsetenv OPENCLAW_GATEWAY_TOKEN",
-    ],
-    ["OPENCLAW_GATEWAY_PASSWORD", "config-token"],
-  ],
-  ["PASSWORD", { gateway: { auth: { password } } }, [], ["OPENCLAW_GATEWAY_TOKEN"]],
-] satisfies Array<[string, OpenClawConfig, string[], string[]]>)(
-  "reports %s overrides without revealing credentials",
-  async (suffix, cfg, includes, excludes) => {
-    const envName = `OPENCLAW_GATEWAY_${suffix}`;
-    const secret = `launchctl-${suffix.toLowerCase()}`;
+describe("macOS Gateway environment warnings", () => {
+  it("prints clear unsetenv instructions for token override", async () => {
     mocks.runExec.mockImplementation(async (_command, [, name]) => ({
-      stdout: name === envName ? ` \t${secret}\n` : " \n",
+      stdout: name === "OPENCLAW_GATEWAY_TOKEN" ? " \tlaunchctl-token\n" : " \n",
       stderr: "",
     }));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    };
+
     await noteMacGatewayPlatformWarnings(cfg);
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
     expect(mocks.runExec).toHaveBeenCalledTimes(2);
-    expectMacNote([envName, ...includes], [secret, ...excludes]);
-  },
-);
 
-it("does nothing on non-darwin platforms", async () => {
-  Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
-  mocks.runExec.mockResolvedValue({ stdout: "launchctl-token", stderr: "" });
-  await noteMacGatewayPlatformWarnings(tokenConfig);
-
-  expect(mocks.runExec).not.toHaveBeenCalled();
-  expect(mocks.note).not.toHaveBeenCalled();
-});
-
-it("bounds launchctl getenv calls and ignores timeout failures", async () => {
-  mocks.runExec.mockRejectedValue(new Error("timed out"));
-  await noteMacGatewayPlatformWarnings(tokenConfig);
-  expect(mocks.runExec.mock.calls).toEqual(
-    ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"].map((name) => [
-      "/bin/launchctl",
-      ["getenv", name],
-      { logOutput: false, timeoutMs: 5_000 },
-    ]),
-  );
-  expect(mocks.note).not.toHaveBeenCalled();
-});
-it("uses service env for gateway platform stale updater warnings", async () => {
-  const serviceEnv = {
-    OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
-  };
-  mocks.readCommand.mockResolvedValue({
-    environment: serviceEnv,
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(title).toBe("Gateway (macOS)");
+    expect(message).toContain("Host-wide launchctl gateway auth overrides detected");
+    expect(message).toContain("Current managed Gateway installs do not need these values");
+    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(message).toContain("launchctl unsetenv OPENCLAW_GATEWAY_TOKEN");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
+    expect(message).not.toContain("launchctl-token");
+    expect(message).not.toContain("config-token");
   });
 
-  const warnings = await collectGatewayPlatformWarnings({});
+  it("treats SecretRef-backed credentials as configured", async () => {
+    mocks.runExec.mockImplementation(async (_command, [, name]) => ({
+      stdout: name === "OPENCLAW_GATEWAY_PASSWORD" ? " \tlaunchctl-password\n" : " \n",
+      stderr: "",
+    }));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          password: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    };
 
-  expect(warnings).toEqual([]);
-  expect(mocks.runExec).not.toHaveBeenCalled();
-  expect(mocks.readCommand).toHaveBeenCalledTimes(1);
-  expect(mocks.findJobs).toHaveBeenCalledWith(
-    expect.objectContaining({ HOME: "/tmp/openclaw-doctor-host", ...serviceEnv }),
-  );
-});
+    await noteMacGatewayPlatformWarnings(cfg);
 
-it("prints stale updater job cleanup guidance on macOS", async () => {
-  mocks.findJobs.mockResolvedValue([
-    { label: "ai.openclaw.update.2026.5.12", lastExitStatus: 127 },
-    { label: "ai.openclaw.manual-update.1717168800", lastExitStatus: 0 },
-  ]);
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(message).toContain("OPENCLAW_GATEWAY_PASSWORD");
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(message).not.toContain("launchctl-password");
+  });
 
-  await noteMacGatewayPlatformWarnings({});
+  it("does nothing on non-darwin platforms", async () => {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+    mocks.runExec.mockResolvedValue({ stdout: "launchctl-token", stderr: "" });
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    };
 
-  expect(mocks.findJobs).toHaveBeenCalledTimes(1);
-  expectMacNote([
-    "Stale OpenClaw updater launchd job(s) detected",
-    "ai.openclaw.update.2026.5.12",
-    "ai.openclaw.manual-update.1717168800",
-    "launchctl remove <label>",
-    "openclaw gateway restart",
-  ]);
-});
-it.each([false, true])(
-  "reports only the active state's launch-agent marker (present: %s)",
-  async (activeMarkerExists) => {
-    const activeMarker = "/tmp/openclaw-doctor-host-state/disable-launchagent";
-    const defaultMarker = "/tmp/openclaw-doctor-host/.openclaw/disable-launchagent";
-    vi.mocked(fs.existsSync).mockImplementation(
-      (candidate) =>
-        candidate === defaultMarker || (candidate === activeMarker && activeMarkerExists),
+    await noteMacGatewayPlatformWarnings(cfg);
+
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("bounds launchctl getenv calls and ignores timeout failures", async () => {
+    mocks.runExec.mockRejectedValue(new Error("timed out"));
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    };
+
+    await noteMacGatewayPlatformWarnings(cfg);
+
+    expect(mocks.runExec).toHaveBeenNthCalledWith(
+      1,
+      "/bin/launchctl",
+      ["getenv", "OPENCLAW_GATEWAY_TOKEN"],
+      { logOutput: false, timeoutMs: 5_000 },
     );
+    expect(mocks.runExec).toHaveBeenNthCalledWith(
+      2,
+      "/bin/launchctl",
+      ["getenv", "OPENCLAW_GATEWAY_PASSWORD"],
+      { logOutput: false, timeoutMs: 5_000 },
+    );
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+});
+
+describe("macOS stale updater warnings", () => {
+  it("uses service env for gateway platform stale updater warnings", async () => {
+    const serviceEnv = {
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
+    };
     mocks.readCommand.mockResolvedValue({
-      environment: { HOME: "/tmp/openclaw-doctor-service" },
+      programArguments: ["/bin/node", "cli", "gateway"],
+      environment: serviceEnv,
     });
 
     const warnings = await collectGatewayPlatformWarnings({});
+
+    expect(warnings).toEqual([]);
+    expect(mocks.runExec).not.toHaveBeenCalled();
+    expect(mocks.readCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.findJobs).toHaveBeenCalledWith(
+      expect.objectContaining({
+        HOME: "/tmp/openclaw-doctor-host",
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
+      }),
+    );
+  });
+
+  it("prints stale updater job cleanup guidance on macOS", async () => {
+    mocks.findJobs.mockResolvedValue([
+      {
+        label: "ai.openclaw.update.2026.5.12",
+        lastExitStatus: 127,
+      },
+      {
+        label: "ai.openclaw.manual-update.1717168800",
+        lastExitStatus: 0,
+      },
+    ]);
+
     await noteMacGatewayPlatformWarnings({});
 
-    expect(fs.existsSync).not.toHaveBeenCalledWith(defaultMarker);
-    if (activeMarkerExists) {
-      expect(warnings).toEqual([expect.stringContaining(`disabled via ${activeMarker}`)]);
-      expect(mocks.note).toHaveBeenCalledWith(warnings[0], "Gateway (macOS)");
-    } else {
-      expect(warnings).toEqual([]);
-      expect(mocks.note).not.toHaveBeenCalled();
-    }
-  },
-);
+    expect(mocks.findJobs).toHaveBeenCalledTimes(1);
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(title).toBe("Gateway (macOS)");
+    expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
+    expect(message).toContain("ai.openclaw.update.2026.5.12");
+    expect(message).toContain("ai.openclaw.manual-update.1717168800");
+    expect(message).toContain("launchctl remove <label>");
+    expect(message).toContain("openclaw gateway restart");
+  });
+});
+
+describe("collectGatewayPlatformWarnings", () => {
+  it.each([false, true])(
+    "reports only the active state's launch-agent marker (present: %s)",
+    async (activeMarkerExists) => {
+      const activeMarker = "/tmp/openclaw-doctor-host-state/disable-launchagent";
+      const defaultMarker = "/tmp/openclaw-doctor-host/.openclaw/disable-launchagent";
+      vi.mocked(fs.existsSync).mockImplementation(
+        (candidate) =>
+          candidate === defaultMarker || (candidate === activeMarker && activeMarkerExists),
+      );
+      mocks.readCommand.mockResolvedValue({
+        environment: { HOME: "/tmp/openclaw-doctor-service" },
+      });
+
+      const warnings = await collectGatewayPlatformWarnings({});
+      await noteMacGatewayPlatformWarnings({});
+
+      expect(fs.existsSync).not.toHaveBeenCalledWith(defaultMarker);
+      if (activeMarkerExists) {
+        expect(warnings).toEqual([expect.stringContaining(`disabled via ${activeMarker}`)]);
+        expect(mocks.note).toHaveBeenCalledWith(warnings[0], "Gateway (macOS)");
+      } else {
+        expect(warnings).toEqual([]);
+        expect(mocks.note).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
+
 describe("noteStartupOptimizationHints", () => {
   beforeEach(() => {
     Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
@@ -187,44 +235,74 @@ describe("noteStartupOptimizationHints", () => {
     vi.spyOn(os, "totalmem").mockReturnValue(4 * 1024 ** 3);
   });
 
-  it.each([
-    [
-      "temporary cache without no-respawn",
-      temporaryCache,
+  it("does not warn when compile cache and no-respawn are configured", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
+      OPENCLAW_NO_RESPAWN: "1",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("warns when compile cache is under /tmp and no-respawn is not set", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message, title] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(title).toBe("Startup optimization");
+    expect(message).toBe(
       [
         "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
         "- OPENCLAW_NO_RESPAWN is not set to 1; set it when you want routine gateway restarts to stay in-process instead of handing off to a managed supervisor.",
-      ],
-      [],
-    ],
-    [
-      "disabled compile cache",
-      { ...startupEnv, NODE_DISABLE_COMPILE_CACHE: "1" },
-      ["- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled."],
-      ["  unset NODE_DISABLE_COMPILE_CACHE"],
-    ],
-  ] satisfies Array<[string, NodeJS.ProcessEnv, string[], string[]]>)(
-    "warns for %s",
-    (_name, env, problems, extra) => {
-      noteStartupOptimizationHints(env);
-      expect(mocks.note.mock.calls).toEqual([
-        [[...problems, ...startupSuggestions, ...extra].join("\n"), "Startup optimization"],
-      ]);
-    },
-  );
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+      ].join("\n"),
+    );
+  });
 
-  it.each([
-    ["configured cache and no-respawn", startupEnv],
-    ["Windows", temporaryCache, "win32"],
-    ["non-target Linux host", temporaryCache, "linux", "x64", 32],
-  ] satisfies Array<[string, NodeJS.ProcessEnv, NodeJS.Platform?, string?, number?]>)(
-    "does not warn for %s",
-    (_name, env, platform = "linux", arch = "arm64", memoryGiB = 4) => {
-      Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-      vi.mocked(os.arch).mockReturnValue(arch);
-      vi.mocked(os.totalmem).mockReturnValue(memoryGiB * 1024 ** 3);
-      noteStartupOptimizationHints(env);
-      expect(mocks.note).not.toHaveBeenCalled();
-    },
-  );
+  it("warns when compile cache is disabled via env override", () => {
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/var/tmp/openclaw-compile-cache",
+      OPENCLAW_NO_RESPAWN: "1",
+      NODE_DISABLE_COMPILE_CACHE: "1",
+    });
+
+    expect(mocks.note).toHaveBeenCalledTimes(1);
+    const [message] = expectDefined<unknown[]>(mocks.note.mock.calls[0], "note call 0");
+    expect(message).toBe(
+      [
+        "- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.",
+        "- Suggested env for low-power hosts:",
+        "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
+        "  mkdir -p /var/tmp/openclaw-compile-cache",
+        "  export OPENCLAW_NO_RESPAWN=1",
+        "  unset NODE_DISABLE_COMPILE_CACHE",
+      ].join("\n"),
+    );
+  });
+
+  it("skips startup optimization note on win32", () => {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
+
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("skips startup optimization note on non-target linux hosts", () => {
+    vi.mocked(os.arch).mockReturnValue("x64");
+    vi.mocked(os.totalmem).mockReturnValue(32 * 1024 ** 3);
+
+    noteStartupOptimizationHints({
+      NODE_COMPILE_CACHE: "/tmp/openclaw-compile-cache",
+    });
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
 });

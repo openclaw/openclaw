@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { MatrixConfig } from "../../types.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 export type DirectRoomTrackerOptions = {
@@ -11,23 +10,55 @@ export type DirectRoomTrackerOptions = {
     | undefined;
 };
 
-type MonitorRetirement = Parameters<
-  import("../client.js").SharedMatrixClientLease["registerMonitorRetirement"]
->[0];
+type MonitorRetirement = {
+  closeTaskAdmission: () => void;
+  detachListeners: () => void;
+  waitForTasks: () => Promise<void>;
+  cleanup: () => Promise<void> | void;
+};
 
-const hoisted = await vi.hoisted(async () => {
-  const { EventEmitter } = await import("node:events");
-  const callbacks: {
-    healthySync?: () => number | undefined;
-    roomMessage: null | ((roomId: string, event: unknown) => Promise<void>);
-  } = { roomMessage: null };
+const hoisted = vi.hoisted(() => {
+  const createEmitter = () => {
+    const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+    return {
+      on(event: string, listener: (...args: unknown[]) => void) {
+        let bucket = listeners.get(event);
+        if (!bucket) {
+          bucket = new Set();
+          listeners.set(event, bucket);
+        }
+        bucket.add(listener);
+        return this;
+      },
+      off(event: string, listener: (...args: unknown[]) => void) {
+        listeners.get(event)?.delete(listener);
+        return this;
+      },
+      emit(event: string, ...args: unknown[]) {
+        for (const listener of listeners.get(event) ?? []) {
+          listener(...args);
+        }
+        return true;
+      },
+      listenerCount(event: string) {
+        return listeners.get(event)?.size ?? 0;
+      },
+      removeAllListeners() {
+        listeners.clear();
+        return this;
+      },
+    };
+  };
   const callOrder: string[] = [];
   const state = {
     leaseAbortController: new AbortController(),
     monitorRetirement: null as MonitorRetirement | null,
     monitorRetirementPromise: null as Promise<void> | null,
+    startClientError: null as Error | null,
   };
-  const accountConfig: MatrixConfig = { dm: {} };
+  const accountConfig = {
+    dm: {},
+  };
   const inboundReplayClaim = {
     keys: ["test"] as const,
     commit: vi.fn(async () => true),
@@ -37,7 +68,7 @@ const hoisted = await vi.hoisted(async () => {
     claim: vi.fn(async () => ({ kind: "claimed" as const, handle: inboundReplayClaim })),
   };
   const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
-  const client = Object.assign(new EventEmitter(), {
+  const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
     drainPendingDecryptions: vi.fn(async () => undefined),
@@ -50,13 +81,25 @@ const hoisted = await vi.hoisted(async () => {
   );
   const getRoomInfo = vi.fn<
     (roomId: string, opts?: { includeAliases?: boolean }) => Promise<MatrixRoomInfo>
-  >(async () => ({ altAliases: [], nameResolved: true, aliasesResolved: true }));
+  >(async () => ({
+    altAliases: [],
+    nameResolved: true,
+    aliasesResolved: true,
+  }));
   const getMemberDisplayName = vi.fn(async () => "Bot");
-  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const logger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
   const stopThreadBindingManager = vi.fn();
   const createThreadBindingManager = vi.fn(async () => {
     callOrder.push("create-manager");
-    return { accountId: "default", stop: stopThreadBindingManager };
+    return {
+      accountId: "default",
+      stop: stopThreadBindingManager,
+    };
   });
   const disposeAutoJoin = vi.fn(() => {
     callOrder.push("dispose-auto-join");
@@ -88,20 +131,24 @@ const hoisted = await vi.hoisted(async () => {
     })();
     return state.monitorRetirementPromise;
   };
-  const resolveSharedMatrixClientImpl = async (_abortSignal?: AbortSignal) => {
+  const finalReleaseImpl = async () => {
+    await runRegisteredMonitorRetirement();
+  };
+  const resolveSharedMatrixClientImpl = async () => {
     if (!callOrder.includes("create-manager")) {
       throw new Error("Matrix client started before thread bindings were registered");
     }
     if (!state.monitorRetirement) {
       throw new Error("Matrix client started before monitor retirement was registered");
     }
+    if (state.startClientError) {
+      throw state.startClientError;
+    }
     callOrder.push("start-client");
     return client;
   };
   const acquireSharedMatrixClient = vi.fn(acquireSharedMatrixClientImpl);
-  const releaseSharedClientInstance = vi.fn(async () => {
-    await runRegisteredMonitorRetirement();
-  });
+  const releaseSharedClientInstance = vi.fn(finalReleaseImpl);
   const lease = {
     get abortSignal() {
       return state.leaseAbortController.signal;
@@ -114,27 +161,18 @@ const hoisted = await vi.hoisted(async () => {
   };
   const registerMatrixAutoJoin = vi.fn(() => disposeAutoJoin);
   const registerMatrixMonitorEvents = vi.fn(
-    (params: {
+    (_params: {
       getHealthySyncSinceMs?: () => number | undefined;
       onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
       runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
     }) => {
       callOrder.push("register-events");
-      callbacks.healthySync = params.getHealthySyncSinceMs;
-      callbacks.roomMessage = (roomId, event) =>
-        params.runDetachedTask
-          ? params.runDetachedTask("test room message", async () => {
-              await params.onRoomMessage(roomId, event);
-            })
-          : params.onRoomMessage(roomId, event);
       return disposeMonitorEvents;
     },
   );
-  const registerChannelRuntimeContext = vi.fn<(params: { abortSignal?: AbortSignal }) => void>();
+  const registerChannelRuntimeContext = vi.fn();
   const setMatrixRuntime = vi.fn();
-  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(
-    async (_params: { abortSignal?: AbortSignal }) => undefined,
-  );
+  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
   const runMatrixStartupMaintenance = vi.fn<
     (params: { abortSignal?: AbortSignal }) => Promise<void>
   >(async () => undefined);
@@ -142,6 +180,7 @@ const hoisted = await vi.hoisted(async () => {
   return {
     accountConfig,
     acquireSharedMatrixClient,
+    acquireSharedMatrixClientImpl,
     backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
     client,
@@ -151,12 +190,14 @@ const hoisted = await vi.hoisted(async () => {
     createThreadBindingManager,
     disposeAutoJoin,
     disposeMonitorEvents,
+    finalReleaseImpl,
     getMemberDisplayName,
     getRoomInfo,
     inboundDeduper,
     inboundReplayClaim,
     logger,
-    callbacks,
+    registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
+    registeredOnRoomMessage: null as null | ((roomId: string, event: unknown) => Promise<void>),
     registerChannelRuntimeContext,
     registerMatrixAutoJoin,
     registerMatrixMonitorEvents,
@@ -199,7 +240,11 @@ vi.mock("../../resolve-targets.js", () => ({
 vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => ({
     config: {
-      current: () => ({ channels: { matrix: hoisted.accountConfig } }),
+      current: () => ({
+        channels: {
+          matrix: hoisted.accountConfig,
+        },
+      }),
       replaceConfigFile: vi.fn(),
       mutateConfigFile: vi.fn(),
     },
@@ -207,9 +252,17 @@ vi.mock("../../runtime.js", () => ({
       getChildLogger: () => hoisted.logger,
       shouldLogVerbose: () => false,
     },
-    channel: { mentions: { buildMentionRegexes: () => [] } },
-    system: { formatNativeDependencyHint: () => "" },
-    media: { loadWebMedia: vi.fn() },
+    channel: {
+      mentions: {
+        buildMentionRegexes: () => [],
+      },
+    },
+    system: {
+      formatNativeDependencyHint: () => "",
+    },
+    media: {
+      loadWebMedia: vi.fn(),
+    },
   }),
   setMatrixRuntime: hoisted.setMatrixRuntime,
 }));
@@ -219,7 +272,10 @@ vi.mock("../accounts.js", async () => {
   return {
     ...actual,
     resolveConfiguredMatrixBotUserIds: vi.fn(() => new Set<string>()),
-    resolveMatrixAccount: () => ({ accountId: "default", config: hoisted.accountConfig }),
+    resolveMatrixAccount: () => ({
+      accountId: "default",
+      config: hoisted.accountConfig,
+    }),
   };
 });
 
@@ -234,7 +290,28 @@ vi.mock("../client.js", () => ({
     initialSyncLimit: 20,
     encryption: false,
   })),
-  resolveMatrixAuthContext: vi.fn(() => ({ accountId: "default" })),
+  resolveMatrixAuthContext: vi.fn(() => ({
+    accountId: "default",
+  })),
+}));
+
+vi.mock("../config-update.js", () => ({
+  updateMatrixAccountConfig: vi.fn((cfg: unknown) => cfg),
+}));
+
+vi.mock("../device-health.js", () => ({
+  summarizeMatrixDeviceHealth: vi.fn(() => ({
+    staleOpenClawDevices: [],
+  })),
+}));
+
+vi.mock("../profile.js", () => ({
+  syncMatrixOwnProfile: vi.fn(async () => ({
+    displayNameUpdated: false,
+    avatarUpdated: false,
+    convertedAvatarFromHttp: false,
+    resolvedAvatarUrl: undefined,
+  })),
 }));
 
 vi.mock("../thread-bindings.js", () => ({
@@ -254,7 +331,23 @@ vi.mock("./direct.js", () => ({
 }));
 
 vi.mock("./events.js", () => ({
-  registerMatrixMonitorEvents: hoisted.registerMatrixMonitorEvents,
+  registerMatrixMonitorEvents: hoisted.registerMatrixMonitorEvents.mockImplementation(
+    (params: {
+      getHealthySyncSinceMs?: () => number | undefined;
+      onRoomMessage: (roomId: string, event: unknown) => Promise<void>;
+      runDetachedTask?: (label: string, task: () => Promise<void>) => Promise<void>;
+    }) => {
+      hoisted.callOrder.push("register-events");
+      hoisted.registeredHealthySyncGetter = params.getHealthySyncSinceMs;
+      hoisted.registeredOnRoomMessage = (roomId: string, event: unknown) =>
+        params.runDetachedTask
+          ? params.runDetachedTask("test room message", async () => {
+              await params.onRoomMessage(roomId, event);
+            })
+          : params.onRoomMessage(roomId, event);
+      return hoisted.disposeMonitorEvents;
+    },
+  ),
 }));
 
 vi.mock("./handler.js", () => ({
@@ -270,6 +363,10 @@ vi.mock("./room-info.js", () => ({
     getRoomInfo: hoisted.getRoomInfo,
     getMemberDisplayName: hoisted.getMemberDisplayName,
   })),
+}));
+
+vi.mock("./startup-verification.js", () => ({
+  ensureMatrixStartupVerification: vi.fn(),
 }));
 
 vi.mock("./startup.js", () => ({

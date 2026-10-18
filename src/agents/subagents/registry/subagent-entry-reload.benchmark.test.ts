@@ -5,7 +5,6 @@ import { listSessionEntriesReadOnly } from "../../../config/sessions/session-acc
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -20,18 +19,15 @@ import {
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 
-const { counters, resetCounters } = vi.hoisted(() => {
-  const empty = {
-    fullLoads: 0,
-    fullLoadMs: 0,
-    parsedEntries: 0,
-    parsedJsonBytes: 0,
-    fixtureJsonParses: 0,
-    fixtureJsonBytes: 0,
-  };
-  const state = { active: false, metrics: { ...empty } };
-  return { counters: state, resetCounters: () => (state.metrics = { ...empty }) };
-});
+const counters = vi.hoisted(() => ({
+  active: false,
+  fullLoads: 0,
+  fullLoadMs: 0,
+  parsedEntries: 0,
+  parsedJsonBytes: 0,
+  fixtureJsonParses: 0,
+  fixtureJsonBytes: 0,
+}));
 
 vi.mock(
   "../../../config/sessions/session-accessor.sqlite-entry-cache-projection.js",
@@ -47,11 +43,11 @@ vi.mock(
           return actual.loadSessionEntrySnapshot(...args);
         }
         const start = performance.now();
-        counters.metrics.fullLoads++;
+        counters.fullLoads++;
         try {
           return actual.loadSessionEntrySnapshot(...args);
         } finally {
-          counters.metrics.fullLoadMs += performance.now() - start;
+          counters.fullLoadMs += performance.now() - start;
         }
       },
     };
@@ -65,8 +61,8 @@ vi.mock("../../../config/sessions/session-accessor.sqlite-status.js", async (loa
     ...actual,
     parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
       if (counters.active) {
-        counters.metrics.parsedEntries++;
-        counters.metrics.parsedJsonBytes += Buffer.byteLength(args[0].entry_json);
+        counters.parsedEntries++;
+        counters.parsedJsonBytes += Buffer.byteLength(args[0].entry_json);
       }
       return actual.parseSessionEntryJson(...args);
     },
@@ -76,27 +72,19 @@ vi.mock("../../../config/sessions/session-accessor.sqlite-status.js", async (loa
 // Opt-in allocation proof; the ordinary prompt suite owns the CI regression.
 it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
   "profiles admission and active-child context across a 5,000-session write workload",
-  () =>
-    withOpenClawTestState(
+  async () => {
+    await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
         const rows = 5_000;
         const turns = 10;
         const cfg = {};
         const controllerSessionKey = "agent:main:main";
-        const owner = { agentId: "main", sessionKey: controllerSessionKey };
-        const storePath = resolvePhysicalSessionStorePath(owner, cfg);
-        const mainScope = { ...owner, storePath };
-        const updateChild = (sessionKey: string, update: (entry: SessionEntry) => SessionEntry) =>
-          applySessionEntryExactReplacements({
-            agentId: "main",
-            storePath,
-            sessionKeys: [sessionKey],
-            update: ([row]) => ({
-              result: undefined,
-              replacements: [{ sessionKey, entry: update(row!.entry) }],
-            }),
-          });
+        const storePath = resolvePhysicalSessionStorePath(
+          { sessionKey: controllerSessionKey, agentId: "main" },
+          cfg,
+        );
+        const mainScope = { agentId: "main", storePath, sessionKey: controllerSessionKey };
         const now = Date.now();
         const metadataPayload = "m".repeat(4_096);
         const savedPrompt = "p".repeat(8_192);
@@ -116,6 +104,10 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
                   updatedAt: now - index,
                   label: `Fixture session ${index} ${metadataPayload}`,
                   skillsSnapshot: { prompt: savedPrompt, skills: [] },
+                  model: "fixture-model",
+                  modelProvider: "fixture",
+                  totalTokens: index + 1,
+                  status: "done",
                 },
               );
             }
@@ -127,7 +119,12 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
         inspector.connect();
         const samples: Array<Record<string, string | number>> = [];
         const measure = async <T>(phase: string, iteration: number, run: () => T | Promise<T>) => {
-          resetCounters();
+          counters.fullLoads = 0;
+          counters.fullLoadMs = 0;
+          counters.parsedEntries = 0;
+          counters.parsedJsonBytes = 0;
+          counters.fixtureJsonParses = 0;
+          counters.fixtureJsonBytes = 0;
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 32 * 1024,
             includeObjectsCollectedByMajorGC: true,
@@ -147,24 +144,33 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           const elapsed = process.threadCpuUsage(cpu);
           const heapDeltaBytes = process.memoryUsage().heapUsed - heapBefore;
           const { profile } = await inspector.post("HeapProfiler.stopSampling");
-          const allocationBytes = (node: typeof profile.head): number =>
-            node.selfSize + node.children.reduce((sum, child) => sum + allocationBytes(child), 0);
+          let sampledAllocationBytes = 0;
+          const visit = (node: typeof profile.head) => {
+            sampledAllocationBytes += node.selfSize;
+            node.children.forEach(visit);
+          };
+          visit(profile.head);
           samples.push({
             phase,
             iteration,
             wallMs,
             mainThreadCpuMs: (elapsed.user + elapsed.system) / 1_000,
             heapDeltaBytes,
-            sampledAllocationBytes: allocationBytes(profile.head),
-            ...counters.metrics,
+            sampledAllocationBytes,
+            fullLoads: counters.fullLoads,
+            fullLoadMs: counters.fullLoadMs,
+            parsedEntries: counters.parsedEntries,
+            parsedJsonBytes: counters.parsedJsonBytes,
+            fixtureJsonParses: counters.fixtureJsonParses,
+            fixtureJsonBytes: counters.fixtureJsonBytes,
           });
           return value;
         };
         // A forwarding wrapper counts parsing without retaining every JSON argument/result.
         JSON.parse = (text, reviver) => {
           if (counters.active && typeof text === "string" && text.includes(metadataPayload)) {
-            counters.metrics.fixtureJsonParses++;
-            counters.metrics.fixtureJsonBytes += Buffer.byteLength(text);
+            counters.fixtureJsonParses++;
+            counters.fixtureJsonBytes += Buffer.byteLength(text);
           }
           return parseJson(text, reviver);
         };
@@ -179,21 +185,26 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
             }),
           );
           expect(listed).toHaveLength(rows);
-          expect(counters.metrics.fullLoads).toBe(1);
-          expect(counters.metrics.parsedEntries).toBeGreaterThanOrEqual(rows);
+          expect(counters.fullLoads).toBe(1);
+          expect(counters.parsedEntries).toBeGreaterThanOrEqual(rows);
 
           for (let iteration = 0; iteration < turns; iteration++) {
             const childSessionKey = `agent:main:subagent:benchmark-${iteration}`;
             const run = createSubagentRunRecord({
               runId: `benchmark-run-${iteration}`,
               childSessionKey,
+              requesterSessionKey: controllerSessionKey,
               requesterAgentId: "main",
               controllerSessionKey,
               requesterStorePath: storePath,
               controllerStorePath: storePath,
+              requesterDisplayKey: "main",
+              task: `Inspect fixture ${iteration}`,
               taskName: `fixture_${iteration}`,
+              cleanup: "keep",
               createdAt: now + iteration,
               execution: { status: "running", startedAt: now + iteration },
+              completion: { required: false },
               delivery: { status: "not_required" },
             });
             const childScope = { ...mainScope, sessionKey: childSessionKey };
@@ -202,20 +213,31 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               updatedAt: now + iteration,
               abortedLastRun: true,
               model: "saved-fixture-model",
+              totalTokens: 1_000,
             };
             // Worker status publication invalidates snapshots retained on the host connection.
             replaceSessionEntrySync(childScope, { ...entry, status: "done" });
             subagentRuns.set(run.runId, run);
             persistRegistryFixture(subagentRuns, [run.runId]);
-            await updateChild(childSessionKey, () => ({ ...entry, status: undefined }));
+            await applySessionEntryExactReplacements({
+              agentId: "main",
+              storePath,
+              sessionKeys: [childSessionKey],
+              update: () => ({
+                result: undefined,
+                replacements: [
+                  { sessionKey: childSessionKey, entry: { ...entry, status: undefined } },
+                ],
+              }),
+            });
 
             const prompt = await measure("turn-prompt", iteration, () =>
               buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey }),
             );
             expect(prompt).toContain(`session=${childSessionKey}`);
             expect(prompt).toContain(`taskName_json="fixture_${iteration}"`);
-            expect(counters.metrics.fullLoads).toBe(0);
-            expect(counters.metrics.parsedEntries).toBeLessThanOrEqual(3);
+            expect(counters.fullLoads).toBe(0);
+            expect(counters.parsedEntries).toBeLessThanOrEqual(3);
             await measure("registry-snapshot-only", iteration, () =>
               withSubagentRunReadSnapshot(
                 subagentRuns,
@@ -235,15 +257,26 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               cfg,
             );
             // Give the user-facing metadata read its own committed invalidation after the prompt.
-            await updateChild(childSessionKey, (row) => ({
-              ...row,
-              label: `Changed child ${iteration}`,
-            }));
+            await applySessionEntryExactReplacements({
+              agentId: "main",
+              storePath,
+              sessionKeys: [childSessionKey],
+              update: ([row]) => ({
+                result: undefined,
+                replacements: [
+                  {
+                    sessionKey: childSessionKey,
+                    entry: { ...row!.entry, label: `Changed child ${iteration}` },
+                  },
+                ],
+              }),
+            });
             const metadata = await measure("subagent-list-selected", iteration, () =>
               readSubagentListSessionEntries(cfg, context.list),
             );
             expect(metadata.get(run.runId)?.model).toBe("saved-fixture-model");
-            expect(counters.metrics).toMatchObject({ fullLoads: 0, parsedEntries: 0 });
+            expect(counters.fullLoads).toBe(0);
+            expect(counters.parsedEntries).toBe(0);
           }
           console.log(
             JSON.stringify({
@@ -263,5 +296,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           clearSubagentRunsReadCacheForTest();
         }
       },
-    ),
+    );
+  },
 );
