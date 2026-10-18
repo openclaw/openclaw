@@ -154,7 +154,7 @@ it.each(
           canSelectFull: false,
           onModelSetup: vi.fn(),
         });
-        renderPaneModelControl(controls.composerControls, container);
+        renderPaneModelControl(controls.composerControls, container, true);
         const props = rendered.mock.calls.at(-1)?.[0];
         if (!props) {
           throw new Error("Expected mounted composer control props");
