@@ -308,6 +308,15 @@ or protocol-version change.
   `/clear` preserves `sessionId` and changes `lifecycleRevision`.
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
+- Committed transcript presentation is bounded per exact session/store/lifecycle.
+  If one publication is still executing, queued message notifications for the same
+  known lifecycle can collapse into one `sessions.changed` event with
+  `phase: "message"` and no `messageId` or `messageSeq`. Refetch history on that
+  invalidation; the durable transcript still contains every committed message.
+  Executing publication, other sessions, and live-source completion obligations
+  remain independent. Unknown legacy ownership and pending assistant errors are
+  not coalesced. A collapsed notification does not claim individual message
+  delivery, so unpublished assistant text retains its existing live fallback.
 - `sessions.changed`: session index or metadata changed. Keyed changes carry the
   affected row in `session`, presented for that connection. Nested rows in
   `sessions.changed` and `session.message` use the same full prepared metadata,

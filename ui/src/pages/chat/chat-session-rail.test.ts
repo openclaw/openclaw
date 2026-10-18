@@ -317,6 +317,37 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
 
+  it("returns focus to the rail composer after deleting its last comment", async () => {
+    const onAttachmentsChange = vi.fn();
+    const element = await mount({
+      presented: true,
+      onAttachmentsChange,
+      companion: {
+        turns: [],
+        loading: false,
+        draft: "Keep this draft",
+        attachments: [
+          {
+            id: "rail-comment",
+            mimeType: "text/plain",
+            selectionAnnotation: {
+              text: "Selected text",
+              comment: "Explain this",
+              sessionKey: "agent:main:run",
+              start: 0,
+              end: 13,
+            },
+          },
+        ],
+      },
+    });
+    const textarea = element.querySelector("textarea")!;
+    element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.value).toBe("Keep this draft");
+  });
+
   it("retains selected answer text while draft and presentation props update", async () => {
     const element = await mount({
       presented: true,

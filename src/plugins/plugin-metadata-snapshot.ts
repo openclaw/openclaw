@@ -13,7 +13,7 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { preparePersistedInstalledPluginIndexCacheEntry } from "./installed-plugin-index-record-state.js";
+import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import {
@@ -635,23 +635,11 @@ export async function resolvePluginMetadataSnapshotAsync(
       if (current.kind === "current") {
         return current.snapshot;
       }
-      const activateDiscovery = await prepareBundledDiscoveryMode(captured.env);
-      activateDiscovery();
-      const prepared = selectPluginMetadataSnapshot(captured);
-      if (prepared.kind === "current") {
-        return prepared.snapshot;
-      }
-      if (
-        captured.index === undefined &&
-        captured.installRecords === undefined &&
-        captured.preferPersisted !== false
-      ) {
-        const installed = await preparePersistedInstalledPluginIndexCacheEntry({
-          env: captured.env,
-          stateDir: captured.stateDir,
-        });
-        installed.assertCurrent();
-      }
+      const activateDiscovery = await (captured.index === undefined &&
+      captured.installRecords === undefined &&
+      captured.preferPersisted !== false
+        ? preparePluginMetadataMachineStateAsync({ env: captured.env, stateDir: captured.stateDir })
+        : prepareBundledDiscoveryMode(captured.env));
       activateDiscovery();
       return resolvePluginMetadataSnapshot(captured);
     });
