@@ -63,6 +63,28 @@ function complete(request: Request, code = 0, stdout = "ok", stderr = "") {
   request.child.emit("close", code, null);
 }
 
+function completeBatch(start: number, end = requests.length) {
+  requests.slice(start, end).forEach((request) => complete(request));
+}
+
+function startInput(options: Parameters<typeof execPrGhAsync>[1]) {
+  const task = execPrGhAsync(["api", "graphql", "--input", "-"], options, "plain");
+  const request = requestAt(0);
+  const inputPath = request.args[request.args.indexOf("--input") + 1];
+  if (!inputPath) {
+    throw new Error("Expected staged input path");
+  }
+  return { task, request, inputPath };
+}
+
+function startTimedInput() {
+  return startInput({
+    env: { ...env, OPENCLAW_PR_LOCK_NOTIFY_FD: "3" },
+    input: "private bytes",
+    timeout: 100,
+  });
+}
+
 it("caps mixed writer and reader subprocesses at four and drains queued work", async () => {
   const tasks = Array.from({ length: 10 }, (_, index) =>
     (index % 2 ? execGhReadAsync : execPlainGhAsync)([String(index)], { env }),
@@ -76,19 +98,13 @@ it("caps mixed writer and reader subprocesses at four and drains queued work", a
   ]);
   expect(requestAt(0).options.env.OPENCLAW_GH_BIN).toBe(process.execPath);
   expect(requestAt(1).options.env.OPENCLAW_GH_BIN).toBeUndefined();
-  for (const request of requests.slice(0, 4)) {
-    complete(request);
-  }
+  completeBatch(0, 4);
   await Promise.all(tasks.slice(0, 4));
   expect(requests).toHaveLength(8);
-  for (const request of requests.slice(4, 8)) {
-    complete(request);
-  }
+  completeBatch(4, 8);
   await Promise.all(tasks.slice(4, 8));
   expect(requests).toHaveLength(10);
-  for (const request of requests.slice(8)) {
-    complete(request);
-  }
+  completeBatch(8);
   await expect(Promise.all(tasks)).resolves.toEqual(Array(10).fill("ok"));
 });
 
@@ -115,25 +131,16 @@ it("keeps the writer notifier and quota refusal semantics without retrying", asy
 });
 
 it("keeps input bytes private until the asynchronous child has closed", async () => {
-  const task = execPrGhAsync(
-    ["api", "graphql", "--input", "-"],
-    {
-      env,
-      input: "fixture payload",
-      stdio: ["pipe", "pipe", "pipe"],
-    },
-    "plain",
-  );
-  const request = requestAt(0);
-  const path = request.args[request.args.indexOf("--input") + 1];
-  if (!path) {
-    throw new Error("Expected staged input path");
-  }
-  expect(readFileSync(path, "utf8")).toBe("fixture payload");
+  const { task, request, inputPath } = startInput({
+    env,
+    input: "fixture payload",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  expect(readFileSync(inputPath, "utf8")).toBe("fixture payload");
   expect(request.options.stdio[0]).toBe("ignore");
   complete(request);
   await expect(task).resolves.toBe("ok");
-  expect(existsSync(path)).toBe(false);
+  expect(existsSync(inputPath)).toBe(false);
 });
 
 it("joins a failed direct child and refuses queued or later work when output is cut", async () => {
@@ -155,9 +162,7 @@ it("joins a failed direct child and refuses queued or later work when output is 
   first.child.emit("close", null, "SIGTERM");
   await Promise.all([failure, queued]);
   expect(requests).toHaveLength(4);
-  for (const request of requests.slice(1)) {
-    complete(request);
-  }
+  completeBatch(1);
   await expect(Promise.all(tasks.slice(1, 4))).resolves.toEqual(Array(3).fill("ok"));
   await expect(execGhReadAsync(["api"], { env })).rejects.toMatchObject({
     code: "OPENCLAW_GH_UNJOINED",
@@ -167,14 +172,8 @@ it("joins a failed direct child and refuses queued or later work when output is 
 
 it("allows retry after a timed-out child closes naturally within its drain grace", async () => {
   vi.useFakeTimers();
-  const task = execPrGhAsync(
-    ["api", "graphql", "--input", "-"],
-    { env: { ...env, OPENCLAW_PR_LOCK_NOTIFY_FD: "3" }, input: "private bytes", timeout: 100 },
-    "plain",
-  );
+  const { task, request, inputPath } = startTimedInput();
   const failure = task.catch((error: unknown) => error);
-  const request = requestAt(0);
-  const inputPath = request.args[request.args.indexOf("--input") + 1]!;
   await vi.advanceTimersByTimeAsync(100);
   expect(request.child.kill).toHaveBeenCalledWith("SIGTERM");
   expect(request.child.stdout.destroyed).toBe(false);
@@ -194,13 +193,7 @@ it("allows retry after a timed-out child closes naturally within its drain grace
 
 it("enforces timeout across inherited output while preserving notifier and private input", async () => {
   vi.useFakeTimers();
-  const task = execPrGhAsync(
-    ["api", "graphql", "--input", "-"],
-    { env: { ...env, OPENCLAW_PR_LOCK_NOTIFY_FD: "3" }, input: "private bytes", timeout: 100 },
-    "plain",
-  );
-  const request = requestAt(0);
-  const inputPath = request.args[request.args.indexOf("--input") + 1]!;
+  const { task, request, inputPath } = startTimedInput();
   const failure = expect(task).rejects.toMatchObject({
     code: "ETIMEDOUT",
     processTreeState: "indeterminate",

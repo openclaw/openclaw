@@ -166,13 +166,10 @@ describePosix("scripts/pr Git maintenance ownership", () => {
     },
   );
 
-  it.for([
-    { command: "git gc", exitCode: 0 },
-    { command: "git gc", exitCode: 7 },
-  ])(
-    "joins $command before operation completion (exit $exitCode)",
-    async ({ command, exitCode }, { signal }) => {
-      const fixture = createMaintenanceFixture(command, exitCode);
+  it.for([0, 7])(
+    "joins git gc before operation completion (exit %s)",
+    async (exitCode, { signal }) => {
+      const fixture = createMaintenanceFixture("git gc", exitCode);
       const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
         cwd: fixture.repo,
         env: fixture.env,
