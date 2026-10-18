@@ -69,11 +69,7 @@ function startBatch(trigger: BatchTrigger, state: CronServiceState) {
   return trigger === "scheduled" ? onTimer(state) : runMissedJobs(state);
 }
 
-async function finishBatch(
-  state: CronServiceState,
-  batch: Promise<unknown>,
-  runner: ReturnType<typeof blockedRunner>,
-) {
+async function finishBatch(batch: Promise<unknown>, runner: ReturnType<typeof blockedRunner>) {
   runner.release.resolve({ status: "ok", summary: "completed" });
   await batch;
 }
@@ -179,7 +175,7 @@ describe("cron batch outcome finalization", () => {
         });
       } finally {
         ownerAvailable = false;
-        await finishBatch(state, batch, runner);
+        await finishBatch(batch, runner);
       }
     },
   );
@@ -311,7 +307,7 @@ describe("cron batch outcome finalization", () => {
       ]);
       expect(isCronJobActive(original.id)).toBe(false);
     } finally {
-      await finishBatch(state, batch, runner);
+      await finishBatch(batch, runner);
     }
   });
 
@@ -477,7 +473,7 @@ describe("cron batch outcome finalization", () => {
       expect(findCronTask(job.id)?.status).toBe("succeeded");
       expect(isCronJobActive(job.id)).toBe(false);
     } finally {
-      await finishBatch(state, batch, runner);
+      await finishBatch(batch, runner);
     }
   });
 
@@ -506,7 +502,7 @@ describe("cron batch outcome finalization", () => {
       expect(isCronJobActive(first.id)).toBe(false);
       expect(isCronJobActive(second.id)).toBe(false);
     } finally {
-      await finishBatch(state, batch, runner);
+      await finishBatch(batch, runner);
       observer.mockRestore();
       allowWrites();
     }
@@ -542,129 +538,103 @@ describe("cron batch outcome finalization", () => {
     }
   });
 
-  it.each([{ trigger: "startup", deleteAfterRun: false }] as const)(
-    "persists a completed $trigger job before its sibling drains",
-    async ({ trigger, deleteAfterRun }) => {
-      const first = dueJob(`${trigger}-finished`, { deleteAfterRun });
-      const second = dueJob(`${trigger}-blocked`);
-      const runner = blockedRunner(second.id);
-      const events: CronEvent[] = [];
-      const { state, storePath } = await fixture([first, second], {
-        runIsolatedAgentJob: runner.run,
-        onEvent: (event) => events.push(event),
-      });
+  it("persists a completed startup job before its sibling drains", async () => {
+    const first = dueJob("startup-finished", { deleteAfterRun: false });
+    const second = dueJob("startup-blocked");
+    const runner = blockedRunner(second.id);
+    const events: CronEvent[] = [];
+    const { state, storePath } = await fixture([first, second], {
+      runIsolatedAgentJob: runner.run,
+      onEvent: (event) => events.push(event),
+    });
 
-      const inactive = observeInactiveJobs([first.id]);
-      const batch = startBatch(trigger, state);
-      try {
-        await runner.started.promise;
-        await inactive.settled;
-        const jobs = (await loadCronStore(storePath)).jobs;
-        const persisted = jobs.find((job) => job.id === first.id);
-        if (deleteAfterRun) {
-          expect(persisted).toBeUndefined();
-        } else {
-          expect(persisted?.state.lastRunStatus).toBe("ok");
-          expect(persisted?.state.runningAtMs).toBeUndefined();
-        }
-        expect(jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(DUE_AT);
-        expect(findCronTask(first.id)?.status).toBe("succeeded");
-        expect(findCronTask(second.id)).toBeUndefined();
-        expect(isCronJobActive(first.id)).toBe(false);
-        expect(isCronJobActive(second.id)).toBe(true);
-        expect(events).toContainEqual(
-          expect.objectContaining({ action: "finished", jobId: first.id, status: "ok" }),
-        );
-        if (deleteAfterRun) {
-          expect(events).toContainEqual(
-            expect.objectContaining({ action: "removed", jobId: first.id }),
-          );
-        }
-      } finally {
-        inactive.restore();
-        await finishBatch(state, batch, runner);
-      }
-      expect(findCronTask(second.id)?.status).toBe("succeeded");
-    },
-  );
-
-  it.each(["scheduled"] as const)(
-    "durably finalizes a large %s batch while its final run remains active",
-    async (trigger) => {
-      const store = fixtures.makeStorePath();
-      const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
-      const jobCount = 32;
-      const jobs: CronJob[] = Array.from({ length: jobCount }, (_, index) =>
-        createDueIsolatedJob({
-          id: `${trigger}-stress-${String(index).padStart(2, "0")}`,
-          nowMs: dueAt,
-          nextRunAtMs: dueAt,
-        }),
+    const inactive = observeInactiveJobs([first.id]);
+    const batch = runMissedJobs(state);
+    try {
+      await runner.started.promise;
+      await inactive.settled;
+      const jobs = (await loadCronStore(storePath)).jobs;
+      const persisted = jobs.find((job) => job.id === first.id);
+      expect(persisted?.state.lastRunStatus).toBe("ok");
+      expect(persisted?.state.runningAtMs).toBeUndefined();
+      expect(jobs.find((job) => job.id === second.id)?.state.runningAtMs).toBe(DUE_AT);
+      expect(findCronTask(first.id)?.status).toBe("succeeded");
+      expect(findCronTask(second.id)).toBeUndefined();
+      expect(isCronJobActive(first.id)).toBe(false);
+      expect(isCronJobActive(second.id)).toBe(true);
+      expect(events).toContainEqual(
+        expect.objectContaining({ action: "finished", jobId: first.id, status: "ok" }),
       );
-      await saveCronStore(store.storePath, { version: 1, jobs });
+    } finally {
+      inactive.restore();
+      await finishBatch(batch, runner);
+    }
+    expect(findCronTask(second.id)?.status).toBe("succeeded");
+  });
 
-      const lastJob = jobs.at(-1);
-      if (!lastJob) {
-        throw new Error("expected a final cron stress-test job");
-      }
-      const finalRunStarted = createDeferred();
-      const releaseFinalRun = createDeferred<{ status: "ok"; summary: string }>();
-      const clock = createGatewaySchedulerClock(dueAt);
-      const state = createCronRegressionState({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        storePath: store.storePath,
-        nowMs: () => dueAt,
-        maxMissedJobsPerRestart: 40,
-        runIsolatedAgentJob: vi.fn(async ({ job }) => {
-          if (job.id === lastJob.id) {
-            finalRunStarted.resolve();
-            return await releaseFinalRun.promise;
-          }
-          return { status: "ok" as const, summary: `finished ${job.id}` };
-        }),
-      });
+  it("durably finalizes a large scheduled batch while its final run remains active", async () => {
+    const dueAt = Date.parse("2026-02-06T10:05:03.000Z");
+    const jobCount = 32;
+    const jobs = Array.from({ length: jobCount }, (_, index) =>
+      createDueIsolatedJob({
+        id: `scheduled-stress-${String(index).padStart(2, "0")}`,
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      }),
+    );
 
-      const inactive = observeInactiveJobs(jobs.slice(0, -1).map((job) => job.id));
-      let activeBatch = startBatch(trigger, state);
-      const batches = [activeBatch];
-      const finalStarted = finalRunStarted.promise.then(() => true);
-      let reachedFinalRun = false;
-      try {
-        for (let wave = 0; wave < jobCount; wave += 1) {
-          if (await Promise.race([finalStarted, activeBatch.then(() => false)])) {
-            reachedFinalRun = true;
-            break;
-          }
-          const capacityTick = clock.advanceBy(0);
-          if (!capacityTick) {
-            throw new Error("Expected a capacity wake before the final cron job");
-          }
-          activeBatch = capacityTick;
-          batches.push(capacityTick);
+    const lastJob = jobs.at(-1);
+    if (!lastJob) {
+      throw new Error("expected a final cron stress-test job");
+    }
+    const runner = blockedRunner(lastJob.id);
+    const clock = createGatewaySchedulerClock(dueAt);
+    const { state, storePath } = await fixture(jobs, {
+      scheduler: createTestGatewayScheduler(clock.clock),
+      nowMs: () => dueAt,
+      runIsolatedAgentJob: runner.run,
+    });
+
+    const inactive = observeInactiveJobs(jobs.slice(0, -1).map((job) => job.id));
+    let activeBatch = onTimer(state);
+    const batches = [activeBatch];
+    const finalStarted = runner.started.promise.then(() => true);
+    let reachedFinalRun = false;
+    try {
+      for (let wave = 0; wave < jobCount; wave += 1) {
+        if (await Promise.race([finalStarted, activeBatch.then(() => false)])) {
+          reachedFinalRun = true;
+          break;
         }
-        expect(reachedFinalRun).toBe(true);
-        await inactive.settled;
-        const persistedJobs = (await loadCronStore(store.storePath)).jobs;
-        expect(
-          persistedJobs.filter((job) => job.id !== lastJob.id && job.state.lastRunStatus === "ok"),
-        ).toHaveLength(jobCount - 1);
-        expect(persistedJobs.find((job) => job.id === lastJob.id)?.state.runningAtMs).toBe(dueAt);
-
-        for (const job of jobs.slice(0, -1)) {
-          expect(findCronTask(job.id)?.status).toBe("succeeded");
-          expect(isCronJobActive(job.id)).toBe(false);
+        const capacityTick = clock.advanceBy(0);
+        if (!capacityTick) {
+          throw new Error("Expected a capacity wake before the final cron job");
         }
-        expect(findCronTask(lastJob.id)).toBeUndefined();
-        expect(isCronJobActive(lastJob.id)).toBe(true);
-      } finally {
-        inactive.restore();
-        releaseFinalRun.resolve({ status: "ok", summary: "finished final job" });
-        await Promise.all(batches);
-        stop(state);
-        await state.schedulerDrain;
+        activeBatch = capacityTick;
+        batches.push(capacityTick);
       }
+      expect(reachedFinalRun).toBe(true);
+      await inactive.settled;
+      const persistedJobs = (await loadCronStore(storePath)).jobs;
+      expect(
+        persistedJobs.filter((job) => job.id !== lastJob.id && job.state.lastRunStatus === "ok"),
+      ).toHaveLength(jobCount - 1);
+      expect(persistedJobs.find((job) => job.id === lastJob.id)?.state.runningAtMs).toBe(dueAt);
 
-      expect(findCronTask(lastJob.id)?.status).toBe("succeeded");
-    },
-  );
+      for (const job of jobs.slice(0, -1)) {
+        expect(findCronTask(job.id)?.status).toBe("succeeded");
+        expect(isCronJobActive(job.id)).toBe(false);
+      }
+      expect(findCronTask(lastJob.id)).toBeUndefined();
+      expect(isCronJobActive(lastJob.id)).toBe(true);
+    } finally {
+      inactive.restore();
+      runner.release.resolve({ status: "ok", summary: "finished final job" });
+      await Promise.all(batches);
+      stop(state);
+      await state.schedulerDrain;
+    }
+
+    expect(findCronTask(lastJob.id)?.status).toBe("succeeded");
+  });
 });

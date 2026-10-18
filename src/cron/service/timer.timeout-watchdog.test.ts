@@ -30,6 +30,13 @@ const fixtures = setupCronRegressionFixtures({
   baseTimeIso: new Date(SCHEDULED_AT).toISOString(),
 });
 type RunnerArgs = Parameters<CronServiceDeps["runIsolatedAgentJob"]>[0];
+const attribution = {
+  phase: "tool_execution_started",
+  provider: "deepseek",
+  model: "deepseek-v4-pro",
+  sessionId: "sess-attrib",
+  sessionKey: "key-attrib",
+} as const;
 
 function dueJob(id: string, overrides?: Partial<CronJob>): CronJob {
   return {
@@ -43,6 +50,20 @@ function dueJob(id: string, overrides?: Partial<CronJob>): CronJob {
     }),
     ...overrides,
   };
+}
+
+function agentJob(id: string, timeoutSeconds: number) {
+  return dueJob(id, { payload: { kind: "agentTurn", message: "work", timeoutSeconds } });
+}
+
+function heartbeatJob(id: string, overrides: Partial<CronJob> = {}) {
+  return dueJob(id, {
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "check heartbeat work" },
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
+    ...overrides,
+  });
 }
 
 async function fixture(
@@ -94,17 +115,11 @@ async function drain(...runs: Promise<unknown>[]) {
 describe("cron execution watchdogs", () => {
   it("keeps timed-out cron runs from being overwritten by late cancellation", async () => {
     resetActiveCronTaskRunsForTests();
-    const job = dueJob("late-cancel-after-timeout", {
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1 },
-    });
+    const job = agentJob("late-cancel-after-timeout", 1);
     const runner = pendingRunner(({ onExecutionStarted }) =>
       onExecutionStarted?.({
         jobId: job.id,
-        phase: "tool_execution_started",
-        provider: "deepseek",
-        model: "deepseek-v4-pro",
-        sessionId: "sess-attrib",
-        sessionKey: "key-attrib",
+        ...attribution,
       }),
     );
     const cleanupStarted = createDeferred();
@@ -159,9 +174,7 @@ describe("cron execution watchdogs", () => {
 
   it("returns cancellation attribution before the core finishes its owned cleanup (#95873)", async () => {
     resetActiveCronTaskRunsForTests();
-    const job = dueJob("cancel-attribution", {
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 0 },
-    });
+    const job = agentJob("cancel-attribution", 0);
     const { storePath } = fixtures.makeStorePath();
     const activeJobMarker = markCronJobActive(job.id);
     const entered = createDeferred();
@@ -170,11 +183,7 @@ describe("cron execution watchdogs", () => {
       async ({ onExecutionStarted }) => {
         onExecutionStarted?.({
           jobId: job.id,
-          phase: "tool_execution_started",
-          provider: "deepseek",
-          model: "deepseek-v4-pro",
-          sessionId: "sess-attrib",
-          sessionKey: "key-attrib",
+          ...attribution,
         });
         entered.resolve();
         const result = await release.promise;
@@ -221,9 +230,7 @@ describe("cron execution watchdogs", () => {
   });
 
   it("notifies setup timeout after startup catch-up finalization", async () => {
-    const job = dueJob("startup-setup-timeout", {
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
-    });
+    const job = agentJob("startup-setup-timeout", 120);
     const runner = pendingRunner();
     const onIsolatedAgentSetupTimeout = vi.fn();
     const { state, advance } = await fixture(job, {
@@ -252,22 +259,16 @@ describe("cron execution watchdogs", () => {
     }
   });
 
-  it.each(["heartbeat"] as const)(
-    "restarts the %s watchdog from the effective heartbeat timeout at handoff",
-    async (kind) => {
-      const job = dueJob(`heartbeat-handoff-${kind}`, {
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "heartbeat" },
-        agentId: "   ",
-        sessionKey: "agent:ops:main",
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
-      });
-      const started = createDeferred<AbortSignal | undefined>();
-      const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-      const requestHeartbeatAndWait = vi.fn<
-        NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>
-      >(async (_wake, { abortSignal, onAttemptStarted }) => {
+  it("restarts the heartbeat watchdog from the effective heartbeat timeout at handoff", async () => {
+    const job = heartbeatJob("heartbeat-handoff-heartbeat", {
+      payload: { kind: "heartbeat" },
+      agentId: "   ",
+      sessionKey: "agent:ops:main",
+    });
+    const started = createDeferred<AbortSignal | undefined>();
+    const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
+    const requestHeartbeatAndWait = vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
+      async (_wake, { abortSignal, onAttemptStarted }) => {
         onAttemptStarted?.();
         started.resolve(abortSignal);
         await new Promise<void>((resolve) => {
@@ -278,37 +279,35 @@ describe("cron execution watchdogs", () => {
           }
         });
         return { status: "failed", reason: "aborted" };
-      });
-      const { state, advance } = await fixture(job, {
-        nowMs: Date.now,
-        defaultAgentId: "main",
-        resolveHeartbeatTimeoutMs,
-        requestHeartbeatAndWait,
-      });
-      const timer = onTimer(state);
-      let settled = false;
-      void timer.then(() => {
-        settled = true;
-      });
-      const signal = await started.promise;
-      await advance(10 * 60_000 + 1);
-      expect(signal?.aborted).toBe(false);
-      expect(settled).toBe(false);
-      await advance(5 * 60_000);
-      await timer;
-      expect(signal?.aborted).toBe(true);
-      expect(settled).toBe(true);
-      expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
-      );
-      expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
-    },
-  );
+      },
+    );
+    const { state, advance } = await fixture(job, {
+      nowMs: Date.now,
+      defaultAgentId: "main",
+      resolveHeartbeatTimeoutMs,
+      requestHeartbeatAndWait,
+    });
+    const timer = onTimer(state);
+    let settled = false;
+    void timer.then(() => {
+      settled = true;
+    });
+    const signal = await started.promise;
+    await advance(10 * 60_000 + 1);
+    expect(signal?.aborted).toBe(false);
+    expect(settled).toBe(false);
+    await advance(5 * 60_000);
+    await timer;
+    expect(signal?.aborted).toBe(true);
+    expect(settled).toBe(true);
+    expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
+    );
+    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+  });
 
   it("does not spend setup or execution timeout while waiting for cron-nested admission (#41783)", async () => {
-    const job = dueJob("isolated-setup-timeout-lane-wait", {
-      payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1 },
-    });
+    const job = agentJob("isolated-setup-timeout-lane-wait", 1);
     const entered = createDeferred();
     const release = createDeferred();
     const blocker = enqueueCommandInLane(CommandLane.CronNested, async () => {
@@ -506,11 +505,7 @@ describe("cron execution watchdogs", () => {
   });
 
   it("keeps the cron deadline while a heartbeat-backed trigger is still evaluating", async () => {
-    const job = dueJob("heartbeat-trigger-watchdog", {
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "check heartbeat work" },
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
+    const job = heartbeatJob("heartbeat-trigger-watchdog", {
       trigger: { script: "return { fire: true };" },
     });
     const started = createDeferred();

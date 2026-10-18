@@ -22,6 +22,32 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionKey = "agent:main:main";
 const ran = { status: "ran", durationMs: 1 } as const;
 
+const drainEvents = () => drainSystemEventEntries(sessionKey).map((event) => event.text);
+const peekEvents = () => peekSystemEventEntries(sessionKey).map((event) => event.text);
+function retryHandler(reason: string, delay: number) {
+  return vi
+    .fn<HeartbeatWakeHandler>()
+    .mockResolvedValueOnce({ status: "skipped", reason, retryAtMs: Date.now() + delay })
+    .mockImplementation(async () => {
+      drainEvents();
+      return ran;
+    });
+}
+
+function observe<T>(promise: Promise<T>) {
+  let finished = false;
+  const pending = promise.then((result) => {
+    finished = true;
+    return result;
+  });
+  return {
+    pending,
+    get finished() {
+      return finished;
+    },
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
@@ -86,80 +112,49 @@ it("coalesces two main jobs and settles both only after their shared turn", asyn
   const release = createDeferred();
   const observed: string[][] = [];
   const handler = vi.fn(async () => {
-    observed.push(drainSystemEventEntries(sessionKey).map((event) => event.text));
+    observed.push(drainEvents());
     await release.promise;
     return ran;
   });
   const { run } = createHarness(handler);
-  let finished = false;
-  const pending = Promise.all([run("first"), run("second")]).then((results) => {
-    finished = true;
-    return results;
-  });
+  const result = observe(Promise.all([run("first"), run("second")]));
   try {
     await vi.advanceTimersByTimeAsync(2 * 60_000 + 1);
     expect(handler).toHaveBeenCalledTimes(1);
     expect(observed).toEqual([["first", "second"]]);
-    expect(finished).toBe(false);
+    expect(result.finished).toBe(false);
   } finally {
     release.resolve();
   }
-  await expect(pending).resolves.toEqual([
+  await expect(result.pending).resolves.toEqual([
     { status: "ok", summary: "first" },
     { status: "ok", summary: "second" },
   ]);
 });
 
-it.each(["requests-in-flight"] as const)(
-  "waits through %s without shortening the queue's retry deadline",
-  async (reason) => {
-    const handler = vi
-      .fn<HeartbeatWakeHandler>()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason,
-        ...(reason === "requests-in-flight" ? { retryAtMs: Date.now() + 60_000 } : {}),
-      })
-      .mockImplementation(async () => {
-        drainSystemEventEntries(sessionKey);
-        return ran;
-      });
-    const { run } = createHarness(handler);
-    let finished = false;
-    const pending = run().then((result) => {
-      finished = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(59_999);
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(finished).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toMatchObject({ status: "ok" });
-    expect(handler).toHaveBeenCalledTimes(2);
-  },
-);
+it("waits through requests-in-flight without shortening the queue's retry deadline", async () => {
+  const handler = retryHandler("requests-in-flight", 60_000);
+  const { run } = createHarness(handler);
+  const result = observe(run());
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect(result.finished).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(result.pending).resolves.toMatchObject({ status: "ok" });
+  expect(handler).toHaveBeenCalledTimes(2);
+});
 
 it.each([{ reason: "requests-in-flight", retryDelay: 180_000 }])(
   "detaches the cron waiter while preserving $reason work and its deadline",
   async ({ reason, retryDelay }) => {
-    const handler = vi
-      .fn<HeartbeatWakeHandler>()
-      .mockResolvedValueOnce({
-        status: "skipped",
-        reason,
-        retryAtMs: Date.now() + retryDelay,
-      })
-      .mockImplementation(async () => {
-        drainSystemEventEntries(sessionKey);
-        return ran;
-      });
+    const handler = retryHandler(reason, retryDelay);
     const { state, run } = createHarness(handler);
     const pending = run();
     await vi.advanceTimersByTimeAsync(0);
     await expect(pending).resolves.toEqual({ status: "ok", summary: "reminder" });
     expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     expect(handler.mock.calls[0]?.[0].heartbeat).toEqual({ target: "last" });
-    expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["reminder"]);
+    expect(peekEvents()).toEqual(["reminder"]);
     await vi.advanceTimersByTimeAsync(retryDelay - 1);
     expect(handler).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -175,7 +170,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
     if (retrying && ++calls === 1) {
       return { status: "skipped", reason: "requests-in-flight" };
     }
-    observed.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
+    observed.push(...drainEvents());
     return ran;
   });
   enqueueSystemEventWithReceipt("unrelated", { sessionKey, contextKey: "other" });
@@ -187,7 +182,7 @@ it.each([false, true])("removes only the cancelled job's event, retrying=%s", as
   }
   controller.abort();
   await expect(pending).resolves.toMatchObject({ status: "error" });
-  expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["unrelated"]);
+  expect(peekEvents()).toEqual(["unrelated"]);
   await vi.advanceTimersByTimeAsync(retrying ? 1_000 : 0);
   expect(observed).toEqual(["unrelated"]);
 });
@@ -198,7 +193,7 @@ it("removes only the failed job's event after terminal wake failure", async () =
   const pending = run();
   await vi.advanceTimersByTimeAsync(0);
   await expect(pending).resolves.toMatchObject({ status: "error", error: "runner refused" });
-  expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual(["unrelated"]);
+  expect(peekEvents()).toEqual(["unrelated"]);
 });
 
 it("hands off at the original busy budget after repeated retry deadlines", async () => {
@@ -208,19 +203,15 @@ it("hands off at the original busy budget after repeated retry deadlines", async
     retryAtMs: Date.now() + 60_000,
   }));
   const { run } = createHarness(handler);
-  let finished = false;
-  const pending = run().then((result) => {
-    finished = true;
-    return result;
-  });
+  const result = observe(run());
   await vi.advanceTimersByTimeAsync(119_999);
   expect(handler).toHaveBeenCalledTimes(2);
-  expect(finished).toBe(false);
+  expect(result.finished).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
-  await expect(pending).resolves.toMatchObject({ status: "ok" });
+  await expect(result.pending).resolves.toMatchObject({ status: "ok" });
   expect(handler).toHaveBeenCalledTimes(3);
   handler.mockImplementation(async () => {
-    drainSystemEventEntries(sessionKey);
+    drainEvents();
     return ran;
   });
   await vi.advanceTimersByTimeAsync(59_999);
