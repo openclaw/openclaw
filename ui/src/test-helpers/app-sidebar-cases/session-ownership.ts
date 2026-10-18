@@ -104,9 +104,11 @@ describe("AppSidebar session ownership", () => {
       harness.publishList({
         result: {
           ...result,
-          sessions: result.sessions.map((row) =>
-            row === shared ? { ...row, participants: [], participantCount: 5 } : row,
-          ),
+          sessions: result.sessions.with(result.sessions.indexOf(shared), {
+            ...shared,
+            participants: [],
+            participantCount: 5,
+          }),
         },
         agentId: "main",
       });
@@ -249,15 +251,11 @@ describe("AppSidebar session ownership", () => {
       harness.publishList({
         result: {
           ...result,
-          sessions: result.sessions.map((row, index) =>
-            index === 1
-              ? {
-                  ...row,
-                  participants: [{ identity: { type: "profile", id: "profile-bob" } }],
-                  participantCount: 1,
-                }
-              : row,
-          ),
+          sessions: result.sessions.with(1, {
+            ...result.sessions[1]!,
+            participants: [{ identity: { type: "profile", id: "profile-bob" } }],
+            participantCount: 1,
+          }),
         },
         agentId: "main",
       });

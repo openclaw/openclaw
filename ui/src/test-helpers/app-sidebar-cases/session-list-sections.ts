@@ -193,9 +193,10 @@ describe("AppSidebar session section visibility", () => {
     harness.publishList({
       result: {
         ...result,
-        sessions: result.sessions.map((row) =>
-          row.key === alpha.key ? { ...row, category: "Empty" } : row,
-        ),
+        sessions: result.sessions.with(result.sessions.indexOf(alpha), {
+          ...alpha,
+          category: "Empty",
+        }),
       },
       groups: ["Empty", "Alpha"],
     });
