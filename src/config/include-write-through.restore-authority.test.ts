@@ -34,7 +34,8 @@ const mockPrepareConfigFileWrite = vi.hoisted(() =>
   vi.fn<typeof import("./backup-rotation.js").prepareConfigFileWrite>(),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => ({
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
   loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
 
@@ -147,6 +148,38 @@ describe("config io write / include write-through restore authority", () => {
       ...options,
     });
 
+  // Keep backup rotation, destination receipts, and guarded publication real;
+  // fail the filesystem write after the copy fallback has recreated its target.
+  const failCopyFallbackAfterWrite = () => {
+    mockPrepareConfigFileWrite.mockImplementationOnce(async (params) => {
+      const actual =
+        await vi.importActual<typeof import("./backup-rotation.js")>("./backup-rotation.js");
+      let renameDenied = false;
+      return actual.prepareConfigFileWrite({
+        ...params,
+        fsModule: {
+          ...params.fsModule,
+          renameSync(source, destination) {
+            if (destination === params.configPath) {
+              renameDenied = true;
+              throw Object.assign(new Error("rename denied"), { code: "EPERM" });
+            }
+            return params.fsModule.renameSync(source, destination);
+          },
+          writeSync: new Proxy(params.fsModule.writeSync, {
+            apply(target, thisArg, args) {
+              const written = Reflect.apply(target, thisArg, args);
+              if (renameDenied) {
+                throw new Error("synthetic copy-fallback write failure after recreate");
+              }
+              return written;
+            },
+          }),
+        },
+      });
+    });
+  };
+
   itWithHome(
     "restores an include when post-commit finalization fails inside a guarded mutation flow",
     async (home) => {
@@ -214,19 +247,7 @@ describe("config io write / include write-through restore authority", () => {
       const originalTonyRaw = await fs.readFile(tonyPath, "utf-8");
       const io = createFastConfigIO(home);
 
-      // Simulates fs-safe's permission-error copy fallback: it removes the
-      // existing target (firing onRootRemoved), then recreates it -- here
-      // with garbage bytes -- before the write itself throws.
-      mockPrepareConfigFileWrite.mockImplementationOnce(
-        async (params: { configPath: string; fsModule: typeof import("node:fs") }) => ({
-          publish: () => {
-            params.fsModule.rmSync(params.configPath, { force: true });
-            params.fsModule.writeFileSync(params.configPath, "{not the previous content}", "utf-8");
-            throw new Error("synthetic copy-fallback write failure after recreate");
-          },
-          [Symbol.asyncDispose]: async () => {},
-        }),
-      );
+      failCopyFallbackAfterWrite();
 
       await expect(
         io.writeConfigFile({
@@ -258,16 +279,29 @@ describe("config io write / include write-through restore authority", () => {
       const originalRootRaw = await fs.readFile(configPath, "utf-8");
       const originalTonyRaw = await fs.readFile(tonyPath, "utf-8");
       let cleanupFailureInjected = false;
-      mockPrepareConfigFileWrite.mockImplementationOnce(async (params) => ({
-        publish: () => {
-          const stagedPath = `${params.configPath}.post-rename-test`;
-          params.fsModule.writeFileSync(stagedPath, params.content, "utf-8");
-          params.fsModule.renameSync(stagedPath, params.configPath);
-          cleanupFailureInjected = true;
-          throw new Error("synthetic descriptor cleanup failure after include rename");
-        },
-        [Symbol.asyncDispose]: async () => {},
-      }));
+      mockPrepareConfigFileWrite.mockImplementationOnce(async (params) => {
+        const actual =
+          await vi.importActual<typeof import("./backup-rotation.js")>("./backup-rotation.js");
+        let published = false;
+        return actual.prepareConfigFileWrite({
+          ...params,
+          fsModule: {
+            ...params.fsModule,
+            renameSync(source, destination) {
+              params.fsModule.renameSync(source, destination);
+              published ||= destination === params.configPath;
+            },
+            closeSync(fd) {
+              const isFile = params.fsModule.fstatSync(fd).isFile();
+              params.fsModule.closeSync(fd);
+              if (published && isFile && !cleanupFailureInjected) {
+                cleanupFailureInjected = true;
+                throw new Error("synthetic descriptor cleanup failure after include rename");
+              }
+            },
+          },
+        });
+      });
       const io = createFastConfigIO(home);
 
       await expect(
@@ -295,19 +329,7 @@ describe("config io write / include write-through restore authority", () => {
       const originalTonyRaw = await fs.readFile(tonyPath, "utf-8");
       const previousHash = hashConfigIncludeRaw(originalTonyRaw);
 
-      // Simulates fs-safe's permission-error copy fallback: it removes the
-      // existing target (firing onRootRemoved), then recreates it -- here
-      // with garbage bytes -- before the write itself throws.
-      mockPrepareConfigFileWrite.mockImplementationOnce(
-        async (params: { configPath: string; fsModule: typeof import("node:fs") }) => ({
-          publish: () => {
-            params.fsModule.rmSync(params.configPath, { force: true });
-            params.fsModule.writeFileSync(params.configPath, "{not the previous content}", "utf-8");
-            throw new Error("synthetic copy-fallback write failure after recreate");
-          },
-          [Symbol.asyncDispose]: async () => {},
-        }),
-      );
+      failCopyFallbackAfterWrite();
 
       const restorers: IncludeWriteRestorer[] = [];
       await expect(

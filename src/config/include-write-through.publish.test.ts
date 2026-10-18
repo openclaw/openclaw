@@ -34,7 +34,8 @@ const mockPrepareConfigFileWrite = vi.hoisted(() =>
   vi.fn<typeof import("./backup-rotation.js").prepareConfigFileWrite>(),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => ({
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
   loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
 
@@ -155,12 +156,11 @@ describe("config io write / include write-through publish", () => {
       // `identity` belongs at the agent-entry root; authored under `tools` it is
       // exactly the shape doctor repairs, and it lives only in the include file.
       await writeConfigJson(scribePath, {
-        default: true,
         name: "Scribe",
         tools: { profile: "full", identity: { name: "Scribe" } },
       });
       await writeConfigJson(configPath, {
-        agents: { entries: { scribe: { $include: "./scribe.json5" } } },
+        agents: { ownership: "explicit", entries: { scribe: { $include: "./scribe.json5" } } },
       });
       const io = createFastConfigIO(home);
       const snapshot = await io.readConfigFileSnapshot();
@@ -168,9 +168,9 @@ describe("config io write / include write-through publish", () => {
 
       await io.writeConfigFile({
         agents: {
+          ownership: "explicit",
           entries: {
             scribe: {
-              default: true,
               name: "Scribe",
               tools: { profile: "full" },
               identity: { name: "Scribe" },
@@ -184,7 +184,10 @@ describe("config io write / include write-through publish", () => {
         string,
         unknown
       >;
-      expect(rootAfter.agents).toEqual({ entries: { scribe: { $include: "./scribe.json5" } } });
+      expect(rootAfter.agents).toEqual({
+        ownership: "explicit",
+        entries: { scribe: { $include: "./scribe.json5" } },
+      });
       const repaired = JSON.parse(await fs.readFile(scribePath, "utf-8")) as Record<
         string,
         unknown

@@ -30,7 +30,8 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/manifest-registry.js", () => ({
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/manifest-registry.js")>()),
   loadPluginManifestRegistryCore: mockLoadPluginManifestRegistry,
 }));
 
