@@ -2504,6 +2504,13 @@ export const en: TranslationMap & {
       },
     },
     sessionHeader: {
+      people: "People",
+      peopleParticipants: "Participants",
+      mentionRejected: "Mention was not inserted. Return to the composer and try again.",
+      mentionsTruncated: "Some people are not included. Type @ in the composer to search.",
+      mention: "Mention",
+      mentionPerson: "Mention {name}",
+      morePeople: "{count} more people",
       agentContext: "Session and workspace for {agent}",
       renameTooltip: "Rename session",
       renameAria: "Rename session {title}",
