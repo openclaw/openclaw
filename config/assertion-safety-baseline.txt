@@ -27,7 +27,7 @@ extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
-extensions/beam/src/mirror.ts	2
+extensions/beam/src/mirror.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
