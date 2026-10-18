@@ -35,6 +35,78 @@ describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
   it.each([
+    {
+      rejection: "invalid arguments",
+      blocked: false,
+      expected: "⚠️ Browser failed: invalid arguments",
+    },
+    { rejection: "policy denial", blocked: true, expected: "⚠️ Browser blocked" },
+  ])(
+    "describes $rejection through the agent subscription and final reply",
+    async ({ blocked, expected }) => {
+      const execute = vi.fn(async () => ({ content: [], details: {} }));
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "validation-warning",
+      });
+      let requests = 0;
+      const agent = new Agent({
+        initialState: {
+          model: steeringModel,
+          tools: [
+            {
+              name: "browser",
+              label: "browser",
+              description: "Opens a target.",
+              parameters: Type.Object({ target: Type.String() }),
+              execute,
+            },
+          ],
+        },
+        streamFn: () => {
+          const first = requests++ === 0;
+          const message = makeAgentAssistantMessage({
+            content: first
+              ? [
+                  {
+                    type: "toolCall",
+                    id: "call-validation",
+                    name: "browser",
+                    arguments: blocked
+                      ? { target: "PRIVATE_TARGET" }
+                      : { query: "PRIVATE_ARGUMENT" },
+                  },
+                ]
+              : [],
+            stopReason: first ? "toolUse" : "stop",
+          });
+          const stream = createAssistantMessageEventStream();
+          stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+          stream.end();
+          return stream;
+        },
+        beforeToolCall: async () =>
+          blocked ? { block: true, reason: "PRIVATE_POLICY_REASON" } : undefined,
+      });
+      const unsubscribe = agent.subscribe(emit);
+      try {
+        await agent.prompt("Open the target.");
+        await subscription.waitForPendingEvents();
+        expect(execute).not.toHaveBeenCalled();
+        const payloads = buildPayloads({
+          assistantTexts: subscription.assistantTexts,
+          lastAssistant: subscription.getCurrentAttemptAssistant(),
+          lastToolError: subscription.getLastToolError(),
+        });
+        expect(payloads).toEqual([expect.objectContaining({ text: expected, isError: true })]);
+        expect(JSON.stringify(payloads)).not.toContain("PRIVATE_");
+      } finally {
+        unsubscribe();
+        subscription.unsubscribe();
+      }
+    },
+  );
+
+  it.each([
     { firstOutcome: "success", error: undefined, warnings: [] },
     { firstOutcome: "failure", error: "Original tool failure", warnings: ["⚠️ Exec failed"] },
     { firstOutcome: "blocked", error: "Original admission failure", warnings: ["⚠️ Exec blocked"] },

@@ -18,7 +18,8 @@ import type {
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
-import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
+import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { sendReplyRestartRecoveryNotice } from "./reply-turn-recovery-notice.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -38,27 +39,22 @@ export async function dispatchLowLevelChannelReplyFromConfig(
 }
 
 async function dispatchReplyFromConfigWithQueuePolicy(
-  params: DispatchFromConfigParams,
+  inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  // Gateway ingress reserves before ACK so deferred preparation cannot reorder sends.
-  const inheritedTicket = params.replyOptions?.[REPLY_ADMISSION_TICKET];
-  const ticket =
-    inheritedTicket ??
-    reserveReplyAdmissionTicket([params.ctx.SessionKey, params.ctx.CommandTargetSessionKey]);
-  const ticketedParams = ticket
-    ? {
-        ...params,
-        replyOptions: { ...params.replyOptions, [REPLY_ADMISSION_TICKET]: ticket },
-      }
-    : params;
+  const source = prepareReplySourceInput(
+    inputParams.ctx,
+    inputParams.cfg,
+    prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),
+  );
+  const params = { ...inputParams, replyOptions: source.options };
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
   let refreshedSessionSnapshot = false;
   try {
     while (true) {
       try {
         const result = await dispatchReplyFromConfigInner(
-          ticketedParams,
+          params,
           messageAuditTerminal,
           allowActiveQueueResolution,
         );
@@ -68,6 +64,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
         if (
           error instanceof DispatchSessionRefreshRequiredError &&
           !refreshedSessionSnapshot &&
+          source.input?.retirementRequested !== true &&
+          source.input?.claim?.releaseRequested !== true &&
           params.replyOptions?.abortSignal?.aborted !== true
         ) {
           // Rebuild once from the latest store entry. If another lifecycle mutation wins the
@@ -80,9 +78,8 @@ async function dispatchReplyFromConfigWithQueuePolicy(
       }
     }
   } finally {
-    // Ingress owns retries until queue handoff or terminal dispatch cleanup.
-    if (!inheritedTicket) {
-      ticket?.release();
+    if (source.created) {
+      retireUnadoptedReplySource(source.input);
     }
   }
 }

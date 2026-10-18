@@ -1,11 +1,8 @@
 # Gateway Runtime And Delivery
 
-Gateway startup/tests needing only static descriptors must not load bundled plugin runtime.
-
 ## Guardrails
 
-- Resolve plugin-owned Gateway behavior (including auth bypass) via lightweight public artifacts before full plugins. Share one plugin-owned helper; never broad channel registries for static HTTP/server questions.
-- Add descriptor's core resolver, plugin artifact, mirrored full-plugin export together.
+- Plugin-owned Gateway behavior and static descriptors: lightweight artifacts first ([channels](../channels/AGENTS.md), [extensions](../../extensions/AGENTS.md)).
 - Reuse suite servers, authenticated contexts, clients unless proving fresh connect/auth; reset state explicitly. Manual-RPC tests: disable schedulers/pollers/background loops unless proving lifecycle.
 
 ## Process-Owned Files
@@ -26,16 +23,11 @@ Gateway startup/tests needing only static descriptors must not load bundled plug
 
 ## Run Authority And Worker Upgrades
 
-- Run liveness: `src/infra/agent-run-registry.ts`; worker-turn liveness: `src/gateway/worker-environments/placement-turn-claims.ts`. Validate both at use time; HMAC, TTL, matching IDs ≠ live authority.
-- After awaits: compose all applicable live-authority assertions in owner's synchronous pre-commit guard, never after mutation.
-- Sessionless runs: retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Bind abort maps only for registered projected runs.
+- Run liveness: `src/infra/agent-run-registry.ts`; worker-turn liveness: `src/gateway/worker-environments/placement-turn-claims.ts`.
+- Compose live-authority checks in one synchronous pre-commit guard.
+- Sessionless runs: retain prepared admission authority without session projection; canonical reservation owns deduplication. Source-specific RPC waits end only on that source's replay publication, never lifecycle completion/another source. Cancellation targets captured controller source ownership.
 - Worker launch/recovery/reclaim/RPC: exact live placement, environment, owner epoch, placement generation, turn claim required.
 - Incompatible execution-context dialects: Reject/reprovision; never legacy payloads, local downgrade, or revived pre-restart claims.
-
-## Approval Identity Persistence
-
-- Additive execution-identity companion table: create lazily, only for valid bound identity writes. Rows = provenance; parent approvals + live authority govern authorization/decision consumption.
-- Preserve schema version + older-reader tolerance. Changes: prove enabled, disabled, integrity, downgrade, candidate-reopen behavior.
 
 ## Session Row Projection
 
@@ -63,5 +55,4 @@ Gateway startup/tests needing only static descriptors must not load bundled plug
 ## Verification
 
 - Session-creation publication ownership/restart-delivery custody changes: prove public `sessions.create` in isolated Gateway with explicit non-main session, then post-publication read/turn. Creation-helper tests alone ≠ flow proof.
-- Trusted changes: local touched tests (`pnpm test <file> --maxWorkers=1`) + targeted typecheck/lint/format; measure affected Gateway test time before/after. Lazy-loading/bundled-plugin artifact changes: `pnpm build`.
-- Root proof policy: broad proof via PR CI; boxes only for otherwise unavailable coverage with immediate admission. No queue waits, provider fallbacks, reruns/re-pushes just for green. Before attributing red: read CI failure classification.
+- Measure Gateway test time only when the change targets test cost. Lazy-loading/bundled-plugin artifact changes: `pnpm build`.

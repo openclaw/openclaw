@@ -11,6 +11,7 @@ import {
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
 
@@ -307,6 +308,7 @@ function isSemanticModelCallResult(result: unknown): boolean {
 }
 
 export function createModelObserver(params: {
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
   config?: OpenClawConfig;
   streamContext: ModelCallRequestContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
@@ -343,12 +345,15 @@ export function createModelObserver(params: {
       // progress, and the next request retain their authoritative FIFO ordering.
       if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {
         state.semanticProgressEmitted = true;
-        emitCoreSemanticRunProgressDiagnosticEvent({
-          runId: eventBase.runId,
-          ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
-          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
-          reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
-        });
+        emitCoreSemanticRunProgressDiagnosticEvent(
+          {
+            runId: eventBase.runId,
+            ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+            ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+            reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+          },
+          params.diagnosticOwner,
+        );
       }
     },
     sizeTimingFields() {

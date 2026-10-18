@@ -212,7 +212,6 @@ it.each([
         broadcastVoiceWakeChanged: unexpected,
         addChatRun: unexpected,
         removeChatRun: unexpected,
-        chatAbortControllers: new Map(),
         dedupe: new Map(),
         agentRunSeq: new Map(),
         getHealthCache: () => null,

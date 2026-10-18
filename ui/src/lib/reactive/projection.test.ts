@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { createEffect, createRoot, flush, isPending, latest, untrack } from "@solidjs/signals";
+import {
+  createEffect,
+  createRoot,
+  createSignal,
+  flush,
+  isPending,
+  latest,
+  untrack,
+} from "@solidjs/signals";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ValueSignal } from "../board/provider-signals.ts";
 import { projectSource } from "./projection.ts";
@@ -100,6 +108,27 @@ describe("owner projections", () => {
     expect(projection.revision()).toBe(1);
   });
 
+  it("samples reactive owner getters only when their owner publishes", () => {
+    const [value, setValue] = createSignal(1);
+    const owner = new ValueSignal(0);
+    const subscribe = vi.spyOn(owner, "subscribe");
+    const projection = projectSource(owner, {
+      read: value,
+      subscribe: (current, notify) => current.subscribe(notify),
+      equality: "revision",
+    });
+    disposals.push(projection.dispose);
+    const view = observe(projection.read);
+    setValue(2);
+    flush();
+    expect(view.values).toEqual([1]);
+    expect(subscribe).toHaveBeenCalledOnce();
+    owner.set(1);
+    flush();
+    expect(view.values).toEqual([1, 2]);
+    expect(subscribe).toHaveBeenCalledOnce();
+  });
+
   it("honors value equality without suppressing revision-only snapshots", () => {
     const { owner, projection } = source<string>("same", Object.is);
     const listener = vi.fn();
@@ -128,6 +157,17 @@ describe("owner projections", () => {
     flush();
     expect(projection.read()).toBe(8);
     expect(view.values).toEqual([1, 7, 8]);
+  });
+
+  it("cancels a pending revision increment when disposed before the next flush", () => {
+    const { owner, projection, stops } = source(1);
+    observe(projection.read);
+    owner.set(2);
+    projection.dispose();
+    flush();
+    expect(projection.revision()).toBe(0);
+    expect(projection.read()).toBe(2);
+    expect(stops).toHaveBeenCalledOnce();
   });
 
   it("shares acquisition with explicit subscribers and counts duplicate callbacks separately", () => {

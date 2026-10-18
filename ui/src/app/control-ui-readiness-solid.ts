@@ -40,8 +40,7 @@ async function settleShellReadiness(
   if (!outlet || !(await outlet.settlePresentation())) {
     return { kind: "loading", navigationVisible };
   }
-  // Route modules own their page islands; the shell owns only the outlet ref.
-  await outlet.querySelector<CommittedElement>("openclaw-chat-page")?.updateComplete;
+  await outlet.renderedElement?.("openclaw-chat-page")?.updateComplete;
   return { kind: "shell", navigationVisible, sessionKey: shell.activeSessionKey };
 }
 

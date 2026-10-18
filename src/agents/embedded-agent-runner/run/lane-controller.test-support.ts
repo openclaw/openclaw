@@ -9,7 +9,6 @@ type LaneParams = RunEmbeddedAgentParams & { sessionFile: string };
 export function createLaneControllerFixture(
   initialParams: LaneParams,
   options: {
-    sessionLane: string;
     globalLane: string;
     lifecycleGeneration?: string;
     initialQueuedLifecycleGeneration?: string;
@@ -25,7 +24,6 @@ export function createLaneControllerFixture(
   const controller = createEmbeddedRunLaneController({
     getParams: () => params,
     getLifecycleGeneration: () => generation,
-    sessionLane: options.sessionLane,
     globalLane: options.globalLane,
     initialQueuedLifecycleGeneration: options.initialQueuedLifecycleGeneration ?? generation,
     setParams: (next) => {

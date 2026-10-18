@@ -152,6 +152,7 @@ packages/worker-runtime/package.json
 packages/worker-runtime/src/index.ts
 packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
+packages/worker-runtime/src/worker-task-admission.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
 packages/worker-runtime/src/worker-task-error.ts
@@ -1144,6 +1145,7 @@ src/infra/sqlite-pinned-read-snapshot.ts
 src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
+src/infra/sqlite-private-snapshot-fork.ts
 src/infra/sqlite-read-cache.ts
 src/infra/sqlite-reader-lifecycle.ts
 src/infra/sqlite-readonly-auth-schema.ts
@@ -1694,7 +1696,6 @@ src/process/spawn-broker/resource-socket.ts
 src/process/spawn-diagnostics.ts
 src/process/spawn-utils.ts
 src/process/supervisor/cancellation-policy.ts
-src/process/supervisor/darwin-bun-process-census.ts
 src/process/supervisor/darwin-process-command.ts
 src/process/supervisor/service-child-group-ownership.ts
 src/process/windows-command-line.ts
@@ -1745,6 +1746,8 @@ src/security/safe-regex.ts
 src/security/scan-paths.ts
 src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
+src/sessions/session-controller.cleanup-context.ts
+src/sessions/session-controller.owner-context.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts
@@ -1972,6 +1975,7 @@ src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
 src/state/openclaw-state-db-schema-v27-indexes.ts
+src/state/openclaw-state-db-schema-v28-publication.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts

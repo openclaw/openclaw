@@ -156,9 +156,9 @@ vi.mock("../../config/sessions.js", async () => {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
     resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
-    resolveAgentIdFromSessionKey: (sessionKey: string) => {
+    resolveAgentIdFromSessionKey: (sessionKey: string, configuredDefaultAgentId?: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
-      return m?.[1] ?? "main";
+      return m?.[1] ?? configuredDefaultAgentId ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
     resolveAgentMainSessionKey: ({
@@ -183,8 +183,15 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
   );
+  // The accessor barrel is still initializing when this mock resolves (import cycle through the
+  // session controller), so take exact-read helpers from their defining module.
+  const exactRead = await import("../../config/sessions/session-accessor.sqlite-exact-read.js");
+  const listRead = await import("../../config/sessions/session-accessor.sqlite-entry-list.read.js");
   return {
     ...actual,
+    loadExactSessionEntryCandidates: exactRead.loadExactSessionEntryCandidates,
+    loadExactSessionEntryReadOnly: exactRead.loadExactSessionEntryReadOnly,
+    listSessionEntriesReadOnly: listRead.listSessionEntriesReadOnly,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
@@ -446,6 +453,14 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
     typeof import("../../agents/subagents/registry/subagent-registry.js")
   >()),
   replaceSubagentRunAfterSteerCore: mocks.replaceSubagentRunAfterSteer,
+}));
+
+vi.mock("../session-lifecycle-plugin-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-plugin-hooks.js")>()),
+  emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../session-reset-service.js", () => ({

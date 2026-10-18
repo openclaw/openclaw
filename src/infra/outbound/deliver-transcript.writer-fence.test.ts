@@ -1,15 +1,15 @@
 // Mirror fence tests cover which session's writer claim a delivery mirror carries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
-import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
@@ -112,10 +112,15 @@ describe("outbound delivery mirror writer fence", () => {
   it("retains shutdown custody without retaining the sender's scope or writer", async ({
     signal,
   }) => {
-    const lane = resolveSessionLane(RUNNING_SESSION_KEY);
+    const target = {
+      sessionKey: RUNNING_SESSION_KEY,
+      sessionId: "running-requester",
+      agentId: "wolf",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "wolf" }),
+    };
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const turn = enqueueCommandInLane(lane, async () => {
+    const turn = withSessionTurn(target, async () => {
       entered.resolve();
       await release.promise;
     });
@@ -143,16 +148,15 @@ describe("outbound delivery mirror writer fence", () => {
       expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
       release.resolve();
       await withinTest(turn, signal);
-      await withinTest(
-        enqueueCommandInLane(lane, async () => {}),
-        signal,
+      await vi.waitFor(() =>
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce(),
       );
       expect(appendSignals).toEqual([undefined]);
       expect(appendedArgs()).not.toHaveProperty("expectedWriterRunId");
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     } finally {
       release.resolve();
-      await Promise.allSettled([turn, enqueueCommandInLane(lane, async () => {})]);
+      await Promise.allSettled([turn]);
     }
   });
 });

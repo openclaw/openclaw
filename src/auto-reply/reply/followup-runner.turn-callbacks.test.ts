@@ -4,7 +4,6 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { admitFollowupTurn } from "./followup-turn-admission.js";
 import {
   createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
@@ -12,23 +11,26 @@ import {
   resetFollowupTurnTestState,
 } from "./followup-turn-execution.test-support.js";
 import {
-  clearFollowupQueueForTest,
   createQueueSettings,
   createQueueTestRun,
+  rejectQueuePreparation,
 } from "./queue.test-helpers.js";
 import { scheduleFollowupDrain } from "./queue/drain.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { FollowupRunDeferredError, type FollowupRun } from "./queue/types.js";
+import type { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { expectCallCounts, expectCalls } from "./reply-contract.test-support.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 
-const admissionState = vi.hoisted(() => ({ beforeAdmission: vi.fn<() => Promise<void>>() }));
+const admissionState = vi.hoisted(() => ({
+  beforeAdmission: vi.fn<(queued: FollowupRun) => Promise<void>>(),
+}));
 
 // mock-isolation: Keep database admission outside this queue-to-execution ownership proof.
-vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: async ({ queued }: Parameters<typeof admitFollowupTurn>[0]) => {
-    await admissionState.beforeAdmission();
+vi.mock("./reply-agent-turn-preparation.js", () => ({
+  prepareReplyAgentTurn: async ({ queued }: Parameters<typeof prepareReplyAgentTurn>[0]) => {
+    await admissionState.beforeAdmission(queued);
     return {
       kind: "admitted",
       turn: createFollowupTurnTestTurn({ runId: `execution-${queued.prompt}`, queued }),
@@ -78,7 +80,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  clearFollowupQueueForTest(key);
+  clearFollowupQueue(key);
   vi.useRealTimers();
 });
 
@@ -97,10 +99,10 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
     });
     let attempts = 0;
     if (scenario === "deferred restart") {
-      admissionState.beforeAdmission.mockImplementationOnce(async () => {
+      admissionState.beforeAdmission.mockImplementationOnce(async (queued) => {
         firstStarted.resolve();
         await releaseFirst.promise;
-        throw new FollowupRunDeferredError("reply lane busy");
+        rejectQueuePreparation(queued, new FollowupRunDeferredError("reply lane busy"));
       });
     }
     state.execute.mockImplementation(async ({ opts, followupRun }: AgentTurnParams) => {
@@ -133,6 +135,7 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
     });
     const createEventExecution = () => ({
       deliver: false as const,
+      onFailed: vi.fn<NonNullable<SessionEventExecution["onFailed"]>>(),
       onStarted: vi.fn<SessionEventExecution["onStarted"]>(),
       onTerminal: vi.fn<SessionEventExecution["onTerminal"]>(),
     });
@@ -201,6 +204,7 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
           [own.resolveReplyDelivery, [[1], [2]]],
         );
       }
+      expectCallCounts(0, ownedEvent.onFailed, decoyEvent.onFailed);
       expect(ownedEvent.onStarted).toHaveBeenCalledExactlyOnceWith("execution-B");
       expect(ownedEvent.onTerminal).toHaveBeenCalledExactlyOnceWith("execution-B", "completed");
       expectCallCounts(0, decoyEvent.onStarted, decoyEvent.onTerminal);

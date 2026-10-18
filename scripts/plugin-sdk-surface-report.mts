@@ -288,7 +288,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
       // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
       // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
-      3808,
+      // +1: the shared message-tool source-reply finality resolver.
+      3809,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -329,7 +330,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
       // +1: maintainer-requested context-engine transcript watermark reader.
-      2206,
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      2207,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

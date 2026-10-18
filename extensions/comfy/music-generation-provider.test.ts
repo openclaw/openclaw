@@ -1,7 +1,6 @@
 import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
-import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
+import { buildComfyConfig, fetchGuardJson, registerComfyProviders } from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -12,6 +11,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
+const comfyProviders = registerComfyProviders();
+
 describe("comfy music-generation provider", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -19,7 +20,7 @@ describe("comfy music-generation provider", () => {
   });
 
   it("registers the workflow model", () => {
-    const provider = buildComfyMusicGenerationProvider();
+    const provider = comfyProviders.music;
 
     expect(provider.defaultModel).toBe("workflow");
     expect(provider.models).toEqual(["workflow"]);
@@ -48,7 +49,7 @@ describe("comfy music-generation provider", () => {
         release: vi.fn(async () => {}),
       });
 
-    const provider = buildComfyMusicGenerationProvider();
+    const provider = comfyProviders.music;
     const result = await provider.generateMusic({
       provider: "comfy",
       model: "workflow",
@@ -101,7 +102,7 @@ describe("comfy music-generation provider", () => {
       };
     });
 
-    const provider = buildComfyMusicGenerationProvider();
+    const provider = comfyProviders.music;
     await expect(
       provider.generateMusic({
         provider: "comfy",

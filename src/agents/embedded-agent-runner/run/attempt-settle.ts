@@ -20,7 +20,7 @@ import { withSessionManagerAppend } from "../../sessions/session-manager-append-
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
 import { log } from "../logger.js";
-import { clearActiveEmbeddedRun } from "../runs.js";
+import { detachActiveEmbeddedRun } from "../runs.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-finalize.js";
@@ -42,6 +42,7 @@ const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
 
 type StreamCleanupInput = {
+  attachment: PreparedStreamRuntime["stream"]["registration"];
   attempt: EmbeddedRunAttemptParams;
   clearAttemptTimeoutTimers: () => void;
   queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
@@ -63,11 +64,13 @@ function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error
     cleanups.push([
       "active run cleanup",
       () =>
-        clearActiveEmbeddedRun(
+        detachActiveEmbeddedRun(
           attempt.sessionId,
           input.queueHandle,
           attempt.sessionKey,
           attempt.sessionFile,
+          undefined,
+          input.attachment,
         ),
     ]);
   }
@@ -363,6 +366,7 @@ export async function runEmbeddedAttemptSettledPhase(
     }
   } finally {
     cleanupError = cleanupEmbeddedAttemptStreamExecution({
+      attachment: preparedStreamRuntime.stream.registration,
       attempt,
       clearAttemptTimeoutTimers,
       queueHandle,

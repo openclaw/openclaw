@@ -18,8 +18,8 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   readSubagentSessionEntry: () => undefined,
   readSessionMessagesAsync: async () => [],
   resolveSessionStorePathCore: () => "/unused",
-  isEmbeddedAgentRunActive: () => false,
-  waitForEmbeddedAgentRunEnd: async () => true,
+  isSessionRunActive: () => false,
+  waitForSessionRunEnd: async () => true,
 }));
 
 afterEach(() => {

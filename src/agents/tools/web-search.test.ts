@@ -118,7 +118,11 @@ const normalizedProviderFixtures = [
     "brave",
     { docs: "https://docs.openclaw.ai/tools/web" },
     { error: "missing_brave_api_key" },
-    { kind: "error", error: "provider_error", message: "missing_brave_api_key" },
+    {
+      kind: "error",
+      error: "provider_error",
+      message: `web_search is not set up: provider "brave" has no credentials on this Gateway. Searching again or rewording the query fails the same way until the operator configures it. Use another available route instead, such as fetching a known URL or a browser, if this session has one, and tell the user if search was needed.\nProvider setup details:\nmissing_brave_api_key`,
+    },
   ),
 ];
 
@@ -216,6 +220,25 @@ describe("web_search normalized output contract", () => {
       message: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
     expect(normalized).not.toHaveProperty("docs");
+  });
+
+  it("states missing credentials as trusted guidance and keeps provider prose wrapped", () => {
+    const normalized = normalize({
+      error: "missing_demo_api_key",
+      message: "Set DEMO_KEY in the Gateway environment.",
+    });
+    if (normalized.kind !== "error") {
+      throw new Error("expected error branch");
+    }
+    const [guidance, detail] = normalized.message.split("\nProvider setup details:\n");
+    expect(guidance).toMatch(/^web_search is not set up: provider "external-demo"/u);
+    expect(guidance).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(detail?.trimStart()).toMatch(/^<<<EXTERNAL_UNTRUSTED_CONTENT/u);
+    expect(detail).toContain("Set DEMO_KEY in the Gateway environment.");
+    // Other provider errors carry no core guidance.
+    expect(normalize({ error: "rate_limited" })).toMatchObject({
+      message: expect.not.stringContaining("not set up"),
+    });
   });
 
   it("keeps structured provider error serialization surrogate-safe at the cap", () => {

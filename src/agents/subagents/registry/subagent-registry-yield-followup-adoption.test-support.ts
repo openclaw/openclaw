@@ -238,6 +238,10 @@ export function registerYieldFollowupAdoptionTests({
       mockGatewayMethods(mocks.callGateway, {
         "agent.wait": createDeferred<Record<string, unknown>>().promise,
       });
+      mocks.entries[ORIGINAL_REQUESTER] = createSessionEntry({
+        sessionId: "sess-yield-requester",
+        lifecycleRevision: "revision-yield-requester",
+      });
       mocks.entries[CHILD_SESSION_KEY] = createSessionEntry({
         sessionId: "sess-yield-followup",
         lifecycleRevision: "revision-yield-followup",

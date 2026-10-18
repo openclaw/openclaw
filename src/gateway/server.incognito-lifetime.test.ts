@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import {
@@ -13,6 +12,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { isSessionRunActiveForKey } from "../sessions/session-controller.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -27,6 +28,7 @@ import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import * as deletion from "./server-methods/sessions-delete.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 const config = { agents: { entries: { main: {} } } };
@@ -130,7 +132,13 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
     });
     await time.advanceBy(60 * 60_000 - 1);
     expect(loadSessionEntryReadOnly(scope)).toBeDefined();
-    const active = replyRunRegistry.begin({ ...scope, resetTriggered: false });
+    const source = createRpcSourceForTest({}, { ...scope, storeScope: scope.storePath });
+    const release = await claimRpcSourceForTest(source);
+    const active = source.input.claim?.operation;
+    if (!active) {
+      throw new Error("Expected the controller to own the Incognito turn");
+    }
+    active.abortSignal.addEventListener("abort", release, { once: true });
     try {
       await time.advanceBy(1);
       const result = await deleted.promise;
@@ -140,7 +148,7 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
       });
       expect(deletes).toHaveBeenCalledOnce();
       expect(active.abortSignal.aborted).toBe(true);
-      expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(false);
+      expect(isSessionRunActiveForKey(scope.sessionKey)).toBe(false);
       await flushPendingSessionsChangedEvents(context);
       expect(logWarning).not.toHaveBeenCalled();
       expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
@@ -154,7 +162,7 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
         expect.any(Object),
       );
     } finally {
-      active.complete();
+      release();
     }
   });
 });
@@ -274,7 +282,7 @@ it("refuses work while session cleanup retries", async () => {
       }),
     );
     expect(await loadTranscriptEvents(scope)).toEqual([]);
-    expect(context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     await time.advanceBy(60_000);
     await expect(deleted.promise).resolves.toMatchObject({ ok: true, result: { deleted: true } });
     expect(deletes).toHaveBeenCalledTimes(2);

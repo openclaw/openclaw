@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { transitionMainSessionRecovery as transition } from "./main-session-recovery-state.js";
 import { claimForeground, recoveryEntry } from "./main-session-recovery-state.test-support.js";
@@ -188,8 +189,6 @@ describe("main session recovery terminal-only residue", () => {
 
         await expect(
           recoverStore({
-            activeSessionIds: [],
-            activeSessionKeys: [],
             gatewayRuntime: unusedGatewayRuntime,
             handledSessionKeys: new Set(),
             storePath,
@@ -224,7 +223,7 @@ describe("main session recovery terminal-only residue", () => {
   it("retires terminal residue before orphan marking without touching a current owner", async () => {
     const liveSessionKey = "agent:main:live";
     const startupCheckedStorePaths = new Set<string>();
-    await withStore(async ({ read, write, mark }) => {
+    await withStore(async ({ storePath, read, write, mark }) => {
       await write(settledEntry());
       await write(
         settledEntry({
@@ -236,13 +235,19 @@ describe("main session recovery terminal-only residue", () => {
         liveSessionKey,
       );
 
-      await expect(
-        mark({
-          activeSessionIds: ["live-session"],
-          activeSessionKeys: [],
-          startupCheckedStorePaths,
-        }),
-      ).resolves.toEqual({ marked: 0, skipped: 1 });
+      const liveWork = await beginSessionEffect({
+        scope: storePath,
+        identities: [liveSessionKey, "live-session"],
+        assertAllowed: () => {},
+      });
+      try {
+        await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({
+          marked: 0,
+          skipped: 1,
+        });
+      } finally {
+        liveWork.release();
+      }
       await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({ marked: 0, skipped: 0 });
 
       const terminal = read();

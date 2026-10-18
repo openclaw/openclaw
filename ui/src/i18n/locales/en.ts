@@ -482,13 +482,7 @@ export const en: TranslationMap & {
       subtitle: "Bot status and channel configuration.",
     },
     whatsapp: {
-      title: "WhatsApp",
-      subtitle: "Link WhatsApp Web and monitor connection health.",
-      phoneNumber: "Phone number",
       loggedOut: "Logged out.",
-      logoutConfirmTitle: "Log out of WhatsApp account {accountId}?",
-      logoutConfirmMessage:
-        "Logging out of account {accountId} stops its listener and deletes its saved credentials.",
       logoutNotCleared:
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },
@@ -2722,10 +2716,21 @@ export const en: TranslationMap & {
       environment: "Environment",
       context: "Context",
       contextMessages: "Messages & other",
-      contextFiles: "Workspace memory",
+      contextFiles: "Workspace files",
       contextTools: "Tool schemas",
-      contextSkills: "Skills",
-      contextSystem: "System prompt",
+      contextAgentWorkspace: "Agent workspace",
+      contextProject: "Project",
+      contextPersonal: "Personal instructions",
+      contextOtherFiles: "Other files",
+      contextSystemTools: "System tools",
+      contextMcpTools: "MCP tools",
+      contextClientTools: "Client tools",
+      contextAvailableOnDemand: "Available on demand",
+      contextNotLoaded: "Not loaded",
+      contextDeferredEstimate:
+        "Potential schema sizes, not included in usage above. Discovery descriptions and previously retrieved schemas still use context.",
+      contextSkills: "Skills catalog",
+      contextSystem: "System instructions",
       contextFree: "Free space",
       contextUnverified: "Unverified",
       contextEstimate:

@@ -76,13 +76,15 @@ export function observePluginProperties<P extends object>(
 }
 
 function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
-  let container!: HTMLDivElement;
-  // Host-owned content is mounted into the plugin's imperative DOM island.
-  createEffect(
-    () => props.mount,
-    (mount) => mount?.(container),
+  return (
+    <Show when={props.mount} keyed>
+      {(mount) => {
+        let container!: HTMLDivElement;
+        onSettled(() => mount(container));
+        return <div style={{ display: "contents" }} ref={(element) => (container = element)} />;
+      }}
+    </Show>
   );
-  return <div style={{ display: "contents" }} ref={(element) => (container = element)} />;
 }
 
 const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();

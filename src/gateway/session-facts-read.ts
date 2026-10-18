@@ -81,8 +81,10 @@ export function prepareFactsRead(
         ?.has(identityId) ?? false,
   });
   const active = createVisibleActiveSessionRunProjector(
-    resolved.context,
     rowContext.projectedAgentRuns,
+    undefined,
+    resolved.context.resolveGatewayContext,
+    read.physicalPaths,
   );
   const currentRows = { ...rowContext, subagentRuns: rowContext.subagentRuns.atTime(now) };
   const prOwner = resolved.context.controlUiSessionPullRequests;
@@ -108,6 +110,7 @@ export function prepareFactsRead(
       }
       const row = record.materialized.row;
       const live = active({
+        storePath: record.storeTarget.storePath,
         requestedKey: record.key,
         canonicalKey: record.key,
         sessionId: record.entry.sessionId,
