@@ -69,37 +69,49 @@ describe("probeGatewayStatus", () => {
     capability: "pairing_pending",
   } as const;
 
-  it("projects allowlisted connect failure details without serializing raw payloads", async () => {
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error: "connect failed",
-      close: { code: 1008, reason: "connect failed" },
-      connectErrorDetails: {
-        code: "PAIRING_REQUIRED",
-        reason: "scope-upgrade",
-        secret: "do-not-print",
-      },
-      auth: pairingPendingAuth,
-      gatewayReached: true,
-    });
-
-    const result = await probe({
-      json: true,
-    });
-
-    assert(!result.ok);
-    expect(result.connectFailure).toEqual({
-      kind: "pairing-required",
-      detailCode: "PAIRING_REQUIRED",
-    });
-    expect(result).not.toHaveProperty("connectErrorDetails");
-    expect(gatewayProbeResultSawGateway(result)).toBe(true);
-
-    const json = JSON.stringify(createDaemonStatus(result));
-    expect(json).not.toContain("do-not-print");
-    expect(json).not.toContain('"secret"');
-    expect(json).not.toContain("scope-upgrade");
-  });
+  it.each([
+    {
+      code: "PAIRING_REQUIRED",
+      reason: "scope-upgrade",
+      secret: "do-not-print",
+      reached: true,
+      failure: { kind: "pairing-required", detailCode: "PAIRING_REQUIRED" },
+    },
+    {
+      code: "FUTURE_SENSITIVE_CODE",
+      reason: undefined,
+      secret: "do-not-print-unknown",
+      reached: undefined,
+      failure: { kind: "gateway-rejected" },
+    },
+  ])(
+    "projects only allowlisted $code details into daemon status",
+    async ({ code, reason, secret, reached, failure }) => {
+      probeGatewayMock.mockResolvedValueOnce({
+        ok: false,
+        error: "connect failed",
+        close: { code: 1008, reason: "connect failed" },
+        connectErrorDetails: { code, secret, ...(reason ? { reason } : {}) },
+        auth: pairingPendingAuth,
+        ...(reached ? { gatewayReached: true } : {}),
+      });
+      const result = await probe({ json: true });
+      assert(!result.ok);
+      expect(result.connectFailure).toEqual(failure);
+      if (reached) {
+        expect(result).not.toHaveProperty("connectErrorDetails");
+        expect(gatewayProbeResultSawGateway(result)).toBe(true);
+      }
+      const json = JSON.stringify(createDaemonStatus(result));
+      expect(json).not.toContain(secret);
+      if (reason) {
+        expect(json).not.toContain('"secret"');
+        expect(json).not.toContain(reason);
+      } else {
+        expect(json).not.toContain(code);
+      }
+    },
+  );
 
   it("does not treat an unvalidated transport close as a Gateway response", async () => {
     probeGatewayMock.mockResolvedValueOnce({
@@ -114,30 +126,6 @@ describe("probeGatewayStatus", () => {
 
     assert(!result.ok);
     expect(gatewayProbeResultSawGateway(result)).toBe(false);
-  });
-
-  it("omits unknown detail codes from serialized daemon status", async () => {
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
-      error: "connect failed",
-      close: { code: 1008, reason: "connect failed" },
-      connectErrorDetails: {
-        code: "FUTURE_SENSITIVE_CODE",
-        secret: "do-not-print-unknown",
-      },
-      auth: pairingPendingAuth,
-    });
-
-    const result = await probe({
-      json: true,
-    });
-
-    assert(!result.ok);
-    expect(result.connectFailure).toEqual({ kind: "gateway-rejected" });
-
-    const json = JSON.stringify(createDaemonStatus(result));
-    expect(json).not.toContain("FUTURE_SENSITIVE_CODE");
-    expect(json).not.toContain("do-not-print-unknown");
   });
 
   it("uses one timeout-bound status RPC when requireRpc is enabled", async () => {
@@ -244,31 +232,30 @@ describe("probeGatewayStatus", () => {
     });
   });
 
-  it("redacts credential-bearing URLs echoed in probe failure text", async () => {
-    probeGatewayMock.mockResolvedValueOnce({
-      ok: false,
+  it.each([
+    {
+      thrown: false,
       error: "connect failed to ws://user:secret@gw.example.com:18789?token=abc123",
-      close: null,
-    });
-
-    const result = await probe({});
-
+      redacted: "ws://***:***@gw.example.com:18789?token=***",
+    },
+    {
+      thrown: true,
+      error: "dial ws://user:secret@gw.example.com:18789 refused",
+      redacted: "ws://***:***@gw.example.com:18789",
+    },
+  ])("redacts credential-bearing URLs (thrown=$thrown)", async ({ thrown, error, redacted }) => {
+    if (thrown) {
+      probeGatewayMock.mockRejectedValueOnce(new Error(error));
+    } else {
+      probeGatewayMock.mockResolvedValueOnce({ ok: false, error, close: null });
+    }
+    const result = await probe();
     assert(!result.ok);
     expect(result.error).not.toContain("secret");
-    expect(result.error).not.toContain("abc123");
-    expect(result.error).toContain("ws://***:***@gw.example.com:18789?token=***");
-  });
-
-  it("redacts credential-bearing URLs in thrown probe errors", async () => {
-    probeGatewayMock.mockRejectedValueOnce(
-      new Error("dial ws://user:secret@gw.example.com:18789 refused"),
-    );
-
-    const result = await probe({});
-
-    assert(!result.ok);
-    expect(result.error).not.toContain("secret");
-    expect(result.error).toContain("ws://***:***@gw.example.com:18789");
+    if (!thrown) {
+      expect(result.error).not.toContain("abc123");
+    }
+    expect(result.error).toContain(redacted);
   });
 
   it("preserves event-loop evidence when an admitted status RPC times out", async () => {

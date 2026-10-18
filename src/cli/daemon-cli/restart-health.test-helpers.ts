@@ -5,7 +5,6 @@ import {
 } from "../../../packages/gateway-client/src/protocol-request.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import type { ConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
@@ -44,19 +43,15 @@ vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
       return {
         ...probe,
         requestHttp: (params: Parameters<ConfiguredGatewayLocalProbe["requestHttp"]>[0]) => {
-          if (params.pathname === "/startupz") {
-            return requestStartupProbe(params);
-          }
-          // Only intercept readiness endpoints when a test provides an explicit
-          // implementation; otherwise fall through to the real loopback transport
-          // so existing real-HTTP readiness tests keep exercising real sockets.
-          if (
-            (params.pathname === "/healthz" || params.pathname === "/readyz") &&
-            requestReadinessProbe.getMockImplementation() !== undefined
-          ) {
-            return requestReadinessProbe(params);
-          }
-          return probe.requestHttp(params);
+          // Unconfigured readiness mocks retain the real loopback transport.
+          const mock =
+            params.pathname === "/startupz"
+              ? requestStartupProbe
+              : ["/healthz", "/readyz"].includes(params.pathname) &&
+                  requestReadinessProbe.getMockImplementation() !== undefined
+                ? requestReadinessProbe
+                : undefined;
+          return mock ? mock(params) : probe.requestHttp(params);
         },
       };
     },
@@ -93,14 +88,11 @@ export const resolveGatewayServiceProbeHosts = vi.fn<
 >(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports-format.js", () => ({
-  classifyPortListener: (listener: unknown) => classifyPortListener(listener),
+  classifyPortListener,
   formatPortDiagnostics: vi.fn(() => []),
 }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({
-  inspectPortUsage: (port: number, options?: { probeHosts?: readonly string[] }) =>
-    inspectPortUsage(port, options),
-}));
+vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage }));
 
 vi.mock("../../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
@@ -108,32 +100,25 @@ vi.mock("../../infra/ports-probe.js", () => ({
 
 vi.mock("../../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../gateway/call.js")>()),
-  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
+  callGateway,
 }));
 
-vi.mock("../../config/io.js", () => ({
-  createConfigIO: (opts: unknown) => createConfigIO(opts),
-}));
+vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
 vi.mock("../../gateway/probe-auth.js", () => ({
-  resolveGatewayProbeAuthSafeWithSecretInputs: (opts: unknown) =>
-    resolveGatewayProbeAuthSafeWithSecretInputs(opts),
+  resolveGatewayProbeAuthSafeWithSecretInputs,
 }));
 
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
-  hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
+  hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
 }));
 
-vi.mock("../../infra/gateway-owner-lease.js", () => ({
-  readGatewayOwnerLease: (params: { env?: NodeJS.ProcessEnv; port?: number }) =>
-    readGatewayOwnerLease(params),
-}));
+vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockIdentity: (params?: { env?: NodeJS.ProcessEnv }) =>
-    readActiveGatewayLockIdentity(params),
+  readActiveGatewayLockIdentity,
   isSameGatewayLockIdentity: (
     previous: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
     current: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
@@ -146,16 +131,13 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({
-  resolveGatewayServiceProbeHosts: (params: unknown) => resolveGatewayServiceProbeHosts(params),
+  resolveGatewayServiceProbeHosts,
 }));
 
-vi.mock("../../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
-  return {
-    ...actual,
-    sleep: (ms: number) => sleep(ms),
-  };
-});
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  sleep,
+}));
 
 const originalPlatform = process.platform;
 
@@ -218,46 +200,19 @@ export async function inspectGatewayRestartWithSnapshot(params: {
   expectedVersion?: string;
   expectedBuildId?: string;
 }) {
-  const service = makeGatewayService(params.runtime);
-  inspectPortUsage.mockResolvedValue(params.portUsage);
+  const { runtime, portUsage: usage, ...identity } = params;
+  inspectPortUsage.mockResolvedValue(usage);
   const { inspectGatewayRestart } = await import("./restart-health.js");
   return inspectGatewayRestart({
-    service,
+    service: makeGatewayService(runtime),
     port: 18789,
     probeHosts: ["127.0.0.1"],
-    ...(params.expectedVersion === undefined ? {} : { expectedVersion: params.expectedVersion }),
-    ...(params.expectedBuildId === undefined ? {} : { expectedBuildId: params.expectedBuildId }),
-  });
-}
-
-export async function inspectUnknownListener(params: {
-  runtime: { status: "running"; pid: number } | { status: "stopped" };
-}) {
-  Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-  classifyPortListener.mockReturnValue("unknown");
-  return inspectGatewayRestartWithSnapshot({
-    runtime: params.runtime,
-    portUsage: portUsage([{ pid: 10920, command: "unknown" }]),
-  });
-}
-
-export async function inspectAmbiguousOwnershipWithProbe(error?: Error) {
-  classifyPortListener.mockReturnValue("unknown");
-  if (error) {
-    callGateway.mockRejectedValue(error);
-  } else {
-    callGateway.mockImplementation(gatewayHealthResponse());
-  }
-  return inspectGatewayRestartWithSnapshot({
-    runtime: { status: "running", pid: 8000 },
-    portUsage: portUsage([{ commandLine: "" }]),
+    ...identity,
   });
 }
 
 export async function waitForStoppedFreeGatewayRestart(
-  params: {
-    supervisorKeepsAlive?: boolean;
-  } = {},
+  params: { supervisorKeepsAlive?: boolean } = {},
 ) {
   const attempts = process.platform === "win32" ? 360 : 120;
   const service = makeGatewayService({ status: "stopped" });
@@ -279,14 +234,9 @@ export function resetRestartHealthMocks() {
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
   inspectPortUsage.mockReset();
-  readBestEffortConfig.mockReset();
-  // These transport-mocked lifecycle tests spoof OS state; they must not load
-  // native credential storage under a platform different from the running host.
-  readBestEffortConfig.mockResolvedValue({ gateway: { auth: { mode: "none" } } });
-  createConfigIO.mockReset();
-  createConfigIO.mockReturnValue({
-    readBestEffortConfig: () => readBestEffortConfig(),
-  });
+  // Spoofed OS state must not load native credential storage for that platform.
+  readBestEffortConfig.mockReset().mockResolvedValue({ gateway: { auth: { mode: "none" } } });
+  createConfigIO.mockReset().mockReturnValue({ readBestEffortConfig });
   resolveGatewayProbeAuthSafeWithSecretInputs.mockReset().mockResolvedValue({ auth: {} });
   inspectPortUsage.mockResolvedValue(portUsage([], { port: 0 }));
   sleep.mockReset().mockImplementation(async (ms: number) => {

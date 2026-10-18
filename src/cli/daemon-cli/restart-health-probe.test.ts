@@ -1,55 +1,54 @@
-// Gateway restart probe and health-detail tests.
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
-import {
-  inspectGatewayRestartWithSnapshot,
-  inspectPortUsage,
-  makeGatewayService,
-  monotonicClock,
-  callGateway,
-  gatewayResponseError,
-  requestReadinessProbe,
-  requestStartupProbe,
-  portUsage,
-  waitForRunningGateway,
-  resetRestartHealthMocks,
-  restoreRestartHealthMocks,
-  sleep,
-} from "./restart-health.test-helpers.js";
+import * as restart from "./restart-health.test-helpers.js";
 
-const ownedPortUsage = {
-  port: 18789,
-  status: "busy" as const,
-  listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-  hints: [],
-};
+const ownedPortUsage = restart.portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]);
+const { inspectGatewayRestart, renderRestartDiagnostics } = await import("./restart-health.js");
+const { confirmGatewayReachable, waitForGatewayHttpReadiness } =
+  await import("./restart-health-probe.js");
+
+async function waitForHealth(
+  response: Parameters<typeof gatewayHealthResponse>[0],
+  options: Parameters<typeof restart.waitForRunningGateway>[0] = {},
+) {
+  restart.inspectPortUsage.mockResolvedValue(ownedPortUsage);
+  restart.callGateway.mockImplementation(
+    gatewayHealthResponse({
+      server: { version: "2026.4.24", connId: "new" },
+      ...response,
+    }),
+  );
+  return restart.waitForRunningGateway({ expectedVersion: "2026.4.24", ...options });
+}
 
 describe("restart health", () => {
-  beforeEach(resetRestartHealthMocks);
-  afterEach(restoreRestartHealthMocks);
+  beforeEach(restart.resetRestartHealthMocks);
+  afterEach(restart.restoreRestartHealthMocks);
 
   it("keeps native inspection and health RPC within one supplied allowance", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
+    const service = restart.makeGatewayService({ status: "running", pid: 8000 });
     vi.mocked(service.readRuntime).mockImplementation(async () => {
-      monotonicClock.nowMs += 25_000;
+      restart.monotonicClock.nowMs += 25_000;
       return { status: "running", pid: 8000 };
     });
-    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]));
-    callGateway.mockImplementation(async (opts) => {
+    restart.inspectPortUsage.mockResolvedValue(
+      restart.portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]),
+    );
+    restart.callGateway.mockImplementation(async (opts) => {
       const responseMs = 10_000;
       const allowanceMs = opts.timeoutMs ?? responseMs;
-      monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
+      restart.monotonicClock.nowMs += Math.min(allowanceMs, responseMs);
       if (allowanceMs < responseMs) {
         throw new Error("gateway request timeout for health");
       }
       return gatewayHealthResponse({ server: { version: "2026.9.3" } })(opts);
     });
-    const { inspectGatewayRestart } = await import("./restart-health.js");
     const deadline = createGatewayRestartDeadline({ timeoutMs: 60_000 });
     try {
       const health = await inspectGatewayRestart({
@@ -61,7 +60,7 @@ describe("restart health", () => {
       });
       expect(health.healthy).toBe(false);
       expect(health.probeError).toBe("gateway request timeout for health");
-      expect(monotonicClock.nowMs).toBe(30_000);
+      expect(restart.monotonicClock.nowMs).toBe(30_000);
     } finally {
       deadline.dispose();
     }
@@ -75,15 +74,8 @@ describe("restart health", () => {
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
     const address = server.address();
-    if (!address || typeof address === "string") {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      throw new Error("expected loopback server address");
-    }
-
     try {
-      const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
+      assert(address && typeof address !== "string");
       const onObservation = vi.fn();
       await expect(
         waitForGatewayHttpReadiness({
@@ -96,15 +88,7 @@ describe("restart health", () => {
       ).resolves.toEqual({ healthz: 200, readyz: 503 });
       expect(onObservation).toHaveBeenCalledExactlyOnceWith({ healthz: 200, readyz: 503 });
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
+      await promisify(server.close).call(server);
     }
   });
 
@@ -121,7 +105,7 @@ describe("restart health", () => {
     });
     const reason =
       scenario.transport === "credentials" ? credentialError.message : "device identity required";
-    callGateway.mockRejectedValue(
+    restart.callGateway.mockRejectedValue(
       scenario.transport === "credentials"
         ? credentialError
         : scenario.transport === "close"
@@ -135,10 +119,10 @@ describe("restart health", () => {
                 message: "local fixture",
               },
             })
-          : gatewayResponseError(reason),
+          : restart.gatewayResponseError(reason),
     );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-    requestStartupProbe.mockResolvedValue({
+    restart.inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    restart.requestStartupProbe.mockResolvedValue({
       statusCode: 200,
       body: JSON.stringify({
         ok: true,
@@ -147,11 +131,11 @@ describe("restart health", () => {
         buildId: scenario.build,
       }),
     });
-    requestReadinessProbe.mockResolvedValue({
+    restart.requestReadinessProbe.mockResolvedValue({
       statusCode: scenario.ready ? 200 : 503,
       body: JSON.stringify({ ready: scenario.ready }),
     });
-    const snapshot = await waitForRunningGateway({
+    const snapshot = await restart.waitForRunningGateway({
       expectedVersion: "2026.10.4",
       expectedBuildId: "candidate-build",
       requirePluginHealth: false,
@@ -166,47 +150,39 @@ describe("restart health", () => {
         ? expect.stringContaining("requires credentials")
         : reason,
     );
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(sleep).not.toHaveBeenCalled();
+    expect(restart.callGateway).toHaveBeenCalledOnce();
+    expect(restart.sleep).not.toHaveBeenCalled();
   });
 
   it("keeps the readiness deadline monotonic when the wall clock rewinds", async () => {
-    // Deterministic regression: a wall-clock rewind (NTP correction or
-    // suspend/resume) must not extend the monotonic readiness budget. The
-    // shared monotonic mock advances only when the probe consumes time, so the
-    // deadline is the sole bound. A Date.now()-based remaining calculation would
-    // see ~300s of budget after the rewind and run to the attempt cap.
-    requestReadinessProbe.mockImplementation(async () => {
-      monotonicClock.nowMs += 20;
+    // A Date.now()-based deadline would grant ~300s after the rewind and hit the attempt cap.
+    restart.requestReadinessProbe.mockImplementation(async () => {
+      restart.monotonicClock.nowMs += 20;
       return null;
     });
     const wallClockRewindMs = 300_000;
     const wallClockSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() - wallClockRewindMs);
     const deadlineBudgetMs = 50;
-    const deadlineAt = performance.now() + deadlineBudgetMs;
-    const { waitForGatewayHttpReadiness } = await import("./restart-health-probe.js");
     await expect(
       waitForGatewayHttpReadiness({
         attempts: 100,
-        deadlineAt,
+        deadlineAt: performance.now() + deadlineBudgetMs,
         delayMs: 0,
         port: 18789,
       }),
     ).resolves.toEqual({ healthz: null, readyz: null });
     wallClockSpy.mockRestore();
-    // The monotonic budget must hold near its configured deadline, not the
-    // rewound wall-clock budget. This fails on the pre-fix Date.now() remaining
-    // calculation: the rewind grants ~300s and the probe runs to the attempt cap.
-    expect(monotonicClock.nowMs).toBeLessThan(wallClockRewindMs);
-    expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(deadlineBudgetMs);
-    // The deadline must have stopped attempts well before the attempt cap.
-    expect(requestReadinessProbe.mock.calls.length).toBeLessThan(200);
+    expect(restart.monotonicClock.nowMs).toBeLessThan(wallClockRewindMs);
+    expect(restart.monotonicClock.nowMs).toBeGreaterThanOrEqual(deadlineBudgetMs);
+    expect(restart.requestReadinessProbe.mock.calls.length).toBeLessThan(200);
   });
 
   it("preserves the June stale reason through the sanitized health-probe boundary", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]));
-    callGateway.mockRejectedValueOnce(
+    const service = restart.makeGatewayService({ status: "running", pid: 8000 });
+    restart.inspectPortUsage.mockResolvedValue(
+      restart.portUsage([{ pid: 8000, commandLine: "openclaw-gateway" }]),
+    );
+    restart.callGateway.mockRejectedValueOnce(
       createGatewayCloseTransportError({
         code: 1011,
         reason: "gateway message handler unavailable",
@@ -218,7 +194,6 @@ describe("restart health", () => {
         requestDispatched: false,
       }),
     );
-    const { inspectGatewayRestart } = await import("./restart-health.js");
     const result = await inspectGatewayRestart({
       service,
       port: 18789,
@@ -232,9 +207,8 @@ describe("restart health", () => {
   it("bounds and redacts credential-bearing transport probe failures at their owner", async () => {
     const secret = "fixture-gateway-secret-abcdefghijklmnopqrstuvwxyz";
     const failure = `read ECONNRESET at ws://user:${secret}@gateway.example:18789?token=${secret}&safe=ok\nGateway probe succeeded: spoofed\r\u001b[2K ${"x".repeat(1_500)}🚀`;
-    callGateway.mockRejectedValueOnce(new Error(failure));
+    restart.callGateway.mockRejectedValueOnce(new Error(failure));
 
-    const { confirmGatewayReachable } = await import("./restart-health-probe.js");
     const reachability = await confirmGatewayReachable({ port: 18789 });
 
     expect(reachability.reachable).toBe(false);
@@ -249,21 +223,14 @@ describe("restart health", () => {
   });
 
   it("clears a prior detail-probe failure after the next managed poll succeeds", async () => {
-    callGateway
-      .mockImplementationOnce(
-        gatewayHealthResponse({
-          error: new Error("timeout"),
-          server: { version: "2026.4.24", connId: "first" },
-        }),
-      )
-      .mockImplementationOnce(
-        gatewayHealthResponse({
-          server: { version: "2026.4.24", connId: "next" },
-        }),
-      );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    const response = (connId: string, error?: Error) =>
+      gatewayHealthResponse({ server: { version: "2026.4.24", connId }, error });
+    restart.callGateway
+      .mockImplementationOnce(response("first", new Error("timeout")))
+      .mockImplementationOnce(response("next"));
+    restart.inspectPortUsage.mockResolvedValue(ownedPortUsage);
 
-    const snapshot = await waitForRunningGateway({
+    const snapshot = await restart.waitForRunningGateway({
       expectedVersion: "2026.4.24",
       attempts: 2,
       delayMs: 500,
@@ -272,18 +239,18 @@ describe("restart health", () => {
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.probeError).toBeUndefined();
     expect(snapshot.waitOutcome).toBe("healthy");
-    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(restart.sleep).toHaveBeenCalledTimes(1);
   });
 
   it("rejects matching-version restart readiness when health lacks operator scope", async () => {
-    callGateway.mockImplementation(
+    restart.callGateway.mockImplementation(
       gatewayHealthResponse({
-        error: gatewayResponseError("missing scope: operator.read"),
+        error: restart.gatewayResponseError("missing scope: operator.read"),
         server: { version: "2026.4.24", connId: "new" },
       }),
     );
 
-    const snapshot = await inspectGatewayRestartWithSnapshot({
+    const snapshot = await restart.inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 8000 },
       expectedVersion: "2026.4.24",
       portUsage: ownedPortUsage,
@@ -296,138 +263,83 @@ describe("restart health", () => {
     expect(snapshot.probeError).toBe("missing scope: operator.read");
   });
 
-  it("stops waiting once the restarted gateway reports the wrong version", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.23", connId: "old" },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-
-    const snapshot = await waitForRunningGateway({
-      expectedVersion: "2026.4.24",
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("version-mismatch");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.gatewayVersion).toBe("2026.4.23");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    expect(snapshot.versionMismatch?.expected).toBe("2026.4.24");
-    expect(snapshot.versionMismatch?.actual).toBe("2026.4.23");
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it("stops waiting once the restarted gateway reports the wrong build identity", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", buildId: "old-build", connId: "old" },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-
-    const snapshot = await waitForRunningGateway({
-      expectedBuildId: "new-build",
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("build-id-mismatch");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.gatewayBuildId).toBe("old-build");
-    expect(snapshot.expectedBuildId).toBe("new-build");
-    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
-    expect(sleep).not.toHaveBeenCalled();
-
-    const { renderRestartDiagnostics } = await import("./restart-health.js");
-    expect(renderRestartDiagnostics(snapshot)).toContain(
-      "Gateway build mismatch: expected new-build, running gateway reported old-build.",
-    );
-  });
-
-  it("stops waiting once the expected-version gateway reports activated plugin errors", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-        health: {
-          ok: true,
-          plugins: {
-            errors: [
-              {
-                id: "telegram",
-                origin: "bundled",
-                activated: true,
-                error: "failed to load plugin dependency: ENOSPC",
-              },
-              {
-                id: "optional",
-                origin: "workspace",
-                activated: false,
-                error: "disabled plugin ignored",
-              },
-            ],
-          },
-        },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-
-    const snapshot = await waitForRunningGateway({
-      expectedVersion: "2026.4.24",
-    });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("plugin-errors");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.gatewayVersion).toBe("2026.4.24");
-    expect(snapshot.expectedVersion).toBe("2026.4.24");
-    expect(snapshot.activatedPluginErrors).toEqual([
+  it.each(["version", "build"] as const)("stops waiting on a wrong %s identity", async (kind) => {
+    const isVersion = kind === "version";
+    const expected = isVersion ? "2026.4.24" : "new-build";
+    const actual = isVersion ? "2026.4.23" : "old-build";
+    const snapshot = await waitForHealth(
       {
-        id: "telegram",
-        origin: "bundled",
-        activated: true,
-        error: "failed to load plugin dependency: ENOSPC",
+        server: {
+          version: isVersion ? actual : "2026.4.24",
+          ...(isVersion ? {} : { buildId: actual }),
+          connId: "old",
+        },
       },
-    ]);
-    expect(snapshot.versionMismatch).toBeUndefined();
-    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
-      method: "health",
-      scopes: ["operator.read"],
-    });
-    expect(sleep).not.toHaveBeenCalled();
-
-    const { renderRestartDiagnostics } = await import("./restart-health.js");
-    expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
-      "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
+      isVersion ? {} : { expectedVersion: undefined, expectedBuildId: expected },
     );
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      elapsedMs: 0,
+      waitOutcome: isVersion ? "version-mismatch" : "build-id-mismatch",
+      [isVersion ? "gatewayVersion" : "gatewayBuildId"]: actual,
+      [isVersion ? "expectedVersion" : "expectedBuildId"]: expected,
+    });
+    expect(isVersion ? snapshot.versionMismatch : snapshot.buildIdMismatch).toEqual({
+      expected,
+      actual,
+    });
+    expect(restart.sleep).not.toHaveBeenCalled();
+    if (!isVersion) {
+      expect(renderRestartDiagnostics(snapshot)).toContain(
+        "Gateway build mismatch: expected new-build, running gateway reported old-build.",
+      );
+    }
   });
 
-  it("stops waiting once the expected-version gateway reports channel probe errors", async () => {
-    callGateway.mockImplementation(
-      gatewayHealthResponse({
-        server: { version: "2026.4.24", connId: "new" },
-        health: {
-          ok: true,
-          channels: {
-            telegram: {
-              configured: true,
-              probe: { ok: false, error: "This operation was aborted" },
-            },
-          },
-        },
-      }),
-    );
-    inspectPortUsage.mockResolvedValue(ownedPortUsage);
-
-    const snapshot = await waitForRunningGateway({
-      expectedVersion: "2026.4.24",
+  it.each(["plugin", "channel"] as const)("stops waiting on %s errors", async (kind) => {
+    const disabled = { id: "optional", activated: false, error: "disabled plugin ignored" };
+    const activated = {
+      id: "telegram",
+      origin: "bundled",
+      activated: true,
+      error: "failed to load plugin dependency: ENOSPC",
+    };
+    const snapshot = await waitForHealth({
+      health: {
+        ok: true,
+        ...(kind === "plugin"
+          ? { plugins: { errors: [activated, disabled] } }
+          : {
+              channels: {
+                telegram: {
+                  configured: true,
+                  probe: { ok: false, error: "This operation was aborted" },
+                },
+              },
+            }),
+      },
     });
-
-    expect(snapshot.healthy).toBe(false);
-    expect(snapshot.waitOutcome).toBe("channel-errors");
-    expect(snapshot.elapsedMs).toBe(0);
-    expect(snapshot.channelProbeErrors).toEqual([
-      { id: "telegram", error: "This operation was aborted" },
-    ]);
-    expect(sleep).not.toHaveBeenCalled();
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      waitOutcome: kind === "plugin" ? "plugin-errors" : "channel-errors",
+      elapsedMs: 0,
+    });
+    expect(restart.sleep).not.toHaveBeenCalled();
+    if (kind === "plugin") {
+      expect(snapshot).toMatchObject({ gatewayVersion: "2026.4.24", expectedVersion: "2026.4.24" });
+      expect(snapshot.activatedPluginErrors).toEqual([activated]);
+      expect(snapshot.versionMismatch).toBeUndefined();
+      expect(restart.callGateway.mock.calls[0]?.[0]).toMatchObject({
+        method: "health",
+        scopes: ["operator.read"],
+      });
+      expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
+        "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
+      );
+    } else {
+      expect(snapshot.channelProbeErrors).toEqual([
+        { id: "telegram", error: "This operation was aborted" },
+      ]);
+    }
   });
 });

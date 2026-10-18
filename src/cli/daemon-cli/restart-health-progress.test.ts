@@ -1,103 +1,86 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import {
-  callGateway,
-  inspectPortUsage,
-  makeGatewayService,
-  monotonicClock,
-  requestStartupProbe,
-  portUsage,
-  waitForRunningGateway,
-  resetRestartHealthMocks,
-  restoreRestartHealthMocks,
-} from "./restart-health.test-helpers.js";
+import * as restart from "./restart-health.test-helpers.js";
 
 const { waitForGatewayHealthyRestart, formatGatewayRestartFailure } =
   await import("./restart-health.js");
 
-describe("restart startup progress", () => {
-  beforeEach(resetRestartHealthMocks);
-  afterEach(restoreRestartHealthMocks);
+function listenWhen(ready: () => boolean, pid = 8000) {
+  restart.inspectPortUsage.mockImplementation(async (port) =>
+    restart.portUsage(ready() ? [{ pid }] : [], { port }),
+  );
+}
 
-  it("observes explicit startup phases before readiness at 90000 ms", async () => {
-    const readyAtMs = 90_000;
-    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
-    requestStartupProbe.mockImplementation(async () => ({
-      statusCode: monotonicClock.nowMs < readyAtMs ? 503 : 200,
-      body: JSON.stringify(
-        monotonicClock.nowMs < readyAtMs
-          ? { status: "starting", pendingReason: "plugin-convergence" }
-          : { status: "started" },
-      ),
-    }));
-    callGateway.mockImplementation(gatewayHealthResponse());
+const failure = (health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>) =>
+  formatGatewayRestartFailure({ health, port: 18789, defaultTimeoutSeconds: 60 }).failMessage;
+
+describe("restart startup progress", () => {
+  beforeEach(restart.resetRestartHealthMocks);
+  afterEach(restart.restoreRestartHealthMocks);
+
+  it.each(["starting", "draining"])("distinguishes HTTP %s from readiness", async (status) => {
+    const starting = status === "starting";
+    restart.inspectPortUsage.mockResolvedValue(restart.portUsage([{ pid: 8000 }]));
+    restart.requestStartupProbe.mockResolvedValue({
+      statusCode: 503,
+      body: JSON.stringify({ status, pendingReason: starting ? "plugin-convergence" : "shutdown" }),
+    });
+    restart.callGateway.mockImplementation(gatewayHealthResponse());
     const onProgress = vi.fn();
-    const result = await waitForRunningGateway({
+    const result = await restart.waitForRunningGateway({
       requirePluginHealth: false,
-      timeoutMs: 60_000,
+      timeoutMs: starting ? 60_000 : undefined,
       onProgress,
     });
-    expect(result).toMatchObject({
-      healthy: false,
-      waitOutcome: "still-starting",
-      elapsedMs: 60_000,
-      startupPhase: "plugin-convergence",
-    });
-    expect(onProgress).toHaveBeenCalledWith("plugin-convergence");
-    expect(callGateway).toHaveBeenCalledTimes(0);
-  });
-
-  it("does not mistake draining HTTP readiness for startup", async () => {
-    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
-    requestStartupProbe.mockResolvedValue({
-      statusCode: 503,
-      body: '{"status":"draining","pendingReason":"shutdown"}',
-    });
-    callGateway.mockImplementation(gatewayHealthResponse());
-    const result = await waitForRunningGateway({
-      requirePluginHealth: false,
-    });
-    expect(result).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
+    expect(result).toMatchObject(
+      starting
+        ? {
+            healthy: false,
+            waitOutcome: "still-starting",
+            elapsedMs: 60_000,
+            startupPhase: "plugin-convergence",
+          }
+        : { healthy: true, waitOutcome: "healthy", elapsedMs: 0 },
+    );
+    if (starting) {
+      expect(onProgress).toHaveBeenCalledWith("plugin-convergence");
+      expect(restart.callGateway).toHaveBeenCalledTimes(0);
+    }
   });
 
   it("does not let HTTP startup hide an owned listener running the wrong build", async () => {
-    inspectPortUsage.mockResolvedValue(portUsage([{ pid: 8000 }]));
-    requestStartupProbe.mockResolvedValue({
+    restart.inspectPortUsage.mockResolvedValue(restart.portUsage([{ pid: 8000 }]));
+    restart.requestStartupProbe.mockResolvedValue({
       statusCode: 503,
       body: '{"status":"starting","pendingReason":"plugin-convergence"}',
     });
-    callGateway.mockImplementation(
+    restart.callGateway.mockImplementation(
       gatewayHealthResponse({
         server: { version: "previous-version", buildId: "previous-build" },
       }),
     );
-    const result = await waitForRunningGateway({
+    const result = await restart.waitForRunningGateway({
       timeoutMs: 2_000,
       requireRunningService: true,
       requirePluginHealth: false,
       expectedBuildId: "candidate-build",
     });
-    expect(result).toMatchObject({ healthy: false, waitOutcome: "build-id-mismatch" });
-    expect(
-      formatGatewayRestartFailure({ health: result, port: 18789, defaultTimeoutSeconds: 60 })
-        .failMessage,
-    ).toMatch(/build did not match/);
+    expect(result).toMatchObject({
+      healthy: false,
+      waitOutcome: "build-id-mismatch",
+    });
     expect(result.buildIdMismatch).toEqual({
       expected: "candidate-build",
       actual: "previous-build",
     });
+    expect(failure(result)).toMatch(/build did not match/);
   });
 
   it.each([null, 1])("observes delayed child readiness with exitCode=%s", async (exitCode) => {
     const child = { pid: process.pid, exitCode, signalCode: null };
-    inspectPortUsage.mockImplementation(async (port) => ({
-      port,
-      status: monotonicClock.nowMs < 12_500 ? "free" : "busy",
-      listeners: monotonicClock.nowMs < 12_500 ? [] : [{ pid: child.pid }],
-      hints: [],
-    }));
-    callGateway.mockImplementation(async (opts) => {
-      if (monotonicClock.nowMs < 20_000) {
+    listenWhen(() => restart.monotonicClock.nowMs >= 12_500, child.pid);
+    restart.callGateway.mockImplementation(async (opts) => {
+      if (restart.monotonicClock.nowMs < 20_000) {
         throw new Error("Gateway is still starting");
       }
       return gatewayHealthResponse({ server: { version: "2026.9.4", bootId: "child-boot" } })(opts);
@@ -118,171 +101,138 @@ describe("restart startup progress", () => {
   });
 
   it("waits through advancing service, listener, and hello phases until health at 180s", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
+    const service = restart.makeGatewayService({ status: "running", pid: 8000 });
     vi.mocked(service.readRuntime).mockImplementation(async () =>
-      monotonicClock.nowMs < 45_000 ? { status: "unknown" } : { status: "running", pid: 8000 },
+      restart.monotonicClock.nowMs < 45_000
+        ? { status: "unknown" }
+        : { status: "running", pid: 8000 },
     );
-    inspectPortUsage.mockImplementation(async (port) => ({
-      port,
-      status: monotonicClock.nowMs < 95_000 ? "free" : "busy",
-      listeners: monotonicClock.nowMs < 95_000 ? [] : [{ pid: 8000 }],
-      hints: [],
-    }));
-    callGateway.mockImplementation(async (opts) => {
-      if (monotonicClock.nowMs >= 145_000) {
+    listenWhen(() => restart.monotonicClock.nowMs >= 95_000);
+    restart.callGateway.mockImplementation(async (opts) => {
+      if (restart.monotonicClock.nowMs >= 145_000) {
         await gatewayHealthResponse({ server: { bootId: "stable-boot" } })(opts);
       }
-      if (monotonicClock.nowMs < 180_000) {
+      if (restart.monotonicClock.nowMs < 180_000) {
         throw new Error("Gateway health is not ready");
       }
       return {};
     });
-    const health = await waitForGatewayHealthyRestart({
+    const health = await restart.waitForRunningGateway({
       service,
-      port: 18789,
       requirePluginHealth: false,
     });
     expect(health).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 180_000 });
   });
 
+  const migration = (
+    name: string,
+    elapsedMs: number,
+    options: {
+      foreignAt?: number;
+      releasedAt?: number;
+      renewUntil?: number;
+      errorAt?: number;
+      listenerPhase?: boolean;
+      readyAt?: number;
+      jitter?: number;
+      healthy?: boolean;
+      updateInProgress?: boolean;
+    } = {},
+  ) => ({ name, elapsedMs, ...options });
   it.each([
-    {
-      name: "heartbeat observed after polling delay",
-      readyAtMs: 90_000,
-      pollJitterMs: 250,
-      expected: "healthy",
-      elapsedMs: 90_250,
-    },
-    {
-      name: "migration released at 120s before readiness at 145s",
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "healthy",
-      elapsedMs: 145_000,
-    },
-    {
-      name: "migration stalled after its 61s renewal without completing",
-      renewUntilMs: 61_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
-    },
-    {
-      name: "foreign migration completion after the observed lease is replaced",
-      foreignAfterMs: 90_000,
-      releaseAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
-      phase: "waiting for Gateway listener",
-    },
-    {
-      name: "migration completion credited only once",
-      releaseAtMs: 120_000,
-      expected: "still-starting",
-      elapsedMs: 180_000,
-      phase: "waiting for Gateway listener",
-    },
-    {
-      name: "migration poll failure without observed completion",
-      renewUntilMs: 61_000,
-      pollErrorAtMs: 120_000,
-      readyAtMs: 145_000,
-      expected: "still-starting",
-      elapsedMs: 130_000,
-      phase: "waiting for Gateway listener",
-    },
-    { name: "renewing migration", expected: "still-starting", elapsedMs: 300_000 },
-    {
-      name: "renewing migration under a published updater",
-      updateInProgress: true,
-      expected: "still-starting",
-      elapsedMs: 300_000,
-    },
+    migration("delayed heartbeat", 90_250, { readyAt: 90_000, jitter: 250, healthy: true }),
+    migration("release before readiness", 145_000, {
+      releasedAt: 120_000,
+      readyAt: 145_000,
+      healthy: true,
+    }),
+    migration("stalled renewal", 130_000, { renewUntil: 61_000, readyAt: 145_000 }),
+    migration("foreign migration completion", 130_000, {
+      foreignAt: 90_000,
+      releasedAt: 120_000,
+      readyAt: 145_000,
+      listenerPhase: true,
+    }),
+    migration("migration completion credited once", 180_000, {
+      releasedAt: 120_000,
+      listenerPhase: true,
+    }),
+    migration("migration poll failure", 130_000, {
+      renewUntil: 61_000,
+      errorAt: 120_000,
+      readyAt: 145_000,
+      listenerPhase: true,
+    }),
+    migration("renewing migration", 300_000),
+    migration("renewing migration under updater", 300_000, { updateInProgress: true }),
   ])(
     "bounds a $name",
     async ({
-      foreignAfterMs,
-      releaseAtMs,
-      renewUntilMs,
-      pollErrorAtMs,
-      phase,
-      readyAtMs,
-      pollJitterMs,
-      expected,
       elapsedMs,
+      foreignAt,
+      releasedAt,
+      renewUntil,
+      errorAt,
+      listenerPhase,
+      readyAt,
+      jitter,
+      healthy = false,
       updateInProgress,
     }) => {
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      if (readyAtMs !== undefined) {
-        inspectPortUsage.mockImplementation(async (port) => ({
-          port,
-          status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
-          listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
-          hints: [],
-        }));
-        callGateway.mockImplementation(
+      const service = restart.makeGatewayService({ status: "running", pid: 8000 });
+      if (readyAt !== undefined) {
+        listenWhen(() => restart.monotonicClock.nowMs >= readyAt);
+        restart.callGateway.mockImplementation(
           gatewayHealthResponse({ server: { bootId: "stable-boot" } }),
         );
       }
-      if (pollJitterMs) {
+      if (jitter) {
         vi.mocked(service.readRuntime).mockImplementation(async () => {
-          if (monotonicClock.nowMs === 60_000) {
-            monotonicClock.nowMs += pollJitterMs;
+          if (restart.monotonicClock.nowMs === 60_000) {
+            restart.monotonicClock.nowMs += jitter;
           }
           return { status: "running", pid: 8000 };
         });
       }
-      const isStartupMigrationActive = ({
-        onActivity,
-      }: {
-        env?: NodeJS.ProcessEnv;
-        onActivity?: (activity: {
-          owner: string;
-          pid?: number;
-          heartbeatAt: number | null;
-        }) => void;
-      } = {}) => {
-        if (monotonicClock.nowMs >= (pollErrorAtMs ?? Infinity)) {
+      const isStartupMigrationActive: NonNullable<
+        Parameters<typeof waitForGatewayHealthyRestart>[0]["isStartupMigrationActive"]
+      > = ({ onActivity } = {}) => {
+        if (restart.monotonicClock.nowMs >= (errorAt ?? Infinity)) {
           throw new Error("Migration activity unavailable");
         }
-        if (monotonicClock.nowMs < 1_000 || monotonicClock.nowMs >= (releaseAtMs ?? Infinity)) {
+        if (
+          restart.monotonicClock.nowMs < 1_000 ||
+          restart.monotonicClock.nowMs >= (releasedAt ?? Infinity)
+        ) {
           return false;
         }
-        const foreignLease = monotonicClock.nowMs >= (foreignAfterMs ?? Infinity);
+        const foreignLease = restart.monotonicClock.nowMs >= (foreignAt ?? Infinity);
+        const renewedAt = Math.min(restart.monotonicClock.nowMs, renewUntil ?? Infinity);
         onActivity?.({
           owner: foreignLease ? "foreign-migration-owner" : "migration-owner",
           pid: foreignLease ? 9000 : 8000,
-          heartbeatAt:
-            1_000 +
-            Math.floor(
-              (Math.min(monotonicClock.nowMs, renewUntilMs ?? Infinity) - 1_000) / 60_000,
-            ) *
-              60_000,
+          heartbeatAt: 1_000 + Math.floor((renewedAt - 1_000) / 60_000) * 60_000,
         });
         return true;
       };
-      const health = await waitForGatewayHealthyRestart({
+      const health = await restart.waitForRunningGateway({
         service,
-        port: 18789,
         isStartupMigrationActive,
         requirePluginHealth: false,
         env: updateInProgress ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {},
       });
       expect(health).toMatchObject({
-        healthy: expected === "healthy",
-        waitOutcome: expected,
+        healthy,
+        waitOutcome: healthy ? "healthy" : "still-starting",
         elapsedMs,
       });
-      const message = formatGatewayRestartFailure({
-        health,
-        port: 18789,
-        defaultTimeoutSeconds: 60,
-      });
-      if (expected === "still-starting") {
-        expect(message.failMessage).toContain(`still starting after ${elapsedMs / 1000}s`);
-        expect(message.failMessage).toContain(phase ?? "startup migration");
-        expect(message.failMessage).toContain("openclaw gateway status --deep");
+      if (!healthy) {
+        const message = failure(health);
+        expect(message).toContain(`still starting after ${elapsedMs / 1000}s`);
+        expect(message).toContain(
+          listenerPhase ? "waiting for Gateway listener" : "startup migration",
+        );
+        expect(message).toContain("openclaw gateway status --deep");
       }
     },
   );
@@ -293,14 +243,8 @@ describe("restart startup progress", () => {
   ])(
     "only credits new listener progress owned by the service (pid=$listenerPid)",
     async ({ listenerPid, elapsedMs }) => {
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: Math.floor(monotonicClock.nowMs / 30_000) % 2 === 0 ? "free" : "busy",
-        listeners:
-          Math.floor(monotonicClock.nowMs / 30_000) % 2 === 0 ? [] : [{ pid: listenerPid }],
-        hints: [],
-      }));
-      const health = await waitForRunningGateway({
+      listenWhen(() => Math.floor(restart.monotonicClock.nowMs / 30_000) % 2 !== 0, listenerPid);
+      const health = await restart.waitForRunningGateway({
         requirePluginHealth: false,
       });
       expect(health).toMatchObject({
