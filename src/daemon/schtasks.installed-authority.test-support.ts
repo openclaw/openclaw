@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { hashFile } from "../../scripts/lib/gateway-bench-installed-package.ts";
 import {
   createWindowsTaskAutoStartGuard,
@@ -20,6 +19,10 @@ import {
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
 import { readScheduledTaskRuntime } from "./schtasks-runtime.js";
+import {
+  assertFields,
+  withInstalledRestoration,
+} from "./schtasks.installed-command.test-support.js";
 import type { InstalledTask } from "./schtasks.installed-diagnostics.test-support.js";
 import { entry, packageRoot } from "./schtasks.installed-package.test-support.js";
 import {
@@ -95,13 +98,10 @@ export async function inspectInstalledTaskAuthority(params: {
   const snapshot = async (phase: string) => {
     const principal = readTaskPrincipal(task.taskName);
     const runtime = await readScheduledTaskRuntime(task.env, { requireLoaded: true });
-    assert.equal(runtime.status, "stopped");
-    assert.equal(runtime.pid, undefined);
+    assertFields(runtime, { status: "stopped", pid: undefined });
     assert.equal(await canBindLoopbackPort(task.gatewayPort), true);
     const processes = readRelatedProcessDiagnostics([root, task.profile]);
-    assert.equal(processes.ok, true);
-    assert.equal(processes.truncated, false);
-    assert.deepEqual(processes.processes, []);
+    assertFields(processes, { ok: true, truncated: false, processes: [] });
     assert.deepEqual(await fileHashes(), filesBefore);
     const xml = await readTaskXml(task.taskName);
     assert.ok(xml);
@@ -135,12 +135,10 @@ export async function inspectInstalledTaskAuthority(params: {
     );
     await recordProgress(`authority:registered:${phase}`);
     const observed = await snapshot(phase);
-    assert.equal(observed.enabled, false);
-    assert.equal(observed.taskState, 1);
+    assertFields(observed, { enabled: false, taskState: 1 });
     return observed;
   };
   const observations: Record<string, unknown> = {};
-  let failure: Error | undefined;
   await withGatewayServiceOperationLock(task.env, async (assertCurrent) => {
     const inspect = async (expectedService: Admission = { serviceEnv: task.env }) => {
       const admitted = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -186,105 +184,99 @@ export async function inspectInstalledTaskAuthority(params: {
       assert.ok(refusal);
       return { before: prior, refusal, after };
     };
-    try {
-      const disabled = await registerDisabled(scripts.owned, "owned");
-      const admitted = await inspect();
-      assert.equal(admitted.inspected, true);
-      assert.equal(admitted.runtimeInspected, true);
-      assert.equal(admitted.running, false);
-      assert.equal(admitted.serviceUpdateVerdict?.kind, "owned");
-      assert.equal(
-        await resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
-        true,
-      );
-      await recordProgress("authority:enabled");
-      const enabled = await snapshot("enabled");
-      assert.equal(enabled.enabled, true);
-      assert.equal(enabled.taskState, 3);
-      assert.equal(enabled.lastRunTime, disabled.lastRunTime);
-      assert.equal(enabled.lastTaskResult, disabled.lastTaskResult);
-      assert.equal(
-        normalizeScheduledTaskXmlEnabledForFixture(enabled.xml),
-        normalizeScheduledTaskXmlEnabledForFixture(disabled.xml),
-      );
-      assert.equal(
-        await suspendScheduledTaskAutoStartForUpdate(task.env, controlOptions(admitted)),
-        true,
-      );
-      await recordProgress("authority:disabled");
-      assert.deepEqual(await snapshot("disabled"), disabled);
-      observations.allowed = { admission: admitted.serviceUpdateVerdict, disabled, enabled };
+    await withInstalledRestoration(
+      async () => {
+        const disabled = await registerDisabled(scripts.owned, "owned");
+        const admitted = await inspect();
+        assertFields(admitted, { inspected: true, runtimeInspected: true, running: false });
+        assert.equal(admitted.serviceUpdateVerdict?.kind, "owned");
+        assert.equal(
+          await resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
+          true,
+        );
+        await recordProgress("authority:enabled");
+        const enabled = await snapshot("enabled");
+        assertFields(enabled, {
+          enabled: true,
+          taskState: 3,
+          lastRunTime: disabled.lastRunTime,
+          lastTaskResult: disabled.lastTaskResult,
+        });
+        assert.equal(
+          normalizeScheduledTaskXmlEnabledForFixture(enabled.xml),
+          normalizeScheduledTaskXmlEnabledForFixture(disabled.xml),
+        );
+        assert.equal(
+          await suspendScheduledTaskAutoStartForUpdate(task.env, controlOptions(admitted)),
+          true,
+        );
+        await recordProgress("authority:disabled");
+        assert.deepEqual(await snapshot("disabled"), disabled);
+        observations.allowed = { admission: admitted.serviceUpdateVerdict, disabled, enabled };
 
-      await registerDisabled(scripts.foreign, "foreign");
-      const foreign = await inspect();
-      assert.equal(foreign.serviceUpdateVerdict?.kind, "foreign");
-      assert.equal(foreign.serviceMutationAllowed, false);
-      observations.foreign = {
-        admission: foreign.serviceUpdateVerdict,
-        ...(await observeRefusal(
-          () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(foreign)),
-          "Windows task ownership could not be verified; inspect its autostart state manually.",
-          "foreign",
-        )),
-      };
-      observations.retainedOwnedBecameForeign = {
-        admission: admitted.serviceUpdateVerdict,
-        current: foreign.serviceUpdateVerdict,
-        ...(await observeRefusal(
-          () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
-          "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
-          "retained-owned-became-foreign",
-        )),
-      };
+        await registerDisabled(scripts.foreign, "foreign");
+        const foreign = await inspect();
+        assert.equal(foreign.serviceUpdateVerdict?.kind, "foreign");
+        assert.equal(foreign.serviceMutationAllowed, false);
+        observations.foreign = {
+          admission: foreign.serviceUpdateVerdict,
+          ...(await observeRefusal(
+            () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(foreign)),
+            "Windows task ownership could not be verified; inspect its autostart state manually.",
+            "foreign",
+          )),
+        };
+        observations.retainedOwnedBecameForeign = {
+          admission: admitted.serviceUpdateVerdict,
+          current: foreign.serviceUpdateVerdict,
+          ...(await observeRefusal(
+            () => resumeScheduledTaskAutoStartAfterUpdate(task.env, controlOptions(admitted)),
+            "Gateway service ownership or manager identity changed; inspect it before restarting manually.",
+            "retained-owned-became-foreign",
+          )),
+        };
 
-      await registerDisabled(scripts.owned, "retained");
-      const retained = await inspect();
-      assert.equal(retained.serviceUpdateVerdict?.kind, "owned");
-      assert.ok(
-        retained.serviceUpdateVerdict?.kind === "owned" &&
-          retained.serviceUpdateVerdict.refreshDefinition,
-      );
-      await registerDisabled(scripts.reassigned, "reassigned");
-      // Same-root refresh is legitimate after update; do not manufacture a restrictive verdict.
-      await createWindowsTaskAutoStartGuard({
-        root: packageRoot(task.installRoot),
-        before: retained,
-      })();
-      await recordProgress("authority:retained-guard-verified");
-      observations.retainedDefinitionChanged = {
-        admission: retained.serviceUpdateVerdict,
-        boundary: "maintenance retained admission; no native enable requested",
-        change: "serial owned launcher/sourcePath change within the admitted package root",
-        sameRootRefreshAllowed: true,
-        ...(await observeRefusal(
-          () => inspect(retained),
-          "Gateway service definition changed after database admission; retry against its current configuration.",
-          "retained-definition",
-        )),
-      };
-    } catch (error) {
-      failure = toErrorObject(error, "Native autostart authority fixture failed");
-    }
-    try {
-      assertCurrent();
-      assert.equal(
-        (await execSchtasks(["/Create", "/F", "/TN", task.taskName, "/XML", restorePath])).code,
-        0,
-      );
-      await recordProgress("authority:definition-restored");
-      assert.equal(await readTaskXml(task.taskName), originalXml);
-      assert.deepEqual(await fs.readFile(task.configPath), originalConfig);
-      assert.equal(await hashFile(task.scriptPath), originalScriptHash);
-      await snapshot("restored");
-    } catch (error) {
-      failure = new AggregateError(
-        failure ? [failure, error] : [error],
-        "Native autostart authority fixture restoration failed",
-      );
-    }
-    if (failure) {
-      throw failure;
-    }
+        await registerDisabled(scripts.owned, "retained");
+        const retained = await inspect();
+        assert.equal(retained.serviceUpdateVerdict?.kind, "owned");
+        assert.ok(
+          retained.serviceUpdateVerdict?.kind === "owned" &&
+            retained.serviceUpdateVerdict.refreshDefinition,
+        );
+        await registerDisabled(scripts.reassigned, "reassigned");
+        // Same-root refresh is legitimate after update; do not manufacture a restrictive verdict.
+        await createWindowsTaskAutoStartGuard({
+          root: packageRoot(task.installRoot),
+          before: retained,
+        })();
+        await recordProgress("authority:retained-guard-verified");
+        observations.retainedDefinitionChanged = {
+          admission: retained.serviceUpdateVerdict,
+          boundary: "maintenance retained admission; no native enable requested",
+          change: "serial owned launcher/sourcePath change within the admitted package root",
+          sameRootRefreshAllowed: true,
+          ...(await observeRefusal(
+            () => inspect(retained),
+            "Gateway service definition changed after database admission; retry against its current configuration.",
+            "retained-definition",
+          )),
+        };
+      },
+      async () => {
+        assertCurrent();
+        assert.equal(
+          (await execSchtasks(["/Create", "/F", "/TN", task.taskName, "/XML", restorePath])).code,
+          0,
+        );
+        await recordProgress("authority:definition-restored");
+        assert.equal(await readTaskXml(task.taskName), originalXml);
+        assert.deepEqual(await fs.readFile(task.configPath), originalConfig);
+        assert.equal(await hashFile(task.scriptPath), originalScriptHash);
+        await snapshot("restored");
+      },
+      "Native autostart authority fixture failed",
+      "Native autostart authority fixture restoration failed",
+    );
   });
   return {
     scope:

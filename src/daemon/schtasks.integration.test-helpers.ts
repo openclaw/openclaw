@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -13,6 +14,19 @@ import type { GatewayServiceEnv } from "./service-types.js";
 const POLL_INTERVAL_MS = 200;
 const RUN_EVENT_SETTLE_MS = 2_000;
 const WAIT_TIMEOUT_MS = 30_000;
+
+function nativeCommand(
+  executable: string,
+  args: string[],
+  options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding"> = {},
+) {
+  return spawnSync(executable, args, {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 10_000,
+    ...options,
+  });
+}
 
 export type ProbeRunEvent = {
   phase: "listening" | "started";
@@ -77,9 +91,7 @@ async function waitForNativeLaunchMarker(markerPath: string, launcherPid: number
       }
       return pid;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, POLL_INTERVAL_MS);
-    });
+    await sleep(POLL_INTERVAL_MS);
   }
   throw new Error("Startup fallback detached process did not write its launch marker");
 }
@@ -91,10 +103,10 @@ async function runShortLivedStartupLauncher(params: {
   parentPidPath: string;
   probePath: string;
 }): Promise<{ launcherPid: number; childPid: number }> {
-  const result = spawnSync(
+  const result = nativeCommand(
     process.execPath,
     [params.harnessPath, params.mode, params.markerPath, params.parentPidPath, params.probePath],
-    { cwd: process.cwd(), encoding: "utf8", windowsHide: true, timeout: WAIT_TIMEOUT_MS },
+    { cwd: process.cwd(), timeout: WAIT_TIMEOUT_MS },
   );
   if (result.error || result.status !== 0) {
     throw new Error(`Startup fallback ${params.mode} launcher parent did not exit successfully`, {
@@ -112,16 +124,12 @@ async function runShortLivedStartupLauncher(params: {
 }
 
 function resolveCurrentWindowsUserSid(): string {
-  const result = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    ],
-    { encoding: "utf8", windowsHide: true, timeout: 10_000 },
-  );
+  const result = nativeCommand(getWindowsPowerShellExePath(), [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+  ]);
   const sid = result.stdout?.trim();
   if (result.error || result.status !== 0 || !sid || !/^S-1-[0-9-]+$/u.test(sid)) {
     throw new Error("Could not resolve the current Windows user SID for isolated ACL proof");
@@ -130,11 +138,7 @@ function resolveCurrentWindowsUserSid(): string {
 }
 
 function updateNativeScriptAcl(scriptPath: string, args: string[]): void {
-  const result = spawnSync(getWindowsSystem32ExePath("icacls.exe"), [scriptPath, ...args], {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 10_000,
-  });
+  const result = nativeCommand(getWindowsSystem32ExePath("icacls.exe"), [scriptPath, ...args]);
   if (result.error || result.status !== 0) {
     throw new Error(
       `Could not update isolated Startup script ACL (exit ${result.status ?? "unknown"})`,
@@ -151,13 +155,7 @@ function inspectNativeAclCommand(
   env?: NodeJS.ProcessEnv,
   windowsVerbatimArguments = false,
 ): NativeAclCommandResult {
-  const result = spawnSync(executable, args, {
-    encoding: "utf8",
-    env,
-    windowsHide: true,
-    windowsVerbatimArguments,
-    timeout: 10_000,
-  });
+  const result = nativeCommand(executable, args, { env, windowsVerbatimArguments });
   return {
     exitCode: result.status,
     accessDenied: /access is denied|unauthorizedaccessexception|permission denied/i.test(
@@ -168,15 +166,12 @@ function inspectNativeAclCommand(
 }
 
 function resolveWindowsBackupPrivilegeState(): NativeStartupAclDiagnostics["backupPrivilege"] {
-  const result = spawnSync(
-    getWindowsSystem32ExePath("whoami.exe"),
-    ["/priv", "/fo", "csv", "/nh"],
-    {
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 10_000,
-    },
-  );
+  const result = nativeCommand(getWindowsSystem32ExePath("whoami.exe"), [
+    "/priv",
+    "/fo",
+    "csv",
+    "/nh",
+  ]);
   if (result.error || result.status !== 0) {
     return "unknown";
   }
@@ -406,15 +401,11 @@ export async function waitForExactProbeRun(
   while (Date.now() < deadline) {
     events = await readRunEvents(eventsPath);
     if (events.filter((event) => event.phase === "listening").length >= expectedCount) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, RUN_EVENT_SETTLE_MS);
-      });
+      await sleep(RUN_EVENT_SETTLE_MS);
       events = await readRunEvents(eventsPath);
       break;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, POLL_INTERVAL_MS);
-    });
+    await sleep(POLL_INTERVAL_MS);
   }
 
   const started = events.filter((event) => event.phase === "started");

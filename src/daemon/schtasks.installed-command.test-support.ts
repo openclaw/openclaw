@@ -13,6 +13,39 @@ import { formatCommandOutput } from "../process/command-error.js";
 
 type ServiceObservation = "install" | "status";
 
+export function assertFields<T extends object>(actual: T, expected: Partial<T>) {
+  for (const key in expected) {
+    assert.deepEqual(actual[key], expected[key], key);
+  }
+}
+
+export async function withInstalledRestoration<T>(
+  inspect: () => Promise<T>,
+  restore: () => Promise<void>,
+  inspectionMessage: string,
+  restorationMessage: string,
+): Promise<T> {
+  let outcome: { value: T } | { error: Error };
+  try {
+    outcome = { value: await inspect() };
+  } catch (error) {
+    outcome = { error: toErrorObject(error, inspectionMessage) };
+  }
+  try {
+    await restore();
+  } catch (error) {
+    throw new AggregateError(
+      "error" in outcome ? [outcome.error, error] : [error],
+      restorationMessage,
+      { cause: error },
+    );
+  }
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return outcome.value;
+}
+
 function captureCommandOutput(
   kind: ServiceObservation | "published-update",
   stdout: string,
@@ -54,13 +87,10 @@ function captureCommandOutput(
       ...fields(value, ["status", "mode", "reason", "durationMs"]),
       before: fields(value.before, ["version", "buildId", "sha"]),
       after: fields(value.after, ["version", "buildId", "sha"]),
-      recovery: fields(value.recovery, [
-        "serviceRestartSafe",
-        "reason",
-        "version",
-        "buildId",
-        "packageRollbackVerified",
-      ]),
+      recovery: fields(
+        value.recovery,
+        "serviceRestartSafe reason version buildId packageRollbackVerified".split(" "),
+      ),
       steps: Array.isArray(value.steps)
         ? value.steps.slice(0, 40).map((entry: unknown) => {
             const step = asOptionalRecord(entry);
@@ -81,10 +111,9 @@ function captureCommandOutput(
     };
   }
   const service = asOptionalRecord(value.service);
-  const common = { kind };
   if (kind === "install") {
     return {
-      ...common,
+      kind,
       ...fields(value, ["action", "ok", "result", "message", "error"]),
       service: fields(service, ["label", "loaded", "loadedText", "notLoadedText"]),
       warnings: Array.isArray(value.warnings)
@@ -98,21 +127,17 @@ function captureCommandOutput(
   const runtime = asOptionalRecord(service?.runtime);
   const rpc = asOptionalRecord(value.rpc);
   return {
-    ...common,
+    kind,
     service: {
       ...fields(service, ["loaded", "inspectionReason"]),
       loadState: fields(service?.loadState, ["status", "detail", "inspectionReason"]),
       runtime: {
-        ...fields(runtime, [
-          "status",
-          "state",
-          "pid",
-          "detail",
-          "inspectionReason",
-          "missingUnit",
-          "lastRunTime",
-          "lastRunResult",
-        ]),
+        ...fields(
+          runtime,
+          "status state pid detail inspectionReason missingUnit lastRunTime lastRunResult".split(
+            " ",
+          ),
+        ),
         inspectionFailure: fields(runtime?.inspectionFailure, ["code", "detail", "timeoutMs"]),
       },
     },
@@ -170,8 +195,7 @@ export async function run(
       ? { startedAtMs: Date.now(), stdout: {}, stderr: {} }
       : undefined;
   let child: ChildProcess | undefined;
-  let stdout = "";
-  let stderr = "";
+  const output = { stdout: "", stderr: "" };
   let truncated = false;
   let code: number | null = null;
   let exitSignal: NodeJS.Signals | null = null;
@@ -218,26 +242,18 @@ export async function run(
             });
           }
         }
-        launched.stdout?.on("data", (chunk: Buffer) => {
-          if (settlement) {
-            settlement.stdout.lastDataAtMs = Date.now();
-          }
-          stdout += chunk.toString();
-          if (stdout.length > 262144) {
-            truncated = true;
-            stdout = stdout.slice(-262144);
-          }
-        });
-        launched.stderr?.on("data", (chunk: Buffer) => {
-          if (settlement) {
-            settlement.stderr.lastDataAtMs = Date.now();
-          }
-          stderr += chunk.toString();
-          if (stderr.length > 262144) {
-            truncated = true;
-            stderr = stderr.slice(-262144);
-          }
-        });
+        for (const stream of ["stdout", "stderr"] as const) {
+          launched[stream]?.on("data", (chunk: Buffer) => {
+            if (settlement) {
+              settlement[stream].lastDataAtMs = Date.now();
+            }
+            output[stream] += chunk.toString();
+            if (output[stream].length > 262144) {
+              truncated = true;
+              output[stream] = output[stream].slice(-262144);
+            }
+          });
+        }
         launched.once("exit", (exitCode, receivedSignal) => {
           if (settlement) {
             settlement.exitAtMs = Date.now();
@@ -254,6 +270,7 @@ export async function run(
   const afterCleanup = child
     ? inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })
     : undefined;
+  const { stdout, stderr } = output;
   const stderrMatches = expectedStderr.every((expected) => stderr.includes(expected));
   const failed =
     failure ||

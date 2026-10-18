@@ -47,6 +47,19 @@ export type WindowsProcessDiagnostic = {
 
 type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
 
+function inspectWithPowerShell(script: string, maxBuffer?: number) {
+  return spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true, maxBuffer },
+  );
+}
+
 export async function canBindLoopbackPort(port: number): Promise<boolean> {
   const server = createServer();
   return new Promise<boolean>((resolve) => {
@@ -114,16 +127,7 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
     "$result=@{enabled=[bool]$task.Enabled;logonType=[int]$principal.LogonType;runLevel=[int]$principal.RunLevel;taskState=[int]$task.State;lastTaskResult=[int64]$task.LastTaskResult;lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o')}",
     "[Console]::Out.Write(($result | ConvertTo-Json -Compress))",
   ].join("; ");
-  const result = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
-  );
+  const result = inspectWithPowerShell(script);
   if (result.error) {
     throw result.error;
   }
@@ -169,37 +173,19 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     "$ErrorActionPreference='Stop'",
     "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
-  const result = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 5_000, windowsHide: true },
-  );
+  const result = inspectWithPowerShell(script, 1024 * 1024);
+  const failed = (error: string) => ({ error, ok: false, processes: [], truncated: false });
   if (result.error) {
-    return { error: result.error.message, ok: false, processes: [], truncated: false };
+    return failed(result.error.message);
   }
   if (result.status !== 0) {
-    return {
-      error: result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`,
-      ok: false,
-      processes: [],
-      truncated: false,
-    };
+    return failed(result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout.trim() || "[]");
   } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      ok: false,
-      processes: [],
-      truncated: false,
-    };
+    return failed(error instanceof Error ? error.message : String(error));
   }
   const entries = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (entry): entry is WindowsProcessDiagnostic => typeof entry === "object" && entry !== null,
@@ -274,9 +260,10 @@ export function sanitizeDiagnosticText(
     .map((variant) => variant.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
     .join("|");
   const sanitized = pattern
-    ? value.replace(new RegExp(pattern, "giu"), (match) => {
-        return variantPlaceholders.get(match.toLowerCase()) ?? match;
-      })
+    ? value.replace(
+        new RegExp(pattern, "giu"),
+        (match) => variantPlaceholders.get(match.toLowerCase()) ?? match,
+      )
     : value;
   return sanitized.length <= DIAGNOSTIC_TEXT_LIMIT
     ? sanitized
@@ -381,15 +368,10 @@ export async function waitForRuntimeStatus(
   expectedPid?: number,
 ): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  let lastStatus = "unknown";
-  let lastDetail = "";
-  let lastPid: number | undefined;
+  let last: GatewayServiceRuntime = {};
   while (Date.now() < deadline) {
-    const runtime = await readRuntime();
-    lastStatus = runtime.status ?? "unknown";
-    lastDetail = runtime.detail ?? "";
-    lastPid = runtime.pid;
-    if (runtime.status === expected && (expectedPid === undefined || runtime.pid === expectedPid)) {
+    last = await readRuntime();
+    if (last.status === expected && (expectedPid === undefined || last.pid === expectedPid)) {
       return;
     }
     await sleep(WAIT_INTERVAL_MS);
@@ -397,7 +379,7 @@ export async function waitForRuntimeStatus(
   throw new Error(
     `Timed out waiting for Scheduled Task status=${expected}${
       expectedPid === undefined ? "" : ` pid=${expectedPid}`
-    }; observed ${lastStatus}${lastPid === undefined ? "" : ` pid=${lastPid}`}: ${lastDetail}`,
+    }; observed ${last.status ?? "unknown"}${last.pid === undefined ? "" : ` pid=${last.pid}`}: ${last.detail ?? ""}`,
   );
 }
 
