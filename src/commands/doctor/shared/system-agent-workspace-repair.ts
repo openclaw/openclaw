@@ -85,7 +85,7 @@ function describeRestore(params: {
  * after copying the agent's files into it. With `agents.defaults.workspace` set, the Gateway already
  * runs the agent in its own directory and the root holds sibling workspaces, so that directory is
  * pinned. Without it, the Gateway runs the agent in the launch workspace, which is pinned so the
- * working directory does not move. No file is moved or deleted and a customized file in the pinned
+ * working directory does not move; when another agent owns that workspace, Doctor only warns. No file is moved or deleted and a customized file in the pinned
  * directory is never replaced. Without `applyFiles` the pin is left out while files must be copied.
  */
 export async function repairSystemAgentWorkspacePin(
@@ -124,7 +124,16 @@ export async function repairSystemAgentWorkspacePin(
   const launchOwned = listAgentIds(cfg).some(
     (id) => id !== agentId && resolveAgentWorkspaceDir(cfg, id, env) === launchDir,
   );
-  const keepLaunch = !launchOwned && !cfg.agents?.defaults?.workspace?.trim();
+  const keepLaunch = !cfg.agents?.defaults?.workspace?.trim();
+  if (keepLaunch && launchOwned) {
+    // Either pin would move the Gateway working directory, ending stored CLI conversations.
+    return {
+      ...unchanged,
+      warnings: [
+        `Agent "${agentId}" works in ${shortenHomePath(launchDir)}, which another agent owns, but resolves its persona and memory to ${shortenHomePath(agentDir)}. Doctor did not set ${configPath}; set it to the directory that should hold its files.`,
+      ],
+    };
+  }
   const [from, to] = keepLaunch ? [agentDir, launchDir] : [launchDir, agentDir];
   let restore: WorkspaceRestorePlan = { copies: [], links: [], conflicts: [] };
   try {

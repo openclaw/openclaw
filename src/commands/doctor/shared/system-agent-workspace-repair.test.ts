@@ -272,6 +272,18 @@ describe("repairSystemAgentWorkspacePin", () => {
     );
   });
 
+  it("warns without pinning when another agent owns the launch workspace and no root is set", async () => {
+    const cfg = convergedRoster();
+    delete cfg.agents!.defaults!.workspace;
+    const launchDir = resolveDefaultAgentWorkspaceDir(testState.env);
+    cfg.agents!.entries!.dev = { workspace: launchDir };
+
+    const result = await repairSystemAgentWorkspacePin(cfg, testState.env, { applyFiles: true });
+
+    expect(result.config).toBe(cfg);
+    expect(result.warnings).toEqual([expect.stringContaining("which another agent owns")]);
+  });
+
   it("keeps the agent's own customized files when both directories hold files", async () => {
     const agentDir = path.join(root, "main");
     await writePersona(root, "root persona");
