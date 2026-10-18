@@ -1,4 +1,3 @@
-// Memory Core tests cover project isolation across consolidation passes.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
@@ -21,7 +20,6 @@ const addDecisions = (prompt: ConsolidationPrompt) => ({
 });
 
 type ConsolidationPrompt = {
-  currentMemory: string;
   candidates: Array<{ key: string; resultEntry: string; projectKey: string | null }>;
 };
 
@@ -45,6 +43,21 @@ function createPromptResponder(
   };
 }
 
+function consolidate(
+  candidates: PromotionCandidate[],
+  existingMemory: string,
+  subagent = createPromptResponder(addDecisions),
+  memoryFileMaxChars?: number,
+) {
+  return consolidateMemory({
+    candidates,
+    existingMemory,
+    subagent,
+    memoryFileMaxChars,
+    ...consolidationDefaults,
+  });
+}
+
 describe("memory consolidation project groups", () => {
   it("consolidates global and project candidates in deterministic isolated passes", async () => {
     const existingMemory = "# Memory\n\n- Existing global fact.\n";
@@ -55,12 +68,7 @@ describe("memory consolidation project groups", () => {
     ];
     const subagent = createPromptResponder(addDecisions);
 
-    const plan = await consolidateMemory({
-      subagent,
-      existingMemory,
-      candidates,
-      ...consolidationDefaults,
-    });
+    const plan = await consolidate(candidates, existingMemory, subagent);
 
     const promptedGroups = subagent.complete.mock.calls.map(([options]) => {
       const prompt = JSON.parse((options as { message: string }).message) as ConsolidationPrompt;
@@ -108,14 +116,7 @@ describe("memory consolidation project groups", () => {
       };
     });
 
-    await expect(
-      consolidateMemory({
-        subagent,
-        existingMemory,
-        candidates,
-        ...consolidationDefaults,
-      }),
-    ).resolves.toBeNull();
+    await expect(consolidate(candidates, existingMemory, subagent)).resolves.toBeNull();
     expect(subagent.complete).toHaveBeenCalledTimes(3);
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("output crosses project groups for candidate alpha"),
@@ -128,14 +129,8 @@ describe("memory consolidation project groups", () => {
       projectCandidate("global", "Use metric units globally."),
       projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
     ];
-    const createBudgetSubagent = () => createPromptResponder(addDecisions);
 
-    const fullPlan = await consolidateMemory({
-      subagent: createBudgetSubagent(),
-      existingMemory,
-      candidates,
-      ...consolidationDefaults,
-    });
+    const fullPlan = await consolidate(candidates, existingMemory);
 
     const perGroupBudget = Math.max(
       ...expectDefined(fullPlan, "full consolidation plan").operations.map((operation) => {
@@ -150,13 +145,7 @@ describe("memory consolidation project groups", () => {
     );
 
     await expect(
-      consolidateMemory({
-        subagent: createBudgetSubagent(),
-        existingMemory,
-        candidates,
-        ...consolidationDefaults,
-        memoryFileMaxChars: perGroupBudget,
-      }),
+      consolidate(candidates, existingMemory, undefined, perGroupBudget),
     ).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
       "memory-core: combined consolidation plan is invalid; using append-only fallback.",

@@ -1,8 +1,8 @@
-// Memory Core tests cover dreaming plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   MANAGED_MEMORY_DREAMING_CRON_NAME as MANAGED_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG as MANAGED_CRON_TAG,
@@ -65,12 +65,7 @@ type DreamingPluginApiTestDouble = DreamingPluginApi & {
 };
 
 function createLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
 function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHarnessOptions) {
@@ -87,22 +82,14 @@ function createCronHarness(initialJobs: CronJobLike[] = [], opts?: CronHarnessOp
       if (opts?.listThrowsForFirstCalls && listCalls <= opts.listThrowsForFirstCalls) {
         throw new Error(`list failed on call ${listCalls}`);
       }
-      return jobs.map((job) => ({
-        ...job,
-        ...(job.schedule ? { schedule: { ...job.schedule } } : {}),
-        ...(job.payload ? { payload: { ...job.payload } } : {}),
-        ...(job.delivery ? { delivery: { ...job.delivery } } : {}),
-      }));
+      return structuredClone(jobs);
     },
     async add(input) {
       mutationCalls.push("add");
       addCalls.push(input);
       jobs.push({
-        ...input,
+        ...structuredClone(input),
         id: `job-${jobs.length + 1}`,
-        schedule: { ...input.schedule },
-        payload: { ...input.payload },
-        ...(input.delivery ? { delivery: { ...input.delivery } } : {}),
         createdAtMs: Date.now(),
       });
       return {};
@@ -160,14 +147,7 @@ function createDreamingConfig(
   },
   config: Partial<OpenClawConfig> = {},
 ): OpenClawConfig {
-  return {
-    ...config,
-    plugins: {
-      entries: {
-        "memory-core": { config: { dreaming } },
-      },
-    },
-  } as OpenClawConfig;
+  return { ...config, plugins: { entries: { "memory-core": { config: { dreaming } } } } };
 }
 
 function createDreamingTestContext(
@@ -212,29 +192,6 @@ function expectLogContains(mock: { mock: { calls: unknown[][] } }, expected: str
   expect(mockStringMessages(mock).join("\n")).toContain(expected);
 }
 
-function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): CronAddInput {
-  return expectDefined(harness.addCalls[index], `expected cron add call ${index}`);
-}
-
-function requireAgentTurnPayload(
-  payload: CronAddInput["payload"],
-): Extract<CronAddInput["payload"], { kind: "agentTurn" }> {
-  if (payload.kind !== "agentTurn") {
-    throw new Error(`expected agentTurn payload, got ${payload.kind}`);
-  }
-  return payload;
-}
-
-function expectCronSchedule(
-  schedule: CronAddInput["schedule"] | CronPatch["schedule"] | undefined,
-  expr: string,
-  tz?: string,
-): void {
-  expect(schedule?.kind).toBe("cron");
-  expect(schedule?.expr).toBe(expr);
-  expect(schedule?.tz).toBe(tz);
-}
-
 function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
   const call = expectDefined(
     onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply"),
@@ -259,19 +216,6 @@ function getDreamingService(api: DreamingPluginApiTestDouble) {
   )[0];
 }
 
-async function triggerDreamingServiceStart(
-  api: DreamingPluginApiTestDouble,
-  ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
-): Promise<void> {
-  const context = {
-    ...ctx,
-    stateDir: ".",
-    logger: api.logger,
-  } as OpenClawPluginServiceContext;
-  await getDreamingService(api).start({ ...context, scheduler: api.scheduler });
-  await Promise.all(api.backgroundTasks);
-}
-
 async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
   api.scheduler.beginClose();
   try {
@@ -289,9 +233,20 @@ async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Pro
 async function startDreaming(
   api: DreamingPluginApiTestDouble,
   getCron?: () => unknown,
+  waitForStartup = true,
 ): Promise<void> {
-  registerShortTermPromotionDreamingForTest(api);
-  await triggerDreamingServiceStart(api, { config: api.config, ...(getCron ? { getCron } : {}) });
+  registerShortTermPromotionDreaming(api);
+  registeredServiceStops.add(() => triggerDreamingServiceStop(api));
+  await getDreamingService(api).start({
+    config: api.config,
+    stateDir: ".",
+    logger: api.logger,
+    scheduler: api.scheduler,
+    getCron,
+  } as OpenClawPluginServiceContext);
+  if (waitForStartup) {
+    await Promise.all(api.backgroundTasks);
+  }
 }
 
 function workspaceConfig(workspaceDir: string, dreaming: Record<string, unknown> = {}) {
@@ -316,50 +271,19 @@ async function readDeepReport(workspaceDir: string) {
   );
 }
 
-function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
-  registerShortTermPromotionDreaming(api);
-  registeredServiceStops.add(() => triggerDreamingServiceStop(api));
-}
-
 describe("dreaming service reconciliation", () => {
   it("starts before reconciliation settles and drains it on stop without arming runtime recovery", async () => {
     vi.useFakeTimers();
-    let rejectStartupList: (reason?: unknown) => void = () => undefined;
-    const startupListPromise = new Promise<never>((_resolve, reject) => {
-      rejectStartupList = reject;
-    });
-    let listCalls = 0;
-    const add = vi.fn(async () => ({}));
-    const cron = {
-      async list() {
-        listCalls += 1;
-        if (listCalls === 1) {
-          return startupListPromise;
-        }
-        return [];
-      },
-      add,
-      async update() {
-        return {};
-      },
-      async remove() {
-        return { removed: false };
-      },
-      async removeStaleJobFamily() {
-        return 0;
-      },
-    } satisfies NonNullable<ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>>;
-    const { api, logger } = createDreamingTestContext();
+    const startupList = createDeferred<never>();
+    const { api, harness, logger } = createDreamingTestContext();
+    const list = vi
+      .fn<CronParam["list"]>()
+      .mockReturnValueOnce(startupList.promise)
+      .mockResolvedValue([]);
+    const cron = { ...harness.cron, list };
 
     try {
-      registerShortTermPromotionDreamingForTest(api);
-      await getDreamingService(api).start({
-        config: api.config,
-        stateDir: ".",
-        logger,
-        scheduler: api.scheduler,
-        getCron: () => cron,
-      });
+      await startDreaming(api, () => cron, false);
 
       let stopped = false;
       const stopping = triggerDreamingServiceStop(api).then(() => {
@@ -367,15 +291,15 @@ describe("dreaming service reconciliation", () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(stopped).toBe(false);
-      rejectStartupList(new Error("startup list failed"));
+      startupList.reject(new Error("startup list failed"));
       await stopping;
       await vi.advanceTimersByTimeAsync(RECONCILE_MS);
 
-      expect(listCalls).toBe(1);
-      expect(add).not.toHaveBeenCalled();
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(harness.addCalls).toHaveLength(0);
       expectLogContains(logger.error, "dreaming startup reconciliation failed");
     } finally {
-      rejectStartupList(new Error("test cleanup"));
+      startupList.reject(new Error("test cleanup"));
       await triggerDreamingServiceStop(api).catch(() => undefined);
       vi.useRealTimers();
     }
@@ -426,23 +350,19 @@ describe("dreaming service reconciliation", () => {
   });
 
   it("requests Doctor without changing legacy jobs when dreaming is enabled", async () => {
-    const enabled = true;
     vi.useFakeTimers();
     const legacyJobs: CronJobLike[] = [
       {
         id: "legacy-tagged",
-        name: MANAGED_CRON_NAME,
         description: `${MANAGED_CRON_TAG} legacy job`,
         payload: { kind: "agentTurn", message: "authored payload" },
       },
       {
         id: "legacy-agent-turn",
-        name: MANAGED_CRON_NAME,
         payload: { kind: "agentTurn", message: DREAMING_EVENT },
       },
       {
         id: "legacy-system-event",
-        name: MANAGED_CRON_NAME,
         payload: { kind: "systemEvent", text: DREAMING_EVENT },
       },
       {
@@ -467,31 +387,25 @@ describe("dreaming service reconciliation", () => {
       },
       {
         id: "operator-job",
-        name: MANAGED_CRON_NAME,
         payload: { kind: "agentTurn", message: "authored payload" },
       },
       {
         id: "other-declaration",
         declarationKey: "other-plugin:dreaming",
-        name: MANAGED_CRON_NAME,
         description: MANAGED_CRON_TAG,
       },
     ].map((job) =>
       Object.assign(
         {
-          enabled: true,
-          schedule: { kind: "cron", expr: "0 3 * * *" },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
+          name: MANAGED_CRON_NAME,
           payload: { kind: "systemEvent", text: "authored payload" },
-          createdAtMs: 10,
         },
         job,
       ),
     );
     const before = structuredClone(legacyJobs);
     const { api, harness, logger } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled, frequency: "*/3 * * * *" }),
+      config: createDreamingConfig({ enabled: true, frequency: "*/3 * * * *" }),
       initialJobs: legacyJobs,
     });
     const removeStaleJobFamily = vi.fn(async () => 0);
@@ -545,7 +459,11 @@ describe("dreaming service reconciliation", () => {
     expect(harness.removeCalls).toEqual(["job-duplicate"]);
     expect(harness.updateCalls).toHaveLength(1);
     expect(harness.updateCalls[0]?.id).toBe("job-oldest");
-    expectCronSchedule(harness.updateCalls[0]?.patch.schedule, "*/3 * * * *");
+    expect(harness.updateCalls[0]?.patch.schedule).toMatchObject({
+      kind: "cron",
+      expr: "*/3 * * * *",
+    });
+    expect(harness.updateCalls[0]?.patch.schedule?.tz).toBeUndefined();
     expect(harness.jobs).toHaveLength(1);
     expect(harness.jobs[0]).toMatchObject({
       id: "job-oldest",
@@ -603,14 +521,14 @@ describe("dreaming service reconciliation", () => {
     cronAvailable = true;
     await vi.advanceTimersByTimeAsync(RECONCILE_MS);
 
-    expect(harness.addCalls).toHaveLength(1);
-    const addCall = requireAddCall(harness, 0);
-    expect(addCall.name).toBe("Memory Dreaming Promotion");
-    expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
-    expect(addCall.sessionTarget).toBe("isolated");
-    const payload = requireAgentTurnPayload(addCall.payload);
-    expect(payload.message).toBe(DREAMING_EVENT);
-    expect(payload.lightContext).toBe(true);
+    expect(harness.addCalls).toMatchObject([
+      {
+        name: "Memory Dreaming Promotion",
+        schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: DREAMING_EVENT, lightContext: true },
+      },
+    ]);
   });
 
   it("removes only declared dreaming jobs when disabled cron reconciliation becomes available", async () => {
@@ -745,8 +663,7 @@ describe("dreaming service reconciliation", () => {
       runDreamingSweepPhasesMock.mock.calls[0],
       "dreaming sweep call",
     )[0];
-    expect(sweepArgs.agentId).toBe("researcher");
-    expect(sweepArgs.workspaceDir).toBe(workspaceDir);
+    expect(sweepArgs).toMatchObject({ agentId: "researcher", workspaceDir });
   });
 
   it("reports bounded rejection counts through the cron hook", async () => {
@@ -797,7 +714,8 @@ describe("dreaming service reconciliation", () => {
       }),
     });
     await startDreaming(api, () => harness.cron);
-    const payload = requireAgentTurnPayload(requireAddCall(harness, 0).payload);
+    const payload = expectDefined(harness.addCalls[0], "dreaming job").payload;
+    expect(payload.kind).toBe("agentTurn");
     await getBeforeAgentReplyHandler(api.on)(
       { cleanedBody: payload.message },
       { trigger: "cron", agentId: "main", workspaceDir },
@@ -832,9 +750,7 @@ describe("dreaming service reconciliation", () => {
     {
       label: "all counts and lock",
       counts: [2, 3, 4],
-      rewrite: true,
       stale: true,
-      changed: true,
       expected:
         "rewrote recall store (-2 invalid, -3 dangling, -4 overflow), removed stale promotion lock",
     },

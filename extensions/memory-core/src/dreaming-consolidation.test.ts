@@ -1,4 +1,3 @@
-// Memory Core tests cover bounded deep-phase consolidation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -51,13 +50,7 @@ async function recordConsolidationRecall(workspaceDir: string) {
     results: [recallResult],
     nowMs,
   });
-  return rankShortTermPromotionCandidates({
-    workspaceDir,
-    minScore: 0,
-    minRecallCount: 0,
-    minUniqueQueries: 0,
-    nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-  });
+  return rankShortTermPromotionCandidates({ workspaceDir, ...promotionDefaults });
 }
 
 const logger = { info: vi.fn(), warn: vi.fn() };
@@ -82,13 +75,16 @@ function decisionOutput(
   return JSON.stringify({ operations: [{ candidateKey: promoted.key, action, priorEntries }] });
 }
 
-async function prepareRecall(prefix: string, initialMemory?: string) {
+async function prepareRecall(
+  prefix: string,
+  initialMemory: string | null = "# Memory\n\n- Original fact.\n",
+) {
   const workspaceDir = await createTempWorkspace(prefix);
   const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
   await fs.mkdir(path.dirname(notePath), { recursive: true });
   await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
-  if (initialMemory !== undefined) {
+  if (initialMemory !== null) {
     await fs.writeFile(memoryPath, initialMemory, "utf8");
   }
   const candidates = await recordConsolidationRecall(workspaceDir);
@@ -96,7 +92,14 @@ async function prepareRecall(prefix: string, initialMemory?: string) {
   if (!promoted) {
     throw new Error("expected ranked candidate");
   }
-  return { workspaceDir, memoryPath, candidates, promoted };
+  const apply = (subagent: ReturnType<typeof createSubagent>) =>
+    applyShortTermPromotions({
+      workspaceDir,
+      candidates,
+      ...promotionDefaults,
+      consolidation: { subagent, logger },
+    });
+  return { workspaceDir, memoryPath, promoted, apply };
 }
 
 describe("memory consolidation", () => {
@@ -360,14 +363,9 @@ describe("memory consolidation", () => {
   });
 
   it("falls back to append-only promotion when the consolidation model fails", async () => {
-    const { workspaceDir, candidates } = await prepareRecall("memory-consolidation-fallback-");
+    const { workspaceDir, apply } = await prepareRecall("memory-consolidation-fallback-", null);
     const subagent = createSubagent("", "error");
-    const applied = await applyShortTermPromotions({
-      workspaceDir,
-      candidates,
-      ...promotionDefaults,
-      consolidation: { subagent, logger },
-    });
+    const applied = await apply(subagent);
 
     expect(applied.applied).toBe(1);
     await expect(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).resolves.toContain(
@@ -376,20 +374,14 @@ describe("memory consolidation", () => {
   });
 
   it("uses append fallback when MEMORY.md changes during the subagent turn", async () => {
-    const { workspaceDir, memoryPath, candidates, promoted } = await prepareRecall(
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-race-",
-      "# Memory\n\n- Original fact.\n",
     );
     const subagent = createSubagent(decisionOutput(promoted), "ok", async () => {
       await fs.writeFile(memoryPath, "# Memory\n\n- Concurrent fact.\n", "utf8");
     });
 
-    const applied = await applyShortTermPromotions({
-      workspaceDir,
-      candidates,
-      ...promotionDefaults,
-      consolidation: { subagent, logger },
-    });
+    const applied = await apply(subagent);
 
     expect(applied.applied).toBe(1);
     const memory = await fs.readFile(memoryPath, "utf8");
@@ -403,9 +395,8 @@ describe("memory consolidation", () => {
   });
 
   it("uses append fallback when MEMORY.md changes while the preimage is stored", async () => {
-    const { workspaceDir, memoryPath, candidates, promoted } = await prepareRecall(
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-preimage-race-",
-      "# Memory\n\n- Original fact.\n",
     );
     const subagent = createSubagent(decisionOutput(promoted));
     const env = { ...process.env };
@@ -428,12 +419,7 @@ describe("memory consolidation", () => {
     });
 
     try {
-      const applied = await applyShortTermPromotions({
-        workspaceDir,
-        candidates,
-        ...promotionDefaults,
-        consolidation: { subagent, logger },
-      });
+      const applied = await apply(subagent);
 
       expect(applied).toMatchObject({ applied: 1, appended: 1 });
       await expect(fs.readFile(memoryPath, "utf8")).resolves.toContain(
@@ -453,9 +439,8 @@ describe("memory consolidation", () => {
   });
 
   it("reports a candidate removed from the recall store before consolidation as changed", async () => {
-    const { workspaceDir, memoryPath, candidates, promoted } = await prepareRecall(
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-removed-recall-",
-      "# Memory\n\n- Original fact.\n",
     );
     await shortTermTestState.writeRawRecallStore(workspaceDir, {
       version: 1,
@@ -464,12 +449,7 @@ describe("memory consolidation", () => {
     });
     const subagent = createSubagent("{}");
 
-    const applied = await applyShortTermPromotions({
-      workspaceDir,
-      candidates,
-      ...promotionDefaults,
-      consolidation: { subagent, logger },
-    });
+    const applied = await apply(subagent);
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates).toEqual([
@@ -484,9 +464,8 @@ describe("memory consolidation", () => {
   });
 
   it("rejects a candidate downgraded in the recall store during consolidation", async () => {
-    const { workspaceDir, memoryPath, candidates, promoted } = await prepareRecall(
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-provenance-race-",
-      "# Memory\n\n- Original fact.\n",
     );
     const subagent = createSubagent(decisionOutput(promoted), "ok", async () => {
       await recordShortTermRecalls({
@@ -506,12 +485,7 @@ describe("memory consolidation", () => {
       });
     });
 
-    const applied = await applyShortTermPromotions({
-      workspaceDir,
-      candidates,
-      ...promotionDefaults,
-      consolidation: { subagent, logger },
-    });
+    const applied = await apply(subagent);
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates).toEqual([
@@ -524,9 +498,8 @@ describe("memory consolidation", () => {
   });
 
   it("rejects a candidate whose ranking signals change during consolidation", async () => {
-    const { workspaceDir, memoryPath, candidates, promoted } = await prepareRecall(
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-ranking-race-",
-      "# Memory\n\n- Original fact.\n",
     );
     const subagent = createSubagent(decisionOutput(promoted), "ok", async () => {
       await recordShortTermRecalls({
@@ -538,12 +511,7 @@ describe("memory consolidation", () => {
       });
     });
 
-    const applied = await applyShortTermPromotions({
-      workspaceDir,
-      candidates,
-      ...promotionDefaults,
-      consolidation: { subagent, logger },
-    });
+    const applied = await apply(subagent);
 
     expect(applied.applied).toBe(0);
     expect(applied.rejectedCandidates).toEqual([
