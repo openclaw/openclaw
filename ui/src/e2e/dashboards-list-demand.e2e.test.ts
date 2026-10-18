@@ -22,6 +22,7 @@ const COMMON_REQUEST_PARAMS = {
 } as const;
 const DASHBOARD_REQUEST_PARAMS = {
   ...COMMON_REQUEST_PARAMS,
+  ifRowsRevision: "",
   archived: "all",
   hasBoard: true,
   rowMode: "dashboard",

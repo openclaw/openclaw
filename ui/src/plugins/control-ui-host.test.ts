@@ -146,6 +146,7 @@ describe("native UI roster refresh", () => {
       {
         rowMode: "compact",
         source: "chat-pane",
+        ifRowsRevision: "",
         includeGlobal: true,
         includeUnknown: true,
         excludeDock: true,
