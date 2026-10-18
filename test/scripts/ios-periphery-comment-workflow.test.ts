@@ -15,9 +15,7 @@ const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
   if?: string;
-  id?: string;
   name?: string;
-  uses?: string;
   with?: {
     "if-no-files-found"?: string;
     name?: string;
@@ -27,37 +25,9 @@ type WorkflowStep = {
 };
 
 type Workflow = {
-  jobs?: {
-    comment?: {
-      steps?: WorkflowStep[];
-    };
-  };
-};
-
-type ProducerWorkflow = {
   name: string;
   "run-name": string;
-  on?: {
-    pull_request?: {
-      paths?: string[];
-      types?: string[];
-    };
-  };
-  jobs?: {
-    scope?: {
-      steps?: WorkflowStep[];
-    };
-    scan?: {
-      "runs-on"?: string;
-      steps?: WorkflowStep[];
-    };
-    "scan-ios"?: {
-      "runs-on"?: string;
-    };
-    "scan-macos"?: {
-      "runs-on"?: string;
-    };
-  };
+  jobs?: Record<string, { "runs-on"?: string; steps?: WorkflowStep[] }>;
 };
 
 type Artifact = {
@@ -96,12 +66,31 @@ type ProducerEvent = {
   draft?: boolean;
 };
 
+const readWorkflow = (file: string) => parse(readFileSync(file, "utf8")) as Workflow;
+const makeArtifact = (overrides: Partial<Artifact> = {}): Artifact => ({
+  expired: false,
+  id: 77,
+  name: ARTIFACT_NAME,
+  size_in_bytes: 1,
+  ...overrides,
+});
+const previousComments = (
+  platform: "iOS" | "macOS" = "iOS",
+  login = "github-actions[bot]",
+): [ExistingComment] => [
+  {
+    id: 99,
+    body: `<!-- openclaw-${platform.toLowerCase()}-periphery-dead-code -->\nprevious findings`,
+    user: { login, type: "Bot" },
+  },
+];
+
 function producerRunMetadata(
   platform: "iOS" | "macOS",
   source: ProducerEvent = { eventName: "pull_request", action: "ready_for_review", draft: false },
 ) {
   const file = platform === "iOS" ? PRODUCER_WORKFLOW_PATH : MACOS_PRODUCER_WORKFLOW_PATH;
-  const workflow = parse(readFileSync(file, "utf8")) as ProducerWorkflow;
+  const workflow = readWorkflow(file);
   const github = {
     workflow: workflow.name,
     event_name: source.eventName,
@@ -128,7 +117,7 @@ function producerRunMetadata(
 }
 
 function readCommenterScript(): string {
-  const workflow = parse(readFileSync(WORKFLOW_PATH, "utf8")) as Workflow;
+  const workflow = readWorkflow(WORKFLOW_PATH);
   const step = workflow.jobs?.comment?.steps?.find(
     (candidate) => candidate.name === "Upsert Periphery PR comment",
   );
@@ -192,9 +181,6 @@ async function runCommenter(
       this.warnings.push(message);
     },
   };
-  let downloadCount = 0;
-  let artifactListCount = 0;
-  let jobListCount = 0;
   let pullGetCount = 0;
   const createdBodies: string[] = [];
   const updatedBodies: string[] = [];
@@ -206,7 +192,6 @@ async function runCommenter(
         listWorkflowRuns() {},
         async downloadArtifact() {
           apiCalls.push("downloadArtifact");
-          downloadCount += 1;
           return { data: archiveData };
         },
       },
@@ -246,28 +231,22 @@ async function runCommenter(
         async get() {
           apiCalls.push("getPull");
           pullGetCount += 1;
+          const after = pullGetCount > 1;
+          const draft = options.liveDraft ?? false;
+          const sha = options.liveHeadSha ?? "head-sha";
           return {
             data: {
               base: {
                 repo: {
-                  full_name:
-                    pullGetCount > 1
-                      ? (options.liveRepositoryAfter ?? "openclaw/openclaw")
-                      : "openclaw/openclaw",
+                  full_name: after
+                    ? (options.liveRepositoryAfter ?? "openclaw/openclaw")
+                    : "openclaw/openclaw",
                 },
               },
-              draft:
-                pullGetCount > 1
-                  ? (options.liveDraftAfter ?? options.liveDraft ?? false)
-                  : (options.liveDraft ?? false),
-              head: {
-                sha:
-                  pullGetCount > 1
-                    ? (options.liveHeadShaAfter ?? options.liveHeadSha ?? "head-sha")
-                    : (options.liveHeadSha ?? "head-sha"),
-              },
+              draft: after ? (options.liveDraftAfter ?? draft) : draft,
+              head: { sha: after ? (options.liveHeadShaAfter ?? sha) : sha },
               number: 123,
-              state: pullGetCount > 1 ? (options.liveStateAfter ?? "open") : "open",
+              state: after ? (options.liveStateAfter ?? "open") : "open",
             },
           };
         },
@@ -277,7 +256,6 @@ async function runCommenter(
       if (request === github.rest.actions.listJobsForWorkflowRun) {
         apiCalls.push("listJobs");
         expect(params).toMatchObject({ run_id: run.id, filter: "latest" });
-        jobListCount += 1;
         return [
           {
             conclusion: options.scopeJobConclusion ?? "success",
@@ -292,7 +270,6 @@ async function runCommenter(
       if (request === github.rest.actions.listWorkflowRunArtifacts) {
         apiCalls.push("listArtifacts");
         expect(params.run_id).toBe(run.id);
-        artifactListCount += 1;
         return [
           {
             ...artifact,
@@ -318,36 +295,24 @@ async function runCommenter(
       throw new Error(`unexpected paginate call: ${JSON.stringify(params)}`);
     },
   };
-  const context = {
-    payload: {
-      workflow_run: run,
-    },
-    repo: {
-      owner: "openclaw",
-      repo: "openclaw",
-    },
-  };
+  const context = { payload: { workflow_run: run }, repo: { owner: "openclaw", repo: "openclaw" } };
 
   await executeCommenter(createRequire(import.meta.url), context, core, github);
 
   return {
     apiCalls,
-    artifactListCount,
+    artifactListCount: apiCalls.filter((call) => call === "listArtifacts").length,
     core,
     createdBodies,
-    downloadCount,
-    jobListCount,
+    downloadCount: apiCalls.filter((call) => call === "downloadArtifact").length,
+    jobListCount: apiCalls.filter((call) => call === "listJobs").length,
     pullGetCount,
     updatedBodies,
   };
 }
 
 function runReport(archive: Buffer, options: Parameters<typeof runCommenter>[2] = {}) {
-  return runCommenter(
-    { expired: false, id: 77, name: ARTIFACT_NAME, size_in_bytes: archive.length },
-    archive,
-    options,
-  );
+  return runCommenter(makeArtifact({ size_in_bytes: archive.length }), archive, options);
 }
 
 function expectUnavailableComment(bodies: string[]): void {
@@ -355,16 +320,9 @@ function expectUnavailableComment(bodies: string[]): void {
   expect(bodies[0]).toContain("Periphery did not complete or its report could not be safely read.");
 }
 
-function u16(value: number): Buffer {
-  const buffer = Buffer.alloc(2);
-  buffer.writeUInt16LE(value);
-  return buffer;
-}
-
-function u32(value: number): Buffer {
-  const buffer = Buffer.alloc(4);
-  buffer.writeUInt32LE(value);
-  return buffer;
+function expectNoWrite(result: Awaited<ReturnType<typeof runCommenter>>) {
+  expect(result.createdBodies).toEqual([]);
+  expect(result.updatedBodies).toEqual([]);
 }
 
 function makeZip(
@@ -382,60 +340,49 @@ function makeZip(
     const compressedBuffer =
       compressionMethod === 8 ? deflateRawSync(contentsBuffer) : contentsBuffer;
     const checksum = crc32(contentsBuffer);
-    const localHeader = Buffer.concat([
-      u32(0x04034b50),
-      u16(20),
-      u16(0),
-      u16(compressionMethod),
-      u16(0),
-      u16(0),
-      u32(checksum),
-      u32(compressedBuffer.length),
-      u32(contentsBuffer.length),
-      u16(nameBuffer.length),
-      u16(0),
-      nameBuffer,
-    ]);
+    const localHeader = Buffer.alloc(30 + nameBuffer.length);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(compressionMethod, 8);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressedBuffer.length, 18);
+    localHeader.writeUInt32LE(contentsBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    nameBuffer.copy(localHeader, 30);
     localParts.push(localHeader, compressedBuffer);
-    centralParts.push(
-      Buffer.concat([
-        u32(0x02014b50),
-        u16(20),
-        u16(20),
-        u16(0),
-        u16(compressionMethod),
-        u16(0),
-        u16(0),
-        u32(checksum),
-        u32(compressedBuffer.length),
-        u32(contentsBuffer.length),
-        u16(nameBuffer.length),
-        u16(0),
-        u16(0),
-        u16(0),
-        u16(0),
-        u32((0o100644 << 16) >>> 0),
-        u32(offset),
-        nameBuffer,
-      ]),
-    );
+    const centralHeader = Buffer.alloc(46 + nameBuffer.length);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    // Version through extra-field length are identical in both ZIP headers.
+    localHeader.copy(centralHeader, 6, 4, 30);
+    centralHeader.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    nameBuffer.copy(centralHeader, 46);
+    centralParts.push(centralHeader);
     offset += localHeader.length + compressedBuffer.length;
   }
 
   const localData = Buffer.concat(localParts);
   const centralDirectory = Buffer.concat(centralParts);
-  const endOfCentralDirectory = Buffer.concat([
-    u32(0x06054b50),
-    u16(0),
-    u16(0),
-    u16(Object.keys(files).length),
-    u16(Object.keys(files).length),
-    u32(centralDirectory.length),
-    u32(localData.length),
-    u16(0),
-  ]);
+  const endOfCentralDirectory = Buffer.alloc(22);
+  endOfCentralDirectory.writeUInt32LE(0x06054b50, 0);
+  endOfCentralDirectory.writeUInt16LE(centralParts.length, 8);
+  endOfCentralDirectory.writeUInt16LE(centralParts.length, 10);
+  endOfCentralDirectory.writeUInt32LE(centralDirectory.length, 12);
+  endOfCentralDirectory.writeUInt32LE(localData.length, 16);
 
   return Buffer.concat([localData, centralDirectory, endOfCentralDirectory]);
+}
+
+function reportZip(
+  findings: unknown = [],
+  status = "0\n",
+  options: Parameters<typeof makeZip>[1] = {},
+) {
+  return makeZip(
+    { "periphery.json": JSON.stringify(findings), "periphery.status": status },
+    options,
+  );
 }
 
 function markFirstCentralDirectoryEntryEncrypted(archive: Buffer): Buffer {
@@ -462,29 +409,32 @@ function setFirstEntryUncompressedSize(archive: Buffer, size: number): Buffer {
   return result;
 }
 
+const findingArchive = reportZip(
+  [{ kind: "function", location: "Sources/Test.swift:12", name: "unusedSyntheticFunction" }],
+  "1\n",
+);
+
 describe("iOS Periphery comment workflow", () => {
   it("scopes the report artifact to the workflow attempt", () => {
-    const workflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
+    const workflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
     const upload = workflow.jobs?.scan?.steps?.find(
       (step) => step.name === "Upload Periphery report",
     );
 
-    expect(upload?.with?.name).toBe(
-      "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(upload?.if).toBe("always()");
-    expect(upload?.with?.path).toBe("${{ runner.temp }}/ios-periphery");
-    expect(upload?.with?.["if-no-files-found"]).toBe("error");
+    expect(upload).toMatchObject({
+      if: "always()",
+      with: {
+        name: "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: "${{ runner.temp }}/ios-periphery",
+        "if-no-files-found": "error",
+      },
+    });
   });
 
   it("uses hosted macOS capacity for scans", () => {
-    const iosWorkflow = parse(readFileSync(PRODUCER_WORKFLOW_PATH, "utf8")) as ProducerWorkflow;
-    const macosWorkflow = parse(
-      readFileSync(MACOS_PRODUCER_WORKFLOW_PATH, "utf8"),
-    ) as ProducerWorkflow;
-    const sharedWorkflow = parse(
-      readFileSync(SHARED_PRODUCER_WORKFLOW_PATH, "utf8"),
-    ) as ProducerWorkflow;
+    const iosWorkflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
+    const macosWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
+    const sharedWorkflow = readWorkflow(SHARED_PRODUCER_WORKFLOW_PATH);
 
     expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
     expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
@@ -493,46 +443,16 @@ describe("iOS Periphery comment workflow", () => {
   });
 
   it("accepts deflated Periphery artifacts", async () => {
-    const archive = makeZip(
-      {
-        "periphery.json": "[]\n",
-        "periphery.status": "0\n",
-      },
-      { compressionMethod: 8 },
-    );
+    const archive = reportZip([], "0\n", { compressionMethod: 8 });
     const result = await runReport(archive);
 
     expect(result.downloadCount).toBe(1);
     expect(result.core.warnings).toEqual([]);
   });
 
-  it("rejects deflated entries that inflate past the per-file limit", async () => {
-    const archive = setFirstEntryUncompressedSize(
-      makeZip(
-        {
-          "periphery.json": `${" ".repeat(2 * 1024 * 1024 + 1)}[]\n`,
-          "periphery.status": "0\n",
-        },
-        { compressionMethod: 8 },
-      ),
-      1,
-    );
-    const result = await runReport(archive);
-
-    expectUnavailableComment(result.createdBodies);
-    expect(result.core.warnings).toEqual([
-      `Skipping ${ARTIFACT_NAME}; periphery.json exceeded the per-file size limit while reading.`,
-    ]);
-  });
-
   it("rejects oversized artifact metadata before download", async () => {
     const result = await runCommenter(
-      {
-        expired: false,
-        id: 77,
-        name: ARTIFACT_NAME,
-        size_in_bytes: 1024 * 1024 + 1,
-      },
+      makeArtifact({ size_in_bytes: 1024 * 1024 + 1 }),
       Buffer.alloc(0),
     );
 
@@ -543,48 +463,47 @@ describe("iOS Periphery comment workflow", () => {
     ]);
   });
 
-  it("rejects unexpected artifact paths", async () => {
-    const archive = makeZip({
-      "../periphery.json": "[]\n",
-      "periphery.status": "0\n",
-    });
-    const result = await runReport(archive);
-
+  it.each([
+    [
+      "deflated entries that inflate past the per-file limit",
+      () =>
+        setFirstEntryUncompressedSize(
+          makeZip(
+            {
+              "periphery.json": `${" ".repeat(2 * 1024 * 1024 + 1)}[]\n`,
+              "periphery.status": "0\n",
+            },
+            { compressionMethod: 8 },
+          ),
+          1,
+        ),
+      "periphery.json exceeded the per-file size limit while reading.",
+    ],
+    [
+      "unexpected artifact paths",
+      () =>
+        makeZip({
+          "../periphery.json": "[]\n",
+          "periphery.status": "0\n",
+        }),
+      "unexpected artifact entry ../periphery.json.",
+    ],
+    [
+      "encrypted artifact entries",
+      () => markFirstCentralDirectoryEntryEncrypted(reportZip()),
+      "periphery.json is encrypted.",
+    ],
+  ] as const)("rejects %s", async (_name, archive, warning) => {
+    const result = await runReport(archive());
     expectUnavailableComment(result.createdBodies);
-    expect(result.core.warnings).toEqual([
-      `Skipping ${ARTIFACT_NAME}; unexpected artifact entry ../periphery.json.`,
-    ]);
-  });
-
-  it("rejects encrypted artifact entries", async () => {
-    const archive = markFirstCentralDirectoryEntryEncrypted(
-      makeZip({
-        "periphery.json": "[]\n",
-        "periphery.status": "0\n",
-      }),
-    );
-    const result = await runReport(archive);
-
-    expectUnavailableComment(result.createdBodies);
-    expect(result.core.warnings).toEqual([
-      `Skipping ${ARTIFACT_NAME}; periphery.json is encrypted.`,
-    ]);
+    expect(result.core.warnings).toEqual([`Skipping ${ARTIFACT_NAME}; ${warning}`]);
   });
 
   it("does not read artifacts from a stale workflow run", async () => {
-    const result = await runCommenter(
-      {
-        expired: false,
-        id: 77,
-        name: ARTIFACT_NAME,
-        size_in_bytes: 1,
-      },
-      Buffer.alloc(0),
-      {
-        liveHeadSha: "new-head",
-        runHeadSha: "old-head",
-      },
-    );
+    const result = await runCommenter(makeArtifact(), Buffer.alloc(0), {
+      liveHeadSha: "new-head",
+      runHeadSha: "old-head",
+    });
 
     expect(result.artifactListCount).toBe(0);
     expect(result.downloadCount).toBe(0);
@@ -592,21 +511,10 @@ describe("iOS Periphery comment workflow", () => {
 
   it("does not reuse an artifact from an earlier workflow attempt", async () => {
     const result = await runCommenter(
-      {
-        expired: false,
-        id: 77,
-        name: "ios-periphery-dead-code-12345-1",
-        size_in_bytes: 1,
-      },
+      makeArtifact({ name: "ios-periphery-dead-code-12345-1" }),
       Buffer.alloc(0),
       {
-        existingComments: [
-          {
-            body: "<!-- openclaw-ios-periphery-dead-code -->\nold findings",
-            id: 99,
-            user: { login: "github-actions[bot]", type: "Bot" },
-          },
-        ],
+        existingComments: previousComments(),
       },
     );
 
@@ -620,16 +528,10 @@ describe("iOS Periphery comment workflow", () => {
 
   it("escapes finding text before creating a PR comment", async () => {
     const longName = `![click](https://example.invalid)\r\n@octocat|next${"a".repeat(260)}`;
-    const archive = makeZip({
-      "periphery.json": JSON.stringify([
-        {
-          kind: "<script>*bold*</script>",
-          location: "Sources/Test.swift:12",
-          name: longName,
-        },
-      ]),
-      "periphery.status": "1\n",
-    });
+    const archive = reportZip(
+      [{ kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName }],
+      "1\n",
+    );
     const result = await runReport(archive);
 
     expect(result.createdBodies).toHaveLength(1);
@@ -643,16 +545,14 @@ describe("iOS Periphery comment workflow", () => {
 
   it("bounds the rendered comment after escaping", async () => {
     const repeated = "{".repeat(500);
-    const archive = makeZip({
-      "periphery.json": JSON.stringify(
-        Array.from({ length: 50 }, (_, index) => ({
-          kind: repeated,
-          location: `${repeated}${index}:${index}`,
-          name: repeated,
-        })),
-      ),
-      "periphery.status": "1\n",
-    });
+    const archive = reportZip(
+      Array.from({ length: 50 }, (_, index) => ({
+        kind: repeated,
+        location: `${repeated}${index}:${index}`,
+        name: repeated,
+      })),
+      "1\n",
+    );
     const result = await runReport(archive);
 
     expect(result.createdBodies).toHaveLength(1);
@@ -660,46 +560,17 @@ describe("iOS Periphery comment workflow", () => {
   });
 
   it("warns without failing when workflow_run token cannot write comments", async () => {
-    const archive = makeZip({
-      "periphery.json": JSON.stringify([
-        {
-          kind: "function",
-          location: "Sources/Test.swift:12",
-          name: "unused",
-        },
-      ]),
-      "periphery.status": "1\n",
-    });
-    const result = await runReport(archive, {
-      commentErrorStatus: 403,
-    });
+    const result = await runReport(findingArchive, { commentErrorStatus: 403 });
 
-    expect(result.createdBodies).toEqual([]);
-    expect(result.updatedBodies).toEqual([]);
+    expectNoWrite(result);
     expect(result.core.warnings).toContain(
       "Skipping Periphery PR comment for #123; GitHub token cannot write issue comments for this workflow_run.",
     );
   });
 
   it("does not overwrite a marker comment owned by another bot", async () => {
-    const archive = makeZip({
-      "periphery.json": JSON.stringify([
-        {
-          kind: "function",
-          location: "Sources/Test.swift:12",
-          name: "unused",
-        },
-      ]),
-      "periphery.status": "1\n",
-    });
-    const result = await runReport(archive, {
-      existingComments: [
-        {
-          body: "<!-- openclaw-ios-periphery-dead-code -->",
-          id: 99,
-          user: { login: "another-app[bot]", type: "Bot" },
-        },
-      ],
+    const result = await runReport(findingArchive, {
+      existingComments: previousComments("iOS", "another-app[bot]"),
     });
 
     expect(result.updatedBodies).toEqual([]);
@@ -721,24 +592,12 @@ describe("Periphery publication admission", () => {
     action: "converted_to_draft",
     draft: true,
   });
-  const archive = makeZip({
-    "periphery.json": JSON.stringify([
-      { kind: "function", location: "Sources/Test.swift:12", name: "unusedSyntheticFunction" },
-    ]),
-    "periphery.status": "1\n",
-  });
+  const archive = findingArchive;
   const publish = (options: Parameters<typeof runCommenter>[2] = {}) =>
-    runCommenter({ expired: false, id: 77, name: "", size_in_bytes: archive.length }, archive, {
+    runCommenter(makeArtifact({ name: "", size_in_bytes: archive.length }), archive, {
       platform,
       ...options,
     });
-  const previousComments = (commentPlatform: "iOS" | "macOS" = platform): [ExistingComment] => [
-    {
-      id: 99,
-      body: `<!-- openclaw-${commentPlatform.toLowerCase()}-periphery-dead-code -->\nprevious findings`,
-      user: { login: "github-actions[bot]" },
-    },
-  ];
 
   describe.each(["iOS", "macOS"] as const)("%s producer admission", (producerPlatform) => {
     it.each([
@@ -795,8 +654,7 @@ describe("Periphery publication admission", () => {
         });
         if (run === delayedPassive) {
           expect(result.apiCalls).toEqual([]);
-          expect(result.createdBodies).toEqual([]);
-          expect(result.updatedBodies).toEqual([]);
+          expectNoWrite(result);
         } else {
           expect(result.updatedBodies).toHaveLength(1);
           expect(result.updatedBodies[0]).toContain("unusedSyntheticFunction");
@@ -842,8 +700,7 @@ describe("Periphery publication admission", () => {
     });
     expect(result.apiCalls).toEqual([]);
     expect(result.core.infos.length).toBeGreaterThan(0);
-    expect(result.updatedBodies).toEqual([]);
-    expect(result.createdBodies).toEqual([]);
+    expectNoWrite(result);
   });
 
   it.each([
@@ -912,8 +769,7 @@ describe("Periphery publication admission", () => {
       const result = await publish({ ...options, existingComments: previousComments() });
       expect(result.pullGetCount).toBe(2);
       expect(result.apiCalls.at(-1)).toBe("getPull");
-      expect(result.updatedBodies).toEqual([]);
-      expect(result.createdBodies).toEqual([]);
+      expectNoWrite(result);
     },
   );
 
@@ -946,11 +802,11 @@ describe("Periphery publication admission", () => {
   ])(
     "reports unavailable for %s without a report",
     async (_label, scopeJobConclusion, scanJobConclusion) => {
-      const result = await runCommenter(
-        { expired: false, id: 77, name: "wrong-attempt", size_in_bytes: 1 },
-        Buffer.alloc(0),
-        { platform, scopeJobConclusion, scanJobConclusion },
-      );
+      const result = await runCommenter(makeArtifact({ name: "wrong-attempt" }), Buffer.alloc(0), {
+        platform,
+        scopeJobConclusion,
+        scanJobConclusion,
+      });
       expectUnavailableComment(result.createdBodies);
     },
   );
