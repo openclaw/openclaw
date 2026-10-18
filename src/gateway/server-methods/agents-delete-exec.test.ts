@@ -19,13 +19,11 @@ import {
   runtimeManagedRun,
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
-import { CronService } from "../../cron/service.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 const supervisor = vi.hoisted(() => ({ spawn: vi.fn(), cancel: vi.fn() }));
@@ -72,6 +70,12 @@ function launchOwnedProcess() {
     pendingMaxOutput: 1000,
     notifyOnExit: false,
     timeoutSec: null,
+  });
+}
+
+function routeCancellation(...processes: Array<{ id: string; cancel: () => void }>) {
+  supervisor.cancel.mockImplementation((id: string) => {
+    processes.find((process) => process.id === id)?.cancel();
   });
 }
 
@@ -122,33 +126,16 @@ it("drains an independent agent service through exit while preserving another ag
     const doomedSession = await launch("doomed", workspace);
     const keeper = prepareProcess();
     const keeperSession = await launch("keeper", state.workspaceDir);
-    supervisor.cancel.mockImplementation((id: string) => {
-      if (id === doomedSession.id) {
-        doomed.cancel();
-      }
-      if (id === keeperSession.id) {
-        keeper.cancel();
-      }
-    });
+    routeCancellation(
+      { id: doomedSession.id, cancel: doomed.cancel },
+      { id: keeperSession.id, cancel: keeper.cancel },
+    );
     const stop = captureExecRequestCancellation({ agentId: "doomed" });
     expect(stop.cancel()).toBe(false);
     await stop.settle();
     expect(doomed.cancel).not.toHaveBeenCalled();
-    const scheduler = createTestGatewayScheduler();
-    const cron = new CronService({
-      scheduler,
-      storePath: state.statePath("cron/jobs.json"),
-      cronEnabled: false,
-      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    const deleting = deleteGatewayAgent(
-      "doomed",
-      true,
-      createDirectChatContext({ cron, getRuntimeConfig }),
-    );
+    const { scheduler, cron, context } = createDeletionCron(state);
+    const deleting = deleteGatewayAgent("doomed", true, context);
     const settled = vi.fn();
     void deleting.then(settled, settled);
     try {
@@ -195,14 +182,10 @@ it("rejects later exec cancellation after authority loss while joining the accep
   const firstRun = await launchOwnedProcess();
   const second = prepareProcess();
   const secondRun = await launchOwnedProcess();
-  supervisor.cancel.mockImplementation((id: string) => {
-    if (id === firstRun.session.id) {
-      first.cancel();
-    }
-    if (id === secondRun.session.id) {
-      second.cancel();
-    }
-  });
+  routeCancellation(
+    { id: firstRun.session.id, cancel: first.cancel },
+    { id: secondRun.session.id, cancel: second.cancel },
+  );
   const draining = drainAgentExecProcesses("doomed", () => {
     if (!current) {
       throw new Error("deletion authority lost");
@@ -241,27 +224,24 @@ it("joins an already exiting process and refuses uncertain cleanup on deletion r
   markBackgrounded(run.session);
   await entered.promise;
   const draining = drainAgentExecProcesses("doomed", () => {});
+  const uncertainCleanup = {
+    errors: [
+      expect.objectContaining({
+        message: expect.stringContaining("cleanup could not be confirmed"),
+      }),
+    ],
+  };
   const settled = vi.fn();
   void draining.then(settled, settled);
   try {
     expect(supervisor.cancel).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
     extinction.reject(new Error("physical exit could not be confirmed"));
-    await expect(draining).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({
-          message: expect.stringContaining("cleanup could not be confirmed"),
-        }),
-      ],
-    });
+    await expect(draining).rejects.toMatchObject(uncertainCleanup);
     await run.promise;
-    await expect(drainAgentExecProcesses("doomed", () => {})).rejects.toMatchObject({
-      errors: [
-        expect.objectContaining({
-          message: expect.stringContaining("cleanup could not be confirmed"),
-        }),
-      ],
-    });
+    await expect(drainAgentExecProcesses("doomed", () => {})).rejects.toMatchObject(
+      uncertainCleanup,
+    );
   } finally {
     extinction.resolve();
     await Promise.allSettled([draining, run.promise]);

@@ -8,7 +8,6 @@ import {
   claimAgentRunDelegatedAuthority,
   resetAgentRunRegistryForTest,
 } from "../../infra/agent-run-registry.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   consumeCronCreatorAuthorityGrant,
@@ -51,45 +50,21 @@ function createClient(overrides: Partial<NonNullable<GatewayClient["internal"]>>
   } as unknown as GatewayClient;
 }
 
-function createParams(
-  overrides: {
-    client?: GatewayClient | null;
-    request?: Partial<AgentRunRequest>;
-    inputProvenance?: InputProvenance;
-    hasRestoredCronContinuation?: boolean;
-    isOneShotModelRun?: boolean;
-    isRestartRecoveryResumeRun?: boolean;
-    resolvedSessionKey?: string;
-    spawnedBy?: string;
-  } = {},
-): Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0] {
+function createParams({
+  request,
+  ...overrides
+}: Partial<Omit<Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0], "request">> & {
+  request?: Partial<AgentRunRequest>;
+} = {}): Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0] {
   return {
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
     client: createClient(),
-    request: {
-      message: "create an automation",
-      idempotencyKey: "run-local-operator",
-      ...overrides.request,
-    },
     hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
     isRestartRecoveryResumeRun: false,
-    ...(overrides.client !== undefined ? { client: overrides.client } : {}),
-    ...(overrides.inputProvenance ? { inputProvenance: overrides.inputProvenance } : {}),
-    ...(overrides.hasRestoredCronContinuation !== undefined
-      ? { hasRestoredCronContinuation: overrides.hasRestoredCronContinuation }
-      : {}),
-    ...(overrides.isOneShotModelRun !== undefined
-      ? { isOneShotModelRun: overrides.isOneShotModelRun }
-      : {}),
-    ...(overrides.isRestartRecoveryResumeRun !== undefined
-      ? { isRestartRecoveryResumeRun: overrides.isRestartRecoveryResumeRun }
-      : {}),
-    ...(overrides.resolvedSessionKey !== undefined
-      ? { resolvedSessionKey: overrides.resolvedSessionKey }
-      : {}),
-    ...(overrides.spawnedBy !== undefined ? { spawnedBy: overrides.spawnedBy } : {}),
+    ...overrides,
+    request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
   };
 }
 

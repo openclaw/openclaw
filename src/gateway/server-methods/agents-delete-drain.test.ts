@@ -17,7 +17,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionPatches from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
-import { CronService } from "../../cron/service.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
@@ -31,7 +30,6 @@ import {
   isRpcSourceRegistered,
 } from "../../sessions/session-controller.rpc-sources.js";
 import * as deletionJournals from "../../state/agent-deletion-journal.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
@@ -53,8 +51,9 @@ import {
   registerWorkerInferenceSessionControl,
 } from "../worker-environments/inference-control-internal.js";
 import { createWorkerInferenceServiceStub } from "../worker-environments/inference-control.test-helpers.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
+import { localPlacement } from "../worker-environments/placement-suite.test-support.js";
 import { drainAgentDeletionRuns } from "./agents-delete-drain.js";
+import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -83,17 +82,7 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
         { agentId: "doomed", sessionKey },
         { sessionId, lifecycleRunId: runId, updatedAt: 1 },
       );
-      const scheduler = createTestGatewayScheduler();
-      const cron = new CronService({
-        scheduler,
-        storePath: state.statePath("cron/jobs.json"),
-        cronEnabled: false,
-        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      const context = createDirectChatContext({ cron, getRuntimeConfig });
+      const { scheduler, context } = createDeletionCron(state);
       const subscriptions = startGatewayEventSubscriptions({
         scheduler,
         signal: new AbortController().signal,
@@ -398,27 +387,10 @@ it.each([false, true])(
       });
       const workerEnvironmentService = createWorkerInferenceServiceStub();
       registerWorkerInferenceSessionControl(workerEnvironmentService, controls);
-      const placement: WorkerSessionPlacementRecord = {
+      const placement = {
+        ...localPlacement(sessionId),
         agentId: "doomed",
-        sessionId,
         sessionKey: baseKey,
-        state: "local",
-        executionMode: "worker-turn",
-        generation: 1,
-        turnClaim: null,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        environmentId: null,
-        activeOwnerEpoch: null,
-        workspaceBaseManifestRef: null,
-        remoteWorkspaceDir: null,
-        workerBundleHash: null,
-        lastTranscriptAckCursor: null,
-        lastLiveEventAckCursor: null,
-        terminalReason: null,
-        terminalAtMs: null,
-        recoveryError: null,
       };
       const admission = await beginSessionEffect({
         agentId: "doomed",

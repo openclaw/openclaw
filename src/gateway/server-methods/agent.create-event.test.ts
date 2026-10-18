@@ -1,6 +1,3 @@
-/**
- * Tests agent creation event emission from gateway agent methods.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -107,10 +104,6 @@ vi.mock("../../runtime.js", () => ({
 
 import { agentHandlers } from "./agent.js";
 
-function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
-  return mock.mock.calls[0];
-}
-
 describe("agent handler session create events", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
   let tempDir: string;
@@ -184,9 +177,7 @@ describe("agent handler session create events", () => {
         },
       );
 
-      const responseCall = firstMockCall(respond) as
-        | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
-        | undefined;
+      const responseCall = respond.mock.calls[0];
       if (preparation === "superseded catalog") {
         expect(responseCall?.[0]).toBe(false);
         expect(responseCall?.[2]).toMatchObject({
@@ -202,11 +193,12 @@ describe("agent handler session create events", () => {
         expect(rpcSourceTesting.has(runId)).toBe(false);
         return;
       }
-      expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
-      expect(responseCall?.[1]?.status).toBe("accepted");
-      expect(responseCall?.[1]?.runId).toBe(runId);
-      expect(responseCall?.[2]).toBeUndefined();
-      expect(responseCall?.[3]?.runId).toBe(runId);
+      expect(responseCall).toEqual([
+        true,
+        expect.objectContaining({ status: "accepted", runId }),
+        undefined,
+        expect.objectContaining({ runId }),
+      ]);
       await execution;
       expect(preparedRuntimeMocks.acquired).toHaveBeenCalledExactlyOnceWith(
         preparedRuntimeMocks.captured.mock.calls[0]?.[0],
@@ -216,23 +208,12 @@ describe("agent handler session create events", () => {
       expect(preparedRuntimeMocks.releaseSelected).toHaveBeenCalledOnce();
       await vi.waitFor(
         () => {
-          const call = firstMockCall(broadcastToConnIds) as
-            | [
-                string,
-                { sessionKey?: string; reason?: string },
-                Set<string>,
-                { dropIfSlow?: boolean; sessionKeys?: string[] },
-              ]
-            | undefined;
-          expect(call?.[0]).toBe("sessions.changed");
-          expect(call?.[1]?.sessionKey).toBe(sessionKey);
-          expect(call?.[1]?.reason).toBe("create");
-          expect(call?.[2]).toEqual(new Set(["conn-1"]));
-          expect(call?.[3]).toEqual({
-            agentId: "main",
-            dropIfSlow: true,
-            sessionEventSubscriptionKeys: [sessionKey],
-          });
+          expect(broadcastToConnIds.mock.calls[0]).toEqual([
+            "sessions.changed",
+            expect.objectContaining({ sessionKey, reason: "create" }),
+            new Set(["conn-1"]),
+            { agentId: "main", dropIfSlow: true, sessionEventSubscriptionKeys: [sessionKey] },
+          ]);
         },
         { timeout: 2_000, interval: 5 },
       );

@@ -33,7 +33,6 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -56,7 +55,6 @@ import {
   readAgentDeletionJournal,
 } from "../../test-utils/agent-deletion-journal.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -64,10 +62,10 @@ import {
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as deletionRecovery from "../server-agent-deletion-recovery.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import { createDeletionCron, expectDeletedStorage } from "./agents-delete.fixture.test-support.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 
 const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
@@ -213,14 +211,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       expect(await deleting).not.toHaveProperty("purgeFailed");
       expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-      for (const pathname of [
-        workspace,
-        state.agentDir(agentId),
-        state.sessionsDir(agentId),
-        databasePath,
-      ]) {
-        await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-      }
+      await expectDeletedStorage(state, agentId, workspace, databasePath);
     } finally {
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
       releaseClosed.resolve();
@@ -266,10 +257,9 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
         const sharedDatabasePath = resolveOpenClawStateSqlitePath(state.env);
         if (scenario === "legacy-retiring") {
           await fs.mkdir(path.dirname(sharedDatabasePath), { recursive: true });
-          const legacy = new DatabaseSync(sharedDatabasePath);
-          try {
-            // Main's v20 journal predates the nullable deletion phase.
-            legacy.exec(`CREATE TABLE agent_deletion_journal (
+          using legacy = new DatabaseSync(sharedDatabasePath);
+          // Main's v20 journal predates the nullable deletion phase.
+          legacy.exec(`CREATE TABLE agent_deletion_journal (
               agent_id TEXT PRIMARY KEY,
               operation_id TEXT NOT NULL DEFAULT '',
               agent_dir TEXT NOT NULL,
@@ -281,15 +271,12 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               cleanup_completed INTEGER NOT NULL DEFAULT 0,
               delete_files INTEGER NOT NULL DEFAULT 1
             ) STRICT;`);
-            legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
-            legacy.exec(`PRAGMA user_version = 20;
+          legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          legacy.exec(`PRAGMA user_version = 20;
               INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
                 VALUES ('primary', 'global', 20, 1, 1);
               INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
                 VALUES ('state.schema.contentVersion', '20', 1);`);
-          } finally {
-            legacy.close();
-          }
         }
         await state.writeConfig({
           gateway: { mode: "local", auth: { mode: "token", token: "agent-delete-test-token" } },
@@ -330,17 +317,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           "synthetic",
         );
         await fs.writeFile(path.join(workspace, "owned-work.txt"), "synthetic");
-        const scheduler = createTestGatewayScheduler();
-        const cron = new CronService({
-          scheduler,
-          storePath: state.statePath("cron/jobs.json"),
-          cronEnabled: false,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-        const context = createDirectChatContext({ cron, getRuntimeConfig });
+        const { scheduler, cron, context } = createDeletionCron(state);
         try {
           if (scenario === "active") {
             const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
@@ -420,24 +397,32 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               registry.plugins.push(plugin);
               registry.agentHarnesses.push(registration);
               try {
+                const history = async (key: string) =>
+                  (
+                    await client.request<{ messages: unknown[] }>("chat.history", {
+                      sessionKey: key,
+                    })
+                  ).messages;
+                const inject = async (key: string, message: string) => {
+                  await expect(
+                    client.request("chat.inject", { sessionKey: key, message }),
+                  ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+                  const messages = await history(key);
+                  expect(messages).toContainEqual(
+                    expect.objectContaining({
+                      role: "assistant",
+                      content: [{ type: "text", text: message }],
+                    }),
+                  );
+                  return messages;
+                };
                 const keeperSession = await client.request<{ key: string }>("sessions.create", {
                   agentId: "keeper",
                   key: "agent:keeper:injection-isolation",
                 });
-                await expect(
-                  client.request("chat.inject", {
-                    sessionKey,
-                    message: "Accepted before agent deletion.",
-                  }),
-                ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
-                const selectedMessages = (
-                  await client.request<{ messages: unknown[] }>("chat.history", { sessionKey })
-                ).messages;
-                expect(selectedMessages).toContainEqual(
-                  expect.objectContaining({
-                    role: "assistant",
-                    content: [{ type: "text", text: "Accepted before agent deletion." }],
-                  }),
+                const selectedMessages = await inject(
+                  sessionKey,
+                  "Accepted before agent deletion.",
                 );
                 const assertInjectionRefused = async (phase: string, reason: string) => {
                   await expect(
@@ -446,22 +431,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                       message: `Refused during ${phase}.`,
                     }),
                   ).rejects.toThrow(reason);
-                  const message = `Keeper accepts injection during ${phase}.`;
-                  await expect(
-                    client.request("chat.inject", { sessionKey: keeperSession.key, message }),
-                  ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
-                  expect(
-                    (
-                      await client.request<{ messages: unknown[] }>("chat.history", {
-                        sessionKey: keeperSession.key,
-                      })
-                    ).messages,
-                  ).toContainEqual(
-                    expect.objectContaining({
-                      role: "assistant",
-                      content: [{ type: "text", text: message }],
-                    }),
-                  );
+                  await inject(keeperSession.key, `Keeper accepts injection during ${phase}.`);
                 };
                 expect(readAgentDeletionJournal(agentId)).toBeUndefined();
                 const reopen = closeAgentWorkAdmissions({
@@ -474,10 +444,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     "closed admission",
                     "Selected agent admission is closed.",
                   );
-                  expect(
-                    (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey }))
-                      .messages,
-                  ).toEqual(selectedMessages);
+                  expect(await history(sessionKey)).toEqual(selectedMessages);
                 } finally {
                   reopen();
                 }
@@ -595,14 +562,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 await expect(
                   client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
                 ).rejects.toThrow();
-                for (const pathname of [
-                  workspace,
-                  state.agentDir(agentId),
-                  state.sessionsDir(agentId),
-                  databasePath,
-                ]) {
-                  await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-                }
+                await expectDeletedStorage(state, agentId, workspace, databasePath);
                 await expect(
                   client.request("agents.create", { name: agentId, workspace }),
                 ).resolves.toMatchObject({ ok: true, agentId });
@@ -719,14 +679,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   expect(await deletingRecreated).not.toHaveProperty("purgeFailed");
                   expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                   expect(readMemoryLeases()).toEqual([]);
-                  for (const pathname of [
-                    workspace,
-                    state.agentDir(agentId),
-                    state.sessionsDir(agentId),
-                    databasePath,
-                  ]) {
-                    await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-                  }
+                  await expectDeletedStorage(state, agentId, workspace, databasePath);
                   await expect(
                     client.request("agents.create", { name: agentId, workspace }),
                   ).resolves.toMatchObject({ ok: true, agentId });
@@ -778,8 +731,8 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           }
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
           if (scenario === "legacy-retiring") {
-            const legacy = new DatabaseSync(sharedDatabasePath);
-            try {
+            {
+              using legacy = new DatabaseSync(sharedDatabasePath);
               expect(legacy.prepare("PRAGMA table_info(agent_deletion_journal)").all()).not.toEqual(
                 expect.arrayContaining([expect.objectContaining({ name: "phase" })]),
               );
@@ -788,8 +741,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
                 VALUES (?, ?, ?, ?, 1)`)
                 .run(pending.agentId, pending.agentDir, pending.workspaceDir, pending.sessionsDir);
-            } finally {
-              legacy.close();
             }
             revokeSqliteDatabaseAdmissionsForPath(sharedDatabasePath);
           }
@@ -817,14 +768,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           await deletionRecovery.resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-          for (const pathname of [
-            workspace,
-            state.agentDir(agentId),
-            state.sessionsDir(agentId),
-            databasePath,
-          ]) {
-            await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-          }
+          await expectDeletedStorage(state, agentId, workspace, databasePath);
           expect(getRuntimeConfig().agents?.entries).not.toHaveProperty(agentId);
           expect(
             await createAgent({ name: agentId, workspace, skipBootstrap: true }),
@@ -841,19 +785,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           ).resolves.toMatchObject({ sessionId: "recreated-after-recovery" });
           if (scenario === "legacy-retiring") {
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-            const upgraded = new DatabaseSync(sharedDatabasePath);
-            try {
-              expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
-                user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-              });
-              expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
-                expect.arrayContaining([
-                  expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),
-                ]),
-              );
-            } finally {
-              upgraded.close();
-            }
+            using upgraded = new DatabaseSync(sharedDatabasePath);
+            expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+              user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+            });
+            expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),
+              ]),
+            );
           }
         } finally {
           cron.stop();

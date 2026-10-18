@@ -9,37 +9,38 @@ import {
   requireValue,
   mockCallArg,
   expectRespondError,
-  expectRecordFields,
   mockMainSessionEntry,
   invokeAgent,
   mockSessionResetSuccess,
 } from "./agent.test-harness.js";
 
 export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAgentTestMocks>) {
+  const reset = (
+    message: string,
+    options: Parameters<typeof invokeAgent>[1],
+    idempotencyKey = "test-idem-reset-closed-authority",
+  ) => invokeAgent({ message, sessionKey: "agent:main:main", idempotencyKey }, options);
+
   it("handles bare /reset by resetting the same session without running the model", async () => {
     mockSessionResetSuccess({ reason: "reset" });
     mocks.performGatewaySessionReset.mockClear();
     mocks.agentCommand.mockClear();
 
-    const respond = await invokeAgent(
-      {
-        message: "/reset",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-idem-reset",
-      },
+    const respond = await reset(
+      "/reset",
       {
         reqId: "4-reset",
         client: operatorWriteCliClient(["operator.admin"]),
       },
+      "test-idem-reset",
     );
 
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(mockCallArg(respond)).toBe(true);
-    const result = expectRecordFields(mockCallArg(respond, 0, 1), {}).result as {
-      payloads?: Array<{ text?: string }>;
-    };
-    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      result: { payloads: [{ text: "✅ Session reset." }] },
+    });
   });
 
   it.each([
@@ -149,14 +150,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       const context = makeContext();
       context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
 
-      const respond = await invokeAgent(
-        {
-          message,
-          sessionKey: "agent:main:main",
-          idempotencyKey: "test-idem-reset-closed-authority",
-        },
-        { reqId: "4-reset-closed-authority", client, context },
-      );
+      const respond = await reset(message, { reqId: "4-reset-closed-authority", client, context });
 
       expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(
         closeAt === "before ingress" ? 0 : 1,
@@ -178,14 +172,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       }
       if (closesAfterCommit || closesDuringFollowUp) {
         authorityActive = true;
-        const retry = await invokeAgent(
-          {
-            message,
-            sessionKey: "agent:main:main",
-            idempotencyKey: "test-idem-reset-closed-authority",
-          },
-          { client, context },
-        );
+        const retry = await reset(message, { client, context });
         expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
         expect(mocks.agentCommand).not.toHaveBeenCalled();
         expect(mockCallArg(retry)).toBe(true);
@@ -219,6 +206,13 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     const runId = "reset-cleanup-ownership";
     const key = `agent:${runId}`;
     const alias = `agent:exec-approval-followup:${runId}`;
+    const replaceReservation = (target: string, status: string, fields = {}) => {
+      context.dedupe.set(target, {
+        ts: Date.now(),
+        ok: true,
+        payload: { runId, status, ...fields },
+      });
+    };
     const hasAlias = state.includes("alias");
     const emit = vi.fn();
     const replyError = state.startsWith("failed reply")
@@ -244,30 +238,18 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       replyError,
     });
     if (state === "stop" || state.includes("after stop")) {
-      context.dedupe.set(key, {
-        ts: Date.now(),
-        ok: true,
-        payload: { runId, status: "timeout", stopReason: "rpc" },
-      });
+      replaceReservation(key, "timeout", { stopReason: "rpc" });
     } else if (state === "newer reservation" || state.includes("after replacement")) {
-      context.dedupe.set(key, {
-        ts: Date.now(),
-        ok: true,
-        payload: { runId, status: "accepted", reservationId: "new-owner" },
-      });
+      replaceReservation(key, "accepted", { reservationId: "new-owner" });
     } else if (state === "newer terminal") {
-      context.dedupe.set(key, { ts: Date.now(), ok: true, payload: { runId, status: "ok" } });
+      replaceReservation(key, "ok");
     } else if (state === "accepted run") {
       lifecycle.markAccepted(true);
     } else if (state === "missing reservation") {
       context.dedupe.delete(key);
     }
     if (hasAlias) {
-      context.dedupe.set(alias, {
-        ts: Date.now(),
-        ok: true,
-        payload: { runId, status: "accepted", reservationId: "new-alias-owner" },
-      });
+      replaceReservation(alias, "accepted", { reservationId: "new-alias-owner" });
     }
     const before = context.dedupe.get(key);
     const aliasBefore = context.dedupe.get(alias);
