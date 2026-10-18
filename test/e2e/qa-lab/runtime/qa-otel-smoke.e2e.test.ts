@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { existsSync, mkdirSync } from "node:fs";
 import { createConnection as createNetConnection } from "node:net";
 import path from "node:path";
@@ -210,10 +210,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        socket.once("connect", resolve);
-        socket.once("error", reject);
-      });
+      await once(socket, "connect");
       socket.write(
         [
           "POST /v1/traces HTTP/1.1",

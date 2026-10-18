@@ -108,15 +108,7 @@ function settlementFixture() {
 it("gates inventory on current hello, propagates failures, and retires removed nodes", async () => {
   const operator = new GatewayClient({});
   transport.clients.at(-1)!.request.mockResolvedValue({
-    nodes: [
-      {
-        nodeId: "paired-fixture-node",
-        approvalState: "approved",
-        connected: true,
-        paired: true,
-        sessionHost: true,
-      },
-    ],
+    nodes: [{ nodeId: "paired-fixture-node", approvalState: "approved" }],
   });
   const root = tempDirs.make("openclaw-paired-node-readiness-");
   const host = await createPairedNodeWorkerHost({
