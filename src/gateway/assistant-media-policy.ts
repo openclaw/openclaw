@@ -280,6 +280,7 @@ function resolvePreparedAssistantMediaPolicy(
   }
   const workspaceOnly =
     !session ||
+    entry?.sandbox === "required" ||
     (entry?.permissionMode
       ? resolveSessionPermissionCoreToolPolicy({ mode: entry.permissionMode }).workspaceOnly
       : resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }));

@@ -39,7 +39,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { invalidateOperatorRolePolicy, resolveCreatorSandbox } from "./operator-role-policy.js";
 
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
@@ -314,6 +314,10 @@ describe("saved message attachment response authority", () => {
         role: "assistant",
       }),
       message("legacy-media", `Saved report\n${directive}`, { role: "assistant" }),
+      message("host-image", `MEDIA:${path.join(state.root, "outside.png")}`, { role: "assistant" }),
+      message("workspace-image", `MEDIA:${path.join(state.workspaceDir, "inside.png")}`, {
+        role: "assistant",
+      }),
       message("user-directive", directive),
       message("text-only", source),
       message("hidden", "Internal coordination", {
@@ -340,7 +344,7 @@ describe("saved message attachment response authority", () => {
         roles: {
           default: "guest",
           definitions: {
-            guest: readerRole("none"),
+            guest: { ...readerRole("none"), sandbox: "required" },
             viewer: readerRole("view"),
             admin: { agents: "*", sessions: { others: "write" }, scopes: ["operator.admin"] },
           },
@@ -357,17 +361,30 @@ describe("saved message attachment response authority", () => {
       const { id } = await ensureCanonicalUserProfileForEmail(address);
       await setCanonicalUserProfileRole(id, role, { onCommitted: invalidateOperatorRolePolicy });
     }
+    const catalog = await prepareUserProfileCatalog();
+    let sandbox: "required" | undefined;
+    try {
+      sandbox = resolveCreatorSandbox(config, {
+        actor: { type: "human", source: "profile", id: profileId },
+      });
+      expect(sandbox).toBe("required");
+    } finally {
+      catalog.release();
+    }
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       createdActor: { type: "human", source: "profile", id: profileId },
       visibility: "shared",
+      sandbox,
     });
     await seed();
     await fs.mkdir(state.statePath("media", "inbound"), { recursive: true });
     await fs.writeFile(state.statePath("media", "inbound", "selection-comment.txt"), text);
     await fs.writeFile(state.statePath("media", "inbound", "notes.txt"), "Ordinary attachment");
     await fs.writeFile(path.join(state.workspaceDir, "report.txt"), "Saved assistant report");
+    await fs.writeFile(path.join(state.root, "outside.png"), REAL_PNG);
+    await fs.writeFile(path.join(state.workspaceDir, "inside.png"), REAL_PNG);
     listener = await reserveTestPortListener({
       offsets: [0],
       createListener: () =>
@@ -378,10 +395,17 @@ describe("saved message attachment response authority", () => {
             getRuntimeConfig: () => config,
             auth: { mode: "trusted-proxy", trustedProxy, allowTailscale: false },
             trustedProxies: ["127.0.0.1"],
-          }).catch((error: unknown) => {
-            res.statusCode = 500;
-            res.end(String(error));
-          });
+          })
+            .then((handled) => {
+              if (!handled) {
+                res.statusCode = 404;
+                res.end();
+              }
+            })
+            .catch((error: unknown) => {
+              res.statusCode = 500;
+              res.end(String(error));
+            });
         }),
     });
     origin = `http://127.0.0.1:${listener.claim.port}`;
@@ -502,6 +526,44 @@ describe("saved message attachment response authority", () => {
       await seed();
     }
   });
+
+  it.each([undefined, "full"] as const)(
+    "contains required-sandbox conversation images with permission mode %s",
+    async (permissionMode) => {
+      const before = config;
+      config = { ...config, tools: {} };
+      setRuntimeConfigSnapshot(config, config);
+      await upsertSessionEntryCore(scope, { permissionMode });
+      try {
+        const outside = { source: path.join(state.root, "outside.png"), messageId: "host-image" };
+        const denied = await request({ ...outside, meta: "1" });
+        expect(denied.status).toBe(200);
+        expect(await denied.json()).toMatchObject({
+          available: false,
+          code: "outside-allowed-folders",
+        });
+        expect((await request(outside)).status).toBe(404);
+        expect(
+          (await request({ ...outside, meta: "1", allow: "1" }, { method: "POST" })).status,
+        ).toBe(403);
+        expect((await request({ ...outside, sessionKey: "", messageId: "" })).status).toBe(403);
+
+        const inside = {
+          source: path.join(state.workspaceDir, "inside.png"),
+          messageId: "workspace-image",
+        };
+        const mediaTicket = await metadata(inside);
+        const preview = await request({ ...inside, mediaTicket }, { ticketOnly: true });
+        expect(preview.status).toBe(200);
+        expect(Buffer.from(await preview.arrayBuffer())).toEqual(REAL_PNG);
+        await metadata();
+      } finally {
+        config = before;
+        setRuntimeConfigSnapshot(config, config);
+        await upsertSessionEntryCore(scope, { permissionMode: undefined });
+      }
+    },
+  );
 
   it("reads saved assistant media directives without treating user text as an attachment", async () => {
     const query = {

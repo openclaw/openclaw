@@ -281,20 +281,27 @@ it("uses configured protection when there is no explicit session mode", async ()
   await expectMetadata(source, { available: false, canAllow: true });
 });
 
-it("offers an explicit exact-image grant and renews it without granting siblings", async () => {
-  const source = await image("outside.png", temp);
-  const sibling = await image("sibling.png", temp);
-  await expectMetadata(source, {
-    available: false,
-    code: "outside-allowed-folders",
-    canAllow: true,
-    retryable: false,
-  });
-  const ticket = await mediaTicket(source, { allow: true });
-  await expectMetadata(source, { available: true }, { ticket });
-  await expectMetadata(sibling, { available: false }, { ticket });
-  await expectBytes(source, { ticket }, PNG, "image/png");
-});
+it.each([undefined, "required"] as const)(
+  "offers and renews an exact-image administrator grant with sandbox %s without granting siblings",
+  async (sandbox) => {
+    entry.sandbox = sandbox;
+    if (sandbox) {
+      entry.permissionMode = "full";
+    }
+    const source = await image("outside.png", temp);
+    const sibling = await image("sibling.png", temp);
+    await expectMetadata(source, {
+      available: false,
+      code: "outside-allowed-folders",
+      canAllow: true,
+      retryable: false,
+    });
+    const ticket = await mediaTicket(source, { allow: true });
+    await expectMetadata(source, { available: true }, { ticket });
+    await expectMetadata(sibling, { available: false }, { ticket });
+    await expectBytes(source, { ticket }, PNG, "image/png");
+  },
+);
 
 it("does not let a reader grant outside access or renew an administrator's allowance", async () => {
   const source = await image("outside.png", temp);
