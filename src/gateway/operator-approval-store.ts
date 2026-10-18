@@ -14,6 +14,7 @@ import {
   type SqliteWorkerAdmissionFactory,
   type SqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 // Runtime approval operations retain the shared-state owner through worker settlement.
 import {
   createSqliteWorkerWriteAdmission,
@@ -184,18 +185,13 @@ function execute<Key extends Operation>(
         exec.committed(isRecord(facts) ? facts.execFacts : undefined);
       });
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const confirmed = admission?.settlement?.kind === "completed";
-        const rolledBack = confirmed && !admission?.committed && !commitAdmitted;
-        approvals.finish(confirmed, rolledBack);
-        grants.finish(confirmed, rolledBack);
-        exec.finish(confirmed, rolledBack);
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      const confirmed = admission?.settlement?.kind === "completed";
+      const rolledBack = confirmed && !admission?.committed && !commitAdmitted;
+      approvals.finish(confirmed, rolledBack);
+      grants.finish(confirmed, rolledBack);
+      exec.finish(confirmed, rolledBack);
+    });
     return retained;
   };
   const publishCommitted = (facts: unknown) => {
