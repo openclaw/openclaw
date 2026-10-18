@@ -6,6 +6,10 @@ import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 
+function writeJson(dir: string, name: string, value: unknown) {
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(value), "utf8");
+}
+
 export async function readRequiredPersistedInstalledPluginIndex(
   stateDir: string,
 ): Promise<InstalledPluginIndex> {
@@ -31,16 +35,12 @@ export function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
     "throw new Error('runtime entry should not load during doctor registry repair');\n",
     "utf8",
   );
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      name: id,
-      configSchema: { type: "object" },
-      providers: [id],
-    }),
-    "utf8",
-  );
+  writeJson(rootDir, "openclaw.plugin.json", {
+    id,
+    name: id,
+    configSchema: { type: "object" },
+    providers: [id],
+  });
   return {
     idHint: id,
     source: path.join(rootDir, "index.ts"),
@@ -58,34 +58,14 @@ export function createBundledCandidate(params: {
 }): PluginCandidate {
   const packageManifest =
     params.bundledDist === undefined ? undefined : { build: { bundledDist: params.bundledDist } };
-  fs.writeFileSync(
-    path.join(params.rootDir, "index.ts"),
-    "throw new Error('runtime entry should not load during doctor registry repair');\n",
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.id,
-      name: params.id,
-      configSchema: { type: "object" },
-      providers: [params.id],
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(params.rootDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      ...(packageManifest ? { openclaw: packageManifest } : {}),
-    }),
-    "utf8",
-  );
+  const candidate = createCandidate(params.rootDir, params.id);
+  writeJson(params.rootDir, "package.json", {
+    name: params.packageName,
+    version: params.version,
+    ...(packageManifest ? { openclaw: packageManifest } : {}),
+  });
   return {
-    idHint: params.id,
-    source: path.join(params.rootDir, "index.ts"),
-    rootDir: params.rootDir,
+    ...candidate,
     origin: "bundled",
     packageName: params.packageName,
     packageVersion: params.version,
@@ -108,69 +88,37 @@ export function createManagedNpmPlugin(params: {
   });
   const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
   fs.mkdirSync(packageDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(npmRoot, "package.json"),
-    JSON.stringify({
-      dependencies: {
-        [params.packageName]: params.version,
-      },
-    }),
-    "utf8",
-  );
+  writeJson(npmRoot, "package.json", { dependencies: { [params.packageName]: params.version } });
   if (params.packageLock) {
-    fs.writeFileSync(
-      path.join(npmRoot, "package-lock.json"),
-      JSON.stringify({
-        lockfileVersion: 3,
-        packages: {
-          "": {
-            dependencies: {
-              [params.packageName]: params.version,
-              "other-plugin": "1.0.0",
-            },
-          },
-          [`node_modules/${params.packageName}`]: {
-            version: params.version,
-          },
-          "node_modules/other-plugin": {
-            version: "1.0.0",
+    writeJson(npmRoot, "package-lock.json", {
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          dependencies: {
+            [params.packageName]: params.version,
+            "other-plugin": "1.0.0",
           },
         },
-        dependencies: {
-          [params.packageName]: {
-            version: params.version,
-          },
-          "other-plugin": {
-            version: "1.0.0",
-          },
-        },
-      }),
-      "utf8",
-    );
+        [`node_modules/${params.packageName}`]: { version: params.version },
+        "node_modules/other-plugin": { version: "1.0.0" },
+      },
+      dependencies: {
+        [params.packageName]: { version: params.version },
+        "other-plugin": { version: "1.0.0" },
+      },
+    });
   }
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
-      openclaw: {
-        extensions: ["."],
-      },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.id,
-      name: params.id,
-      configSchema: {
-        type: "object",
-      },
-    }),
-    "utf8",
-  );
+  writeJson(packageDir, "package.json", {
+    name: params.packageName,
+    version: params.version,
+    ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+    openclaw: { extensions: ["."] },
+  });
+  writeJson(packageDir, "openclaw.plugin.json", {
+    id: params.id,
+    name: params.id,
+    configSchema: { type: "object" },
+  });
   return { npmRoot, packageDir };
 }
 

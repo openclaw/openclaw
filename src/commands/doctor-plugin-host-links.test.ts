@@ -19,12 +19,16 @@ import {
   pluginRegistryIssueToHealthFinding,
   pluginRegistryIssueToRepairEffect,
 } from "./doctor-plugin-registry.js";
+import { hermeticEnv } from "./doctor-plugin-registry.test-support.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function writeJson(dir: string, value: unknown, name = "package.json") {
+  fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,27 +44,15 @@ function createRegisteredExtensionPlugin(params: {
   const packageDir = params.packageDir ?? path.join(params.stateDir, "extensions", pluginId);
   const staleHostDir = path.join(packageDir, "node_modules", "openclaw");
   fs.mkdirSync(staleHostDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: `@clawemail/${pluginId}`,
-      version: "2026.7.1",
-      peerDependencies: { openclaw: ">=2026.7.1" },
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
+  writeJson(packageDir, {
+    name: `@clawemail/${pluginId}`,
+    version: "2026.7.1",
+    peerDependencies: { openclaw: ">=2026.7.1" },
+    openclaw: { extensions: ["./index.js"] },
+  });
   fs.writeFileSync(path.join(packageDir, "index.js"), "export default {};\n");
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
-  );
-  fs.writeFileSync(
-    path.join(staleHostDir, "package.json"),
-    JSON.stringify({
-      name: "openclaw",
-      version: "2026.7.1-beta.2",
-    }),
-  );
+  writeJson(packageDir, { id: pluginId, configSchema: { type: "object" } }, "openclaw.plugin.json");
+  writeJson(staleHostDir, { name: "openclaw", version: "2026.7.1-beta.2" });
   return { packageDir, staleHostDir };
 }
 
@@ -69,23 +61,19 @@ function createRegistryInstallRecord(
   pluginId: string,
   packageDir: string,
 ): PluginInstallRecord {
-  if (source === "archive") {
-    return {
-      source,
-      sourcePath: path.join(path.dirname(packageDir), `${pluginId}-original.tgz`),
-      installPath: packageDir,
-      version: "2026.7.1",
-    };
-  }
   const packageName = `@clawemail/${pluginId}`;
   return {
     source,
-    spec: `${packageName}@2026.7.1`,
     installPath: packageDir,
     version: "2026.7.1",
-    resolvedName: packageName,
-    resolvedVersion: "2026.7.1",
-    resolvedSpec: `${packageName}@2026.7.1`,
+    ...(source === "archive"
+      ? { sourcePath: path.join(path.dirname(packageDir), `${pluginId}-original.tgz`) }
+      : {
+          spec: `${packageName}@2026.7.1`,
+          resolvedName: packageName,
+          resolvedVersion: "2026.7.1",
+          resolvedSpec: `${packageName}@2026.7.1`,
+        }),
   };
 }
 
@@ -93,21 +81,23 @@ async function writeInstallRecords(
   stateDir: string,
   installRecords: Record<string, PluginInstallRecord>,
 ): Promise<void> {
-  await seedInstalledPluginIndex(installRecords, {
-    stateDir,
-    candidates: [],
+  await seedInstalledPluginIndex(installRecords, { stateDir, candidates: [] });
+}
+
+async function registerPlugin(
+  stateDir: string,
+  packageDir: string,
+  source: "npm" | "clawhub" = "clawhub",
+) {
+  await writeInstallRecords(stateDir, {
+    email: createRegistryInstallRecord(source, "email", packageDir),
   });
 }
 
 function createDoctorParams(stateDir: string, shouldRepair: boolean) {
   return {
     stateDir,
-    env: {
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    },
+    env: hermeticEnv({ OPENCLAW_STATE_DIR: stateDir }),
     config: {},
     prompter: { shouldRepair },
   };
@@ -151,10 +141,8 @@ it("audits and repairs only the selected managed npm generations", async () => {
   const reads = vi.spyOn(fs.promises, "readdir");
   const syncReads = vi.spyOn(fs, "readdirSync");
   const params = createDoctorParams(stateDir, false);
-  const started = performance.now();
   const audit = await listPluginOpenClawHostLinkIssues(params);
   await maybeRepairPluginOpenClawHostLinks({ ...params, prompter: { shouldRepair: true } });
-  console.info(`host-link audit + repair: ${(performance.now() - started).toFixed(1)} ms`);
 
   expect(
     syncReads.mock.calls.some(([dir]) => String(dir) === path.join(stateDir, "npm", "projects")),
@@ -199,7 +187,6 @@ it("warns and falls back for unreadable records without swallowing invalid recor
 });
 
 describe("registered host links", () => {
-  const source = "clawhub";
   it("relinks a cloned plugin without changing the source host link or package", async () => {
     const sourceState = tempDirs.make("openclaw-source-plugin-host-");
     const clonedState = tempDirs.make("openclaw-cloned-plugin-host-");
@@ -213,9 +200,7 @@ describe("registered host links", () => {
     const hostManifest = fs.readFileSync(path.join(oldHost, "package.json"));
     const clonedPackage = path.join(clonedState, "extensions", "email");
     fs.cpSync(packageDir, clonedPackage, { recursive: true, verbatimSymlinks: true });
-    await writeInstallRecords(clonedState, {
-      email: createRegistryInstallRecord(source, "email", clonedPackage),
-    });
+    await registerPlugin(clonedState, clonedPackage);
 
     await maybeRepairPluginRegistryState(createDoctorParams(clonedState, true));
 
@@ -230,9 +215,7 @@ describe("registered host links", () => {
   it("reports a stale registered extensions-root host without changing it in read-only doctor", async () => {
     const stateDir = tempDirs.make("openclaw-doctor-plugin-host-links-");
     const { packageDir, staleHostDir } = createRegisteredExtensionPlugin({ stateDir });
-    await writeInstallRecords(stateDir, {
-      email: createRegistryInstallRecord("npm", "email", packageDir),
-    });
+    await registerPlugin(stateDir, packageDir, "npm");
 
     const params = createDoctorParams(stateDir, false);
     const issues = await detectPluginRegistryHealthIssues(params);
@@ -264,9 +247,7 @@ describe("registered host links", () => {
       stateDir,
       packageDir: path.join(stateDir, "external-owner", "email"),
     });
-    await writeInstallRecords(stateDir, {
-      email: createRegistryInstallRecord(source, "email", packageDir),
-    });
+    await registerPlugin(stateDir, packageDir);
 
     await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
 
@@ -285,9 +266,7 @@ describe("registered host links", () => {
       const packageDir = path.join(stateDir, "extensions", "email");
       fs.mkdirSync(path.dirname(packageDir), { recursive: true });
       fs.symlinkSync(outsideDir, packageDir, "dir");
-      await writeInstallRecords(stateDir, {
-        email: createRegistryInstallRecord(source, "email", packageDir),
-      });
+      await registerPlugin(stateDir, packageDir);
 
       await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
 
@@ -306,9 +285,7 @@ describe("registered host links", () => {
       });
       const packageDir = path.join(stateDir, "extensions", "email");
       fs.symlinkSync(developerPackageDir, packageDir, "dir");
-      await writeInstallRecords(stateDir, {
-        email: createRegistryInstallRecord(source, "email", packageDir),
-      });
+      await registerPlugin(stateDir, packageDir);
 
       await maybeRepairPluginRegistryState(createDoctorParams(stateDir, true));
 
@@ -322,8 +299,8 @@ describe("registered host links", () => {
     const email = createRegisteredExtensionPlugin({ stateDir });
     fs.writeFileSync(path.join(broken.packageDir, "package.json"), "{", "utf8");
     await writeInstallRecords(stateDir, {
-      broken: createRegistryInstallRecord(source, "broken", broken.packageDir),
-      email: createRegistryInstallRecord(source, "email", email.packageDir),
+      broken: createRegistryInstallRecord("clawhub", "broken", broken.packageDir),
+      email: createRegistryInstallRecord("clawhub", "email", email.packageDir),
     });
 
     const issues = await detectPluginRegistryHealthIssues(createDoctorParams(stateDir, false));
