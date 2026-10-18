@@ -21,6 +21,41 @@ import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
+function createOwner(client?: GatewayBrowserClient) {
+  return {
+    client,
+    abort: new AbortController(),
+    descriptor: { pluginId: "review" },
+    disposers: new Set<() => void>(),
+    contributions: { navigation: new Map(), panels: new Map() },
+  } as Omit<ControlUiPluginOwner, "host">;
+}
+
+function createHost(context: ApplicationContext) {
+  const owner = createOwner();
+  const runtime = {
+    isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
+      current === owner && !current.abort.signal.aborted,
+  } as ControlUiPluginRuntime;
+  return {
+    owner,
+    abort: owner.abort,
+    host: createControlUiPluginHost(() => context, runtime, owner),
+  };
+}
+
+const sessionSnapshot = (
+  result: ReturnType<typeof sessionsResult> | null,
+  error: string | null = null,
+) => {
+  const { sessions, hasMore, nextOffset, totalCount } = result ?? {};
+  return {
+    result: result ? { sessions, hasMore, nextOffset, totalCount } : null,
+    loading: false,
+    error,
+  };
+};
+
 function createRosterHost(request: GatewayBrowserClient["request"]) {
   const client = { request } as GatewayBrowserClient;
   const { gateway } = createGatewayHarness(client);
@@ -32,14 +67,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
     sessions,
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
   } as unknown as ApplicationContext;
-  const abort = new AbortController();
-  const owner = {
-    client,
-    abort,
-    descriptor: { pluginId: "review" },
-    disposers: new Set(),
-    contributions: { navigation: new Map() },
-  } as Omit<ControlUiPluginOwner, "host">;
+  const owner = createOwner(client);
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
   return {
@@ -49,7 +77,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
     agents,
     sessions,
     dispose: () => {
-      abort.abort();
+      owner.abort.abort();
       owner.disposers.forEach((dispose) => dispose());
       owner.disposers.clear();
       runtime.dispose();
@@ -128,16 +156,8 @@ describe("native UI roster refresh", () => {
     );
     fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
     await vi.waitFor(() => {
-      expect(linkedListener).toHaveBeenLastCalledWith({
-        loading: false,
-        error: null,
-        result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
-      });
-      expect(researchListener).toHaveBeenLastCalledWith({
-        loading: false,
-        error: null,
-        result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
-      });
+      expect(linkedListener).toHaveBeenLastCalledWith(sessionSnapshot(found));
+      expect(researchListener).toHaveBeenLastCalledWith(sessionSnapshot(research));
     });
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
     expect(fixture.sessions.state.agentId).toBe("main");
@@ -179,11 +199,7 @@ describe("native UI roster refresh", () => {
     const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
     const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
     await vi.waitFor(() => {
-      expect(listener).toHaveBeenLastCalledWith({
-        result: null,
-        loading: false,
-        error: "Query unavailable",
-      });
+      expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(null, "Query unavailable"));
       expect(fixture.runtime.errors).toContainEqual({
         pluginId: "review",
         message: "Query unavailable",
@@ -191,20 +207,10 @@ describe("native UI roster refresh", () => {
     });
     request.mockResolvedValueOnce(found);
     await observer.refresh();
-    const result = {
-      sessions: found.sessions,
-      hasMore: undefined,
-      nextOffset: undefined,
-      totalCount: undefined,
-    };
-    expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
+    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found));
     request.mockRejectedValueOnce(new Error("Refresh unavailable"));
     await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
-    expect(listener).toHaveBeenLastCalledWith({
-      result,
-      loading: false,
-      error: "Refresh unavailable",
-    });
+    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found, "Refresh unavailable"));
     expect(fixture.sessions.state.result).toBeNull();
     expect(fixture.sessions.state.error).toBeNull();
   });
@@ -409,16 +415,7 @@ describe("native UI locale subscription", () => {
       agentSelection: { subscribe },
       theme: { subscribe },
     } as unknown as ApplicationContext;
-    const abort = new AbortController();
-    const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-      ControlUiPluginOwner,
-      "host"
-    >;
-    const runtime = {
-      isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
-        current === owner && !current.abort.signal.aborted,
-    } as ControlUiPluginRuntime;
-    const host = createControlUiPluginHost(() => context, runtime, owner);
+    const { host, abort } = createHost(context);
     const notified = vi.fn(() => host.locale);
     const stop = host.subscribe(notified);
     try {
@@ -566,16 +563,7 @@ describe("native UI page navigation", () => {
         navigate,
         replace,
       } as unknown as ApplicationContext;
-      const abort = new AbortController();
-      const owner = { abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-        ControlUiPluginOwner,
-        "host"
-      >;
-      const runtime = {
-        isCurrent: (current: Omit<ControlUiPluginOwner, "host">) =>
-          current === owner && !current.abort.signal.aborted,
-      } as ControlUiPluginRuntime;
-      const host = createControlUiPluginHost(() => context, runtime, owner);
+      const { host, abort } = createHost(context);
       const target = { id: "board", path: ["Team / One"], params: { filter: "done" } };
       try {
         const location = new URL(
@@ -632,17 +620,11 @@ describe("native UI plugin panels", () => {
       agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
       sessions: { state: { result: null } },
     } as unknown as ApplicationContext;
-    const abort = new AbortController();
-    const owner = {
-      abort,
-      descriptor: { pluginId: "review" },
-      disposers: new Set(),
-      contributions: { panels: new Map([["document", {}]]) },
-    } as Omit<ControlUiPluginOwner, "host">;
-    const runtime = {
-      isCurrent: () => !abort.signal.aborted,
-    } as unknown as ControlUiPluginRuntime;
-    const host = createControlUiPluginHost(() => context, runtime, owner);
+    const { host, abort, owner } = createHost(context);
+    owner.contributions.panels.set("document", {
+      value: { id: "document", label: "Document", mount: () => undefined },
+      signal: abort.signal,
+    });
     const listener = vi.fn();
     window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
     try {
@@ -729,12 +711,7 @@ describe("native UI conversation dock", () => {
     const runtime = new ControlUiPluginRuntime(() => context);
     runtime.start();
     const makeHost = () => {
-      const owner = {
-        client,
-        abort: new AbortController(),
-        descriptor: { pluginId: "review" },
-        disposers: new Set(),
-      } as Omit<ControlUiPluginOwner, "host">;
+      const owner = createOwner(client);
       return {
         host: createControlUiPluginHost(() => context, runtime, owner),
         dispose: () => {

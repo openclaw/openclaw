@@ -23,6 +23,41 @@ vi.mock("./control-ui-distribution.ts", async (importOriginal) => ({
   controlUiPluginDistributions: packaged,
 }));
 
+const catalogMethods = ["plugins.controlUi.list", "plugins.controlUi.report"];
+const configForRuntime = (
+  refresh: () => Promise<
+    Pick<ApplicationContext["config"]["current"], "pluginAssetsRequireAuth" | "pluginFrameGrants">
+  > = async () => ({
+    pluginAssetsRequireAuth: false,
+    pluginFrameGrants: [],
+  }),
+  resourceBasePath = "",
+) => ({ ...createApplicationConfigCapability({ resourceBasePath }), refresh });
+function connectedContext(
+  client: { gatewayUrl: string; request: (method: string, params: unknown) => unknown },
+  configuration: ReturnType<typeof configForRuntime>,
+  resourceBasePath = "",
+  advertised = ["plugins.controlUi.list"],
+) {
+  // SAFETY: the runtime reads only these gateway and config services.
+  return {
+    resourceBasePath,
+    config: configuration,
+    gateway: {
+      snapshot: { phase: "connected", client, hello: { features: { methods: advertised } } },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
+}
+const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
+  pluginId: "review",
+  name: "Review",
+  revision,
+  entryUrl,
+  styles: [],
+});
+
 it.each(["cross-origin", "authenticated HTTP", "pending import"])(
   "loads only the matching distribution and retires same-revision eligibility loss: %s",
   async (scenario) => {
@@ -58,19 +93,7 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
         return { ok: true };
       },
     };
-    const context = {
-      resourceBasePath: "",
-      config: { ...createApplicationConfigCapability({ resourceBasePath: "" }), refresh },
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client,
-          hello: { features: { methods: ["plugins.controlUi.list"] } },
-        },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
-      },
-    } as unknown as ApplicationContext;
+    const context = connectedContext(client, configForRuntime(refresh));
     vi.stubGlobal("isSecureContext", false);
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       owners.push(owner);
@@ -222,26 +245,14 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
     const activationStarted = createDeferred();
     const activation = createDeferred();
     const completed = createDeferred();
-    const context = {
-      resourceBasePath: "",
-      gateway: {
-        snapshot: {
-          phase: "connected",
-          client: {
-            gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-            request: (method: string) =>
-              method === "plugins.controlUi.list" ? catalog.promise : Promise.resolve({ ok: true }),
-          },
-          hello: { features: { methods: ["plugins.controlUi.list"] } },
-        },
-        subscribe: () => () => undefined,
-        subscribeEvents: () => () => undefined,
+    const context = connectedContext(
+      {
+        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+        request: (method) =>
+          method === "plugins.controlUi.list" ? catalog.promise : Promise.resolve({ ok: true }),
       },
-      config: {
-        ...createApplicationConfigCapability({ resourceBasePath: "" }),
-        refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
-      },
-    } as unknown as ApplicationContext;
+      configForRuntime(),
+    );
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       activationStarted.resolve();
       await activation.promise;
@@ -266,18 +277,7 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
         catalog.resolve({
           revision: "one",
           diagnostics: [],
-          plugins:
-            outcome === "empty"
-              ? []
-              : [
-                  {
-                    pluginId: "review",
-                    name: "Review",
-                    revision: "one",
-                    entryUrl: "/review.js",
-                    styles: [],
-                  },
-                ],
+          plugins: outcome === "empty" ? [] : [pluginDescriptor()],
         });
       }
       if (outcome === "activated" || outcome === "activation-failed") {
@@ -308,28 +308,22 @@ describe("native plugin asset admission", () => {
     {
       scenario: "catalog RPC failure",
       native: false,
-      remote: false,
       catalogError: true,
       error: "plugin registry is no longer active",
     },
     {
       scenario: "cross-origin native plugin",
-      native: true,
       remote: true,
       error:
         "Native plugin UI requires the Control UI served by the connected Gateway. Open https://remote.example and reconnect there.",
     },
-    { scenario: "ordinary remote connection", native: false, remote: true, error: null },
+    { scenario: "ordinary remote connection", native: false, remote: true },
     {
       scenario: "missing native asset grant",
-      native: true,
-      remote: false,
       error: "Native plugin asset grant unavailable: review",
     },
     {
       scenario: "authenticated native plugin on plain HTTP",
-      native: true,
-      remote: false,
       secure: false,
       granted: true,
       error:
@@ -337,28 +331,22 @@ describe("native plugin asset admission", () => {
     },
     {
       scenario: "native plugin without asset authentication on plain HTTP",
-      native: true,
-      remote: false,
       secure: false,
       requiresAuth: false,
       loads: true,
-      error: null,
     },
     {
       scenario: "native plugin under a resource base path",
-      native: true,
-      remote: false,
       granted: true,
       loads: true,
       resourceBasePath: "/console",
-      error: null,
     },
   ])(
     "settles $scenario without loading protected modules",
     async ({
-      native,
-      remote,
-      error,
+      native = true,
+      remote = false,
+      error = null,
       secure = true,
       granted = false,
       requiresAuth = true,
@@ -378,13 +366,10 @@ describe("native plugin asset admission", () => {
               diagnostics: [],
               plugins: native
                 ? [
-                    {
-                      pluginId: "review",
-                      name: "Review",
-                      revision: "one",
-                      entryUrl: `${resourceBasePath}/__openclaw__/plugins/control-ui/review/one/index.js`,
-                      styles: [],
-                    },
+                    pluginDescriptor(
+                      "one",
+                      `${resourceBasePath}/__openclaw__/plugins/control-ui/review/one/index.js`,
+                    ),
                   ]
                 : [],
             }
@@ -396,33 +381,24 @@ describe("native plugin asset admission", () => {
           ? [
               {
                 pluginId: "review",
-                match: "prefix",
+                match: "prefix" as const,
                 path: `${resourceBasePath}/__openclaw__/plugins/control-ui/review/`,
               },
             ]
           : [],
       }));
-      const context = {
-        basePath: "/navigation-only",
-        resourceBasePath,
-        gateway: {
-          snapshot: {
-            phase: "connected",
-            client: {
-              gatewayUrl: remote
-                ? "wss://remote.example/ws"
-                : window.location.origin.replace(/^http/u, "ws"),
-              request,
-            },
-            hello: {
-              features: { methods: ["plugins.controlUi.list", "plugins.controlUi.report"] },
-            },
-          },
-          subscribe: () => () => undefined,
-          subscribeEvents: () => () => undefined,
+      const context = connectedContext(
+        {
+          gatewayUrl: remote
+            ? "wss://remote.example/ws"
+            : window.location.origin.replace(/^http/u, "ws"),
+          request,
         },
-        config: { ...createApplicationConfigCapability({ resourceBasePath }), refresh },
-      } as unknown as ApplicationContext;
+        configForRuntime(refresh, resourceBasePath),
+        resourceBasePath,
+        catalogMethods,
+      );
+      Object.assign(context, { basePath: "/navigation-only" });
       const runtime = new ControlUiPluginRuntime(() => context);
       try {
         runtime.start();
@@ -476,11 +452,10 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
           plugins: revision
             ? [
                 {
-                  pluginId: "review",
-                  name: "Review",
-                  revision,
-                  entryUrl: `/__openclaw__/plugins/control-ui/review/${revision}/index.js`,
-                  styles: [],
+                  ...pluginDescriptor(
+                    revision,
+                    `/__openclaw__/plugins/control-ui/review/${revision}/index.js`,
+                  ),
                   uiCapabilities: ["replacement", "widget"],
                 },
               ]
@@ -506,10 +481,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     const context = {
       gateway,
       resourceBasePath: "",
-      config: {
-        ...createApplicationConfigCapability({ resourceBasePath: "" }),
-        refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }),
-      },
+      config: configForRuntime(),
     } as unknown as ApplicationContext;
     vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
       const host = createControlUiPluginHost(getContext, runtime, owner);

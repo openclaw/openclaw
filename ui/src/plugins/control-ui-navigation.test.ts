@@ -13,6 +13,23 @@ import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
 const originalLocation = window.location.href;
+const pointer = (init: MouseEventInit = {}) =>
+  new MouseEvent("contextmenu", { bubbles: true, ...init });
+const keyboard = (key: string, init: KeyboardEventInit = {}) =>
+  new KeyboardEvent("keydown", { bubbles: true, key, ...init });
+const contribution = (key: string) =>
+  Object.assign(document.createElement("openclaw-plugin-contributions"), {
+    kind: "navigation",
+    navigationKey: key,
+  });
+function expectIcon(element: Element, name: "activity" | "layers") {
+  const expected = mountSolid(() => createComponent(Icon, { name }), {
+    container: document.createElement("div"),
+  }).container;
+  const paths = (node: Element) =>
+    [...node.querySelectorAll("svg path")].map((path) => path.getAttribute("d"));
+  expect(paths(element)).toEqual(paths(expected));
+}
 afterEach(() => {
   document.body.replaceChildren();
   window.history.replaceState(null, "", originalLocation);
@@ -59,11 +76,7 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
   });
   await menus.preloadMenuRenderer();
   const contributions = ["boards", "child", "plain"].map((id) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions"), {
-      kind: "navigation",
-      navigationKey: `example/${id}`,
-      navigationMenus: menus,
-    }),
+    Object.assign(contribution(`example/${id}`), { navigationMenus: menus }),
   );
   window.history.replaceState(null, "", "/boards");
   provider.append(...contributions, menuRoot);
@@ -91,16 +104,9 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     const menu = open(
       link,
       index === 0
-        ? new MouseEvent("contextmenu", {
-            bubbles: true,
+        ? pointer({ cancelable: true, clientX: 24, clientY: 32 })
+        : keyboard(index === 1 ? "F10" : "ContextMenu", {
             cancelable: true,
-            clientX: 24,
-            clientY: 32,
-          })
-        : new KeyboardEvent("keydown", {
-            bubbles: true,
-            cancelable: true,
-            key: index === 1 ? "F10" : "ContextMenu",
             shiftKey: index === 1,
           }),
     );
@@ -118,23 +124,23 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     flush();
     expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
   }
-  const menu = open(links[0]!, new MouseEvent("contextmenu", { bubbles: true }));
-  menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  const menu = open(links[0]!, pointer());
+  menu.dispatchEvent(keyboard("Escape"));
   flush();
   expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
   expect(document.activeElement).toBe(links[0]);
-  open(links[0]!, new MouseEvent("contextmenu", { bubbles: true })).hidePopover();
+  open(links[0]!, pointer()).hidePopover();
   flush();
   expect(menuRoot.querySelector(".sidebar-plugin-navigation-menu")).toBeNull();
 
   for (const event of [
-    new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
-    new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }),
+    pointer({ cancelable: true }),
+    keyboard("ContextMenu", { cancelable: true }),
   ]) {
     expect(open(plain!.querySelector("a")!, event)).toBeNull();
     expect(event.defaultPrevented).toBe(false);
   }
-  const staleMenu = open(links[0]!, new MouseEvent("contextmenu", { bubbles: true }));
+  const staleMenu = open(links[0]!, pointer());
   const staleItem = staleMenu.querySelector<HTMLButtonElement>('[role="menuitem"]')!;
   abort.abort();
   staleItem.click();
@@ -163,31 +169,18 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     host,
     value,
   });
+  const childEntry = (
+    id: string,
+    label: string,
+    order: number,
+    icon: string | undefined,
+    page: ControlUiNavigationItem["page"] = { id: "boards", params: { board: id } },
+  ) => registration({ id, parent: "boards", label, order, icon, page });
   const entries = [
     registration({ id: "boards", label: "Boards", icon: "layers", page: { id: "boards" } }),
-    registration({
-      id: "zulu",
-      parent: "boards",
-      label: "Zulu",
-      order: 2,
-      page: { id: "boards", params: { board: "zulu" } },
-    }),
-    registration({
-      id: "beta",
-      parent: "boards",
-      label: "Beta",
-      order: 1,
-      icon: "toString",
-      page: { id: "special" },
-    }),
-    registration({
-      id: "alpha",
-      parent: "boards",
-      label: "Alpha",
-      order: 1,
-      icon: "activity",
-      page: { id: "boards", params: { board: "alpha" } },
-    }),
+    childEntry("zulu", "Zulu", 2, undefined),
+    childEntry("beta", "Beta", 1, "toString", { id: "special" }),
+    childEntry("alpha", "Alpha", 1, "activity"),
     registration(
       { id: "foreign", parent: "boards", label: "Other plugin", page: { id: "boards" } },
       "other",
@@ -201,11 +194,6 @@ it("shows the active plugin section's ordered children and leaves pinned childre
     plugins: { registrations: () => entries, subscribe },
     router: { subscribe },
   } as unknown as ApplicationContext);
-  const contribution = (key: string) =>
-    Object.assign(document.createElement("openclaw-plugin-contributions"), {
-      kind: "navigation",
-      navigationKey: key,
-    });
   const parent = contribution("example/boards");
   const pinned = contribution("example/alpha");
   provider.append(parent, pinned);
@@ -217,18 +205,8 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   const children = [...parent.querySelectorAll<HTMLAnchorElement>(".nav-item--child")];
   expect(children.map((child) => child.textContent?.trim())).toEqual(["Alpha", "Beta", "Zulu"]);
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
-  const activityIcon = mountSolid(() => createComponent(Icon, { name: "activity" }), {
-    container: document.createElement("div"),
-  }).container;
-  expect(
-    [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...activityIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
-  const layersIcon = mountSolid(() => createComponent(Icon, { name: "layers" }), {
-    container: document.createElement("div"),
-  }).container;
-  expect(
-    [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...layersIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  expectIcon(children[0]!, "activity");
+  expectIcon(children[1]!, "layers");
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

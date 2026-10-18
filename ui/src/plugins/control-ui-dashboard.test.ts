@@ -17,6 +17,34 @@ type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard
 };
 
 const mounted: DashboardElement[] = [];
+const toggle = (element: DashboardElement) =>
+  element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")!;
+const expanded = (element: DashboardElement) => toggle(element).getAttribute("aria-expanded");
+const nativeOwner = (element: DashboardElement) =>
+  element.querySelector('[data-native-owner="widget"]');
+const tab = (element: DashboardElement, id: string) =>
+  element.querySelector<HTMLButtonElement>(`[role="tab"][data-board-tab-id="${id}"]`)!;
+const boardTabs = () =>
+  ["main", "research"].map((tabId, position) => ({
+    tabId,
+    title: position ? "Research" : "Main",
+    position,
+    chatDock: "right",
+  }));
+
+async function boardView(element: DashboardElement) {
+  await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
+  return element.querySelector("openclaw-board-view")!;
+}
+
+async function setPermissions(element: DashboardElement, value: boolean) {
+  element.canMutate = element.canGrant = value;
+  await element.updateComplete;
+  const board = element.querySelector("openclaw-board-view")!;
+  await board.updateComplete;
+  await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+  expect([board.canMutate, board.canGrant]).toEqual([value, value]);
+}
 
 function widget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
@@ -156,15 +184,10 @@ describe("Plugin session dashboard", () => {
       await customElements.whenDefined("openclaw-board-view");
       await vi.waitFor(() => {
         expect(reportError).not.toHaveBeenCalled();
-        expect(
-          element.querySelector('[data-native-owner="widget"]'),
-          element.innerHTML,
-        ).not.toBeNull();
+        expect(nativeOwner(element), element.innerHTML).not.toBeNull();
       });
       expect(request).toHaveBeenCalledWith("board.get", initial);
-      expect(element.querySelector('[data-native-owner="widget"]')?.textContent).toBe(
-        `${initial.agentId}/${sessionKey}`,
-      );
+      expect(nativeOwner(element)?.textContent).toBe(`${initial.agentId}/${sessionKey}`);
       if (hydrateOwner) {
         const previousSignal = widgetSignals.at(-1);
         expect(previousSignal?.aborted).toBe(false);
@@ -173,9 +196,7 @@ describe("Plugin session dashboard", () => {
         await element.updateComplete;
 
         await vi.waitFor(() =>
-          expect(element.querySelector('[data-native-owner="widget"]')?.textContent).toBe(
-            `writer/${sessionKey}`,
-          ),
+          expect(nativeOwner(element)?.textContent).toBe(`writer/${sessionKey}`),
         );
         expect(previousSignal?.aborted).toBe(true);
         expect(widgetSignals.at(-1)?.aborted).toBe(false);
@@ -202,68 +223,37 @@ describe("Plugin session dashboard", () => {
     const element = await mountDashboard({ sessionKey }, client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(
-      element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-    ).toBe("false");
+    expect(expanded(element)).toBe("false");
     expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).toBeNull();
 
     pending.resolve(snapshot);
 
-    await vi.waitFor(() =>
-      expect(
-        element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-      ).toBe("true"),
-    );
+    await vi.waitFor(() => expect(expanded(element)).toBe("true"));
     expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   });
 
   it("updates mounted dashboard controls immediately when gateway permissions change", async () => {
-    const { client, request } = createClient([
-      widget({
-        name: "pending-status",
-        title: "Pending status",
-        grantState: "pending",
-      }),
-    ]);
+    const { client, request } = createClient([widget({ grantState: "pending" })]);
     const element = await mountDashboard(
       { sessionKey: "agent:main:workboard-live-scopes" },
       client,
-      {
-        canMutate: true,
-        canGrant: true,
-      },
+      { canMutate: true, canGrant: true },
     );
 
-    await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
-    const board = element.querySelector("openclaw-board-view")!;
+    const board = await boardView(element);
     await board.updateComplete;
     await vi.waitFor(() =>
       expect(board.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull(),
     );
     const allow = board.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
 
-    expect(board.canMutate).toBe(true);
-    expect(board.canGrant).toBe(true);
+    expect([board.canMutate, board.canGrant]).toEqual([true, true]);
     expect(allow.disabled).toBe(false);
 
-    element.canMutate = false;
-    element.canGrant = false;
-    await element.updateComplete;
-    await board.updateComplete;
-    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
-
-    expect(board.canMutate).toBe(false);
-    expect(board.canGrant).toBe(false);
+    await setPermissions(element, false);
     expect(allow.disabled).toBe(true);
 
-    element.canMutate = true;
-    element.canGrant = true;
-    await element.updateComplete;
-    await board.updateComplete;
-    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
-
-    expect(board.canMutate).toBe(true);
-    expect(board.canGrant).toBe(true);
+    await setPermissions(element, true);
     expect(allow.disabled).toBe(false);
     expect(request).toHaveBeenCalledOnce();
   });
@@ -277,34 +267,27 @@ describe("Plugin session dashboard", () => {
       const { client, request, removeListener } = createClient([widget()]);
       let chat: BoardProviderLease | undefined;
       let dashboard: DashboardElement | undefined;
+      const mount = () => mountDashboard(session, client, { canMutate: true, canGrant: false });
 
       try {
         if (order === "chat-first") {
           chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
-          dashboard = await mountDashboard(session, client, {
-            canMutate: true,
-            canGrant: false,
-          });
+          dashboard = await mount();
         } else {
-          dashboard = await mountDashboard(session, client, {
-            canMutate: true,
-            canGrant: false,
-          });
+          dashboard = await mount();
           chat = acquireBoardProviderForSession(session, client, true, true, true, true, true);
         }
 
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
         expect(request).toHaveBeenCalledWith("board.get", session);
-        await vi.waitFor(() =>
-          expect(dashboard?.querySelector("openclaw-board-view")).not.toBeNull(),
-        );
-        const board = dashboard.querySelector("openclaw-board-view")!;
-        expect(chat.provider).toMatchObject({
+        const board = await boardView(dashboard);
+        const chatCapabilities = {
           canPinWidgets: true,
           canPinMcpApps: true,
           canMutate: true,
           canGrant: true,
-        });
+        };
+        expect(chat.provider).toMatchObject(chatCapabilities);
         expect(board.canMutate).toBe(true);
         expect(board.canGrant).toBe(false);
 
@@ -314,10 +297,7 @@ describe("Plugin session dashboard", () => {
 
         expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
         expect(board.canMutate).toBe(false);
-        expect(chat.provider.canMutate).toBe(true);
-        expect(chat.provider.canPinWidgets).toBe(true);
-        expect(chat.provider.canPinMcpApps).toBe(true);
-        expect(chat.provider.canGrant).toBe(true);
+        expect(chat.provider).toMatchObject(chatCapabilities);
         expect(request).toHaveBeenCalledOnce();
 
         dashboard.remove();
@@ -340,59 +320,44 @@ describe("Plugin session dashboard", () => {
       }),
     ]);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-collapse" }, client);
-    await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
-    const board = element.querySelector("openclaw-board-view")!;
+    const board = await boardView(element);
     expect(board.active).toBe(true);
 
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
+    toggle(element).click();
     await element.updateComplete;
     await board.updateComplete;
     expect(board.active).toBe(false);
 
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
+    toggle(element).click();
     await element.updateComplete;
     await board.updateComplete;
     expect(board.active).toBe(true);
   });
 
   it("reacts when the embedded board selects another tab", async () => {
-    const tabs = [
-      { tabId: "main", title: "Main", position: 0, chatDock: "right" },
-      { tabId: "research", title: "Research", position: 1, chatDock: "right" },
-    ];
-    const widgets = tabs.map((tab, position) =>
+    const tabs = boardTabs();
+    const widgets = tabs.map((entry, position) =>
       widget({
-        name: `${tab.tabId}-status`,
-        tabId: tab.tabId,
-        title: `${tab.title} status`,
+        name: `${entry.tabId}-status`,
+        tabId: entry.tabId,
+        title: `${entry.title} status`,
         position,
       }),
     );
     const { client } = createClient(widgets, tabs);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-tabs" }, client);
-    await vi.waitFor(() =>
-      expect(element.querySelector('[role="tab"][data-board-tab-id="research"]')).not.toBeNull(),
-    );
-    element.querySelector<HTMLButtonElement>('[role="tab"][data-board-tab-id="research"]')!.click();
+    await vi.waitFor(() => expect(tab(element, "research").getAttribute("role")).toBe("tab"));
+    tab(element, "research").click();
 
     await vi.waitFor(() =>
-      expect(
-        element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
-      ).toBe("true"),
+      expect(tab(element, "research").getAttribute("aria-selected")).toBe("true"),
     );
-    expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("aria-selected")).toBe(
-      "false",
-    );
-    expect(
+    expect(tab(element, "main").getAttribute("aria-selected")).toBe("false");
+    const hidden = (name: string) =>
       element
-        .querySelector('[data-widget-name="research-status"]')
-        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
-    ).toBe(false);
-    expect(
-      element
-        .querySelector('[data-widget-name="main-status"]')
-        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
-    ).toBe(true);
+        .querySelector(`[data-widget-name="${name}-status"]`)
+        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden;
+    expect([hidden("research"), hidden("main")]).toEqual([false, true]);
   });
 
   it("retains local choices across refreshes and initializes each replacement after its snapshot", async () => {
@@ -408,10 +373,7 @@ describe("Plugin session dashboard", () => {
     let snapshot = {
       sessionKey,
       revision: 1,
-      tabs: [
-        { tabId: "main", title: "Main", position: 0, chatDock: "right" },
-        { tabId: "research", title: "Research", position: 1, chatDock: "right" },
-      ],
+      tabs: boardTabs(),
       widgets: [widget(), widget({ name: "research", tabId: "research" })],
     };
     let listener: GatewayEventListener | undefined;
@@ -433,13 +395,9 @@ describe("Plugin session dashboard", () => {
       },
     } as unknown as GatewayBrowserClient;
     const element = await mountDashboard({ sessionKey }, client);
-    const toggle = () =>
-      element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")!;
-    await vi.waitFor(() =>
-      expect(element.querySelector('[data-board-tab-id="research"]')).not.toBeNull(),
-    );
-    element.querySelector<HTMLButtonElement>('[data-board-tab-id="research"]')!.click();
-    toggle().click();
+    await vi.waitFor(() => expect(tab(element, "research")).not.toBeNull());
+    tab(element, "research").click();
+    toggle(element).click();
     await element.updateComplete;
 
     snapshot = { ...snapshot, revision: 2 };
@@ -447,30 +405,28 @@ describe("Plugin session dashboard", () => {
     await vi.waitFor(() =>
       expect(element.querySelector("openclaw-board-view")?.snapshot?.revision).toBe(2),
     );
-    expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    expect(
-      element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(expanded(element)).toBe("false");
+    expect(tab(element, "research").getAttribute("aria-selected")).toBe("true");
 
     element.session = null;
     await element.updateComplete;
-    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(expanded(element)).toBe("false");
     expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).toBeNull();
     element.session = { sessionKey: `${sessionKey}-pending` };
     await element.updateComplete;
-    expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    toggle().click();
+    expect(expanded(element)).toBe("false");
+    toggle(element).click();
     pending.resolve(empty(`${sessionKey}-pending`));
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
     await element.updateComplete;
-    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(expanded(element)).toBe("true");
     expect(element.querySelector("openclaw-board-view")).toBeNull();
 
     element.session = { sessionKey: `${sessionKey}-next` };
     await element.updateComplete;
-    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(expanded(element)).toBe("true");
     nextPending.resolve(empty(`${sessionKey}-next`));
-    await vi.waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
+    await vi.waitFor(() => expect(expanded(element)).toBe("false"));
     expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).not.toBeNull();
   });
 
