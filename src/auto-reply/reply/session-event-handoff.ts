@@ -408,11 +408,16 @@ export function enqueueSessionEventForHost(
         ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
       if (isCronRunSessionKey(sessionKey)) {
-        void runWithSessionControllerCleanup(async () => {
-          const { removeCronRunContinuationSessionIfIdle } =
-            await import("../../cron/run-continuation-cleanup.js");
-          await removeCronRunContinuationSessionIfIdle(sessionKey);
-        }).catch((error: unknown) => {
+        // Cleanup must outlive the completed event's async work scope.
+        void runWithGatewayDetachedWorkContinuation(
+          () =>
+            runWithSessionControllerCleanup(async () => {
+              const { removeCronRunContinuationSessionIfIdle } =
+                await import("../../cron/run-continuation-cleanup.js");
+              await removeCronRunContinuationSessionIfIdle(sessionKey);
+            }),
+          "session:event-cleanup",
+        ).catch((error: unknown) => {
           log.warn("Could not remove settled cron continuation", { error: String(error) });
         });
       }
