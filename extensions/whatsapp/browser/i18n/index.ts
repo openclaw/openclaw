@@ -16,5 +16,3 @@ export function createTranslator(locale: () => string) {
       : key;
   };
 }
-
-export type Translator = ReturnType<typeof createTranslator>;
