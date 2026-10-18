@@ -507,7 +507,20 @@ export function createAgentDatabaseExecution(
             }
             return await execute();
           } catch (error) {
-            if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+            let retireNative = runOptions?.retireNativeOnFailure === true;
+            if (capturedGeneration && generation === capturedGeneration && fileIdentity) {
+              try {
+                // A caller refusal preserves co-users; loss of our own physical file cannot.
+                assertExistingDatabaseIdentity(
+                  fileIdentity.nativeLocation,
+                  `file:${fileIdentity.physicalIdentity}`,
+                  fileIdentity.birthtime,
+                );
+              } catch {
+                retireNative = true;
+              }
+            }
+            if (retireNative && capturedGeneration) {
               try {
                 await closeNative(capturedGeneration);
               } catch (cleanupError) {

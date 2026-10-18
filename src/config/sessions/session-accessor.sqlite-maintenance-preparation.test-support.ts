@@ -17,6 +17,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   maintenancePreparationFixture as makeFixture,
@@ -243,10 +244,15 @@ export function registerSessionMaintenancePreparationTests() {
   });
 
   it.for(["caller revocation", "lost preparation reply"] as const)(
-    "preserves rows after %s and lets the next maintenance pass proceed",
+    "preserves rows and admitted readers after %s and lets the next maintenance pass proceed",
     async (failure, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { stale, plan, archivedEntries } = makeFixture(state);
+        const { active, stale, plan, archivedEntries } = makeFixture(state);
+        const admitted = await loadSessionEntryForAdmission(active);
+        const claim = admitted.databaseClaim;
+        if (!("reader" in claim) || !claim.reader) {
+          throw new Error("Fixture requires an admitted session reader");
+        }
         const preparation = pausedStep();
         let preparations = 0;
         const cancelled = new Error(`Maintenance ${failure} after native preparation`);
@@ -285,6 +291,13 @@ export function registerSessionMaintenancePreparationTests() {
           expect(published).not.toHaveBeenCalled();
           expect(sql.queries).toEqual([]);
           sql.restore();
+          await expect(
+            claim.reader.withRead(
+              { sessionKeys: [active.sessionKey] },
+              () => {},
+              (cohort) => cohort.entries.find((row) => row.sessionKey === active.sessionKey)?.entry,
+            ),
+          ).resolves.toMatchObject({ sessionId: "active" });
           expect(loadSessionEntry(stale)?.archivedAt).toBeUndefined();
           sql = observeHostDataSql();
           second = reclaim({ plan });
@@ -297,6 +310,7 @@ export function registerSessionMaintenancePreparationTests() {
         } finally {
           preparation.resume();
           await Promise.allSettled([firstOutcome, second]);
+          await claim.release();
           sql.restore();
         }
         expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
