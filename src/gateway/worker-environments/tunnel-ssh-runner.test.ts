@@ -2,7 +2,7 @@ import type { SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -10,18 +10,13 @@ vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 import { createWorkerSshRunner, WORKER_TUNNEL_READY_MARKER } from "./tunnel-ssh-runner.js";
 
-// Keep kill a mock property rather than an unbound ChildProcess method.
 function createChild() {
-  const child = new EventEmitter() as EventEmitter & {
-    stdin: PassThrough;
-    stdout: PassThrough;
-    stderr: PassThrough;
-    kill: Mock<(signal?: NodeJS.Signals | number) => boolean>;
-  };
-  child.stdin = new PassThrough();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  child.kill = vi.fn(() => true);
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn((_signal?: NodeJS.Signals | number) => true),
+  });
   child.once("exit", (code, signal) => {
     let closed = false;
     const close = () => {
@@ -44,9 +39,7 @@ describe("worker SSH process runner", () => {
     spawnMock.mockReset().mockReturnValue(child);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   const start = (signal?: AbortSignal) =>
     createWorkerSshRunner().start(["ssh"], { timeoutMs: 10_000, signal });
@@ -60,19 +53,24 @@ describe("worker SSH process runner", () => {
     expect(settled).toBe(false);
   }
 
-  it("settles with the real exit when close lags after SIGKILL", async () => {
+  it.each([false, true])("settles despite delayed close (exit before stop: %s)", async (exited) => {
     vi.useFakeTimers();
+    child.kill.mockReturnValue(!exited);
     const process = start();
-
+    const exit = exited ? { code: 255, signal: null } : { code: null, signal: "SIGKILL" };
+    if (exited) {
+      child.emit("exit", exit.code, exit.signal);
+    }
     const stopping = process.stop();
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     await vi.advanceTimersByTimeAsync(1_500);
-    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
-    child.emit("exit", null, "SIGKILL");
+    if (!exited) {
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+      child.emit("exit", exit.code, exit.signal);
+    }
     await vi.advanceTimersByTimeAsync(2_000);
-
     await expect(stopping).resolves.toBeUndefined();
-    await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
+    await expect(process.exited).resolves.toEqual(exit);
     await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
   });
 
@@ -101,48 +99,25 @@ describe("worker SSH process runner", () => {
     },
   );
 
-  it("fails stop when a SIGKILLed child never reports exit", async () => {
+  it.each([
+    [true, "did not exit after SIGKILL"],
+    [false, "SIGKILL delivery failed"],
+  ] as const)("rejects an unconfirmed stop (kill delivered: %s)", async (delivered, message) => {
     vi.useFakeTimers();
+    child.kill.mockReturnValue(delivered);
     const process = start();
-
     const stopping = process.stop();
-    const rejection = expect(stopping).rejects.toThrow("did not exit after SIGKILL");
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await rejection;
-  });
-
-  it("treats a post-exit kill failure as terminal when close is delayed", async () => {
-    vi.useFakeTimers();
-    child.kill = vi.fn(() => false);
-    const process = start();
-
-    child.emit("exit", 255, null);
-    const stopping = process.stop();
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await expect(stopping).resolves.toBeUndefined();
-    await expect(process.exited).resolves.toEqual({ code: 255, signal: null });
-    await expect(process.ready).rejects.toThrow("Worker SSH tunnel failed");
-  });
-
-  it("propagates a stop failure when SIGKILL delivery fails", async () => {
-    vi.useFakeTimers();
-    child.kill = vi.fn(() => false);
-    const process = start();
-
-    const stopping = process.stop();
-    const rejection = expect(stopping).rejects.toThrow("SIGKILL delivery failed");
+    const rejection = expect(stopping).rejects.toThrow(message);
     await vi.advanceTimersByTimeAsync(1_500);
     await vi.advanceTimersByTimeAsync(2_000);
     await rejection;
 
-    await expectPending(process);
-
-    child.emit("close", null, "SIGKILL");
-    await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
-    await expect(process.stop()).resolves.toBeUndefined();
+    if (!delivered) {
+      await expectPending(process);
+      child.emit("close", null, "SIGKILL");
+      await expect(process.exited).resolves.toEqual({ code: null, signal: "SIGKILL" });
+      await expect(process.stop()).resolves.toBeUndefined();
+    }
   });
 
   it("keeps exited pending when a live child emits error without close", async () => {

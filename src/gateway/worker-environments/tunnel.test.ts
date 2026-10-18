@@ -45,6 +45,26 @@ function pendingIdentityTunnel(environmentId = "worker:pending") {
   return { identity, entered, fake, manager, request };
 }
 
+function blockedWorkspaceCommand(
+  onAbort?: (manager: ReturnType<typeof createWorkerTunnelManager>) => void,
+) {
+  const entered = deferred<void>();
+  const command = deferred<ReturnType<typeof success>>();
+  let knownHostsPath = "";
+  const fake = fakeRunner(async (argv, options) => {
+    knownHostsPath = argv
+      .find((arg) => arg.startsWith("UserKnownHostsFile="))!
+      .slice("UserKnownHostsFile=".length);
+    if (onAbort) {
+      options.signal!.addEventListener("abort", () => onAbort(manager), { once: true });
+    }
+    entered.resolve();
+    return await command.promise;
+  });
+  const manager = createWorkerTunnelManager({ runner: fake.runner });
+  return { manager, fake, entered, command, knownHostsPath: () => knownHostsPath };
+}
+
 describe("worker tunnel manager", () => {
   it.each(["connected", "initializing"] as const)(
     "rejects a revoked caller reusing a %s tunnel without stopping its owner",
@@ -120,8 +140,7 @@ describe("worker tunnel manager", () => {
         release.resolve();
         await Promise.all([rejected, stopping]);
         expect(writeFile).not.toHaveBeenCalled();
-        expect(fake.runs).toEqual([]);
-        expect(fake.starts).toEqual([]);
+        expect(fake).toMatchObject({ runs: [], starts: [] });
         expect(manager.status("worker:late-identity")).toBe("stopped");
       } finally {
         release.resolve();
@@ -186,41 +205,42 @@ describe("worker tunnel manager", () => {
     expect(close).toHaveBeenCalledWith(1012, "desktop tunnel closed");
   });
 
-  it("renews a workspace quiescence lease while reconciliation is still running", async () => {
-    const nonce = "a".repeat(32);
-    const acquireArgs = "'/home/worker/workspace' '720000' 'dedicated'";
-    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'heartbeat' 'dedicated'`;
-    const fake = quiescenceRunner(nonce, acquireArgs, renewArgs);
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const handle = await startTestTunnel(manager, "worker:quiescence-renewal", 3);
-
-    vi.useFakeTimers();
-    try {
-      const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
-      await vi.advanceTimersByTimeAsync(4 * 60_000);
-      expect(fake.runs.filter((entry) => entry.argv.at(-1)?.endsWith(renewArgs))).toHaveLength(1);
-      await quiescence.resume();
-    } finally {
-      vi.useRealTimers();
-      await handle.stop();
-    }
-  });
-
-  it("passes shared-host isolation to initial and renewal quiescence commands", async () => {
-    const nonce = "b".repeat(32);
-    const acquireArgs = "'/home/worker/workspace' '720000' 'shared-host'";
-    const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' 'final' 'shared-host'`;
-    const fake = quiescenceRunner(nonce, acquireArgs, renewArgs);
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
-    const handle = await startTestTunnel(manager, "worker:shared-quiescence", 3, SSH, true);
-
-    const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
-    await quiescence.assertActive();
-    expect(fake.runs).toHaveLength(2);
-    expect(fake.runs.every((entry) => entry.argv.at(-1)?.endsWith("'shared-host'"))).toBe(true);
-    await quiescence.resume();
-    await handle.stop();
-  });
+  it.each([false, true])(
+    "renews a quiescence lease with shared-host isolation=%s",
+    async (sharedHost) => {
+      const nonce = "a".repeat(32);
+      const isolation = sharedHost ? "shared-host" : "dedicated";
+      const acquireArgs = `'/home/worker/workspace' '720000' '${isolation}'`;
+      const renewArgs = `'/home/worker/workspace' '${nonce}' '720000' '${sharedHost ? "final" : "heartbeat"}' '${isolation}'`;
+      const fake = quiescenceRunner(nonce, acquireArgs, renewArgs);
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const handle = await startTestTunnel(
+        manager,
+        "worker:quiescence-renewal",
+        3,
+        SSH,
+        sharedHost,
+      );
+      vi.useFakeTimers();
+      try {
+        const quiescence = await handle.quiesceWorkspace("/home/worker/workspace");
+        if (sharedHost) {
+          await quiescence.assertActive();
+          expect(fake.runs).toHaveLength(2);
+          expect(fake.runs.every((entry) => entry.argv.at(-1)?.endsWith("'shared-host'"))).toBe(
+            true,
+          );
+        } else {
+          await vi.advanceTimersByTimeAsync(4 * 60_000);
+        }
+        expect(fake.runs.filter((entry) => entry.argv.at(-1)?.endsWith(renewArgs))).toHaveLength(1);
+        await quiescence.resume();
+      } finally {
+        vi.useRealTimers();
+        await handle.stop();
+      }
+    },
+  );
 
   it("fences stale owners when a replacement epoch takes ownership", async () => {
     const fake = fakeRunner((argv) =>
@@ -280,26 +300,10 @@ describe("worker tunnel manager", () => {
   it.each(["stop", "stopAll"] as const)(
     "joins reentrant %s until workspace commands release their SSH files",
     async (operation) => {
-      const entered = deferred<void>();
-      const command = deferred<ReturnType<typeof success>>();
       let reentered: Promise<void> | undefined;
-      let knownHostsPath = "";
-      const fake = fakeRunner(async (argv, options) => {
-        knownHostsPath = argv
-          .find((arg) => arg.startsWith("UserKnownHostsFile="))!
-          .slice("UserKnownHostsFile=".length);
-        options.signal!.addEventListener(
-          "abort",
-          () => {
-            reentered =
-              operation === "stop" ? manager.stop("worker:command", 1) : manager.stopAll();
-          },
-          { once: true },
-        );
-        entered.resolve();
-        return await command.promise;
+      const { manager, entered, command, knownHostsPath } = blockedWorkspaceCommand((owner) => {
+        reentered = operation === "stop" ? owner.stop("worker:command", 1) : owner.stopAll();
       });
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
       const handle = await startTestTunnel(manager, "worker:command", 1);
       const running = handle.runWorkspaceCommand(PWD_COMMAND);
       await entered.promise;
@@ -309,7 +313,7 @@ describe("worker tunnel manager", () => {
       try {
         await setImmediate();
         expect(settled).not.toHaveBeenCalled();
-        await fs.access(knownHostsPath);
+        await fs.access(knownHostsPath());
         await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
           "no longer connected",
         );
@@ -317,7 +321,7 @@ describe("worker tunnel manager", () => {
         command.resolve(success());
         await Promise.all([running, stopping, reentered]);
       }
-      await expect(fs.access(knownHostsPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(knownHostsPath())).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 
@@ -328,23 +332,13 @@ describe("worker tunnel manager", () => {
   ])(
     "waits for SSH cleanup before replacement epoch $ownerEpoch (stop again: $stopAgain)",
     async ({ ownerEpoch, stopAgain }) => {
-      const entered = deferred<void>();
-      const command = deferred<ReturnType<typeof success>>();
-      let knownHostsPath = "";
-      const fake = fakeRunner(async (argv) => {
-        knownHostsPath = argv
-          .find((arg) => arg.startsWith("UserKnownHostsFile="))!
-          .slice("UserKnownHostsFile=".length);
-        entered.resolve();
-        return await command.promise;
-      });
-      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const { manager, entered, command, knownHostsPath } = blockedWorkspaceCommand();
       const first = await startTestTunnel(manager, "worker:replacement", 1);
       const running = first.runWorkspaceCommand(PWD_COMMAND);
       await entered.promise;
       const stopping = first.stop();
       const nextIdentity = vi.fn(async () => {
-        await expect(fs.access(knownHostsPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(knownHostsPath())).rejects.toMatchObject({ code: "ENOENT" });
         return await resolveIdentity();
       });
       const replacing = manager.start({
@@ -384,23 +378,12 @@ describe("worker tunnel manager", () => {
   );
 
   it("joins a replacement's initialization when prior-owner abort reenters Stop", async () => {
-    const entered = deferred<void>();
-    const command = deferred<ReturnType<typeof success>>();
     let shutdown: Promise<void> | undefined;
     const settled = vi.fn();
-    const fake = fakeRunner(async (_argv, options) => {
-      options.signal!.addEventListener(
-        "abort",
-        () => {
-          shutdown = manager.stopAll();
-          void shutdown.then(settled);
-        },
-        { once: true },
-      );
-      entered.resolve();
-      return await command.promise;
+    const { manager, fake, entered, command } = blockedWorkspaceCommand((owner) => {
+      shutdown = owner.stopAll();
+      void shutdown.then(settled);
     });
-    const manager = createWorkerTunnelManager({ runner: fake.runner });
     const first = await startTestTunnel(manager, "worker:reentrant-replacement", 1);
     const running = first.runWorkspaceCommand(PWD_COMMAND);
     await entered.promise;
@@ -419,15 +402,13 @@ describe("worker tunnel manager", () => {
   });
 });
 
-describe("createWorkerSshRunner diagnostic tails", () => {
-  it("keeps SSH tunnel failure stderr on a valid UTF-16 boundary", async () => {
-    const retained = "b".repeat(4095);
-    const child = createWorkerSshRunner().start(
-      [process.execPath, "-e", `process.stderr.write(${JSON.stringify(`a😀${retained}`)})`],
-      { timeoutMs: 10_000, baseEnv: process.env },
-    );
+it("keeps SSH tunnel failure stderr on a valid UTF-16 boundary", async () => {
+  const retained = "b".repeat(4095);
+  const child = createWorkerSshRunner().start(
+    [process.execPath, "-e", `process.stderr.write(${JSON.stringify(`a😀${retained}`)})`],
+    { timeoutMs: 10_000, baseEnv: process.env },
+  );
 
-    await expect(child.ready).rejects.toThrow(`Worker SSH tunnel failed: ${retained}`);
-    await child.exited;
-  });
+  await expect(child.ready).rejects.toThrow(`Worker SSH tunnel failed: ${retained}`);
+  await child.exited;
 });

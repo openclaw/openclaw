@@ -4,6 +4,10 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "../auth-rate-limit.js";
 import {
@@ -49,71 +53,51 @@ describe("worker bootstrap artifact transfer", () => {
         })
         .catch((error: unknown) => res.destroy(error as Error));
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server did not bind a TCP port");
-    }
-    origin = `http://127.0.0.1:${address.port}`;
+    origin = await listenLoopback(server);
   });
 
   afterEach(async () => {
     service.closeAll();
-    server.closeAllConnections();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await closeHttpServer(server);
     rateLimiter?.dispose();
     rateLimiter = undefined;
     vi.restoreAllMocks();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function prepare(contents: string | Buffer = "source-runtime", signal?: AbortSignal) {
+  async function prepare(contents: string | Buffer = "source-runtime", owner?: AbortController) {
     const artifact: TransferArtifact = {
       tarballPath: path.join(root, "runtime.tgz"),
       tarballSha256: createHash("sha256").update(contents).digest("hex"),
       tarballBytes: Buffer.byteLength(contents),
     };
     await fs.writeFile(artifact.tarballPath, contents);
-    const receipt = service.prepare({ artifact, signal, isAuthorized: () => authorized });
+    const receipt = service.prepare({
+      artifact,
+      signal: owner?.signal,
+      isAuthorized: () => authorized,
+    });
     return {
       artifact,
-      receipt,
       url: `${origin}/__openclaw__/worker-bootstrap/artifacts/${artifact.tarballSha256}`,
       headers: { authorization: `Bearer ${receipt.token}` },
+      close: {
+        owner: () => {
+          authorized = false;
+        },
+        expiry: () => {
+          now = receipt.expiresAtMs;
+        },
+        revoke: () => service.revoke(receipt.token),
+        shutdown: () => service.closeAll(),
+        signal: () => owner?.abort(),
+      },
     };
   }
 
   async function expectNotFound(response: Response) {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "not_found" });
-  }
-
-  function closeTransfer(
-    closure: "owner" | "expiry" | "signal" | "revoke" | "shutdown",
-    owner: AbortController,
-    receipt: { token: string; expiresAtMs: number },
-  ) {
-    switch (closure) {
-      case "owner":
-        authorized = false;
-        break;
-      case "expiry":
-        now = receipt.expiresAtMs;
-        break;
-      case "signal":
-        owner.abort();
-        break;
-      case "revoke":
-        service.revoke(receipt.token);
-        break;
-      case "shutdown":
-        service.closeAll();
-        break;
-    }
   }
 
   it("rejects an empty archive before granting download authority", async () => {
@@ -144,8 +128,8 @@ describe("worker bootstrap artifact transfer", () => {
     "rejects retained bearers after %s closure",
     async (closure) => {
       const owner = new AbortController();
-      const { url, headers, receipt } = await prepare("source-runtime", owner.signal);
-      closeTransfer(closure, owner, receipt);
+      const { url, headers, close } = await prepare("source-runtime", owner);
+      close[closure]();
       await expectNotFound(await fetch(url, { headers }));
       authorized = true;
       now = 1_000;
@@ -198,11 +182,11 @@ describe("worker bootstrap artifact transfer", () => {
     "terminates an active stream on %s and disallows a concurrent download",
     async (closure) => {
       const owner = new AbortController();
-      const { receipt, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner.signal);
+      const { close, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner);
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
       expect((await fetch(url, { headers })).status).toBe(503);
-      closeTransfer(closure, owner, receipt);
+      close[closure]();
       await expect(response.arrayBuffer()).rejects.toThrow();
     },
   );

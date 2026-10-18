@@ -25,14 +25,10 @@ const SOURCE = {
 
 const PORTAL = {
   id: "worker-source-4321",
-  title: "Worker app",
   port: 4321,
-  listenPort: 54321,
-  tokenQuery: "openclaw_portal=test-token",
   url: "http://127.0.0.1:54321/?openclaw_portal=test-token",
   publicUrl: "http://127.0.0.1:54321/",
   origin: "cloud-profile",
-  createdAtMs: 1,
 };
 
 describe("worker portal tool execution", () => {
@@ -58,6 +54,19 @@ describe("worker portal tool execution", () => {
     string,
     Awaited<ReturnType<WorkerSessionPlacementStore["prepareTurnClaimAuthority"]>>
   >();
+
+  async function claimTurn(claimId: string, runId: string) {
+    const claim = await placements.claimTurn({
+      agentId: SOURCE.agentId,
+      sessionId: SOURCE.sessionId,
+      sessionKey: SOURCE.sessionKey,
+      claimId,
+      runId,
+      owner: { kind: "worker", environmentId: SOURCE.environmentId, ownerEpoch: SOURCE.ownerEpoch },
+    });
+    await placements.authorizeWorkerTurnTools(claim, ["portal"]);
+    return claim;
+  }
 
   async function runPortal(
     request: Parameters<typeof execute>[0]["request"],
@@ -108,19 +117,7 @@ describe("worker portal tool execution", () => {
       workspaceBaseManifestRef: `manifest-${SOURCE.sessionId}`,
       remoteWorkspaceDir: `/workspace/${SOURCE.sessionId}`,
     });
-    sourceClaim = await placements.claimTurn({
-      sessionId: SOURCE.sessionId,
-      agentId: SOURCE.agentId,
-      sessionKey: SOURCE.sessionKey,
-      claimId: "source-claim",
-      runId: "source-run",
-      owner: {
-        kind: "worker",
-        environmentId: SOURCE.environmentId,
-        ownerEpoch: SOURCE.ownerEpoch,
-      },
-    });
-    await placements.authorizeWorkerTurnTools(sourceClaim, ["portal"]);
+    sourceClaim = await claimTurn("source-claim", "source-run");
     sourceAuthorities.set(
       sourceClaim.claimId,
       await placements.prepareTurnClaimAuthority(sourceClaim),
@@ -169,9 +166,7 @@ describe("worker portal tool execution", () => {
                 environmentId: SOURCE.environmentId,
                 ownerEpoch: sourceEnvironmentEpoch,
                 attachedSessionIds: [SOURCE.sessionId],
-                providerId: "fake",
                 profileId: "cloud-profile",
-                profileSnapshot: { install: "bundle", settings: { region: "source" } },
                 nodeDeviceId: sourceNodeDeviceId,
                 sshEndpoint: sourceSshEndpoint,
               }
@@ -289,38 +284,26 @@ describe("worker portal tool execution", () => {
     expect(portalWorkerList).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects stale owner epochs and replaced source placements before opening a portal", async () => {
-    await expect(openPortal({ ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 })).rejects.toThrow(
-      "Worker source environment changed",
-    );
-
-    await placements.releaseTurn(sourceClaim);
-    await expect(openPortal()).rejects.toThrow("Worker source session placement changed");
-    expect(portalCarrierOpen).not.toHaveBeenCalled();
-  });
-
-  it("closes a prepared worker portal carrier when its owner epoch changes while opening", async () => {
-    portalCarrierOpen.mockImplementationOnce(async () => {
-      sourceEnvironmentEpoch += 1;
-      return carrier;
-    });
-
-    await expect(openPortal()).rejects.toThrow("Worker source environment changed");
-    expect(portalCarrierClose).toHaveBeenCalledOnce();
-    expect(portalOpen).not.toHaveBeenCalled();
-  });
-
-  it("releases a carrier when the invocation is cancelled during preparation", async () => {
-    const abort = new AbortController();
-    portalCarrierOpen.mockImplementationOnce(async () => {
-      abort.abort(new Error("portal cancelled"));
-      return carrier;
-    });
-    await expect(openPortal(identity, abort.signal)).rejects.toThrow("portal cancelled");
-    expect(portalCarrierClose).toHaveBeenCalledOnce();
-    expect(portalOpen).not.toHaveBeenCalled();
-    expect(portalChanged).not.toHaveBeenCalled();
-  });
+  it.each(["epoch", "cancel"] as const)(
+    "releases a carrier after %s changes during preparation",
+    async (change) => {
+      const abort = new AbortController();
+      portalCarrierOpen.mockImplementationOnce(async () => {
+        if (change === "epoch") {
+          sourceEnvironmentEpoch += 1;
+        } else {
+          abort.abort(new Error("portal cancelled"));
+        }
+        return carrier;
+      });
+      await expect(openPortal(identity, abort.signal)).rejects.toThrow(
+        change === "epoch" ? "Worker source environment changed" : "portal cancelled",
+      );
+      expect(portalCarrierClose).toHaveBeenCalledOnce();
+      expect(portalOpen).not.toHaveBeenCalled();
+      expect(portalChanged).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains the environment-owned portal when its source turn closes after publication", async () => {
     const { service, httpServers } = useActualPortalService();
@@ -363,15 +346,7 @@ describe("worker portal tool execution", () => {
     try {
       await bindStarted;
       await placements.releaseTurn(sourceClaim);
-      const nextClaim = await placements.claimTurn({
-        sessionId: SOURCE.sessionId,
-        agentId: SOURCE.agentId,
-        sessionKey: SOURCE.sessionKey,
-        claimId: "successor-claim",
-        runId: "successor-run",
-        owner: sourceClaim.owner,
-      });
-      await placements.authorizeWorkerTurnTools(nextClaim, ["portal"]);
+      const nextClaim = await claimTurn("successor-claim", "successor-run");
       successor = runPortal(
         {
           toolCallId: "successor-opening-portal",
@@ -388,28 +363,37 @@ describe("worker portal tool execution", () => {
       const [portal] = service.list();
       expect(service.list()).toEqual([expect.objectContaining({ title: "Successor app" })]);
       expect(result.details).toHaveProperty("id", portal?.id);
-      expect(httpServers).toHaveLength(1);
-      expect(httpServers[0]?.listening).toBe(true);
+      expect(httpServers).toMatchObject([{ listening: true }]);
     } finally {
       releaseBind();
       await Promise.allSettled([firstRejected, successor]);
     }
   });
 
-  it("rejects SSH-backed placements before preparing a node portal", async () => {
-    sourceNodeDeviceId = null;
-    sourceSshEndpoint = { host: "worker.example" };
-
-    await expect(openPortal()).rejects.toThrow(
-      "move the session back to the gateway with sessions.move",
-    );
-    expect(portalCarrierOpen).not.toHaveBeenCalled();
-  });
-
-  it("rejects worker portal access when the active turn was not granted portal authority", async () => {
-    await placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
-
-    await expect(openPortal()).rejects.toThrow("Worker session tool authority changed");
-    expect(portalCarrierOpen).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["epoch", "Worker source environment changed"],
+    ["placement", "Worker source session placement changed"],
+    ["SSH", "move the session back to the gateway with sessions.move"],
+    ["tool", "Worker session tool authority changed"],
+  ] as const)(
+    "rejects invalid %s authority before preparing a carrier",
+    async (boundary, message) => {
+      let caller = identity;
+      if (boundary === "epoch") {
+        caller = { ...identity, ownerEpoch: SOURCE.ownerEpoch + 1 };
+      }
+      if (boundary === "placement") {
+        await placements.releaseTurn(sourceClaim);
+      }
+      if (boundary === "SSH") {
+        sourceNodeDeviceId = null;
+        sourceSshEndpoint = { host: "worker.example" };
+      }
+      if (boundary === "tool") {
+        await placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send"]);
+      }
+      await expect(openPortal(caller)).rejects.toThrow(message);
+      expect(portalCarrierOpen).not.toHaveBeenCalled();
+    },
+  );
 });

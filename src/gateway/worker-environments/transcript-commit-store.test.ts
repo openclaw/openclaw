@@ -31,6 +31,13 @@ const BASE_INPUT: WorkerTranscriptCommitInput = {
 const CLAIMED = { kind: "claimed" };
 const CONFLICT = { kind: "rejected", reason: "conflict" };
 const OUT_OF_ORDER = { kind: "rejected", reason: "out-of-order", expectedSeq: 1 };
+const RECOVER = { kind: "recover" };
+const REPLAY = { kind: "replay", outcome: SUCCESS_OUTCOME };
+const SETTLEMENT = {
+  begin: { result: CLAIMED, next: RECOVER },
+  complete: { result: SUCCESS_OUTCOME, next: REPLAY },
+  discard: { result: undefined, next: CLAIMED },
+};
 
 function revokeAt(stage: "transaction" | "commit", message: string) {
   let revoked = false;
@@ -65,7 +72,6 @@ function ledgerReplyValue(
 
 describe("worker transcript commit store", () => {
   let root: string;
-  let nowMs: number;
   let store: WorkerTranscriptCommitStore;
   let input: WorkerTranscriptCommitInput;
   let sequence = 0;
@@ -78,14 +84,12 @@ describe("worker transcript commit store", () => {
 
   beforeAll(() => {
     root = tempDirs.make("openclaw-worker-commit-");
-    nowMs = 1_000;
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
+    store = createWorkerTranscriptCommitStore({ database, now: () => 1_000 });
   });
 
   beforeEach(() => {
     input = { ...BASE_INPUT, sessionId: `session-${++sequence}` };
-    nowMs = 1_000;
   });
   afterEach(() => vi.restoreAllMocks());
 
@@ -139,7 +143,7 @@ describe("worker transcript commit store", () => {
     await store.begin(input);
     await store.discardUncommitted({ ...input, requestHash: "b".repeat(64) });
     await store.discardUncommitted({ ...input, environmentId: "worker-b" });
-    expect(await store.begin(input)).toEqual({ kind: "recover" });
+    expect(await store.begin(input)).toEqual(RECOVER);
 
     await store.discardUncommitted(input);
     const replacement = { ...input, requestHash: "b".repeat(64) };
@@ -147,7 +151,7 @@ describe("worker transcript commit store", () => {
     expect(await store.begin(replacement)).toEqual(CLAIMED);
     await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME });
     await store.discardUncommitted(replacement);
-    expect(await store.begin(replacement)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+    expect(await store.begin(replacement)).toEqual(REPLAY);
     expect(await store.begin({ ...input, seq: 2 })).toEqual(CLAIMED);
   });
 
@@ -202,7 +206,7 @@ describe("worker transcript commit store", () => {
       store.complete({ ...input, outcome: SUCCESS_OUTCOME }, authority.assertCurrent),
     ).rejects.toThrow("ledger completion revoked");
     authority.expectRevoked();
-    expect(await store.begin(input)).toEqual({ kind: "recover" });
+    expect(await store.begin(input)).toEqual(RECOVER);
     expect(await store.begin({ ...input, seq: 2 })).toEqual(OUT_OF_ORDER);
   });
 
@@ -226,12 +230,8 @@ describe("worker transcript commit store", () => {
             const admission = createAdmission(admit, attachment);
             return {
               ...admission,
-              get committed() {
-                return undefined;
-              },
-              get settlement() {
-                return { kind: "unknown" as const };
-              },
+              committed: undefined,
+              settlement: { kind: "unknown" as const },
             };
           },
         );
@@ -251,33 +251,20 @@ describe("worker transcript commit store", () => {
           }
           return receive(slot, reply, owner);
         });
-      const pending =
-        operation === "begin"
-          ? store.begin(input)
-          : operation === "complete"
-            ? store.complete({ ...input, outcome: SUCCESS_OUTCOME })
-            : store.discardUncommitted(input);
+      const pending = {
+        begin: () => store.begin(input),
+        complete: () => store.complete({ ...input, outcome: SUCCESS_OUTCOME }),
+        discard: () => store.discardUncommitted(input),
+      }[operation]();
       if (outcome === "unknown") {
         await expect(pending).rejects.toThrow();
       } else {
-        await expect(pending).resolves.toEqual(
-          operation === "begin"
-            ? { kind: "claimed" }
-            : operation === "complete"
-              ? SUCCESS_OUTCOME
-              : undefined,
-        );
+        await expect(pending).resolves.toEqual(SETTLEMENT[operation].result);
       }
       expect(corrupted).toBe(1);
       replySpy.mockRestore();
       // An explicit subsequent request observes durable state; the failed call never replayed.
-      expect(await store.begin(input)).toEqual(
-        operation === "begin"
-          ? { kind: "recover" }
-          : operation === "complete"
-            ? { kind: "replay", outcome: SUCCESS_OUTCOME }
-            : { kind: "claimed" },
-      );
+      expect(await store.begin(input)).toEqual(SETTLEMENT[operation].next);
     },
   );
 
@@ -311,9 +298,9 @@ describe("worker transcript commit store", () => {
       await Promise.allSettled([pending, closing]);
     }
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
+    store = createWorkerTranscriptCommitStore({ database, now: () => 1_000 });
     await expect(retired.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow();
-    expect(await store.begin(input)).toEqual({ kind: "recover" });
+    expect(await store.begin(input)).toEqual(RECOVER);
   });
 });
 import { deserialize } from "node:v8";

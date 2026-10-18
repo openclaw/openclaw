@@ -55,9 +55,8 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   if (!words || words.length !== 5 || words[0] !== "node") {
     return undefined;
   }
-  const [node, receiverEntryPath, mode, encodedContext, nonce] = words;
+  const [, receiverEntryPath, mode, encodedContext, nonce] = words;
   if (
-    !node ||
     !receiverEntryPath ||
     !["workspace-root", "git-pack", "accepted-next"].includes(mode ?? "") ||
     !encodedContext ||
@@ -65,11 +64,8 @@ function rsyncReceiverInvocation(argv: readonly string[]) {
   ) {
     return undefined;
   }
-  const [workspace] = JSON.parse(Buffer.from(encodedContext, "base64url").toString("utf8")) as [
-    string,
-    string,
-    string,
-  ];
+  const context = Buffer.from(encodedContext, "base64url").toString("utf8");
+  const [workspace] = JSON.parse(context) as [string, string, string];
   const target =
     mode === "git-pack"
       ? path.join(workspace, ".openclaw-base.pack")
@@ -194,7 +190,6 @@ class FakeProcess implements WorkerSshProcess {
   readonly exited = this.exitDeferred.promise;
   stopCount = 0;
   private stopPromise?: Promise<void>;
-  private stopBarrier: Promise<void> | undefined;
 
   constructor(private readonly deferStop = false) {}
 
@@ -202,17 +197,8 @@ class FakeProcess implements WorkerSshProcess {
     this.readyDeferred.resolve();
   }
 
-  failReady(message = "connect failed", code = 1) {
-    this.readyDeferred.reject(new Error(message));
-    this.exitDeferred.resolve({ code, signal: null });
-  }
-
   exit(code = 1, stderrTail?: string) {
     this.exitDeferred.resolve({ code, signal: null, ...(stderrTail ? { stderrTail } : {}) });
-  }
-
-  blockStopUntil(barrier: Promise<void>) {
-    this.stopBarrier = barrier;
   }
 
   stop() {
@@ -221,8 +207,8 @@ class FakeProcess implements WorkerSshProcess {
         await Promise.resolve();
       }
       this.stopCount += 1;
-      if (this.stopBarrier || !this.deferStop) {
-        await this.stopBarrier;
+      if (!this.deferStop) {
+        await Promise.resolve();
       }
       this.readyDeferred.reject(new Error("stopped"));
       this.exitDeferred.resolve({ code: null, signal: "SIGTERM" });
@@ -308,10 +294,7 @@ export function localWorkspaceRunner(
         { recursive: true },
       );
       const intercepted = await onRsync?.(argv, localArgv, options);
-      if (intercepted) {
-        return intercepted;
-      }
-      return await runCommandWithTimeout(localArgv, options);
+      return intercepted ?? (await runCommandWithTimeout(localArgv, options));
     }
     if (argv[0] === "ssh") {
       const remoteCommand = argv.at(-1);

@@ -24,13 +24,7 @@ const identity: WorkerConnectionIdentity = {
   bundleHash: "a".repeat(64),
   sessionId: "session",
   runId: "run",
-  turnClaim: {
-    sessionId: "session",
-    claimId: "claim",
-    runId: "run",
-    placementGeneration: 1,
-    owner: { kind: "worker", environmentId: "environment", ownerEpoch: 1 },
-  },
+  turnClaim: null,
   ownerEpoch: 1,
   rpcSetVersion: 1,
   protocolFeatures: ["worker-gateway-tools-v1"],
@@ -104,6 +98,12 @@ function controlledExecution() {
     return success;
   });
   return { entered, release, execute };
+}
+
+async function issued(tools: AnyAgentTool[]) {
+  const f = fixture(tools);
+  const surface = await f.runtime.getSurface(identity);
+  return { ...f, surface, invocation: request(surface) };
 }
 
 function request(
@@ -255,9 +255,8 @@ describe("worker Gateway tool runtime", () => {
         entered.resolve();
         return completion.promise;
       });
-      const f = fixture([tool("remote", execute)]);
-      const surface = await f.runtime.getSurface(identity);
-      const invocation = f.runtime.invoke(identity, request(surface), sink);
+      const f = await issued([tool("remote", execute)]);
+      const invocation = f.runtime.invoke(identity, f.invocation, sink);
       if (stage !== "before execution") {
         await entered.promise;
       }
@@ -284,9 +283,7 @@ describe("worker Gateway tool runtime", () => {
       onUpdate?.({ ...success, details: { step: 2 } });
       return success;
     });
-    const { runtime } = fixture([tool("remote", execute), tool("other")]);
-    const surface = await runtime.getSurface(identity);
-    const invocation = request(surface);
+    const { runtime, surface, invocation } = await issued([tool("remote", execute), tool("other")]);
     const first: WorkerGatewayToolUpdateFrame[] = [];
     const second: WorkerGatewayToolUpdateFrame[] = [];
     const result = runtime.invoke(identity, invocation, {
@@ -332,8 +329,7 @@ describe("worker Gateway tool runtime", () => {
     };
     const parallel = tool("parallel", execute);
     parallel.executionMode = "parallel";
-    const { runtime } = fixture([tool("sequential", execute), parallel]);
-    const surface = await runtime.getSurface(identity);
+    const { runtime, surface } = await issued([tool("sequential", execute), parallel]);
     const calls = [
       runtime.invoke(identity, request(surface, "parallel-1", 1), sink),
       runtime.invoke(identity, request(surface, "parallel-2", 1), sink),
@@ -367,9 +363,7 @@ describe("worker Gateway tool runtime", () => {
 
   it("cancels an active call and close waits for cooperative settlement while fencing queued work", async () => {
     const { entered, release, execute } = controlledExecution();
-    const { runtime } = fixture([tool("remote", execute)]);
-    const surface = await runtime.getSurface(identity);
-    const invocation = request(surface);
+    const { runtime, surface, invocation } = await issued([tool("remote", execute)]);
     const active = runtime.invoke(identity, invocation, sink);
     const signal = await entered.promise;
     const queued = runtime.invoke(identity, request(surface, "queued"), sink);
@@ -406,8 +400,7 @@ describe("worker Gateway tool runtime", () => {
         kind: "gateway",
         ...(connectionScoped ? { connectionScoped: true } : { replay: true }),
       });
-      const { runtime } = fixture([remote]);
-      const surface = await runtime.getSurface(identity);
+      const { runtime, surface } = await issued([remote]);
       const socket = new AbortController();
       const active = runtime.invoke(identity, request(surface), sink, socket.signal);
       const callSignal = await entered.promise;
@@ -439,8 +432,7 @@ describe("worker Gateway tool runtime", () => {
     const execute = vi.fn(async () => {
       throw new Error(message);
     });
-    const { runtime } = fixture([tool("remote", execute)]);
-    const surface = await runtime.getSurface(identity);
+    const { runtime, surface } = await issued([tool("remote", execute)]);
     const result = await runtime.invoke(identity, request(surface), sink);
     expect(result).toEqual({
       content: [
@@ -459,14 +451,13 @@ describe("worker Gateway tool runtime", () => {
         : {}),
       details: { data: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
     };
-    const { runtime } = fixture([
+    const { runtime, surface } = await issued([
       tool("remote", async (_id, _args, _signal, update) => {
         update?.(oversized);
         update?.(success);
         return oversized;
       }),
     ]);
-    const surface = await runtime.getSurface(identity);
     const updates: WorkerGatewayToolUpdateFrame[] = [];
     const result = await runtime.invoke(identity, request(surface), {
       send: (frame) => updates.push(frame),

@@ -13,9 +13,7 @@ function createRequest(): WorkerTranscriptCommitParams {
     runEpoch: RUN_EPOCH,
     seq: 1,
     baseLeafId: null,
-    messages: [
-      { role: "user", content: [{ type: "text", text: "Inspect the workspace" }], timestamp: 1 },
-    ],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
   };
 }
 
@@ -127,13 +125,9 @@ describe("worker transcript runtime loading", () => {
         if (revoked) {
           throw failure;
         }
-        return undefined;
       });
       const commit = fixture.commit({ assertCurrent });
-      const settled = commit.then(
-        () => undefined,
-        () => undefined,
-      );
+      const settled = commit.catch(() => undefined);
       try {
         expect(
           await Promise.race([
