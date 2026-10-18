@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { composeConfigWriteAssertions } from "../config/write-authority.js";
+import { isDefaultClawHubBaseUrl, resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -55,6 +56,7 @@ import {
 } from "./install.js";
 import type { PluginLifecycleRuntimeApply } from "./lifecycle.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import { getOfficialExternalPluginCatalogEntryForPackage } from "./official-external-plugin-catalog.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
 export type ManagedPluginSourceInstallRequest =
@@ -83,6 +85,7 @@ export type ManagedPluginSourceInstallRequest =
     }
   | {
       source: "clawhub";
+      clawhubUrl?: string;
       spec: string;
       /** Spec recorded for the install; keeps user intent when `spec` is channel-resolved. */
       recordSpec?: string;
@@ -103,6 +106,7 @@ export type ManagedPluginSourceInstallRequest =
     }
   | {
       source: "official";
+      clawhubUrl?: string;
       spec: string;
       installSources: PluginInstallSource[];
       expectedPluginId?: string;
@@ -152,8 +156,11 @@ async function resolveOfficialManagedInstallSpec(params: {
   config: OpenClawConfig;
 }): Promise<ReturnType<typeof resolveClawHubInstallSpecsForUpdateChannel> | null> {
   const { request } = params;
-  // The planner owns source authority; a matching package name cannot restore official trust.
-  if (!request.trustedSourceLinkedOfficialInstall) {
+  const trustedSourceLinkedOfficialInstall = request.trustedSourceLinkedOfficialInstall === true;
+  if (
+    !trustedSourceLinkedOfficialInstall &&
+    (request.source === "npm" || !isDefaultClawHubBaseUrl(request.clawhubUrl))
+  ) {
     return null;
   }
   // Operator pins outrank the channel; recordSpec carries a catalog default’s original intent.
@@ -164,7 +171,11 @@ async function resolveOfficialManagedInstallSpec(params: {
     request.source === "clawhub"
       ? parseClawHubPluginSpec(request.spec)?.name
       : parseRegistryNpmSpec(request.spec)?.name;
-  if (!packageName) {
+  if (
+    !packageName ||
+    (!trustedSourceLinkedOfficialInstall &&
+      !getOfficialExternalPluginCatalogEntryForPackage(packageName))
+  ) {
     return null;
   }
   const updateChannel = resolveRegistryUpdateChannel({
@@ -240,13 +251,20 @@ export type ManagedPluginInstallOptions = Omit<
 export async function installManagedPluginSource(
   input: ManagedPluginSourceInstallParams,
 ): Promise<ManagedPluginSourceInstallResult> {
+  const request =
+    input.request.source === "clawhub" || input.request.source === "official"
+      ? {
+          ...input.request,
+          clawhubUrl: resolveClawHubBaseUrl(input.request.clawhubUrl, input.env),
+        }
+      : input.request;
   return await withPluginLifecycleLease({ env: input.env }, async (lease) => {
     const assertOwned = lease.assertOwned;
     const params = {
       ...input,
+      request,
       beforePersistentApply: composeConfigWriteAssertions(input.beforePersistentApply, assertOwned),
     };
-    const { request } = params;
     if (request.source === "official") {
       const { attempt: installAttempt, source: installedSource } = await installWithSourceFallback({
         sources: request.pin
@@ -263,6 +281,7 @@ export async function installManagedPluginSource(
               mode: request.mode,
               expectedPluginId: request.expectedPluginId,
               trustedSourceLinkedOfficialInstall: true,
+              ...(source.source === "clawhub" ? { clawhubUrl: request.clawhubUrl } : {}),
               ...(source.expectedIntegrity ? { expectedIntegrity: source.expectedIntegrity } : {}),
               ...(source.source === "npm" && request.pin ? { pin: true } : {}),
             },
@@ -571,6 +590,7 @@ async function installResolvedManagedPluginSource(
     return await complete(
       installPluginFromClawHub({
         ...common,
+        baseUrl: request.clawhubUrl,
         spec: request.spec,
         mode: request.mode,
         ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),

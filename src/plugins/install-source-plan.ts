@@ -32,7 +32,6 @@ import {
   resolveOfficialInstallSources,
 } from "./official-external-install-trust.js";
 import {
-  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
@@ -299,6 +298,7 @@ function resolveOfficialEntryByClawHubPackage(
 export function resolveManagedPluginInstallRequest(
   request: PluginsInstallParams,
   officialEntries: readonly OfficialExternalPluginCatalogEntry[],
+  clawhubUrl: string,
 ): ManagedPluginSourceInstallRequest {
   const mode = request.mode ?? "install";
   switch (request.source) {
@@ -337,6 +337,7 @@ export function resolveManagedPluginInstallRequest(
       }
       return {
         source: "official",
+        clawhubUrl,
         spec: primary.spec,
         installSources,
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
@@ -347,18 +348,13 @@ export function resolveManagedPluginInstallRequest(
     case "clawhub": {
       const packageName = request.packageName.trim();
       // Public catalog identity and artifact pins do not describe another registry's package.
-      const useOfficialCatalog = isDefaultClawHubBaseUrl();
+      const useOfficialCatalog = isDefaultClawHubBaseUrl(clawhubUrl);
       const official = useOfficialCatalog
         ? resolveOfficialEntryByClawHubPackage(
             [...listOfficialExternalPluginCatalogEntries(), ...officialEntries],
             packageName,
           )
         : undefined;
-      // Public package-name entries retain cohort intent even without a declared
-      // ClawHub source; only a declared source supplies runtime identity or pins.
-      const officialCohort =
-        useOfficialCatalog &&
-        (official || getOfficialExternalPluginCatalogEntryForPackage(packageName));
       // Pin the runtime id only when the catalog entry declares one; the entry-id
       // fallback is just the package name and would reject legitimate installs.
       const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
@@ -402,12 +398,13 @@ export function resolveManagedPluginInstallRequest(
       }
       return {
         source: "clawhub",
+        clawhubUrl,
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
         ...(!request.version && !request.expectedIntegrity
           ? { recordSpec: `clawhub:${packageName}` }
           : {}),
         mode,
-        ...(officialCohort ? { trustedSourceLinkedOfficialInstall: true } : {}),
+        ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,
         expectedIntegrity: expectedIntegrity ?? request.expectedIntegrity,
       };
