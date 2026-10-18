@@ -16,7 +16,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
-import { refreshRemoteModelCatalog, REMOTE_MODEL_CATALOG_TTL_MS } from "./remote-refresh.js";
+import { refreshRemoteModelCatalog } from "./remote-refresh.js";
 import { readRemoteModelCatalog, writeRemoteModelCatalogAsync } from "./remote-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -159,18 +159,16 @@ describe("remote model catalog refresh", () => {
         source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
         etag: '"one"',
         last_modified: null,
-        checked_at: 10_000,
+        checked_at: Date.now(),
       },
       captureOpenClawStateWorkerContext(databaseOptions),
     );
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 304 }));
     vi.stubGlobal("fetch", fetchImpl);
-    const now = vi.spyOn(Date, "now").mockReturnValue(10_001);
     await expect(refreshRemoteModelCatalog({ config: {}, databaseOptions })).resolves.toMatchObject(
       { status: "fresh" },
     );
     expect(fetchImpl).not.toHaveBeenCalled();
-    now.mockReturnValue(10_001 + REMOTE_MODEL_CATALOG_TTL_MS);
     await expect(
       refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
     ).resolves.toMatchObject({ status: "unchanged" });
@@ -339,13 +337,12 @@ describe("remote model catalog refresh", () => {
         source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
         etag: '"newer"',
         last_modified: null,
-        checked_at: 10_000,
+        checked_at: Date.now(),
       },
       captureOpenClawStateWorkerContext(databaseOptions),
     );
     const rollbackFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(bundle)));
     vi.stubGlobal("fetch", rollbackFetch);
-    const now = vi.spyOn(Date, "now").mockReturnValue(20_000);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
@@ -358,7 +355,6 @@ describe("remote model catalog refresh", () => {
     const mirrorBundle = { ...bundle, generatedAt: newerBundle.generatedAt + 100 };
     const mirrorFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(mirrorBundle)));
     vi.stubGlobal("fetch", mirrorFetch);
-    now.mockReturnValue(20_001);
     await expect(
       refreshRemoteModelCatalog({
         config: {

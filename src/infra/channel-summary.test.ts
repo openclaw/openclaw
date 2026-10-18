@@ -4,7 +4,8 @@ import { listReadOnlyChannelPluginsForConfigAsync } from "../channels/plugins/re
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
-vi.mock("../channels/plugins/read-only.js", () => ({
+vi.mock("../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/read-only.js")>()),
   listReadOnlyChannelPluginsForConfigAsync: vi.fn(),
 }));
 

@@ -273,9 +273,9 @@ it("enrolls an absent agent's inheritance tombstone through its native first-use
     const agentDir = path.join(root.stateDir, "agents", "new-agent", "agent");
     const observe = directoryObservation.observeOwnedDirectory;
     using watcher = vi.spyOn(directoryObservation, "observeOwnedDirectory");
-    watcher.mockImplementation((directory, onChange, options) =>
+    watcher.mockImplementation((directory, onChange) =>
       // Native commit publication must not depend on a later filesystem notification.
-      directory === agentDir ? { close() {} } : observe(directory, onChange, options),
+      directory === agentDir ? { close() {} } : observe(directory, onChange),
     );
     const authority = await root.capture("shared", agentDir);
     expect(
