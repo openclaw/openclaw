@@ -2,7 +2,7 @@
 /* @vitest-environment-options {"url":"http://chat-pane-sharing.test/"} */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -16,6 +16,7 @@ import type {
   SessionCapability,
   SessionRefreshOutcome,
 } from "../../lib/sessions/session-capability.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
@@ -25,7 +26,14 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatSessionSharingState } from "./components/chat-session-sharing.solid.tsx";
+import {
+  renderPaneHeaderInto,
+  openNativeMenu,
+} from "./components/chat-pane-header.test-support.ts";
+import type {
+  ChatSessionSharingState,
+  ChatSessionSharingOutcome,
+} from "./components/chat-session-sharing.solid.tsx";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -46,9 +54,13 @@ type SharingPane = TestChatPane & {
   mutateSessionSharing: (
     row: GatewaySessionRow,
     change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
-  ) => Promise<void>;
-  setSessionPublicShare: (row: GatewaySessionRow, enabled: boolean) => Promise<void>;
-  copySessionPublicLink: (row: GatewaySessionRow) => Promise<void>;
+  ) => Promise<ChatSessionSharingOutcome>;
+  setSessionPublicShare: (
+    row: GatewaySessionRow,
+    enabled: boolean,
+  ) => Promise<ChatSessionSharingOutcome>;
+  copySessionPublicLink: (row: GatewaySessionRow) => Promise<ChatSessionSharingOutcome>;
+
 };
 
 const SHARING_METHODS = [
@@ -225,7 +237,7 @@ describe("public session sharing", () => {
         : undefined;
       confirmPublicShare.mockResolvedValue(true);
       copyPublicShare.mockResolvedValue(true);
-      await pane.setSessionPublicShare(row, true);
+      expect(await pane.setSessionPublicShare(row, true)).toEqual({ status: "success" });
       expect(confirmPublicShare).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.stringContaining("existing and future conversation text"),
@@ -237,7 +249,28 @@ describe("public session sharing", () => {
         expectedSessionId: "session-current",
         enabled: true,
       });
-      await pane.copySessionPublicLink(row);
+      expect(
+        pane.collaboration.sharingStates.get(pane.sessionSharingCacheKey(row.key))?.publicUrl,
+      ).toBe("https://example.test/control/chat/main/current");
+      const header = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => header.remove());
+      const workspace = createPaneHeaderWorkspaceFixture(pane.state);
+      const draw = () =>
+        renderPaneHeaderInto(
+          pane.renderPaneHeader(workspace, row, false, undefined, false, null),
+          header,
+        );
+      draw();
+      await pane.loadSessionSharing(row, true);
+      draw();
+      const sharingMenu = header.querySelector(".chat-pane__sharing-menu")!;
+      await openNativeMenu(sharingMenu);
+      const copyButton = sharingMenu.querySelector<HTMLButtonElement>(
+        '[data-value="public:copy"]',
+      )!;
+      expect(copyButton.disabled).toBe(false);
+      copyButton.click();
+      await waitForSolid(() => expect(copyButton.getAttribute("aria-label")).toBe("Copied!"));
       expect(copyPublicShare).toHaveBeenCalledWith(
         "https://example.test/control/chat/main/current",
         expect.any(Function),
@@ -1003,7 +1036,8 @@ describe("chat pane current sharing mutation refresh order", () => {
       sessions,
     });
 
-    await pane.mutateSessionSharing(row, { visibility: "shared" });
+    expect(await pane.mutateSessionSharing(row, { visibility: "shared" })).toEqual({ status: "success" });
+
 
     expect(calls).toEqual([
       "session.visibility.set",
@@ -1036,7 +1070,8 @@ describe("chat pane current sharing mutation refresh order", () => {
       sessions,
     });
 
-    await pane.mutateSessionSharing(row, { identityId: "identity-alice", member: true });
+    expect(await pane.mutateSessionSharing(row, { identityId: "identity-alice", member: true })).toEqual({ status: "success" });
+
 
     expect(calls).toEqual([
       "session.members.add",
