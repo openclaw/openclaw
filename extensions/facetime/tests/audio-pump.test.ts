@@ -154,8 +154,8 @@ describe("FaceTime native audio bridge", () => {
       const onError = vi.fn(async () => false);
       const { pump, processes, spawn, onPlaybackDrained } = createPump({ onError });
       pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "interrupted" });
-      pump.finishOutputAudio();
       if (action === "barge-in") {
+        pump.finishOutputAudio();
         pump.clearOutputAudio();
       } else {
         await pump.suspendMedia();

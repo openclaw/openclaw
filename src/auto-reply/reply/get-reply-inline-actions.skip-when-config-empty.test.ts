@@ -389,10 +389,8 @@ describe("handleInlineActions", () => {
       directives: clearInlineDirectives("new message"),
       abortedLastRun: false,
     });
-    expect(sessionStore["s:main"]).toMatchObject({
-      abortCutoffMessageSid: undefined,
-      abortCutoffTimestamp: undefined,
-    });
+    expect(sessionStore["s:main"].abortCutoffMessageSid).toBeUndefined();
+    expect(sessionStore["s:main"].abortCutoffTimestamp).toBeUndefined();
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
