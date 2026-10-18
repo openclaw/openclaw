@@ -1,7 +1,6 @@
 import { dynamic, insert, type JSX } from "@solidjs/web";
 import {
   children,
-  createEffect,
   createMemo,
   createSignal,
   createRoot,
@@ -193,7 +192,6 @@ function DisclosureContent(props: {
   children: JSX.Element;
 }) {
   const presented = useContext(ContentPresentation);
-  let element!: HTMLDivElement;
   const dependencies = createMemo(
     () => ({
       parts: props.parts,
@@ -210,22 +208,9 @@ function DisclosureContent(props: {
         before.parts.every((value, index) => value === next.parts[index]),
     },
   );
-  // The overflow observer measures the rendered markdown island.
-  createEffect(dependencies, ({ expanded, forwarded, connected }) => {
-    if (!connected) {
-      return undefined;
-    }
-    const overflow = messageOverflowRef(expanded, forwarded, props.getNodes);
-    overflow(element);
-    return () => overflow(undefined);
-  });
+  const overflow = messageOverflowRef(dependencies, () => props.getNodes());
   return (
-    <div
-      class="chat-message-disclosure__content"
-      ref={(node) => {
-        element = node;
-      }}
-    >
+    <div class="chat-message-disclosure__content" ref={overflow}>
       {props.children}
     </div>
   );
