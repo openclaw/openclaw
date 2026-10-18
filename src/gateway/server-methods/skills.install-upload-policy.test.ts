@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -81,10 +82,7 @@ async function dispatch(uploadId: string, slug: string, force = false, caller = 
 }
 async function prepareUpload(slug: string, force = false) {
   const zip = new JSZip();
-  zip.file(
-    "SKILL.md",
-    "---\nname: Upload proof\ndescription: Publication proof\n---\nNew client bytes.\n",
-  );
+  zip.file("SKILL.md", "---\nname: Upload proof\ndescription: Proof\n---\nNew client bytes.\n");
   const archive = await zip.generateAsync({ type: "nodebuffer" });
   const { uploadId } = await defaultSkillUploadStore.begin({
     kind: "skill-archive",
@@ -110,14 +108,11 @@ beforeAll(async () => {
   setUploads();
   await state.writeConfig(config);
 });
-afterAll(async () => {
-  await state.cleanup();
-});
+afterAll(() => state.cleanup());
 beforeEach(() => {
   gatewayWorkspaceDir = state.workspaceDir;
   setUploads();
-  hooks.scan.mockReset();
-  hooks.scan.mockResolvedValue(undefined);
+  hooks.scan.mockReset().mockResolvedValue(undefined);
   hooks.beforeMove = undefined;
 });
 
@@ -137,7 +132,6 @@ describe("uploaded archive policy at final installation publication", () => {
       const unavailable = async (): Promise<never> => {
         throw new Error("file bridge must not install a skill");
       };
-      // Exercises the registered workspace adapter and native host owner, not a network transport.
       if (phase === "workspace-host") {
         gatewayWorkspaceDir = state.path(slug + "-gateway");
         setUploads();
@@ -155,12 +149,10 @@ describe("uploaded archive policy at final installation publication", () => {
       const pause = async () => {
         entered.resolve();
         await release.promise;
+        return undefined;
       };
       if (phase === "scan") {
-        hooks.scan.mockImplementationOnce(async () => {
-          await pause();
-          return undefined;
-        });
+        hooks.scan.mockImplementationOnce(pause);
       } else {
         hooks.beforeMove = async (from, to) => {
           if (from.includes(".openclaw-install-stage-") && path.basename(to) === slug) {
@@ -170,12 +162,11 @@ describe("uploaded archive policy at final installation publication", () => {
       }
       const pending = dispatch(uploadId, slug, force);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          pending.then(() => {
-            throw new Error("install settled before the publication checkpoint");
-          }),
-        ]);
+          pending,
+          "install settled before publication",
+        );
         setUploads(false);
         release.resolve();
         const respond = await pending;
@@ -194,7 +185,7 @@ describe("uploaded archive policy at final installation publication", () => {
         } else {
           await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        // Reusing the same committed archive proves refusal did not consume it or retain its lease.
+        // Retry the same archive to prove refusal released its lease without consuming it.
         hooks.beforeMove = undefined;
         setUploads();
         expect(await dispatch(uploadId, slug, force)).toHaveBeenCalledWith(
@@ -210,11 +201,7 @@ describe("uploaded archive policy at final installation publication", () => {
         ).rejects.toThrow("upload not found");
       } finally {
         release.resolve();
-        try {
-          await pending;
-        } finally {
-          releaseWorkspace?.();
-        }
+        await pending.finally(() => releaseWorkspace?.());
       }
     },
   );

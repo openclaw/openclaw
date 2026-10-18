@@ -1,5 +1,4 @@
 // A client-selected publisher must reach the outbound ClawHub request unchanged (#117633).
-// Only HTTP is faked; search, the Gateway handlers, and the detail client are real.
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
@@ -35,26 +34,17 @@ const OWNER_IMAGE_URL = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}
 function searchPayload() {
   return {
     results: [
-      ...PUBLISHERS.map((ownerHandle, index) => ({
-        score: 6120 - index,
+      ...PUBLISHERS.map((ownerHandle) => ({
         slug: SLUG,
         registry: "https://unrelated.example",
         ownerHandle,
-        displayName: SLUG,
-        summary: `Email skill by ${ownerHandle}`,
         icon: SEARCH_ICON_URL,
-        version: "1.0.0",
         source: "clawhub",
         install: { kind: "clawhub", reference: `${ownerHandle}/${SLUG}` },
       })),
-      // An external source that names its own reference instead of a registry publisher.
       {
-        score: 6100,
         slug: SLUG,
         ownerHandle: "acme",
-        displayName: SLUG,
-        summary: "Email skill from skills.sh",
-        version: "1.0.0",
         source: "skills-sh",
         install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
       },
@@ -62,13 +52,13 @@ function searchPayload() {
   };
 }
 
-let requestedUrls: string[] = [];
+let requestedUrls: URL[] = [];
 let malformedScan = false;
 let wrongIdentity: "slug" | "owner" | "version" | undefined;
 
 function fakeClawHub(input: string): Response {
   const url = new URL(input);
-  requestedUrls.push(input);
+  requestedUrls.push(url);
   if (url.pathname === "/api/v1/search") {
     return Response.json(searchPayload());
   }
@@ -115,7 +105,6 @@ function fakeClawHub(input: string): Response {
       },
       owner: {
         handle: wrongIdentity === "owner" ? "other-publisher" : ownerHandle,
-        displayName: ownerHandle,
         image: OWNER_IMAGE_URL,
       },
       latestVersion: { version: "2.0.0", createdAt: 2, changelog: "Current release" },
@@ -159,18 +148,16 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
       }
     ).results;
     expect(requestedUrls).toHaveLength(1);
-    expect(
-      new URL(expectDefined(requestedUrls[0], "search request")).searchParams.get("limit"),
-    ).toBe("10");
+    const request = expectDefined(requestedUrls[0], "search request");
+    expect(request.searchParams.get("limit")).toBe("10");
     expect(resolveClawHubCatalogIconUrl(SEARCH_ICON_URL)).toBe(SEARCH_ICON_URL);
-    expect(new URL(expectDefined(requestedUrls[0], "search request")).origin).toBe(registry);
+    expect(request.origin).toBe(registry);
     expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
     expect(results.map((r) => r.installRef)).toEqual([
       `@gzlicanyi/${SLUG}`,
       `@wangchenyu8/${SLUG}`,
       `skills-sh:acme/tools/${SLUG}`,
     ]);
-    // Only the external row is install-only; the registry rows keep the review flow.
     expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
   });
 
@@ -198,17 +185,13 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
       downloadability: { status: "unknown" },
     });
     for (const request of requestedUrls) {
-      expect(new URL(request).searchParams.get("ownerHandle")).toBe("wangchenyu8");
+      expect(request.searchParams.get("ownerHandle")).toBe("wangchenyu8");
     }
-    expect(requestedUrls.map((request) => new URL(request).pathname)).toContain(
+    expect(requestedUrls.map((request) => request.pathname)).toContain(
       `/api/v1/skills/${SLUG}/versions/1.0.0`,
     );
-    const cardRequest = requestedUrls.find((request) =>
-      new URL(request).pathname.endsWith("/card"),
-    );
-    expect(new URL(expectDefined(cardRequest, "card request")).searchParams.get("version")).toBe(
-      "1.0.0",
-    );
+    const cardRequest = requestedUrls.find((request) => request.pathname.endsWith("/card"));
+    expect(expectDefined(cardRequest, "card request").searchParams.get("version")).toBe("1.0.0");
   });
 
   it.each(["slug", "owner"] as const)(
@@ -261,15 +244,13 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
   });
 
   it("refuses external-source detail instead of reading a same-slug registry skill", async () => {
-    // Install keeps the external source, so a bare-slug read here would let an operator review
-    // one skill and install another. ClawHub has no source-qualified read endpoint yet.
     const { ok, error } = await detail({
       slug: `skills-sh:openclaw/skills/${SLUG}`,
     });
 
     expect(ok).toBe(false);
-    expect((error as { code?: string }).code).toBe("INVALID_REQUEST");
-    expect(requestedUrls.some((url) => url.includes("/api/v1/skills/"))).toBe(false);
+    expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect(requestedUrls.some((url) => url.pathname.includes("/api/v1/skills/"))).toBe(false);
   });
 
   it("returns error when ClawHub is unreachable", async () => {

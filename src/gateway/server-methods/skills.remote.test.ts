@@ -29,20 +29,14 @@ import type { GatewayClient } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
-// skills.status opens real watchers; close them before their roots are removed so they
-// cannot outlive this file and re-arm timers on a later file's fake clock.
+// Close discovery watchers before deleting roots or entering another file's fake clock.
 afterEach(() => closeSkillsWatchers(true));
 
-function writeWorkspaceSkill(
-  workspace: string,
-  name: string,
-  description: string,
-  metadata?: object,
-) {
+function writeWorkspaceSkill(workspace: string, name: string, metadata?: object) {
   return writeSkill({
     dir: path.join(workspace, "skills", name),
     name,
-    description,
+    description: name,
     ...(metadata ? { metadata: JSON.stringify({ openclaw: metadata }) } : {}),
   });
 }
@@ -57,20 +51,20 @@ it("reads remote skill status, cards and binary requirements through the workspa
   const gateway = path.join(root, "gateway");
   const remote = path.join(root, "remote");
   const hostPlatform = process.platform === "linux" ? "darwin" : "linux";
-  await writeWorkspaceSkill(gateway, "stale", "Stale");
-  await writeWorkspaceSkill(remote, "available", "Remote skill", {
+  await writeWorkspaceSkill(gateway, "stale");
+  await writeWorkspaceSkill(remote, "available", {
     os: [hostPlatform],
     requires: { bins: ["host-tool"] },
     install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
   });
-  await writeWorkspaceSkill(remote, "installer", "Workspace dependency recipes", {
+  await writeWorkspaceSkill(remote, "installer", {
     install: [
       { id: "brew", kind: "brew", formula: "fixture-tool" },
       { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
       { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
     ],
   });
-  await writeWorkspaceSkill(remote, "missing", "Missing dependency", {
+  await writeWorkspaceSkill(remote, "missing", {
     requires: { bins: ["absent-tool"] },
   });
   await fs.writeFile(path.join(remote, "skills", "available", "skill-card.md"), "# Remote card\n");
@@ -233,12 +227,10 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         }
       } finally {
         resume.resolve();
-        try {
-          await result;
-        } finally {
+        await result.finally(() => {
           projection.dispose();
           release();
-        }
+        });
       }
     });
   },

@@ -154,13 +154,15 @@ describe("setup admission", () => {
   );
 
   it.each([
-    ["already waiting", "outro"],
-    ["after write", "outro"],
-    ["already waiting", "confirm"],
-    ["after write", "confirm"],
+    ["already waiting", "outro", false],
+    ["after write", "outro", false],
+    ["already waiting", "confirm", false],
+    ["after write", "confirm", false],
+    ["after write", undefined, false],
+    ["after write", undefined, true],
   ] as const)(
-    "preserves committed work and ends unavailable %s %s at shutdown",
-    async (when, prompt) => {
+    "preserves committed work at shutdown: %s, prompt=%s, write failure=%s",
+    async (when, prompt, failWrite) => {
       const finishWrite = createDeferred();
       const prompting = createDeferred();
       let written = false;
@@ -170,16 +172,18 @@ describe("setup admission", () => {
         await finishWrite.promise;
         written = true;
         prompting.resolve();
+        if (failWrite) {
+          throw new Error("settings write failed");
+        }
         if (prompt === "outro") {
           await prompter.outro("Channels updated.");
+        } else if (prompt === "confirm") {
+          await prompter.confirm({ message: "Configure another account?", initialValue: true });
         } else {
-          await prompter.confirm({
-            message: "Configure another account?",
-            initialValue: true,
-          });
+          owner.setModelActivation({ modelRef: "ollama/local-model" });
         }
         answered = true;
-      }, true);
+      }, Boolean(prompt));
       try {
         if (when === "already waiting") {
           finishWrite.resolve();
@@ -187,20 +191,37 @@ describe("setup admission", () => {
         }
         markGatewayRestartDraining();
         expect(session.signal.aborted).toBe(false);
-        expect(session.getStatus()).not.toBe("cancelled");
+        if (prompt) {
+          expect(session.getStatus()).not.toBe("cancelled");
+        }
         if (when === "after write") {
-          expect(written).toBe(false);
-          expect(session.isSettled()).toBe(false);
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          if (prompt) {
+            expect(written).toBe(false);
+            expect(session.isSettled()).toBe(false);
+            expect(getActiveGatewayRootWorkCount()).toBe(1);
+          }
           finishWrite.resolve();
           await prompting.promise;
         }
-        expect(session.getCurrentStep()).toBeUndefined();
+        if (prompt) {
+          expect(session.getCurrentStep()).toBeUndefined();
+        }
         await whenAdmittedWizardSessionSettled(session);
-        expect(written).toBe(true);
-        expect(answered).toBe(false);
-        expect(await session.next()).toMatchObject({ done: true, status: "error" });
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(await session.next()).toMatchObject({
+          done: true,
+          ...(prompt
+            ? { status: "error" }
+            : failWrite
+              ? { status: "error", error: "settings write failed" }
+              : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
+        });
+        if (prompt) {
+          expect({ written, answered, roots: getActiveGatewayRootWorkCount() }).toEqual({
+            written: true,
+            answered: false,
+            roots: 0,
+          });
+        }
       } finally {
         finishWrite.resolve();
         await prompting.promise;
@@ -307,36 +328,6 @@ describe("setup admission", () => {
       const fresh = await createAdmittedWizardSession(create);
       expect(fresh).toBeDefined();
       await whenAdmittedWizardSessionSettled(fresh!);
-    },
-  );
-
-  it.each([false, true])(
-    "preserves committed work's result without further input (failure=%s)",
-    async (failWrite) => {
-      const finishWrite = createDeferred();
-      const session = await admit(async (_prompter, _signal, owner) => {
-        owner.lockCancellation();
-        await finishWrite.promise;
-        if (failWrite) {
-          throw new Error("settings write failed");
-        }
-        owner.setModelActivation({ modelRef: "ollama/local-model" });
-      });
-      try {
-        markGatewayRestartDraining();
-        expect(session.signal.aborted).toBe(false);
-        finishWrite.resolve();
-        await whenAdmittedWizardSessionSettled(session);
-        expect(await session.next()).toMatchObject({
-          done: true,
-          ...(failWrite
-            ? { status: "error", error: "settings write failed" }
-            : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
-        });
-      } finally {
-        finishWrite.resolve();
-        await whenAdmittedWizardSessionSettled(session);
-      }
     },
   );
 

@@ -73,6 +73,24 @@ let otherId: string;
 let personalAccountId: string;
 let releaseProfileCatalog: (() => void) | undefined;
 
+type TitleCase = {
+  params?: Record<string, unknown>;
+  config?: OpenClawConfig;
+  profile?: "owner" | "foreign" | "delegated" | "unidentified";
+  personal?: boolean;
+  error?: "INVALID_REQUEST" | "FORBIDDEN";
+  model?: string;
+  connected?: boolean;
+  catalog?: boolean;
+  provider?: string;
+  utility?: string;
+  runtime?: "codex";
+  operator?: boolean;
+  fails?: boolean;
+  infer?: boolean;
+};
+const titleCase = (name: string, options: TitleCase = {}) => ({ name, ...options });
+
 function connectedClient(profileId?: string): GatewayClient {
   return {
     connId: "title-preparation-connection",
@@ -83,16 +101,9 @@ function connectedClient(profileId?: string): GatewayClient {
       role: "operator",
       scopes: ["operator.write"],
     },
-    ...(profileId
-      ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: "Title Test Person",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-        }
-      : {}),
+    authenticatedUserProfile: profileId
+      ? { profileId, displayName: "Title Test Person", hasAvatar: false, updatedAt: 1 }
+      : undefined,
   };
 }
 
@@ -108,13 +119,11 @@ async function prepare(
   const context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getClientConnIds"> = {
     getRuntimeConfig: () => config,
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) => {
-      const connIds = new Set<string>();
-      for (const candidate of connections) {
-        if (candidate.connId && (!filter || filter(candidate))) {
-          connIds.add(candidate.connId);
-        }
-      }
-      return connIds;
+      return new Set(
+        [...connections].flatMap((candidate) =>
+          candidate.connId && (!filter || filter(candidate)) ? [candidate.connId] : [],
+        ),
+      );
     },
   };
   await sessionTitleHandlers[method]!({
@@ -216,23 +225,16 @@ describe("sessions.title.prepare", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    params?: Record<string, unknown>;
-    config?: OpenClawConfig;
-    profile?: "owner" | "foreign" | "delegated" | "unidentified";
-    personal?: boolean;
-    error?: "INVALID_REQUEST" | "FORBIDDEN";
-  }>([
-    ...["", "invalid/"].map((utilityModel) => ({
-      name: `disabled or malformed utility ${JSON.stringify(utilityModel)}`,
-      config: utilityModelConfig(utilityModel),
-      params: { message: "Plan a session" },
-    })),
-    { name: "blank input", params: { message: "   " } },
-    { name: "slash command", params: { message: "/new" } },
-    { name: "incognito input", params: { message: "Secret draft", incognito: true } },
-    { name: "unknown catalog", params: { message: "Catalog draft", catalogId: "missing" } },
+  const withoutInference = [
+    ...["", "invalid/"].map((utilityModel) =>
+      titleCase(`disabled or malformed utility ${JSON.stringify(utilityModel)}`, {
+        config: utilityModelConfig(utilityModel),
+      }),
+    ),
+    titleCase("blank input", { params: { message: "   " } }),
+    titleCase("slash command", { params: { message: "/new" } }),
+    titleCase("incognito input", { params: { incognito: true } }),
+    titleCase("unknown catalog", { params: { catalogId: "missing" } }),
     ...(
       [
         ["unknown agent", { agentId: "missing" }],
@@ -240,28 +242,26 @@ describe("sessions.title.prepare", () => {
         ["existing session target", { sessionKey: "existing-session" }],
         ["model and catalog conflict", { model: "title-test/primary", catalogId: "catalog" }],
       ] as const
-    ).map(([name, params]) => ({ name, params, error: "INVALID_REQUEST" as const })),
-    {
-      name: "denied creation agent",
+    ).map(([name, params]) => titleCase(name, { params, error: "INVALID_REQUEST" })),
+    titleCase("denied creation agent", {
       config: roleConfig({ agents: [], scopes: ["operator.write"], sessions: { others: "none" } }),
       profile: "owner",
       error: "FORBIDDEN",
-    },
-    ...["title-test/blocked", "hidden-title-model"].map((model) => ({
-      name: `denied operator model ${model}`,
-      params: { model },
-      config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
-      profile: "owner" as const,
-      error: "FORBIDDEN" as const,
-    })),
-    {
-      name: "denied operator utility without primary fallback",
+    }),
+    ...["title-test/blocked", "hidden-title-model"].map((model) =>
+      titleCase(`denied operator model ${model}`, {
+        params: { model },
+        config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
+        profile: "owner",
+        error: "FORBIDDEN",
+      }),
+    ),
+    titleCase("denied operator utility without primary fallback", {
       params: { model: "title-test/primary" },
       config: operatorModelConfig(["title-test/primary"]),
       profile: "owner",
-    },
-    {
-      name: "denied creation-agent model",
+    }),
+    titleCase("denied creation-agent model", {
       params: { model: "other-model/denied" },
       config: {
         ...cfg,
@@ -270,15 +270,62 @@ describe("sessions.title.prepare", () => {
           entries: { main: { modelPolicy: { allow: ["title-test/primary"] } } },
         },
       },
-    },
-    ...(["foreign", "delegated", "unidentified"] as const).map((profile) => ({
-      name: `${profile} personal account`,
-      params: { message: "Personal draft" },
-      profile,
-      personal: true,
-      error: "FORBIDDEN" as const,
-    })),
-  ])("avoids inference for $name", async ({ params, config, profile, personal, error }) => {
+    }),
+    ...(["foreign", "delegated", "unidentified"] as const).map((profile) =>
+      titleCase(`${profile} personal account`, { profile, personal: true, error: "FORBIDDEN" }),
+    ),
+  ];
+
+  const withInference = [
+    titleCase("default utility"),
+    titleCase("same-provider auth profile", { model: "title-test/primary@work" }),
+    titleCase("connected personal account", { connected: true, personal: true }),
+    titleCase("cross-provider utility without primary credentials", {
+      model: "title-test/primary@work",
+      config: utilityModelConfig("other-title/utility"),
+      provider: "other-title",
+    }),
+    ...(
+      [
+        ["openai", "codex"],
+        ["other-title", undefined],
+      ] as const
+    ).map(([provider, runtime]) =>
+      titleCase(`${provider} catalog runtime`, {
+        config: utilityModelConfig(`${provider}/synthetic-utility`),
+        catalog: true,
+        provider,
+        utility: "synthetic-utility",
+        runtime,
+      }),
+    ),
+    titleCase("operator-allowed utility", {
+      model: "title-test/primary",
+      config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
+      connected: true,
+      operator: true,
+    }),
+    titleCase("failed automatic inference", { connected: true, fails: true }),
+    titleCase("failed personal inference", { connected: true, personal: true, fails: true }),
+  ];
+  it.each([
+    ...withoutInference,
+    ...withInference.map((selection) => Object.assign(selection, { infer: true })),
+  ])("selects utility inference for $name", async (selection) => {
+    if (selection.fails) {
+      mocks.runIsolatedCompletion.mockRejectedValue(new Error("private provider diagnostic"));
+    }
+    if (selection.catalog) {
+      mocks.resolveRegisteredCatalogCreateTarget.mockReturnValue({
+        ok: true,
+        target: {
+          model: "openai/synthetic-primary",
+          agentRuntime: "codex",
+          pluginOwnerId: "codex",
+        },
+      });
+    }
+    const profile = selection.profile ?? (selection.connected ? "owner" : undefined);
     const client = profile
       ? connectedClient(
           profile === "foreign" ? otherId : profile === "unidentified" ? undefined : ownerId,
@@ -294,114 +341,30 @@ describe("sessions.title.prepare", () => {
       {
         agentId: "main",
         message: "Draft",
-        ...params,
-        ...(personal ? { model: `title-test/primary@${personalAccountId}` } : {}),
-      },
-      config,
-      client,
-    );
-    if (error) {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: error }),
-      );
-    } else {
-      expect(respond).toHaveBeenCalledWith(true, { title: null });
-    }
-    expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-  });
-
-  it.each<{
-    name: string;
-    message?: string;
-    model?: string;
-    config?: OpenClawConfig;
-    connected?: boolean;
-    personal?: boolean;
-    catalog?: boolean;
-    provider?: string;
-    utility?: string;
-    runtime?: "codex";
-    operator?: boolean;
-    fails?: boolean;
-  }>([
-    { name: "default utility", message: "Plan a new session" },
-    {
-      name: "same-provider auth profile",
-      model: "title-test/primary@work",
-    },
-    {
-      name: "connected personal account",
-      message: "Personal draft",
-      connected: true,
-      personal: true,
-    },
-    {
-      name: "cross-provider utility without primary credentials",
-      model: "title-test/primary@work",
-      config: utilityModelConfig("other-title/utility"),
-      provider: "other-title",
-    },
-    ...(
-      [
-        ["openai", "codex"],
-        ["other-title", undefined],
-      ] as const
-    ).map(([provider, runtime]) => ({
-      name: `${provider} catalog runtime`,
-      config: utilityModelConfig(`${provider}/synthetic-utility`),
-      catalog: true,
-      provider,
-      utility: "synthetic-utility",
-      runtime,
-    })),
-    {
-      name: "operator-allowed utility",
-      model: "title-test/primary",
-      config: operatorModelConfig(["title-test/primary", "title-test/utility"]),
-      connected: true,
-      operator: true,
-    },
-    { name: "failed automatic inference", message: "Private draft", connected: true, fails: true },
-    {
-      name: "failed personal inference",
-      message: "Private draft",
-      connected: true,
-      personal: true,
-      fails: true,
-    },
-  ])("uses only utility inference for $name", async (selection) => {
-    if (selection.fails) {
-      mocks.runIsolatedCompletion.mockRejectedValue(new Error("private provider diagnostic"));
-    }
-    if (selection.catalog) {
-      mocks.resolveRegisteredCatalogCreateTarget.mockReturnValue({
-        ok: true,
-        target: {
-          model: "openai/synthetic-primary",
-          agentRuntime: "codex",
-          pluginOwnerId: "codex",
-        },
-      });
-    }
-    const respond = await prepare(
-      {
-        agentId: "main",
-        message: selection.message ?? "Draft",
+        ...selection.params,
         ...(selection.model ? { model: selection.model } : {}),
         ...(selection.personal ? { model: `title-test/primary@${personalAccountId}` } : {}),
         ...(selection.catalog ? { catalogId: "native-catalog" } : {}),
       },
       selection.config,
-      selection.connected ? connectedClient(ownerId) : null,
+      client,
     );
-    expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-      title: selection.fails ? null : "Draft session title",
-    });
-    if (selection.fails) {
-      expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);
+    if (selection.error) {
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: selection.error }),
+      );
     } else {
+      expect(respond).toHaveBeenCalledWith(true, {
+        title: selection.infer && !selection.fails ? "Draft session title" : null,
+      });
+    }
+    expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(selection.infer ? 1 : 0);
+    if (selection.infer) {
+      expect(respond).toHaveBeenCalledTimes(1);
+    }
+    if (selection.infer && !selection.fails) {
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           provider: selection.provider ?? "title-test",
