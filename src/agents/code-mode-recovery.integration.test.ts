@@ -28,7 +28,7 @@ describe("Code Mode recovery checkpoint persistence", () => {
         }),
       );
       network.resultContentSource = "network";
-      setPluginToolMeta(network, { pluginId: "test-network", replaySafe: true });
+      setPluginToolMeta(network, { pluginId: "test-network", optional: true, replaySafe: true });
       const h = createCatalogCodeModeHarness([network], {
         codeMode: { enabled: true, maxOutputBytes: 65_536 },
       });
