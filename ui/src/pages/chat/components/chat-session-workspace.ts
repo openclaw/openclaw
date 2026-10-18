@@ -182,13 +182,42 @@ export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFile
 const BARE_FILE_NAME = /^[^\\/]+$/u;
 const PARENT_PATH_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/u;
 
+function readGatewayErrorDetail(error: unknown, key: string): unknown {
+  if (!(error instanceof GatewayRequestError)) {
+    return undefined;
+  }
+  const details: unknown = error.details;
+  return typeof details === "object" && details !== null ? Reflect.get(details, key) : undefined;
+}
+
 function isMissingSessionFile(error: unknown): boolean {
-  return (
-    error instanceof GatewayRequestError &&
-    typeof error.details === "object" &&
-    error.details !== null &&
-    (error.details as { type?: unknown }).type === "session_file_not_found"
-  );
+  return readGatewayErrorDetail(error, "type") === "session_file_not_found";
+}
+
+function readOversizedSessionFileSize(error: unknown): number | undefined {
+  if (readGatewayErrorDetail(error, "type") !== "session_file_too_large") {
+    return undefined;
+  }
+  const size = readGatewayErrorDetail(error, "size");
+  return typeof size === "number" ? size : undefined;
+}
+
+function oversizedSessionFileResult(
+  sessionKey: string,
+  path: string,
+  size: number,
+): SessionWorkspaceGetResult {
+  return {
+    sessionKey,
+    file: {
+      path,
+      name: pathDisplayName(path),
+      size,
+      kind: "read",
+      missing: false,
+      previewKind: "unsupported",
+    },
+  };
 }
 
 function isResolvableReferencePath(path: string): boolean {
@@ -215,7 +244,14 @@ async function readSessionFileReference(
   try {
     return await state.sessions.getFile(sessionKey, path, { agentId });
   } catch (error) {
-    if (!isMissingSessionFile(error) || !BARE_FILE_NAME.test(path)) {
+    if (!isMissingSessionFile(error)) {
+      const size = readOversizedSessionFileSize(error);
+      if (size !== undefined) {
+        return oversizedSessionFileResult(sessionKey, path, size);
+      }
+      throw error;
+    }
+    if (!BARE_FILE_NAME.test(path)) {
       throw error;
     }
     const listing = await state.sessions.listFiles(sessionKey, { agentId, path: "", search: path });
@@ -231,7 +267,15 @@ async function readSessionFileReference(
     if (matches.length !== 1 || !match) {
       throw error;
     }
-    return await state.sessions.getFile(sessionKey, match.path, { agentId });
+    try {
+      return await state.sessions.getFile(sessionKey, match.path, { agentId });
+    } catch (resolvedError) {
+      const size = readOversizedSessionFileSize(resolvedError);
+      if (size !== undefined) {
+        return oversizedSessionFileResult(sessionKey, match.path, size);
+      }
+      throw resolvedError;
+    }
   }
 }
 
@@ -254,47 +298,19 @@ function openFile(
     state,
     workspace,
     viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
-    async () => {
-      try {
-        return await readSessionFileReference(state, sessionKey, agentId, requestPath);
-      } catch (error) {
-        const details = error instanceof GatewayRequestError ? error.details : null;
-        if (
-          details &&
-          typeof details === "object" &&
-          "type" in details &&
-          details.type === "session_file_too_large" &&
-          "size" in details &&
-          typeof details.size === "number"
-        ) {
-          // The authorized read supplies metadata even when its preview bytes are unavailable.
-          const metadata: SessionWorkspaceGetResult = {
-            sessionKey,
-            file: {
-              path: requestPath,
-              name: pathDisplayName(path),
-              size: details.size,
-              kind: "read",
-              missing: false,
-              previewKind: "unsupported",
-            },
-          };
-          return metadata;
-        }
-        throw error;
-      }
-    },
+    async () => await readSessionFileReference(state, sessionKey, agentId, requestPath),
     (result) => {
       const file = result.file;
       if (!file) {
         return null;
       }
-      const name = file.name || pathDisplayName(path);
-      const filePath = file.workspacePath || file.path || path;
+      const resolvedPath = file.path || file.workspacePath || requestPath;
+      const name = file.name || pathDisplayName(resolvedPath);
+      const filePath = file.workspacePath || resolvedPath;
       const download = (signal: AbortSignal) =>
         downloadSessionFile(
           state,
-          { sessionKey: result.sessionKey, agentId, path: requestPath },
+          { sessionKey: result.sessionKey, agentId, path: resolvedPath },
           signal,
         );
       if (file.previewKind === "image") {
@@ -316,7 +332,7 @@ function openFile(
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, path, download),
+          ...unsupportedFileSidebarContent(file, resolvedPath, download),
           fileLinkSessionKey: result.sessionKey,
         };
       }
@@ -336,7 +352,7 @@ function openFile(
               try {
                 const saved = await state.sessions.setFile(
                   result.sessionKey,
-                  requestPath,
+                  resolvedPath,
                   content,
                   {
                     agentId,
@@ -378,7 +394,7 @@ function openFile(
               }
             },
             fetchLatest: async () => {
-              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+              const latest = await state.sessions.getFile(result.sessionKey, resolvedPath, {
                 agentId,
               });
               const latestFile = latest?.file;
@@ -409,7 +425,7 @@ function openFile(
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: filePath,
+          path: resolvedPath,
         },
         draftKey: [
           gatewayUrl,

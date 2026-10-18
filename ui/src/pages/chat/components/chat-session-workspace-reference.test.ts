@@ -48,15 +48,19 @@ describe("session workspace file reference resolution", () => {
         entries: [{ path: nestedPath, name: "ORGANIZATION_REPORT.md", kind: "file" }],
       },
     });
+    const setFile = vi.fn(async (sessionKey: string, path: string) => ({
+      sessionKey,
+      file: { path, hash: "saved-hash" },
+    }));
     const state: SessionWorkspaceHost = {
       client: createGatewayBrowserClientFixture(),
       connected: true,
       connectionEpoch: 1,
       handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.list"]),
+      hello: gatewayHelloForMethods(["sessions.files.list", "sessions.files.set"]),
       sessionKey: "agent:main:current",
       sidebarContent: null,
-      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
+      sessions: createSessionCapabilityFixture({ getFile, listFiles, setFile }),
     };
 
     openSessionWorkspaceFile(state, { path: "ORGANIZATION_REPORT.md" });
@@ -71,6 +75,63 @@ describe("session workspace file reference resolution", () => {
     expect(getFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, {
       agentId: "main",
     });
+    if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
+      throw new Error("expected editable resolved file content");
+    }
+    await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
+    expect(setFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, "# Updated", {
+      agentId: "main",
+      expectedHash: "hash",
+    });
+    await sidebarContent.edit.fetchLatest();
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, {
+      agentId: "main",
+    });
+  });
+
+  it("uses the resolved nested path for oversized-file metadata", async () => {
+    const nestedPath = "labs/output/REPORT.md";
+    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
+      if (path === nestedPath) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session file too large",
+          details: { type: "session_file_too_large", size: 4096 },
+        });
+      }
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "session file not found",
+        details: { type: "session_file_not_found" },
+      });
+    });
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:current",
+      root: "/workspace",
+      files: [],
+      browser: {
+        path: "",
+        search: "REPORT.md",
+        entries: [{ path: nestedPath, name: "REPORT.md", kind: "file" }],
+      },
+    });
+    const state: SessionWorkspaceHost = {
+      client: createGatewayBrowserClientFixture(),
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: createSidebarContentRecorder(),
+      hello: gatewayHelloForMethods(["sessions.files.list"]),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: createSessionCapabilityFixture({ getFile, listFiles }),
+    };
+
+    openSessionWorkspaceFile(state, { path: "REPORT.md" });
+
+    const sidebarContent = await loadedSidebarContent(state);
+    expect(sidebarContent.kind).toBe("markdown");
+    expect(sidebarContent.fileDownload?.path).toBe(nestedPath);
+    expect(sidebarContent.rawText).toContain(nestedPath);
   });
 
   it.each([
