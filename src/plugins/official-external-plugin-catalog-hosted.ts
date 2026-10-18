@@ -8,6 +8,7 @@ import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-b
 import {
   HostedCatalogSignedFeedMonotonicityError,
   isOfficialExternalPluginCatalogFeed,
+  isOfficialExternalPluginCatalogRollback,
   parseOfficialExternalPluginCatalogTimestamp,
   parseOfficialExternalPluginCatalogEntries,
   filterOfficialExternalPluginCatalogEntriesBySourceRefs,
@@ -107,14 +108,6 @@ function bundledFallbackResult(
   };
 }
 
-function emptyBundledFallbackResult(error: unknown): HostedOfficialExternalPluginCatalogLoadResult {
-  return {
-    source: "bundled-fallback",
-    entries: [],
-    error: formatErrorMessage(error),
-  };
-}
-
 async function parseHostedCatalogFeedBody(params: {
   body: string;
   expectedFeedId?: string;
@@ -156,13 +149,8 @@ async function parseHostedCatalogFeedBody(params: {
         `hosted catalog feed id "${verification.feed.id}" did not match expected "${params.expectedFeedId}"`,
       );
     }
-    const generatedAtMs = parseOfficialExternalPluginCatalogTimestamp(
-      verification.feed.generatedAt,
-    );
+    const generatedAtMs = Date.parse(verification.feed.generatedAt.trim());
     const expiresAt = normalizeOptionalString(verification.feed.expiresAt);
-    if (generatedAtMs === undefined) {
-      throw new Error("hosted catalog signed feed requires a valid generatedAt value");
-    }
     let expired: boolean;
     if (!expiresAt) {
       if (params.allowMissingExpiry !== true) {
@@ -320,22 +308,6 @@ function removeOfficialExternalPluginCatalogInstallAuthority(
   };
 }
 
-function isHostedCatalogSignedFeedRollback(params: {
-  candidate: OfficialExternalPluginCatalogFeed;
-  current: Pick<OfficialExternalPluginCatalogFeed, "sequence"> & { generatedAt?: string };
-}): boolean {
-  if (params.candidate.sequence < params.current.sequence) {
-    return true;
-  }
-  if (params.candidate.sequence > params.current.sequence) {
-    return false;
-  }
-  if (params.current.generatedAt === undefined) {
-    return false;
-  }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
-}
-
 function assertSnapshotMatchesRequestValidators(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   ifNoneMatch?: string;
@@ -367,6 +339,7 @@ async function snapshotOrBundledFallbackResult(params: {
   verification?: OfficialExternalPluginCatalogFeedVerification;
   now: Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
+  let error = params.error;
   if (params.snapshotStore) {
     try {
       const snapshot = await params.snapshotStore.read(params.url);
@@ -374,21 +347,13 @@ async function snapshotOrBundledFallbackResult(params: {
         return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
       }
     } catch (snapshotErr) {
-      if (params.verification?.mode === "signed") {
-        return emptyBundledFallbackResult(
-          `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
-        );
-      }
-      return bundledFallbackResult(
-        `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`,
-        params.metadata,
-      );
+      error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;
     }
   }
   if (params.verification?.mode === "signed") {
-    return emptyBundledFallbackResult(params.error);
+    return { source: "bundled-fallback", entries: [], error: formatErrorMessage(error) };
   }
-  return bundledFallbackResult(params.error, params.metadata);
+  return bundledFallbackResult(error, params.metadata);
 }
 
 async function resolveHostedCatalogSnapshotStore(params: {
@@ -591,7 +556,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
                 })
               ).feed;
         if (
-          isHostedCatalogSignedFeedRollback({
+          isOfficialExternalPluginCatalogRollback({
             candidate: parsed.feed,
             current,
           })

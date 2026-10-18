@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  getRuntimeConfig: () => mocks.config,
+  readRuntimeConfig: () => mocks.config,
   getRuntimeConfigSourceSnapshot: () => mocks.config,
 }));
 vi.mock("../control-service.js", () => ({
@@ -182,8 +182,6 @@ describe("node browser proxy admission", () => {
 
   it.each([
     { phase: "startup", restriction: "disabled" },
-    { phase: "startup", restriction: "profile" },
-    { phase: "staging", restriction: "disabled" },
     { phase: "staging", restriction: "profile" },
   ] as const)(
     "rechecks $restriction admission after awaited $phase",

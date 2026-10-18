@@ -1,7 +1,9 @@
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
+import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
 
 export type SessionStateDeletePlan = {
   agentId: string;
@@ -26,14 +28,24 @@ type MaterializedSessionTranscriptArchive = {
   sha256: string;
 };
 
-export type TranscriptArchiveWorkerPlan = Pick<
-  SessionStateDeletePlan,
-  "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
->;
+export type SessionHistoryEvictionArchivePlan = Omit<SessionStateDeletePlan, "snapshot"> & {
+  historyEviction: {
+    expectedIdentity: DatabasePathIdentity;
+    preserveRecentMs?: number | null;
+  };
+};
+
+export type TranscriptArchiveWorkerPlan =
+  | Pick<
+      SessionStateDeletePlan,
+      "agentId" | "archiveDirectory" | "databasePath" | "reason" | "sessionId" | "snapshot"
+    >
+  | SessionHistoryEvictionArchivePlan;
 
 export type TranscriptArchiveWorkerResult = {
   archive: MaterializedSessionTranscriptArchive | null;
   sessionId: string;
+  preparedPlan?: SessionStateDeletePlan | null;
 };
 
 export type TranscriptArchiveWorkerMessage = {
@@ -69,6 +81,16 @@ export type TranscriptArchiveReadPlan = {
   sessionId?: string;
   sessionKey: string;
   runId: string;
+  expectedIdentity: DatabasePathIdentity | undefined;
+};
+
+export type TranscriptArchivePresenceRead = {
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+  logicalAgentId: string;
+  sessionId?: string;
+  sessionKey: string;
+  expectedIdentity: DatabasePathIdentity;
 };
 
 export type TranscriptArchiveReadResult = { event?: TranscriptEvent };
@@ -88,14 +110,12 @@ export type TranscriptArchivePageOptions = {
   projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
 };
 
-export type TranscriptArchivePagePlan = TranscriptArchiveReadPlan & {
-  limit: number;
-  maxBytes: number;
-  cursor?: string;
-  verifyBinding?: TranscriptArchivePageBinding;
-  contextMaxMessages?: number;
-  projectionSources?: Pick<PreparedSessionHistoryReadTarget, "stateDatabase" | "sourceDatabases">;
-};
+export type TranscriptArchivePagePlan = Omit<TranscriptArchiveReadPlan, "expectedIdentity"> &
+  TranscriptArchivePageOptions & {
+    limit: number;
+    maxBytes: number;
+    verifyBinding?: TranscriptArchivePageBinding;
+  };
 
 export type TranscriptArchivePageResult = {
   entries: Array<{ event: TranscriptEvent; seq: number; coordinationHidden?: true }>;
@@ -112,23 +132,33 @@ export type SqliteArchiveOperation =
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }
   | { operation: "read-final"; plans: readonly TranscriptArchiveReadPlan[] };
 
+export type SqliteArchiveOneShotWorkerData = Extract<
+  SqliteArchiveOperation,
+  { operation: "materialize" | "publish" }
+> & { type: "sqlite-transcript-archive-v2" };
+
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
   type: "archive-operation";
-  operationId: number;
 };
 
-export type SqliteArchiveSessionResponse = {
-  operationId: number;
-  settled: true;
-} & (
+export type SqliteArchiveSessionResponse =
   | TranscriptArchiveWorkerMessage
   | TranscriptArchivePublishWorkerMessage
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }
-  | { type: "final-read"; results: TranscriptArchiveReadResult[] }
-);
+  | { type: "final-read"; results: TranscriptArchiveReadResult[] };
 export type SessionTranscriptMaintenanceSizingInput = {
   agentId: string;
   path: string;
   env: NodeJS.ProcessEnv;
   sessionIds: readonly string[];
+};
+
+export type SessionPendingArchivesWorkerInput = {
+  kind: "session-pending-archives";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
+};
+
+export type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
+  kind: "session-archive-pruning";
 };

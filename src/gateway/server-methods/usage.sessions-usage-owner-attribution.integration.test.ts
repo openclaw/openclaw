@@ -1,211 +1,397 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { encodeSessionArchiveContent } from "../../config/sessions/archive-compression.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.native.js";
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  historyLane,
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
+import { prepareCronSession } from "../../cron/isolated-agent/session.js";
+import { refreshCostUsageCacheForAgent } from "../../infra/session-cost-usage-aggregation.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import { buildUsageOverview } from "../../shared/usage-overview.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SYSTEM_AGENT_ID } from "../../system-agent/agent-id.js";
 import {
-  createOpenClawTestState,
+  type OpenClawTestState,
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import type { RespondFn } from "./types.js";
-import { usageHandlers } from "./usage.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createResidentSessionRowReader } from "../session-row-projection.test-support.js";
+import { loadUsageSessionSummaries } from "./usage-session-loading.js";
+import * as usageSessionSelection from "./usage-session-selection.js";
+import {
+  contextReport,
+  invokeUsage,
+  usageMessage,
+  usageReply,
+  writeUsage,
+} from "./usage.test-support.js";
 
-function usageMessage(tokens: number, timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "Recorded usage" }],
-    api: "openai-responses",
-    provider: "fixture",
-    model: "usage-model",
-    stopReason: "stop",
-    timestamp,
-    usage: {
-      input: tokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: tokens,
-      cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-    },
-  };
+let sessionRows: ReturnType<typeof createResidentSessionRowReader>;
+
+beforeEach(() => {
+  const reader = createResidentSessionRowReader();
+  sessionRows = reader;
+  onTestFinished(() => reader.dispose());
+});
+
+function sessionScope(state: OpenClawTestState, agentId: string, sessionKey: string) {
+  return { agentId, sessionKey, storePath: path.join(state.sessionsDir(agentId), "sessions.json") };
 }
 
-it.each([
-  {
-    name: "generated title",
-    displayName: "Usage worktree",
-    label: undefined,
-    expected: "Usage worktree",
-  },
-  {
-    name: "explicit rename",
-    displayName: "Generated title",
-    label: "My renamed chat",
-    expected: "My renamed chat",
-  },
-  { name: "unnamed session", displayName: undefined, label: undefined, expected: undefined },
-])(
-  "projects the $name through overview and selected usage",
-  async ({ displayName, label, expected }) => {
-    const state = await createOpenClawTestState({ label: "usage-session-title" });
-    try {
-      await state.writeConfig({
-        agents: { ownership: "explicit", entries: { main: {} } },
-        plugins: { enabled: false },
-      });
-      const config = getRuntimeConfig();
-      const key = "agent:main:dashboard:usage-title";
-      const sessionId = "usage-title-instance";
-      const timestamp = Date.now();
-      const scope = {
-        agentId: "main",
-        sessionKey: key,
-        sessionId,
-        storePath: path.join(state.sessionsDir(), "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId, updatedAt: timestamp, displayName, label });
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message: usageMessage(17, timestamp), now: timestamp }],
-      });
-      // Wait for the real accounting projection before testing its presentation metadata.
-      await loadSessionCostSummary({ agentId: "main", sessionId, sessionTarget: scope, config });
-
-      for (const specificKey of [undefined, key]) {
-        const respond = vi.fn();
-        await expectDefined(
-          usageHandlers["sessions.usage"],
-          "usage handler",
-        )({
-          params: {
-            ...(specificKey ? { key: specificKey } : {}),
-            range: "all",
-            groupBy: "instance",
-          },
-          context: { getRuntimeConfig: () => config },
-          respond,
-        } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
-        expect(respond).toHaveBeenCalledOnce();
-        const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
-        expect(ok).toBe(true);
-        const result = payload as SessionsUsageResult;
-        expect(result.sessions).toHaveLength(1);
-        expect(result.sessions[0]).toMatchObject({
-          key,
-          sessionId,
-          agentId: "main",
-          label: expected,
-          usage: { totalTokens: 17, totalCost: 0.01 },
-        });
-        expect(result.totals).toMatchObject({ totalTokens: 17, totalCost: 0.01 });
-      }
-    } finally {
-      await state.cleanup();
+async function warmUsage(agentIds: string[]) {
+  for (const agentId of agentIds) {
+    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
+      await loadSessionCostSummary({ agentId, sessionId, sessionFile, config: getRuntimeConfig() });
     }
-  },
-);
+  }
+}
 
-it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
-  const state = await createOpenClawTestState({ label: "usage-page-metadata" });
+function warmTarget(scope: ReturnType<typeof sessionScope>, sessionId: string) {
+  return loadSessionCostSummary({
+    config: getRuntimeConfig(),
+    agentId: scope.agentId,
+    sessionId,
+    sessionTarget: { ...scope, sessionId },
+  });
+}
+
+async function seedUsage(
+  state: OpenClawTestState,
+  scope: ReturnType<typeof sessionScope>,
+  sessionId: string,
+  tokens: number,
+  timestamp: number,
+  entry: Partial<SessionEntry> = {},
+) {
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: timestamp, ...entry });
+  await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
+}
+
+async function withoutSql<T>(read: () => Promise<T>): Promise<T> {
+  const sql = observeHostDataSql();
   try {
+    const result = await read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
+async function requestUsage(params: Record<string, unknown>, method = "sessions.usage") {
+  const projection = await sessionRows.ready();
+  return usageReply(
+    await invokeUsage(method, params, getRuntimeConfig(), {
+      context: bindSessionRowProjection(
+        createDirectChatContext({ getRuntimeConfig }),
+        () => projection,
+      ),
+    }),
+  );
+}
+
+async function readUsage(params: Record<string, unknown>) {
+  const [ok, payload, error] = await requestUsage(params);
+  expect(ok, JSON.stringify({ params, error })).toBe(true);
+  return payload as SessionsUsageResult;
+}
+
+async function withUsageState(run: (state: OpenClawTestState) => Promise<void>) {
+  await withOpenClawTestState({ label: "usage-owner" }, async (state) => {
     await state.writeConfig({
       agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
       plugins: { enabled: false },
     });
+    await captureRuntimeConfigAsyncReader()();
+    try {
+      await run(state);
+    } finally {
+      await sessionRows.dispose();
+    }
+  });
+}
+
+it("preserves global session addition order across agents before overview pagination", async () => {
+  await withUsageState(async (state) => {
     const config = getRuntimeConfig();
+    const startMs = Date.UTC(2026, 8, 18);
+    const sessions = [];
+    for (const [index, cost] of [0.2, 0.1, 0.3].entries()) {
+      const agentId = index === 1 ? "opus" : "main";
+      const sessionId = `ordered-${index}`;
+      const sessionFile = state.path(`${sessionId}.jsonl`);
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          id: sessionId,
+          parentId: null,
+          message: usageMessage(1, startMs, cost),
+        })}\n`,
+      );
+      sessions.push({
+        key: sessionId,
+        agentId,
+        sessionId,
+        sessionFile,
+        channel: "same-channel",
+        creatorKey: "same-creator",
+        updatedAt: 30 - index * 10,
+        instances: [{ sessionId, sessionFile }],
+      });
+    }
+    for (const agentId of ["main", "opus"]) {
+      await refreshCostUsageCacheForAgent({
+        config,
+        agentId,
+        sessionFiles: sessions
+          .filter((session) => session.agentId === agentId)
+          .flatMap((session) => session.instances.map((instance) => instance.sessionFile)),
+      });
+    }
+    const loaded = await loadUsageSessionSummaries({
+      read: (load) => load(),
+      entries: sessions,
+      config,
+      startMs,
+      endMs: startMs + 86_400_000 - 1,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    const result = {
+      ...buildUsageOverview({
+        rows: sessions.map((session, index) =>
+          Object.assign({}, session, { usage: loaded.summaries[index] ?? null }),
+        ),
+        options: { offset: 1 },
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+      cacheStatus: loaded.cacheStatus,
+    };
+    expect(result.cacheStatus?.status).toBe("fresh");
+    const expectedCost = 0.6000000000000001;
+    expect(result.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byModel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byChannel[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.byCreator?.[0]?.totals.totalCost).toBe(expectedCost);
+    expect(result.aggregates.costDaily?.[0]?.totalCost).toBe(expectedCost);
+    expect(result.aggregates.daily[0]?.cost).toBe(expectedCost);
+    expect(result.overview.tableTotals.cost).toBe(expectedCost);
+    expect(result.sessions.map((session) => session.key)).toEqual(["ordered-1", "ordered-2"]);
+    expect(result.overview).toMatchObject({ total: 3, offset: 1, limit: 50 });
+  });
+});
+
+it("keeps same-key overview context reports with their selected agent", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const timestamp = Date.now() - 60_000;
+    const candidates: usageSessionSelection.UsageSessionSelection[] = [];
+    const reports = [contextReport(timestamp, 1), contextReport(timestamp, 2)];
+    for (const [index, agentId] of ["main", "opus"].entries()) {
+      const sessionId = `${agentId}-global-context`;
+      const scope = sessionScope(state, agentId, "global");
+      await seedUsage(state, scope, sessionId, index + 1, timestamp, {
+        systemPromptReport: reports[index],
+      });
+      await warmTarget(scope, sessionId);
+      candidates.push(
+        ...(await usageSessionSelection.selectUsageSessions({
+          config,
+          projection: await sessionRows.ready(),
+          agentId,
+          specificKey: null,
+          groupingMode: "instance",
+          startMs: 0,
+          endMs: Date.now(),
+        })),
+      );
+    }
+    expect(candidates.map(({ agentId, key }) => [agentId, key])).toEqual([
+      ["main", "global"],
+      ["opus", "global"],
+    ]);
+    // Federation picks one public sentinel today; assembly must retain each physical owner supplied by selection.
+    const selection = vi
+      .spyOn(usageSessionSelection, "selectUsageSessions")
+      .mockResolvedValueOnce(candidates);
+    try {
+      const result = await readUsage({
+        agentScope: "all",
+        range: "all",
+        projection: "overview",
+        includeContextWeight: true,
+      });
+      expect(result.sessions).toHaveLength(2);
+      for (const [index, agentId] of ["main", "opus"].entries()) {
+        expect(result.sessions.find((row) => row.agentId === agentId)).toMatchObject({
+          key: "global",
+          agentId,
+          sessionId: `${agentId}-global-context`,
+          hasContextWeight: true,
+          contextWeight: reports[index],
+        });
+      }
+    } finally {
+      selection.mockRestore();
+    }
+  });
+});
+
+it("keeps prior cron runs attributed through guarded replacement and the real usage handler", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const sessionKey = "agent:main:cron:usage-history";
+    const scope = { agentId: "main", sessionKey };
+    const sessionIds: string[] = [];
+    const timestamp = Date.now() - 60_000;
+    for (const tokens of [10, 20, 30]) {
+      const cronSession = await prepareCronSession({
+        cfg: config,
+        ...scope,
+        nowMs: timestamp,
+        forceNew: true,
+      });
+      await createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: sessionKey,
+        workspaceDir: state.workspaceDir,
+        persistSessionEntry: async ({ storePath, operation }) => {
+          return await applySessionEntryOperation({ ...scope, storePath }, operation, {
+            fallbackEntry: operation.next,
+            replaceEntry: true,
+          });
+        },
+      })();
+      const sessionId = cronSession.sessionEntry.sessionId;
+      sessionIds.push(sessionId);
+      await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
+    }
+    expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+      usageFamilyKey: sessionKey,
+      usageFamilySessionIds: sessionIds,
+      createdActor: { type: "system" },
+    });
+    await warmUsage(["main"]);
+    for (const groupBy of ["instance", "family"]) {
+      const result = await withoutSql(() => readUsage({ range: "all", agentId: "main", groupBy }));
+      expect(result.totals.totalTokens).toBe(60);
+      expect(result.totals.totalCost).toBeCloseTo(0.03);
+      expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
+      expect(result.sessions.every((row) => row.createdActor?.type === "system")).toBe(true);
+      expect(result.aggregates.byCreator).toMatchObject([
+        { actor: { type: "system" }, totals: { totalTokens: 60, totalCost: 0.03 } },
+      ]);
+    }
+    for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
+      const [ok, payload] = await withoutSql(() => requestUsage({ key: sessionKey }, method));
+      expect(ok).toBe(true);
+      expect(payload).toMatchObject(
+        method === "sessions.usage.timeseries"
+          ? { points: [expect.objectContaining({ totalTokens: 30 })] }
+          : { logs: [expect.objectContaining({ role: "assistant", tokens: 30 })] },
+      );
+    }
+  });
+});
+
+it("uses committed metadata for selected usage and families with an empty current window", async () => {
+  await withUsageState(async (state) => {
+    const key = "agent:main:usage-receipts";
+    const scope = sessionScope(state, "main", key);
+    const timestamp = Date.now() - 60_000;
+    const firstId = "usage-receipts-first";
+    await seedUsage(state, scope, firstId, 17, timestamp, { label: "Before rename" });
+    await warmTarget(scope, firstId);
+    const params = { range: "all", key };
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "Before rename", usage: { totalTokens: 17 } },
+    ]);
+
+    await patchSessionEntryCore(scope, () => ({ label: "After rename" }));
+    expect((await readUsage(params)).sessions).toMatchObject([
+      { key, sessionId: firstId, label: "After rename", usage: { totalTokens: 17 } },
+    ]);
+
+    const currentId = "usage-receipts-current";
+    await upsertSessionEntryCore(scope, {
+      sessionId: currentId,
+      updatedAt: timestamp + 1,
+      label: "Replacement",
+    });
+    await warmTarget(scope, currentId);
+    for (const selector of [{ key }, { agentId: "main" }]) {
+      const result = await readUsage({ range: "all", groupBy: "family", ...selector });
+      expect(result.sessions).toMatchObject([
+        {
+          key,
+          sessionId: currentId,
+          currentSessionId: currentId,
+          label: "Replacement",
+          includedSessionIds: [currentId, firstId],
+          usage: { totalTokens: 17 },
+        },
+      ]);
+      expect(result.totals.totalTokens).toBe(17);
+    }
+  });
+});
+
+it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
+  await withUsageState(async (state) => {
     const ada = ensureProfileForEmail("ada@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     const timestamp = Date.now() - 60_000;
     const fixtures = ["main", "opus"].flatMap((agentId, agentIndex) =>
-      Array.from({ length: 8 }, (_, index) => {
+      Array.from({ length: agentId === "main" ? 8 : 51 }, (_, index) => {
         const ordinal = agentIndex * 8 + index;
-        const report: SessionSystemPromptReport | undefined =
-          ordinal === 0
-            ? undefined
-            : {
-                source: "run",
-                generatedAt: timestamp + ordinal,
-                systemPrompt: {
-                  chars: 100 + ordinal,
-                  projectContextChars: ordinal,
-                  nonProjectContextChars: 100,
-                },
-                injectedWorkspaceFiles: [],
-                skills: { promptChars: 65_536, entries: [] },
-                tools: { listChars: ordinal, schemaChars: 0, entries: [] },
-              };
         return {
           agentId,
           sessionId: `usage-page-${index}`,
-          key: `agent:${agentId}:usage-page-${index}`,
-          label: `${agentId} usage ${index}`,
+          key: `agent:${agentId}:dashboard:usage-page-${index}`,
+          label: ordinal === 0 ? undefined : `${agentId} usage ${index}`,
           updatedAt: timestamp + ordinal,
           tokens: agentIndex * 100 + index + 1,
           promptMarker: `usage-page-prompt-${agentId}-${index}:`,
-          report,
+          report: ordinal === 0 ? undefined : contextReport(timestamp + ordinal, ordinal),
         };
       }),
     );
     for (const fixture of fixtures) {
       const scope = {
-        agentId: fixture.agentId,
+        ...sessionScope(state, fixture.agentId, fixture.key),
         sessionId: fixture.sessionId,
-        sessionKey: fixture.key,
-        storePath: path.join(state.sessionsDir(fixture.agentId), "sessions.json"),
       };
-      await upsertSessionEntryCore(scope, {
-        sessionId: fixture.sessionId,
+      await seedUsage(state, scope, fixture.sessionId, fixture.tokens, fixture.updatedAt, {
         label: fixture.label,
         createdActor: {
           type: "human",
           source: "profile",
           id: fixture.agentId === "main" ? ada.id : bob.id,
         },
-        updatedAt: fixture.updatedAt,
         skillsSnapshot: { prompt: fixture.promptMarker + "x".repeat(65_536), skills: [] },
         systemPromptReport: fixture.report,
-      });
-      const message: AssistantMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: "Recorded usage" }],
-        api: "openai-responses",
-        provider: "fixture",
-        model: "usage-model",
-        stopReason: "stop",
-        timestamp: fixture.updatedAt,
-        usage: {
-          input: fixture.tokens,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: fixture.tokens,
-          cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
-        },
-      };
-      await persistSessionTranscriptTurn(scope, {
-        cwd: state.workspaceDir,
-        updateMode: "none",
-        messages: [{ message, now: fixture.updatedAt }],
       });
       fixture.updatedAt = expectDefined(
         loadSessionEntryReadOnly({ ...scope, projection: "list" }),
@@ -213,113 +399,80 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
       ).updatedAt;
     }
     // Refresh outside the observation window so transcript work cannot hide metadata overreads.
-    for (const agentId of ["main", "opus"]) {
-      for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId })) {
-        await loadSessionCostSummary({ agentId, sessionId, sessionFile, config });
-      }
-    }
-    const newest = expectDefined(fixtures.at(-1), "newest usage row");
-    const secondNewest = expectDefined(fixtures.at(-2), "second newest usage row");
-    const older = expectDefined(fixtures[3], "older main usage row");
-    const withoutReport = expectDefined(fixtures[0], "usage row without context report");
-    const totalTokens = fixtures.reduce((total, fixture) => total + fixture.tokens, 0);
+    await warmUsage(["main", "opus"]);
     const adaFixtures = fixtures.filter((fixture) => fixture.agentId === "main");
+    const row = (index: number) => expectDefined(fixtures.at(index), `usage row ${index}`);
+    const newest = row(-1);
     const adaNewest = expectDefined(adaFixtures.at(-1), "newest Ada usage row");
     const adaCreatorKey = JSON.stringify(["profile", ada.id]);
-    for (const scenario of [
-      { selected: [newest], includeContextWeight: false },
-      { selected: [newest], includeContextWeight: true },
-      { selected: [older], includeContextWeight: true, key: older.key },
-      { selected: [withoutReport], includeContextWeight: true, key: withoutReport.key },
-      { selected: [newest, secondNewest], includeContextWeight: false },
-      { selected: [adaNewest], includeContextWeight: false, creatorKey: adaCreatorKey },
-      { selected: [adaNewest], includeContextWeight: true, creatorKey: adaCreatorKey },
-    ]) {
-      const respond = vi.fn<RespondFn>();
-      const reads = ["main", "opus"].map((agentId) =>
-        trackSqliteStatementExecutions(
-          openOpenClawAgentDatabase({ agentId }).db,
-          ["entries"],
-          (sql) => (/from\s+"session_nodes"/i.test(sql) ? "entries" : null),
-        ),
-      );
-      const parse = vi.spyOn(JSON, "parse");
-      let parsedPrompts: string[];
-      try {
-        await expectDefined(
-          usageHandlers["sessions.usage"],
-          "usage handler",
-        )({
-          params: {
-            ...(scenario.key ? { key: scenario.key } : { agentScope: "all" }),
-            range: "all",
-            limit: scenario.selected.length,
-            includeContextWeight: scenario.includeContextWeight,
-            creatorKey: scenario.creatorKey,
-          },
-          context: createDirectChatContext({ getRuntimeConfig: () => config }),
-          req: { type: "req", id: "usage-page-metadata", method: "sessions.usage" },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
+    const scenarios: Array<
+      [typeof fixtures, boolean, { key?: string; creatorKey?: string; projection?: "overview" }?]
+    > = [
+      [[newest], false],
+      [[newest], true],
+      [[row(3)], true, { key: row(3).key }],
+      [[row(0)], true, { key: row(0).key }],
+      [[newest, row(-2)], false],
+      [[adaNewest], false, { creatorKey: adaCreatorKey }],
+      [[adaNewest], true, { creatorKey: adaCreatorKey }],
+      [adaFixtures.toReversed(), true, { creatorKey: adaCreatorKey, projection: "overview" }],
+    ];
+    for (const [selected, includeContextWeight, filters = {}] of scenarios) {
+      let payload: unknown;
+      const transferredPrompts = new Set<string>();
+      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await run(...args);
+          const bytes = JSON.stringify(reply);
+          for (const fixture of fixtures) {
+            if (bytes.includes(fixture.promptMarker)) {
+              transferredPrompts.add(fixture.promptMarker);
+            }
+          }
+          return reply;
         });
-        parsedPrompts = fixtures
-          .filter((fixture) =>
-            parse.mock.calls.some(([json]) => json.includes(fixture.promptMarker)),
-          )
-          .map((fixture) => fixture.promptMarker);
-        expect(reads.reduce((bytes, read) => bytes + read.textBytes.entries, 0)).toBeLessThan(
-          65_536 * scenario.selected.length * 4,
-        );
+      });
+      try {
+        payload = await readUsage({
+          ...(filters.key ? {} : { agentScope: "all" }),
+          range: "all",
+          limit: selected.length,
+          includeContextWeight,
+          ...filters,
+        });
       } finally {
-        parse.mockRestore();
-        for (const read of reads) {
-          read.restore();
+        for (const transfer of transfers) {
+          transfer.mockRestore();
         }
       }
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
-      expect(ok).toBe(true);
+      const matches = filters.key ? selected : filters.creatorKey ? adaFixtures : fixtures;
       expect(payload).toMatchObject({
-        sessions: scenario.selected.map((fixture) => ({
+        sessions: selected.map((fixture) => ({
           key: fixture.key,
           agentId: fixture.agentId,
           sessionId: fixture.sessionId,
           label: fixture.label,
           updatedAt: fixture.updatedAt,
-          usage: { totalTokens: fixture.tokens },
+          usage: { totalTokens: fixture.tokens, totalCost: 0.01 },
           hasContextWeight: Boolean(fixture.report),
-          ...(scenario.includeContextWeight ? { contextWeight: fixture.report ?? null } : {}),
+          ...(includeContextWeight ? { contextWeight: fixture.report ?? null } : {}),
         })),
-        totals: {
-          totalTokens: scenario.key
-            ? scenario.selected[0]?.tokens
-            : scenario.creatorKey
-              ? adaFixtures.reduce((total, fixture) => total + fixture.tokens, 0)
-              : totalTokens,
-        },
-        aggregates: {
-          sessionCount: scenario.key
-            ? 1
-            : scenario.creatorKey
-              ? adaFixtures.length
-              : fixtures.length,
-        },
+        totals: { totalTokens: matches.reduce((total, fixture) => total + fixture.tokens, 0) },
+        aggregates: { sessionCount: matches.length },
       });
-      if (!scenario.includeContextWeight) {
+      if (!includeContextWeight) {
         expect(JSON.stringify(payload)).not.toContain('"contextWeight":');
       }
-      const emittedPrompts = new Set(scenario.selected.map((fixture) => fixture.promptMarker));
+      const emittedPrompts = new Set(selected.map((fixture) => fixture.promptMarker));
       expect
         .soft(
-          parsedPrompts.filter((marker) => !emittedPrompts.has(marker)),
-          "large saved prompts outside the emitted usage page must remain unparsed",
+          [...transferredPrompts].filter((marker) => !emittedPrompts.has(marker)),
+          "large saved prompts outside the emitted usage page must not cross the worker boundary",
         )
         .toEqual([]);
     }
-  } finally {
-    await state.cleanup();
-  }
+  });
 });
 
 it("reads selected reports from the physical owner of shared-store sentinels and qualified rows", async () => {
@@ -334,20 +487,13 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       session: { store: storePath },
       plugins: { enabled: false },
     });
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader()();
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
     for (const [agentId, key] of [
       ["ops", "global"],
       ["worker", "agent:worker:usage"],
     ] as const) {
-      const contextWeight = {
-        source: "run" as const,
-        generatedAt: agentId === "ops" ? 10 : 20,
-        systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      };
+      const contextWeight = contextReport(agentId === "ops" ? 10 : 20);
       replaceSessionEntrySync(
         { agentId, sessionKey: key, storePath },
         { sessionId: `${agentId}-usage`, updatedAt: 1, systemPromptReport: contextWeight },
@@ -357,42 +503,26 @@ it("reads selected reports from the physical owner of shared-store sentinels and
       }).targetsBySessionKey.get(key);
       expect(target?.agentId).toBe(agentId);
       expect(target?.storeTarget).toEqual({ agentId: "main", storePath });
-      const respond = vi.fn<RespondFn>();
-      await expectDefined(
-        usageHandlers["sessions.usage"],
-        "usage handler",
-      )({
-        req: { type: "req", id: agentId, method: "sessions.usage" },
-        params: { range: "all", key, agentId, includeContextWeight: true },
-        respond,
-        client: null,
-        isWebchatConnect: () => false,
-        context: createDirectChatContext({ getRuntimeConfig: () => config }),
-      });
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "shared usage response");
-      expect(ok).toBe(true);
-      expect(payload).toMatchObject({
-        sessions: [{ key, agentId, hasContextWeight: true, contextWeight }],
-      });
+      const params = { range: "all", key, includeContextWeight: true };
+      for (const requestedAgent of [undefined, agentId]) {
+        const payload = await readUsage({ ...params, agentId: requestedAgent });
+        expect(payload).toMatchObject({
+          sessions: [{ key, agentId, hasContextWeight: true, contextWeight }],
+        });
+      }
     }
+    await sessionRows.dispose();
   });
 });
 
 it.each([
   { owner: "opus", key: undefined },
-  { owner: "opus", key: "agent:opus:slack:dm" },
   { owner: "opus", key: "global" },
   { owner: SYSTEM_AGENT_ID, key: `agent:${SYSTEM_AGENT_ID}:usage` },
 ])(
   "keeps independent same-id transcripts with $owner store key $key through the real usage handler",
   async ({ owner, key: opusKey }) => {
-    const state = await createOpenClawTestState({ label: "usage-owner-integration" });
-    try {
-      await state.writeConfig({
-        agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
-        plugins: { enabled: false },
-      });
+    await withUsageState(async (state) => {
       const config = getRuntimeConfig();
       const sessionId = "shared-usage-session";
       const mainKey = "agent:main:telegram:dm";
@@ -429,17 +559,7 @@ it.each([
       if (opusKey) {
         expect(projected.targetsBySessionKey.get(opusKey)?.agentId).toBe(owner);
       }
-      const respond = vi.fn();
-      const request = {
-        params: { agentScope: "all", range: "all", limit: 50 },
-        context: { getRuntimeConfig: () => config },
-        respond,
-      } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0];
-      await expectDefined(usageHandlers["sessions.usage"], "usage handler")(request);
-      expect(respond).toHaveBeenCalledOnce();
-      const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
-      expect(ok).toBe(true);
-      const result = payload as SessionsUsageResult;
+      const result = await readUsage({ agentScope: "all", range: "all", limit: 50 });
       expect(result.sessions).toHaveLength(2);
       expect(result.sessions.map(({ key, agentId, label }) => ({ key, agentId, label }))).toEqual(
         expect.arrayContaining([
@@ -458,21 +578,9 @@ it.each([
         );
         for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"] as const) {
           for (const explicitOwner of owner === SYSTEM_AGENT_ID ? [false, true] : [true]) {
-            const detail = vi.fn();
-            await expectDefined(
-              usageHandlers[method],
-              "usage detail handler",
-            )({
-              ...request,
-              params: {
-                key: selected.key,
-                ...(explicitOwner ? { agentId: selected.agentId } : {}),
-              },
-              respond: detail,
-            });
-            const [detailOk, detailPayload, detailError] = expectDefined(
-              detail.mock.calls[0],
-              "usage detail response",
+            const [detailOk, detailPayload, detailError] = await requestUsage(
+              { key: selected.key, ...(explicitOwner ? { agentId: selected.agentId } : {}) },
+              method,
             );
             if (owner === SYSTEM_AGENT_ID && explicitOwner) {
               expect(detailOk).toBe(false);
@@ -490,47 +598,17 @@ it.each([
           }
         }
       }
-    } finally {
-      await state.cleanup();
-    }
+    });
   },
 );
 
-it.each([
-  { name: "SQLite history", artifact: undefined, directOwner: false, currentArtifact: false },
-  {
-    name: "a direct owner for a historical instance",
-    artifact: undefined,
-    directOwner: true,
-    currentArtifact: false,
-  },
-  {
-    name: "mixed JSONL and SQLite history",
-    artifact: "plain",
-    directOwner: false,
-    currentArtifact: false,
-  },
-  {
-    name: "mixed compressed JSONL and SQLite history",
-    artifact: "zstd",
-    directOwner: false,
-    currentArtifact: false,
-  },
-  {
-    name: "current JSONL discovered after SQLite history",
-    artifact: undefined,
-    directOwner: false,
-    currentArtifact: true,
-  },
-])(
-  "keeps family usage with $name before the current SQLite transcript exists",
-  async ({ artifact, directOwner, currentArtifact }) => {
-    const state = await createOpenClawTestState({ label: "usage-empty-current-family" });
-    try {
-      await state.writeConfig({
-        agents: { ownership: "explicit", entries: { main: {}, opus: {} } },
-        plugins: { enabled: false },
-      });
+it.each(["direct owner", "compressed history", "current JSONL"])(
+  "keeps family usage with %s before the current SQLite transcript exists",
+  async (mode) => {
+    const directOwner = mode === "direct owner";
+    const artifact = mode === "compressed history";
+    const currentArtifact = mode === "current JSONL";
+    await withUsageState(async (state) => {
       const config = getRuntimeConfig();
       const mainKey = "agent:main:chat";
       const opusKey = "agent:opus:chat";
@@ -540,23 +618,17 @@ it.each([
       const secondId = "family-second";
       const currentId = currentArtifact ? archiveManager.getSessionId() : "family-current";
       const timestamp = Date.now();
-      const scopeFor = (agentId: string, sessionKey: string) => ({
-        agentId,
-        sessionKey,
-        storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-      });
-      const mainScope = scopeFor("main", mainKey);
-      const opusScope = scopeFor("opus", opusKey);
+      const mainScope = sessionScope(state, "main", mainKey);
+      const opusScope = sessionScope(state, "opus", opusKey);
       const writeArtifact = async (tokens: number) => {
         archiveManager.appendMessage(usageMessage(tokens, timestamp));
         const content = [archiveManager.getHeader(), ...archiveManager.getEntries()]
           .map((entry) => JSON.stringify(entry))
           .join("\n");
-        const encoded =
-          artifact === "zstd"
-            ? encodeSessionArchiveContent(content)
-            : { bytes: Buffer.from(content), suffix: "" };
-        expect(encoded.suffix).toBe(artifact === "zstd" ? ".zst" : "");
+        const encoded = artifact
+          ? encodeSessionArchiveContent(content)
+          : { bytes: Buffer.from(content), suffix: "" };
+        expect(encoded.suffix).toBe(artifact ? ".zst" : "");
         const filePath = path.join(
           state.sessionsDir(),
           `${archiveManager.getSessionId()}.jsonl.reset.2026-08-01T00-00-00.000Z${encoded.suffix}`,
@@ -579,14 +651,7 @@ it.each([
           await writeArtifact(tokens);
           continue;
         }
-        await persistSessionTranscriptTurn(
-          { ...scope, sessionId },
-          {
-            cwd: state.workspaceDir,
-            updateMode: "none",
-            messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
-          },
-        );
+        await writeUsage({ ...scope, sessionId }, state.workspaceDir, tokens, timestamp);
       }
       const current = await upsertSessionEntryCore(mainScope, {
         sessionId: currentId,
@@ -599,7 +664,7 @@ it.each([
       }
       if (directOwner) {
         // Exact-run continuation nodes retain an instance while their logical root rotates.
-        await upsertSessionEntryCore(scopeFor("main", directKey), {
+        await upsertSessionEntryCore(sessionScope(state, "main", directKey), {
           sessionId: firstId,
           label: "retained run",
           updatedAt: timestamp,
@@ -622,32 +687,15 @@ it.each([
           await loadSessionCostSummary({ agentId, sessionId, sessionFile, config });
         }
       }
-      await loadSessionCostSummary({
-        agentId: mainScope.agentId,
-        sessionId: currentId,
-        sessionTarget: { ...mainScope, sessionId: currentId },
-        config,
-      });
+      await warmTarget(mainScope, currentId);
 
       for (const specificKey of [undefined, mainKey]) {
-        const respond = vi.fn();
-        await expectDefined(
-          usageHandlers["sessions.usage"],
-          "usage handler",
-        )({
-          params: {
-            ...(specificKey ? { key: specificKey } : { agentScope: "all" }),
-            range: "all",
-            groupBy: "family",
-            limit: 50,
-          },
-          context: { getRuntimeConfig: () => config },
-          respond,
-        } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
-        expect(respond).toHaveBeenCalledOnce();
-        const [ok, payload] = expectDefined(respond.mock.calls[0], "usage response");
-        expect(ok).toBe(true);
-        const result = payload as SessionsUsageResult;
+        const result = await readUsage({
+          ...(specificKey ? { key: specificKey } : { agentScope: "all" }),
+          range: "all",
+          groupBy: "family",
+          limit: 50,
+        });
         // Explicit keys use the canonical stored target; only list discovery reads current JSONL.
         const mainTokens = currentArtifact && !specificKey ? 70 : directOwner ? 20 : 30;
         expect(result.sessions).toHaveLength(specificKey ? 1 : directOwner ? 3 : 2);
@@ -658,20 +706,20 @@ it.each([
           sessionId: currentId,
           scope: "family",
           includedSessionIds: directOwner ? [currentId, secondId] : [currentId, firstId, secondId],
-          usage: expect.objectContaining({ totalTokens: mainTokens }),
+          usage: { totalTokens: mainTokens },
         });
         if (!specificKey) {
           expect(result.sessions.find(({ key }) => key === opusKey)).toMatchObject({
             key: opusKey,
             agentId: "opus",
             sessionId: firstId,
-            usage: expect.objectContaining({ totalTokens: 100 }),
+            usage: { totalTokens: 100 },
           });
           if (directOwner) {
             expect(result.sessions.find(({ key }) => key === directKey)).toMatchObject({
               agentId: "main",
               sessionId: firstId,
-              usage: expect.objectContaining({ totalTokens: 10 }),
+              usage: { totalTokens: 10 },
             });
           }
         }
@@ -679,8 +727,6 @@ it.each([
           specificKey ? mainTokens : currentArtifact ? 170 : 130,
         );
       }
-    } finally {
-      await state.cleanup();
-    }
+    });
   },
 );

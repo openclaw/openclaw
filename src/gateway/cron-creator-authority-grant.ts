@@ -284,16 +284,11 @@ export function revokeCronCreatorAuthorityRunScope(scope: CronCreatorAuthorityRu
   }
 }
 
-/** Consumes one live exact-run grant synchronously at the cron commit boundary. */
-export function consumeCronCreatorAuthorityGrant(
-  grant: CronCreatorAuthorityGrant,
-): CronRuntimeAuthority | undefined {
-  const runId = grant.runId.trim();
-  const token = grant.token.trim();
-  const entry = token ? grantsByToken.get(token) : undefined;
-  if (!entry) {
-    throw expiredAuthorityError();
-  }
+function assertCronCreatorAuthorityGrantCurrent(
+  entry: CronCreatorAuthorityGrantEntry,
+  runId: string,
+  token: string,
+): void {
   const scope = entry.scope;
   const issuerIsCurrent = entry.isCurrent?.() !== false;
   if (
@@ -317,8 +312,28 @@ export function consumeCronCreatorAuthorityGrant(
     }
     throw expiredAuthorityError();
   }
+}
+
+/** Consume once; repeated commit checks retain the original issuer and operation lifetime. */
+export function consumeCronCreatorAuthorityGrant(grant: CronCreatorAuthorityGrant): {
+  authority: CronRuntimeAuthority | undefined;
+  assertCurrent: () => void;
+} {
+  const runId = grant.runId.trim();
+  const token = grant.token.trim();
+  const entry = token ? grantsByToken.get(token) : undefined;
+  if (!entry) {
+    throw expiredAuthorityError();
+  }
+  const assertCurrent = () => assertCronCreatorAuthorityGrantCurrent(entry, runId, token);
+  assertCurrent();
   revokeCronCreatorAuthorityGrant(token);
-  return entry.runtimeAuthority ? cloneCronRuntimeAuthority(entry.runtimeAuthority) : undefined;
+  return {
+    authority: entry.runtimeAuthority
+      ? cloneCronRuntimeAuthority(entry.runtimeAuthority)
+      : undefined,
+    assertCurrent,
+  };
 }
 
 function expiredManagementError(): TypeError {

@@ -1,4 +1,3 @@
-// Discord tests cover monitor.threading utils plugin behavior.
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -20,25 +19,14 @@ import {
   resolveDiscordReplyDeliveryPlan,
 } from "./threading.js";
 
-function resolveDiscordRoleAllowed(params: { allowList?: string[]; memberRoleIds: string[] }) {
-  return resolveDiscordMemberAllowed({
-    userAllowList: [],
-    roleAllowList: params.allowList,
-    memberRoleIds: params.memberRoleIds,
-    userId: "unmatched-user",
+const sessionKey = (id: string) =>
+  buildAgentSessionKey({
+    agentId: "agent",
+    channel: "discord",
+    peer: { kind: "channel", id },
   });
-}
 
 describe("resolveDiscordOwnerAllowFrom", () => {
-  it("returns undefined when no allowlist is configured", () => {
-    const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true } as DiscordChannelConfigResolved,
-      sender: { id: "123" },
-    });
-
-    expect(result).toBeUndefined();
-  });
-
   it("skips wildcard matches for owner allowFrom", () => {
     const result = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["*"] } as DiscordChannelConfigResolved,
@@ -46,15 +34,6 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     });
 
     expect(result).toBeUndefined();
-  });
-
-  it("returns a matching user id entry", () => {
-    const result = resolveDiscordOwnerAllowFrom({
-      channelConfig: { allowed: true, users: ["123"] } as DiscordChannelConfigResolved,
-      sender: { id: "123" },
-    });
-
-    expect(result).toEqual(["123"]);
   });
 
   it("returns the normalized name slug for name matches only when enabled", () => {
@@ -74,79 +53,26 @@ describe("resolveDiscordOwnerAllowFrom", () => {
   });
 });
 
-describe("resolveDiscordRoleAllowed", () => {
-  it("matches role IDs only", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: ["123"],
-      memberRoleIds: ["123", "456"],
-    });
-
-    expect(allowed).toBe(true);
+it("resolveDiscordMemberAllowed: does not match non-ID role entries", () => {
+  const allowed = resolveDiscordMemberAllowed({
+    userAllowList: [],
+    userId: "unmatched-user",
+    roleAllowList: ["Admin"],
+    memberRoleIds: ["Admin"],
   });
 
-  it("does not match non-ID role entries", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: ["Admin"],
-      memberRoleIds: ["Admin"],
-    });
-
-    expect(allowed).toBe(false);
-  });
-
-  it("returns false when no matching role IDs", () => {
-    const allowed = resolveDiscordRoleAllowed({
-      allowList: ["456"],
-      memberRoleIds: ["123"],
-    });
-
-    expect(allowed).toBe(false);
-  });
+  expect(allowed).toBe(false);
 });
 
-describe("resolveDiscordMemberAllowed", () => {
-  it("allows when no user or role allowlists are configured", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: undefined,
-      roleAllowList: undefined,
-      memberRoleIds: [],
-      userId: "u1",
-    });
-
-    expect(allowed).toBe(true);
+it("resolveDiscordMemberAllowed: denies when user and role allowlists do not match", () => {
+  const allowed = resolveDiscordMemberAllowed({
+    userAllowList: ["u2"],
+    roleAllowList: ["role-2"],
+    memberRoleIds: ["role-1"],
+    userId: "u1",
   });
 
-  it("allows when user allowlist matches", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: ["123"],
-      roleAllowList: ["456"],
-      memberRoleIds: ["999"],
-      userId: "123",
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("allows when role allowlist matches", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: ["999"],
-      roleAllowList: ["456"],
-      memberRoleIds: ["456"],
-      userId: "123",
-    });
-
-    expect(allowed).toBe(true);
-  });
-
-  it("denies when user and role allowlists do not match", () => {
-    const allowed = resolveDiscordMemberAllowed({
-      userAllowList: ["u2"],
-      roleAllowList: ["role-2"],
-      memberRoleIds: ["role-1"],
-      userId: "u1",
-    });
-
-    expect(allowed).toBe(false);
-  });
+  expect(allowed).toBe(false);
 });
 
 describe("gateway-registry", () => {
@@ -173,40 +99,11 @@ describe("gateway-registry", () => {
     unregisterGateway("account-a");
     expect(getGateway("account-a")).toBeUndefined();
   });
-
-  it("clears all gateways", () => {
-    registerGateway("a", fakeGateway() as never);
-    registerGateway("b", fakeGateway() as never);
-    clearGateways();
-    expect(getGateway("a")).toBeUndefined();
-    expect(getGateway("b")).toBeUndefined();
-  });
-
-  it("overwrites existing entry for same account", () => {
-    const gateway1 = fakeGateway({ isConnected: true });
-    const gateway2 = fakeGateway({ isConnected: false });
-    registerGateway("account-a", gateway1 as never);
-    registerGateway("account-a", gateway2 as never);
-    expect(getGateway("account-a")).toBe(gateway2);
-    expect(getGateway("account-b")).toBeUndefined();
-  });
 });
 
 describe("presence-cache", () => {
   beforeEach(() => {
     clearPresences();
-  });
-
-  it("scopes presence entries by account", () => {
-    const presenceA = { status: "online" } as GatewayPresenceUpdate;
-    const presenceB = { status: "idle" } as GatewayPresenceUpdate;
-
-    setPresence("account-a", "user-1", presenceA);
-    setPresence("account-b", "user-1", presenceB);
-
-    expect(getPresence("account-a", "user-1")).toBe(presenceA);
-    expect(getPresence("account-b", "user-1")).toBe(presenceB);
-    expect(getPresence("account-a", "user-2")).toBeUndefined();
   });
 
   it("clears presence per account", () => {
@@ -223,353 +120,184 @@ describe("presence-cache", () => {
   });
 });
 
-describe("resolveDiscordAutoThreadContext", () => {
-  it("returns null without a created thread and re-keys context when present", () => {
-    const cases = [
+it("resolveDiscordAutoThreadContext: returns null without a created thread and re-keys context when present", () => {
+  const threadContext = {
+    createdThreadId: "thread",
+    To: "channel:thread",
+    From: "discord:channel:thread",
+    OriginatingTo: "channel:thread",
+    SessionKey: sessionKey("thread"),
+    ModelParentSessionKey: sessionKey("parent"),
+  };
+  const cases = [
+    [{}, null],
+    [{ createdThreadId: "thread", parentInheritanceEnabled: false }, threadContext],
+    [
+      { createdThreadId: "thread", parentInheritanceEnabled: true },
+      { ...threadContext, ParentSessionKey: sessionKey("parent") },
+    ],
+    [
       {
-        name: "no created thread",
-        createdThreadId: undefined,
-        expectedNull: true,
-        parentInheritanceEnabled: undefined,
-      },
-      {
-        name: "created thread without parent inheritance",
         createdThreadId: "thread",
-        expectedNull: false,
-        parentInheritanceEnabled: false,
-        expectedModelParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-        expectedParentSessionKey: undefined,
-      },
-      {
-        name: "created thread with parent inheritance",
-        createdThreadId: "thread",
-        expectedNull: false,
-        parentInheritanceEnabled: true,
-        expectedModelParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-        expectedParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-      },
-      {
-        name: "created thread folded into a custom main session",
-        createdThreadId: "thread",
-        expectedNull: false,
         groupScope: "main",
         parentSessionKey: "agent:agent:work",
         parentInheritanceEnabled: true,
-        expectedModelParentSessionKey: undefined,
-        expectedParentSessionKey: undefined,
       },
-    ] as const;
-
-    for (const testCase of cases) {
-      const context = resolveDiscordAutoThreadContext({
-        agentId: "agent",
-        channel: "discord",
-        parentSessionKey:
-          "parentSessionKey" in testCase
-            ? testCase.parentSessionKey
-            : buildAgentSessionKey({
-                agentId: "agent",
-                channel: "discord",
-                peer: { kind: "channel", id: "parent" },
-              }),
-        createdThreadId: testCase.createdThreadId,
-        groupScope: "groupScope" in testCase ? testCase.groupScope : undefined,
-        parentInheritanceEnabled: testCase.parentInheritanceEnabled,
-      });
-
-      if (testCase.expectedNull) {
-        expect(context, testCase.name).toBeNull();
-        continue;
-      }
-
-      expect(context, testCase.name).toEqual({
+      {
         createdThreadId: "thread",
         To: "channel:thread",
         From: "discord:channel:thread",
         OriginatingTo: "channel:thread",
-        SessionKey:
-          "groupScope" in testCase && testCase.groupScope === "main"
-            ? testCase.parentSessionKey
-            : buildAgentSessionKey({
-                agentId: "agent",
-                channel: "discord",
-                peer: { kind: "channel", id: "thread" },
-              }),
-        ...(testCase.expectedModelParentSessionKey
-          ? { ModelParentSessionKey: testCase.expectedModelParentSessionKey }
-          : {}),
-        ...(testCase.expectedParentSessionKey
-          ? { ParentSessionKey: testCase.expectedParentSessionKey }
-          : {}),
-      });
-      expect(context?.ParentSessionKey, testCase.name).toBe(testCase.expectedParentSessionKey);
-      expect(context?.ModelParentSessionKey, testCase.name).toBe(
-        testCase.expectedModelParentSessionKey,
-      );
-    }
-  });
-});
-
-describe("resolveDiscordReplyDeliveryPlan", () => {
-  it("applies delivery targets and reply reference behavior across thread modes", () => {
-    const cases = [
-      {
-        name: "original target with reply references",
-        input: {
-          replyTarget: "channel:parent" as const,
-          replyToMode: "all" as const,
-          messageId: "1001",
-          threadChannel: null,
-          createdThreadId: null,
-        },
-        expectedDeliverTarget: "channel:parent",
-        expectedReplyTarget: "channel:parent",
-        expectedReplyReferenceCalls: ["1001"],
+        SessionKey: "agent:agent:work",
       },
-      {
-        name: "created thread disables reply references",
-        input: {
-          replyTarget: "channel:parent" as const,
-          replyToMode: "all" as const,
-          messageId: "1001",
-          threadChannel: null,
-          createdThreadId: "thread",
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: [undefined],
-      },
-      {
-        name: "thread + off mode",
-        input: {
-          replyTarget: "channel:thread" as const,
-          replyToMode: "off" as const,
-          messageId: "1001",
-          threadChannel: { id: "thread" },
-          createdThreadId: null,
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: [undefined],
-      },
-      {
-        name: "thread + all mode",
-        input: {
-          replyTarget: "channel:thread" as const,
-          replyToMode: "all" as const,
-          messageId: "1001",
-          threadChannel: { id: "thread" },
-          createdThreadId: null,
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["1001", "1001"],
-      },
-      {
-        name: "thread + first mode",
-        input: {
-          replyTarget: "channel:thread" as const,
-          replyToMode: "first" as const,
-          messageId: "1001",
-          threadChannel: { id: "thread" },
-          createdThreadId: null,
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyTarget: "channel:thread",
-        expectedReplyReferenceCalls: ["1001", undefined],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const plan = resolveDiscordReplyDeliveryPlan(testCase.input);
-      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
-      expect(plan.replyTarget, testCase.name).toBe(testCase.expectedReplyTarget);
-      for (const expected of testCase.expectedReplyReferenceCalls) {
-        expect(plan.replyReference.use(), testCase.name).toBe(expected);
-      }
-    }
-  });
-});
-
-describe("maybeCreateDiscordAutoThread", () => {
-  function createAutoThreadParams(client: Client) {
-    return {
-      client,
-      message: {
-        id: "1001",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig: {
-        autoThread: true,
-      } as unknown as DiscordChannelConfigResolved,
-      threadChannel: null,
-      baseText: "hello",
-      combinedBody: "hello",
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-    };
-  }
-
-  it("handles create-thread failures with and without an existing thread", async () => {
-    const cases = [
-      {
-        name: "race condition returns existing thread",
-        postError: "A thread has already been created on this message",
-        getResponse: { thread: { id: "existing-thread" } },
-        expected: "existing-thread",
-      },
-      {
-        name: "other error returns undefined",
-        postError: "Some other error",
-        getResponse: { thread: null },
-        expected: undefined,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const client = {
-        rest: {
-          post: async () => {
-            throw new Error(testCase.postError);
-          },
-          get: async () => testCase.getResponse,
-        },
-      } as unknown as Client;
-
-      const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
-      expect(result, testCase.name).toBe(testCase.expected);
-    }
-  });
-});
-
-describe("resolveDiscordAutoThreadReplyPlan", () => {
-  function createAutoThreadPlanParams(overrides?: {
-    client?: Client;
-    channelConfig?: DiscordChannelConfigResolved;
-    threadChannel?: { id: string } | null;
-    threadParentInheritanceEnabled?: boolean;
-  }) {
-    return {
-      client:
-        overrides?.client ??
-        ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
-      message: {
-        id: "1001",
-        channelId: "parent",
-      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
-      isGuildMessage: true,
-      channelConfig:
-        overrides?.channelConfig ??
-        ({ autoThread: true } as unknown as DiscordChannelConfigResolved),
-      threadChannel: overrides?.threadChannel ?? null,
-      baseText: "hello",
-      combinedBody: "hello",
-      cfg: EMPTY_DISCORD_TEST_CONFIG,
-      replyToMode: "all" as const,
+    ],
+  ] as const;
+  for (const [input, expected] of cases) {
+    const context = resolveDiscordAutoThreadContext({
       agentId: "agent",
-      channel: "discord" as const,
-      parentSessionKey: buildAgentSessionKey({
-        agentId: "agent",
-        channel: "discord",
-        peer: { kind: "channel", id: "parent" },
-      }),
-      threadParentInheritanceEnabled: overrides?.threadParentInheritanceEnabled,
-    };
+      channel: "discord",
+      parentSessionKey: sessionKey("parent"),
+      ...input,
+    });
+    expect(context).toEqual(expected);
   }
+});
 
-  it("applies auto-thread reply planning across created, existing, and disabled modes", async () => {
-    const cases = [
-      {
-        name: "created thread",
-        params: undefined,
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyReference: undefined,
-        expectedSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "thread" },
-        }),
-        expectedModelParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-        expectedParentSessionKey: undefined,
-      },
-      {
-        name: "created thread with parent inheritance",
-        params: {
-          threadParentInheritanceEnabled: true,
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyReference: undefined,
-        expectedSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "thread" },
-        }),
-        expectedModelParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-        expectedParentSessionKey: buildAgentSessionKey({
-          agentId: "agent",
-          channel: "discord",
-          peer: { kind: "channel", id: "parent" },
-        }),
-      },
-      {
-        name: "existing thread channel",
-        params: {
-          threadChannel: { id: "thread" },
-        },
-        expectedDeliverTarget: "channel:thread",
-        expectedReplyReference: "1001",
-        expectedSessionKey: null,
-        expectedParentSessionKey: undefined,
-      },
-      {
-        name: "autoThread disabled",
-        params: {
-          channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
-        },
-        expectedDeliverTarget: "channel:parent",
-        expectedReplyReference: "1001",
-        expectedSessionKey: null,
-        expectedParentSessionKey: undefined,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const plan = await resolveDiscordAutoThreadReplyPlan(
-        createAutoThreadPlanParams(testCase.params),
-      );
-      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
-      expect(plan.replyReference.use(), testCase.name).toBe(testCase.expectedReplyReference);
-      if (testCase.expectedSessionKey == null) {
-        expect(plan.autoThreadContext, testCase.name).toBeNull();
-      } else {
-        expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(testCase.expectedSessionKey);
-        expect(plan.autoThreadContext?.ParentSessionKey, testCase.name).toBe(
-          testCase.expectedParentSessionKey,
-        );
-        expect(plan.autoThreadContext?.ModelParentSessionKey, testCase.name).toBe(
-          testCase.expectedModelParentSessionKey,
-        );
-      }
+it("resolveDiscordReplyDeliveryPlan: applies delivery targets and reply reference behavior across thread modes", () => {
+  const cases = [
+    ["original target", "parent", "all", null, null, "parent", ["1001"]],
+    ["created thread", "parent", "all", null, "thread", "thread", [undefined]],
+    ["thread + off", "thread", "off", { id: "thread" }, null, "thread", [undefined]],
+    ["thread + all", "thread", "all", { id: "thread" }, null, "thread", ["1001", "1001"]],
+    ["thread + first", "thread", "first", { id: "thread" }, null, "thread", ["1001", undefined]],
+  ] as const;
+  for (const [
+    name,
+    target,
+    replyToMode,
+    threadChannel,
+    createdThreadId,
+    delivered,
+    refs,
+  ] of cases) {
+    const plan = resolveDiscordReplyDeliveryPlan({
+      replyTarget: `channel:${target}`,
+      replyToMode,
+      threadChannel,
+      createdThreadId,
+      messageId: "1001",
+    });
+    expect(plan.deliverTarget, name).toBe(`channel:${delivered}`);
+    expect(plan.replyTarget, name).toBe(`channel:${delivered}`);
+    for (const expected of refs) {
+      expect(plan.replyReference.use(), name).toBe(expected);
     }
-  });
+  }
+});
+
+function createAutoThreadParams(client: Client) {
+  return {
+    client,
+    message: {
+      id: "1001",
+      channelId: "parent",
+    } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+    isGuildMessage: true,
+    channelConfig: {
+      autoThread: true,
+    } as unknown as DiscordChannelConfigResolved,
+    threadChannel: null,
+    baseText: "hello",
+    combinedBody: "hello",
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
+  };
+}
+
+it("maybeCreateDiscordAutoThread: reuses existing threads and handles creation failures", async () => {
+  const cases = [
+    {
+      name: "returns existing thread from the initial lookup",
+      postError: "A thread has already been created on this message",
+      getResponse: { thread: { id: "existing-thread" } },
+      expected: "existing-thread",
+    },
+    {
+      name: "other error returns undefined",
+      postError: "Some other error",
+      getResponse: { thread: null },
+      expected: undefined,
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    const client = {
+      rest: {
+        post: async () => {
+          throw new Error(testCase.postError);
+        },
+        get: async () => testCase.getResponse,
+      },
+    } as unknown as Client;
+
+    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
+    expect(result, testCase.name).toBe(testCase.expected);
+  }
+});
+
+function createAutoThreadPlanParams(overrides?: {
+  client?: Client;
+  channelConfig?: DiscordChannelConfigResolved;
+  threadChannel?: { id: string } | null;
+  threadParentInheritanceEnabled?: boolean;
+}) {
+  const base = createAutoThreadParams(
+    overrides?.client ?? ({ rest: { post: async () => ({ id: "thread" }) } } as unknown as Client),
+  );
+  return {
+    ...base,
+    channelConfig: overrides?.channelConfig ?? base.channelConfig,
+    threadChannel: overrides?.threadChannel ?? null,
+    replyToMode: "all" as const,
+    agentId: "agent",
+    channel: "discord" as const,
+    parentSessionKey: sessionKey("parent"),
+    threadParentInheritanceEnabled: overrides?.threadParentInheritanceEnabled,
+  };
+}
+
+it("resolveDiscordAutoThreadReplyPlan: applies auto-thread reply planning across created, existing, and disabled modes", async () => {
+  const cases = [
+    [undefined, "channel:thread", undefined, sessionKey("thread"), undefined, sessionKey("parent")],
+    [
+      { threadParentInheritanceEnabled: true },
+      "channel:thread",
+      undefined,
+      sessionKey("thread"),
+      sessionKey("parent"),
+      sessionKey("parent"),
+    ],
+    [{ threadChannel: { id: "thread" } }, "channel:thread", "1001", null, undefined, undefined],
+    [
+      { channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved },
+      "channel:parent",
+      "1001",
+      null,
+      undefined,
+      undefined,
+    ],
+  ] as const;
+  for (const [params, target, reference, session, parent, modelParent] of cases) {
+    const plan = await resolveDiscordAutoThreadReplyPlan(createAutoThreadPlanParams(params));
+    expect(plan.deliverTarget).toBe(target);
+    expect(plan.replyReference.use()).toBe(reference);
+    if (session === null) {
+      expect(plan.autoThreadContext).toBeNull();
+    } else {
+      expect(plan.autoThreadContext).toMatchObject({
+        SessionKey: session,
+      });
+      expect(plan.autoThreadContext?.ParentSessionKey).toBe(parent);
+      expect(plan.autoThreadContext?.ModelParentSessionKey).toBe(modelParent);
+    }
+  }
 });

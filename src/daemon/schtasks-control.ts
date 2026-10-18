@@ -2,22 +2,29 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
+import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "./program-args.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   readScheduledTaskCommand,
   resolveTaskName,
   resolveTaskScriptPath,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
 import {
   describeUnverifiedPortListeners,
+  waitForGatewayPortRelease,
+} from "./schtasks-port-diagnostics.js";
+import {
   findInstalledProcessPid,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
+} from "./schtasks-process-snapshot.js";
+import {
   resolveScheduledTaskCommandPort,
   resolveScheduledTaskGatewayContext,
   resolveScheduledTaskOwnedGatewayPids,
@@ -25,7 +32,6 @@ import {
   terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
-  waitForGatewayPortRelease,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
@@ -44,10 +50,17 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
-import { probeScheduledTaskExists, type ScheduledTaskSettlement } from "./schtasks-state-probe.js";
+import {
+  probeScheduledTaskExists,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+  type ScheduledTaskSettlement,
+} from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
+import { writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import { fingerprintGatewayServiceDefinition } from "./service-rebind.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -60,36 +73,29 @@ type ScheduledTaskRestartResult = GatewayServiceRestartResult & {
 };
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
-function runtimeSignature(runtime: Awaited<ReturnType<typeof readScheduledTaskRuntime>> | null) {
-  return [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
-    .filter(Boolean)
-    .join("|");
-}
-
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<boolean> {
-  const readLaunchObservation = async (
-    timeoutMs?: number,
-  ): Promise<{
-    state: "running" | "not-yet-run" | "stopped-success" | "other";
-    signature: string;
-  }> => {
+  const readLaunchObservation = async (timeoutMs?: number) => {
     const runtime = await readScheduledTaskRuntime(params.env, { timeoutMs }).catch(() => null);
+    let state: "running" | "not-yet-run" | "stopped-success" | "other" = "other";
     if (runtime?.status === "running") {
-      return { state: "running", signature: runtimeSignature(runtime) };
+      state = "running";
+    } else if (runtime?.status === "stopped") {
+      // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
+      if (runtime.lastRunResult === "267011") {
+        state = "not-yet-run";
+      } else if (runtime.lastRunResult === "0") {
+        state = "stopped-success";
+      }
     }
-    if (runtime?.status !== "stopped") {
-      return { state: "other", signature: runtimeSignature(runtime) };
-    }
-    // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.
-    if (runtime.lastRunResult === "267011") {
-      return { state: "not-yet-run", signature: runtimeSignature(runtime) };
-    }
-    return runtime.lastRunResult === "0"
-      ? { state: "stopped-success", signature: runtimeSignature(runtime) }
-      : { state: "other", signature: runtimeSignature(runtime) };
+    return {
+      state,
+      signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+        .filter(Boolean)
+        .join("|"),
+    };
   };
 
   const hasLaunchEvidence = async (): Promise<boolean> => {
@@ -276,8 +282,8 @@ export async function restoreScheduledTaskDefinition(params: {
 async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
-  beforeMutation?: () => Promise<void>;
-  assertCurrent?: () => void;
+  beforeMutation?: (phase?: "restore") => Promise<void>;
+  assertCurrent?: (phase?: "restore") => void;
   restoreOnFailure?: boolean;
 }): Promise<boolean> {
   const taskName = resolveTaskName(params.env);
@@ -306,14 +312,15 @@ async function changeScheduledTaskEnabledState(params: {
   const result = await execSchtasks(["/Change", "/TN", taskName, action]);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
-    const changeError = new Error(
-      `schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`,
-    );
+    const changeError = new Error(`schtasks ${action.slice(1).toLowerCase()} failed: ${detail}`);
+    if (/access is denied|0x80070005/iu.test(detail)) {
+      throw Object.assign(changeError, { code: "EACCES" });
+    }
     if (!params.enabled && params.restoreOnFailure !== false) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {
-        await params.beforeMutation?.();
-        params.assertCurrent?.();
+        await params.beforeMutation?.("restore");
+        params.assertCurrent?.("restore");
         const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
         if (restore.code !== 0) {
           const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
@@ -335,8 +342,8 @@ async function changeScheduledTaskEnabledState(params: {
 export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: {
-    beforeMutation?: () => Promise<void>;
-    assertCurrent?: () => void;
+    beforeMutation?: (phase?: "restore") => Promise<void>;
+    assertCurrent?: (phase?: "restore") => void;
     restoreOnFailure?: boolean;
   },
 ): Promise<boolean> {
@@ -346,9 +353,9 @@ export async function suspendScheduledTaskAutoStartForUpdate(
       env,
       enabled: false,
       ...options,
-      assertCurrent: () => {
+      assertCurrent: (phase) => {
         assertNative();
-        assertCaller?.();
+        assertCaller?.(phase);
       },
     }),
   );
@@ -406,18 +413,21 @@ export async function stopScheduledTask(params: GatewayServiceControlArgs): Prom
   );
 }
 
-async function stopRegisteredScheduledTask({
+export async function stopRegisteredScheduledTask({
   env,
   stdout,
   assertCurrent,
+  beforeMutation,
   warn,
   onEndMutation,
+  onProcessStopped,
   restart = false,
   onSettlement,
   onRecovery,
 }: GatewayServiceControlArgs & {
   env: GatewayServiceEnv;
   onEndMutation?: () => void;
+  onProcessStopped?: () => void;
   restart?: boolean;
   onSettlement?: (fact: ScheduledTaskSettlement) => void;
   onRecovery?: () => void;
@@ -433,10 +443,12 @@ async function stopRegisteredScheduledTask({
     {
       warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
       onStopped: onEndMutation,
+      beforeMutation,
       restart,
       onSettlement,
       onRecovery,
       end: async () => {
+        await beforeMutation?.();
         assertCurrent?.();
         const res = await execSchtasks(["/End", "/TN", taskName]);
         if (!restart && res.code !== 0 && !isScheduledTaskDefinitelyNotRunning(taskName)) {
@@ -448,13 +460,18 @@ async function stopRegisteredScheduledTask({
       },
     },
   );
+  if (terminated?.length) {
+    onProcessStopped?.();
+  }
   if (!manageGatewayPort) {
-    await terminateScheduledTaskNodeHost(env, assertCurrent);
-    await terminateInstalledStartupRuntime(env, assertCurrent);
+    if ((await terminateScheduledTaskNodeHost(env, assertCurrent, beforeMutation)).length) {
+      onProcessStopped?.();
+    }
+    await terminateInstalledStartupRuntime(env, assertCurrent, beforeMutation);
   }
   if (terminated !== null && stopPort) {
     const probeHosts = stopContext?.probeHosts ?? [];
-    if (!(await waitForGatewayPortRelease(stopPort, 5_000, { probeHosts }))) {
+    if (!(await waitForGatewayPortRelease(stopPort, probeHosts))) {
       const listenerDetails = await describeUnverifiedPortListeners(stopPort, probeHosts);
       throw new Error(
         `gateway port ${stopPort} is still busy ${restart ? "before restart" : "after stop"}; remaining listener ownership could not be verified.${listenerDetails}`,
@@ -488,6 +505,84 @@ export async function startScheduledTask({
     return;
   }
   const taskName = resolveTaskName(effectiveEnv);
+  const policy = preserveAutoStart ? null : probeScheduledTaskState(taskName);
+  if (policy?.status === "unknown") {
+    throw new ScheduledTaskInspectionError(policy);
+  }
+  if (policy?.status === "missing") {
+    throw new Error("Selected Scheduled Task registration is unavailable.");
+  }
+  if (policy?.status === "found" && policy.enabled === false) {
+    const serviceKind = shouldManageGatewayListenerPort(effectiveEnv) ? "gateway" : "node";
+    const readSelectedCommand = async () => {
+      const paths: string[] = [];
+      const command = await readScheduledTaskCommand(effectiveEnv, {
+        requireEffective: true,
+        requireLoaded: true,
+        onLauncherContent: (_content, sourcePath) => paths.push(sourcePath),
+      });
+      if (!command) {
+        throw new Error("Selected Scheduled Task command is unavailable; refusing to enable it.");
+      }
+      const classified = classifyOpenClawArgv(command.programArguments, {
+        command: serviceKind,
+        cwd: command.workingDirectory,
+        requirePackageIdentity: true,
+      });
+      if (classified.kind === "openclaw" && classified.packageIdentity) {
+        paths.push(
+          classified.packageIdentity.entrypoint,
+          path.join(classified.packageIdentity.root, "package.json"),
+        );
+      } else {
+        // Installed wrappers carry explicit operator intent in the launcher, not the caller's shell.
+        const wrapper = resolveEnvironmentValue(
+          command.environment,
+          OPENCLAW_WRAPPER_ENV_KEY,
+          "win32",
+        )?.trim();
+        const executable = command.programArguments[0] ?? "";
+        const selectedCommand = getRootOptionAwareCommandPath(
+          ["node", ...command.programArguments],
+          1,
+        )[0];
+        if (
+          !wrapper ||
+          !path.win32.isAbsolute(wrapper) ||
+          path.win32.parse(wrapper).root.length === 1 ||
+          path.win32.normalize(wrapper).toLowerCase() !==
+            path.win32.normalize(executable).toLowerCase() ||
+          selectedCommand !== serviceKind
+        ) {
+          throw new Error(
+            "Selected Scheduled Task is not the requested OpenClaw service; refusing to enable it.",
+          );
+        }
+        await resolveOpenClawWrapperPath(wrapper);
+        paths.push(wrapper);
+      }
+      // Stronger local start evidence must not change old drivers' serialized command fingerprints.
+      return {
+        ...command,
+        definitionPaths: [...new Set([...(command.definitionPaths ?? []), ...paths])],
+      };
+    };
+    const before = await fingerprintGatewayServiceDefinition(await readSelectedCommand());
+    const assertSelected = async () => {
+      if ((await fingerprintGatewayServiceDefinition(await readSelectedCommand())) !== before) {
+        throw new Error("Selected Scheduled Task command changed before start.");
+      }
+      assertCurrent?.();
+    };
+    await changeScheduledTaskEnabledState({
+      env: effectiveEnv,
+      enabled: true,
+      beforeMutation: assertSelected,
+      assertCurrent,
+    });
+    reportMutation("enable");
+    await assertSelected();
+  }
   await runScheduledTaskOrThrow({
     taskName,
     assertCurrent,
@@ -539,9 +634,9 @@ export async function restartRegisteredScheduledTask(params: {
       );
     }
     if (replacementRuntime.status === "running" && replacementRuntime.pid) {
-      await terminateGatewayProcessTree(replacementRuntime.pid, 300, params.assertCurrent);
+      await terminateGatewayProcessTree(replacementRuntime.pid, params.assertCurrent);
     }
-    if (port && !(await waitForGatewayPortRelease(port, 5_000, { probeHosts }))) {
+    if (port && !(await waitForGatewayPortRelease(port, probeHosts))) {
       throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
     }
   }
@@ -578,7 +673,7 @@ export async function restartRegisteredScheduledTask(params: {
         () => null,
       );
       if (failedRuntime?.status === "running" && failedRuntime.pid) {
-        await terminateGatewayProcessTree(failedRuntime.pid, 300, params.assertCurrent);
+        await terminateGatewayProcessTree(failedRuntime.pid, params.assertCurrent);
       }
       throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
     }

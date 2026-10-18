@@ -216,7 +216,7 @@ it(
               model: { primary: "openrouter/google/gemini-encrypted-fixture" },
               thinkingDefault: "off",
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           models: {
             mode: "replace",

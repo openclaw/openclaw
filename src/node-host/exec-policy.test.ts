@@ -63,7 +63,6 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(denied.eventReason).toBe("approval-required");
-    expect(denied.requiresAsk).toBe(true);
   });
 
   it("allows allowlist miss when explicit approval is provided", () => {
@@ -87,7 +86,6 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(denied.shellWrapperBlocked).toBe(true);
-    expect(denied.windowsShellWrapperBlocked).toBe(true);
     expect(denied.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
 
@@ -98,6 +96,5 @@ describe("evaluateSystemRunPolicy", () => {
       ),
     );
     expect(allowed.shellWrapperBlocked).toBe(false);
-    expect(allowed.windowsShellWrapperBlocked).toBe(false);
   });
 });

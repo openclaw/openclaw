@@ -1,4 +1,5 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -15,6 +16,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -40,12 +42,8 @@ const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
 );
 
-function positiveInteger(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
 function truncateText(value: string, maxLength: number | undefined): string {
-  const limit = positiveInteger(maxLength);
+  const limit = asPositiveInteger(maxLength);
   return limit ? truncateCodePoints(value, limit) : value;
 }
 
@@ -64,7 +62,7 @@ function truncateUtf8Bytes(value: string, limit: number): string {
 }
 
 function truncatePresentationText(value: string, limits: TextLimits | undefined): string {
-  const limit = positiveInteger(limits?.maxLength);
+  const limit = asPositiveInteger(limits?.maxLength);
   if (!limit) {
     return value;
   }
@@ -78,7 +76,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
 }
 
 function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
-  const limit = positiveInteger(limits?.maxLength);
+  const limit = asPositiveInteger(limits?.maxLength);
   if (!limit || truncatePresentationText(value, limits) === value) {
     return [value];
   }
@@ -117,7 +115,7 @@ function presentationTextBlocks(params: {
 }
 
 function fitsByteLimit(value: string | undefined, maxBytes: number | undefined): boolean {
-  const limit = positiveInteger(maxBytes);
+  const limit = asPositiveInteger(maxBytes);
   return !value || !limit || Buffer.byteLength(value, "utf8") <= limit;
 }
 
@@ -141,9 +139,9 @@ function fallbackListBlocks(params: {
 
 function createActionBudget(limits: ActionLimits | undefined): ActionBudget {
   return {
-    remainingActions: positiveInteger(limits?.maxActions),
-    remainingRows: positiveInteger(limits?.maxRows),
-    maxActionsPerRow: positiveInteger(limits?.maxActionsPerRow),
+    remainingActions: asPositiveInteger(limits?.maxActions),
+    remainingRows: asPositiveInteger(limits?.maxRows),
+    maxActionsPerRow: asPositiveInteger(limits?.maxActionsPerRow),
   };
 }
 
@@ -161,7 +159,7 @@ function buttonCapacity(budget: ActionBudget): number | undefined {
   return budget.remainingActions ?? rowCapacity;
 }
 
-function consumeButtonBudget(budget: ActionBudget, count: number): void {
+function consumeActionBudget(budget: ActionBudget, count = 1, actionsPerRow = 1): void {
   if (count <= 0) {
     return;
   }
@@ -169,37 +167,12 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
     budget.remainingActions = Math.max(0, budget.remainingActions - count);
   }
   if (budget.remainingRows !== undefined) {
-    const perRow = budget.maxActionsPerRow ?? count;
-    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / perRow));
+    budget.remainingRows = Math.max(0, budget.remainingRows - Math.ceil(count / actionsPerRow));
   }
-}
-
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
 }
 
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
-}
-
-function consumeSelectBudget(budget: ActionBudget, count = 1): void {
-  if (budget.remainingActions !== undefined) {
-    budget.remainingActions = Math.max(0, budget.remainingActions - count);
-  }
-  if (budget.remainingRows !== undefined) {
-    budget.remainingRows = Math.max(0, budget.remainingRows - count);
-  }
 }
 
 function adaptControl<Control extends MessagePresentationButton | MessagePresentationOption>(
@@ -267,7 +240,7 @@ function adaptButtonsBlock(
   const droppedLabels = candidates
     .filter((candidate) => !candidate.adapted || !selected.has(candidate))
     .map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original));
-  consumeButtonBudget(budget, buttons.length);
+  consumeActionBudget(budget, buttons.length, budget.maxActionsPerRow ?? buttons.length);
   const fallback = fallbackListBlocks({
     blockType: fallbackBlockType,
     heading: "Actions",
@@ -278,10 +251,9 @@ function adaptButtonsBlock(
     return fallback;
   }
   return [
-    ...chunkButtons(buttons, limits?.maxActionsPerRow).map((row): MessagePresentationBlock => ({
-      type: "buttons",
-      buttons: row,
-    })),
+    ...chunkItems(buttons, asPositiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
     ...fallback,
   ];
 }
@@ -308,7 +280,7 @@ function adaptSelectBlock(
     (candidate): candidate is SelectCandidate & { adapted: MessagePresentationOption } =>
       Boolean(candidate.adapted),
   );
-  const maxOptions = positiveInteger(limits?.maxOptions);
+  const maxOptions = asPositiveInteger(limits?.maxOptions);
   const selectedCandidates = maxOptions
     ? renderableCandidates.slice(0, maxOptions)
     : renderableCandidates;
@@ -327,7 +299,7 @@ function adaptSelectBlock(
   if (!canRenderSelect) {
     return fallback;
   }
-  consumeSelectBudget(budget);
+  consumeActionBudget(budget);
   return [
     {
       type: "select",
@@ -368,7 +340,7 @@ function createGlobalButtonSelection(params: {
     return undefined;
   }
   const reservationBudget = createActionBudget(params.limits);
-  consumeSelectBudget(
+  consumeActionBudget(
     reservationBudget,
     countRenderableSelectBlocks(
       params.presentation.blocks,

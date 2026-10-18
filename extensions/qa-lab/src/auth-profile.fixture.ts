@@ -66,20 +66,13 @@ function buildOpenAiApiKeyProfile(): QaApiKeyAuthProfile {
 }
 
 function buildProfileMap(shape: QaAuthProfileShape): Record<string, QaAuthProfile> {
-  switch (shape) {
-    case "oauth-only":
-      return {
-        [QA_CODEX_OAUTH_PROFILE_ID]: buildCodexOAuthProfile(),
-      };
-    case "apikey-only":
-      return {
-        [QA_OPENAI_API_KEY_PROFILE_ID]: buildOpenAiApiKeyProfile(),
-      };
-    case "mixed":
-      return {
-        [QA_CODEX_OAUTH_PROFILE_ID]: buildCodexOAuthProfile(),
-        [QA_OPENAI_API_KEY_PROFILE_ID]: buildOpenAiApiKeyProfile(),
-      };
+  if (shape === "oauth-only" || shape === "apikey-only" || shape === "mixed") {
+    return {
+      ...(shape !== "apikey-only" ? { [QA_CODEX_OAUTH_PROFILE_ID]: buildCodexOAuthProfile() } : {}),
+      ...(shape !== "oauth-only"
+        ? { [QA_OPENAI_API_KEY_PROFILE_ID]: buildOpenAiApiKeyProfile() }
+        : {}),
+    };
   }
   const exhaustive: never = shape;
   return exhaustive;
@@ -136,7 +129,7 @@ export async function seedAuthProfiles(
 }
 
 export async function snapshotAuthProfiles(agentDir: string): Promise<QaAuthProfileSnapshot> {
-  return normalizeAuthProfileSnapshot(readQaAuthProfiles(agentDir));
+  return normalizeAuthProfileSnapshot(await readQaAuthProfiles(agentDir));
 }
 
 export function resolveCodexAuthProfile(

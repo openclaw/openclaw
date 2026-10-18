@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLocalManagedProfile } from "../config.js";
-import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
+import {
+  BrowserProfileUnavailableError,
+  type BrowserErrorResponse,
+  toBrowserErrorResponse,
+} from "../errors.js";
 import { isManagedOnlyBrowserRequest, resolveRequestedBrowserProfile } from "../request-policy.js";
 import {
   type BrowserRouteContext,
@@ -10,7 +14,6 @@ import {
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
-/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
@@ -23,7 +26,7 @@ export function getProfileContext(
     }
     return profile;
   } catch (err) {
-    const mapped = ctx.mapTabError(err);
+    const mapped = toBrowserErrorResponse(err);
     return mapped
       ? { error: mapped.message, status: mapped.status }
       : { error: String(err), status: 404 };
@@ -94,16 +97,8 @@ export function toStringOrEmpty(value: unknown) {
 
 /** Return a canonical HTTP origin, or null when the route value is absent or invalid. */
 export function readHttpOrigin(value: unknown): string | null {
-  const raw = toStringOrEmpty(value);
-  if (!raw) {
-    return null;
-  }
-  try {
-    const url = new URL(raw);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(toStringOrEmpty(value));
+  return url?.protocol === "http:" || url?.protocol === "https:" ? url.origin : null;
 }
 
 /** Coerce route boolean values from booleans or common string forms. */

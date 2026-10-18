@@ -1,6 +1,6 @@
 import type { SessionEntryReplacementPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import type { AcpSessionEntryExpectation } from "./session-meta-entry.kernel.js";
 
 export type AcpSessionEntryMutationInput = {
@@ -13,8 +13,7 @@ export type AcpSessionEntryMutationInput = {
 
 export type AcpSessionEntryMutation =
   | { kind: "touch"; updatedAt: number; fallbackEntry: SessionEntry }
-  | { kind: "clear" }
-  | { kind: "clear-legacy" };
+  | { kind: "clear" };
 
 export type AcpSessionEntryMutationResult = {
   entry: SessionEntry | null;

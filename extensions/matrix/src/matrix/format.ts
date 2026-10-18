@@ -1,4 +1,3 @@
-// Matrix helper module supports format behavior.
 import MarkdownIt from "markdown-it";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -12,7 +11,6 @@ import { createMatrixPrivateMarkers, MATRIX_FORMAT_PROFILE } from "./format-prof
 import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
 import { analyzeMatrixSpoilers, type MatrixSpoilerAnalysis } from "./format-spoiler-ranges.js";
 import type { MatrixClient } from "./sdk.js";
-import { isMatrixQualifiedUserId } from "./target-ids.js";
 
 export { MATRIX_FORMAT_PROFILE, renderMatrixMarkdownTables } from "./format-profile.js";
 const MATRIX_STYLE_MARKERS = {
@@ -168,10 +166,6 @@ function trimMentionSuffix(
   return { raw, end };
 }
 
-function isMatrixMentionUserId(raw: string): boolean {
-  return isMatrixQualifiedUserId(raw) && MATRIX_MENTION_USER_ID_PATTERN.test(raw);
-}
-
 function buildMentionCandidate(raw: string, start: number): MatrixMentionCandidate | null {
   const normalized = trimMentionSuffix(raw, start + raw.length);
   if (!normalized) {
@@ -180,7 +174,7 @@ function buildMentionCandidate(raw: string, start: number): MatrixMentionCandida
   if (normalizeLowercaseStringOrEmpty(normalized.raw) === "@room") {
     return { ...normalized, start, kind: "room" };
   }
-  return isMatrixMentionUserId(normalized.raw)
+  return MATRIX_MENTION_USER_ID_PATTERN.test(normalized.raw)
     ? { ...normalized, start, kind: "user", userId: normalized.raw }
     : null;
 }
@@ -189,10 +183,7 @@ function collectMentionCandidates(text: string): MatrixMentionCandidate[] {
   const mentions: MatrixMentionCandidate[] = [];
   for (const match of text.matchAll(MENTION_PATTERN)) {
     const raw = match[0];
-    const start = match.index ?? -1;
-    if (start < 0 || !raw) {
-      continue;
-    }
+    const start = match.index;
     if (!isMentionStartBoundary(text[start - 1])) {
       continue;
     }
@@ -329,14 +320,6 @@ function createMentionLinkTokens(params: {
   const text = createTextToken(params.sample, params.label);
   const close = createToken(params.sample, "link_close", "a", -1);
   return [open, text, close];
-}
-
-async function resolveMatrixSelfUserId(client: MatrixClient): Promise<string | null> {
-  const getUserId = (client as { getUserId?: () => Promise<string> | string }).getUserId;
-  if (typeof getUserId !== "function") {
-    return null;
-  }
-  return await Promise.resolve(getUserId.call(client)).catch(() => null);
 }
 
 function mutateInlineTokensWithMentions(params: {
@@ -517,19 +500,18 @@ export function markdownToMatrixBody(markdown: string): string {
 
 export function renderMatrixBody(analysis: MatrixSpoilerAnalysis): string {
   const { markdown: projected, delimiterOffsets: offsets, metadataCollision } = analysis;
-  if (offsets.length === 0 && !metadataCollision) {
+  if (metadataCollision) {
+    return "[Spoiler]";
+  }
+  if (offsets.length === 0) {
     return projected;
   }
   let body = projected;
-  if (metadataCollision) {
-    body = "[Spoiler]";
-  } else {
-    for (let index = offsets.length - 2; index >= 0; index -= 2) {
-      const open = offsets[index];
-      const close = offsets[index + 1];
-      if (open !== undefined && close !== undefined) {
-        body = `${body.slice(0, open)}[Spoiler]${body.slice(close + 2)}`;
-      }
+  for (let index = offsets.length - 2; index >= 0; index -= 2) {
+    const open = offsets[index];
+    const close = offsets[index + 1];
+    if (open !== undefined && close !== undefined) {
+      body = `${body.slice(0, open)}[Spoiler]${body.slice(close + 2)}`;
     }
   }
   const ir = markdownToIR(body, {
@@ -554,7 +536,7 @@ async function resolveMarkdownMentionState(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ tokens: MarkdownToken[]; mentions: MatrixMentions }> {
   const tokens = parseMatrixMarkdown(params.analysis, params.tableMode);
-  const selfUserId = await resolveMatrixSelfUserId(params.client);
+  const selfUserId = await params.client.getUserId().catch(() => null);
   const userIds: string[] = [];
   const seenUserIds = new Set<string>();
   let roomMentioned = false;
@@ -603,15 +585,10 @@ export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
   const analysis = analyzeMatrixSpoilers(params.markdown);
-  const state = await resolveMarkdownMentionState({ ...params, analysis });
   if (analysis.metadataCollision) {
-    const redacted = renderMatrixBody(analysis);
-    const redactedState = await resolveMarkdownMentionState({
-      ...params,
-      analysis: analyzeMatrixSpoilers(redacted),
-    });
-    return { html: renderMatrixFallbackHtml(analysis), mentions: redactedState.mentions };
+    return { html: renderMatrixFallbackHtml(analysis), mentions: {} };
   }
+  const state = await resolveMarkdownMentionState({ ...params, analysis });
   compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();
   return {

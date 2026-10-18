@@ -1,4 +1,3 @@
-// Profile name validation and normalization helpers for root CLI profile routing.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";

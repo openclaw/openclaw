@@ -284,7 +284,6 @@ describe("registered node presence activity events", () => {
     { source: "app", clientId: "openclaw-macos", platform: "darwin", accepted: true },
     { source: "app", clientId: "openclaw-macos", platform: "macOS 26.0.1", accepted: true },
     { source: "system", clientId: "openclaw-macos", platform: "darwin", accepted: false },
-    { source: undefined, clientId: "openclaw-macos", platform: "darwin", accepted: false },
     { source: "app", clientId: "node-host", platform: "darwin", accepted: false },
     { source: "app", clientId: "openclaw-macos", platform: "linux", accepted: false },
   ])(

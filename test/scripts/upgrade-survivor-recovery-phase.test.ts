@@ -12,10 +12,172 @@ const lifecycle = source.slice(
   source.indexOf("companion_survivor_scenario() {"),
 );
 const update = source.slice(
-  source.indexOf("update_candidate() {"),
+  source.indexOf("is_extended_stable_release_version() {"),
   source.indexOf("assert_sibling_published_refusal() {"),
 );
 const outer = "recovery-update-restart";
+
+it.skipIf(process.platform === "win32").each([
+  { fault: "future-tarball", phase: "prepare-restart-package", code: 124 },
+  { fault: "future-runtime-tarball", phase: "prepare-restart-runtime", code: 137 },
+  { fault: "none", phase: "", code: 0 },
+])("preserves restart fixture timeout diagnostics ($fault)", ({ fault, phase, code }) => {
+  const root = dirs.make("survivor-restart-fixture-");
+  const prepare = source.slice(
+    source.indexOf("prepare_restart_fixture() {"),
+    source.indexOf("repair_update_restart_auth() {"),
+  );
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -euo pipefail
+exec 3>&1
+source scripts/lib/openclaw-e2e-instance.sh
+ARTIFACT_ROOT="$1"
+RUNTIME_ROOT="$1"
+FAULT="$2"
+FAULT_STATUS="$3"
+SCENARIO=base
+COMMAND_TIMEOUT=1500s
+candidate_tarball=candidate.tgz
+candidate_version=2026.10.2
+OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=registry
+NPM_CONFIG_REGISTRY=registry
+CURRENT_PHASE=""
+FAILURE_PHASE=""
+FAILURE_MESSAGE=""
+FAILURE_SIGNAL=""
+last_update_observation_root=""
+SUMMARY_JSON="$1/summary.json"
+run_completed=0
+json_event() { :; }
+cleanup() { :; }
+write_summary() { :; }
+prepare_candidate_tarball() { :; }
+openclaw_prepublish_plugin_registry_start() { :; }
+timeout() {
+  [ "$1" != --kill-after=1s ] || return 0
+  shift
+  printf 'budget\\t%s\\t%s\\n' "$1" "$4" >&3
+  shift
+  [ "$3" != "$FAULT" ] || return "$FAULT_STATUS"
+  "$@"
+}
+node() {
+  case "$1" in
+    scripts/e2e/lib/update-first-hop-package-fixtures.mjs)
+      printf '{"targetVersion":"2026.10.3"}\\n' ;;
+    -p) printf '2026.10.3' ;;
+    -) cat >/dev/null; printf 'runtime.tgz' ;;
+    scripts/e2e/lib/upgrade-survivor/diagnostics.mjs)
+      printf 'capture\\t%s\\t%s\\n' "$4" "$5" >&3 ;;
+    *) return 91 ;;
+  esac
+}
+${lifecycle}
+${prepare}
+phase prepare-restart-fixture prepare_restart_fixture || exit "$?"
+run_completed=1
+`,
+      "fixture",
+      root,
+      fault,
+      String(code),
+    ],
+    { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(code);
+  const lines = result.stdout.split("\n");
+  expect(lines.filter((line) => line.startsWith("budget\t"))).toEqual([
+    "budget\t1500s\tfuture-tarball",
+    ...(fault === "future-tarball" ? [] : ["budget\t1500s\tfuture-runtime-tarball"]),
+  ]);
+  if (code !== 0) {
+    expect(lines).toContain(`capture\t${phase}\t${code}`);
+  } else {
+    for (const file of ["restart-fixture.json", "restart-runtime-fixture.json"]) {
+      expect(JSON.parse(readFileSync(join(root, file), "utf8"))).toEqual({
+        targetVersion: "2026.10.3",
+      });
+    }
+  }
+});
+
+it.skipIf(process.platform === "win32").each([
+  { fault: "none", code: 0 },
+  { fault: "stop", code: 17 },
+  { fault: "still-active", code: 1 },
+  { fault: "listener", code: 1 },
+])("stops a Doctor-started service before recovery preparation ($fault)", ({ fault, code }) => {
+  const root = dirs.make("survivor-recovery-stop-");
+  const repair = source.slice(
+    source.indexOf("repair_update_restart_auth() {"),
+    source.indexOf("assert_managed_membership_warning() {"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+exec 3>&1
+source scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh
+ARTIFACT_ROOT="$1"
+OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG="$1/gateway.log"
+FAULT="$2"
+SCENARIO=base
+UPDATE_RESTART_MODE=auto-auth
+OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=absent
+COMMAND_TIMEOUT=30
+restart_fixture_package=synthetic.tgz
+restart_fixture_version=2026.9.7
+update_repair_required=0
+active=1
+phase() { shift; "$@"; }
+systemctl() {
+  case "$2" in
+    stop)
+      printf 'stop\n' >&3
+      [ "$FAULT" != stop ] || return 17
+      [ "$FAULT" = still-active ] || active=0 ;;
+    is-active) [ "$active" = 1 ] && return 0; return 3 ;;
+    *) return 99 ;;
+  esac
+}
+openclaw_e2e_maybe_timeout() { shift; "$@"; }
+openclaw_e2e_probe_tcp() { [ "$FAULT" = listener ]; }
+openclaw_e2e_print_log() { cat "$1"; }
+prepare_restart_inference() { printf 'inference\n'; }
+prepare_restart_fixture() { printf 'fixture\n'; }
+install_update_restart_systemctl_shim() { printf 'manager\n'; }
+run_update_restart_probe_gateway() {
+  assert_update_restart_probe_inactive || return "$?"
+  printf 'prepared\n'
+}
+check_gateway_status() { printf 'auth\n'; }
+update_candidate() { printf 'update\n'; }
+assert_managed_membership_warning() { :; }
+node() { :; }
+assert_survival() { :; }
+${repair}
+repair_update_restart_auth
+`,
+      "fixture",
+      root,
+      fault,
+    ],
+    { env: { PATH: process.env.PATH, HOME: root }, encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(code);
+  expect(result.stdout.trim().split("\n")).toEqual(
+    code === 0
+      ? ["stop", "inference", "fixture", "manager", "prepared", "auth", "update"]
+      : ["stop"],
+  );
+  if (code !== 0) {
+    expect(result.stderr).toContain("gateway service shutdown could not be verified");
+  }
+});
 
 it.skipIf(process.platform === "win32").each([
   { fault: "command", code: 17, stage: "command", checks: [] },
@@ -111,7 +273,7 @@ node() {
 }
 assert_update_restart_service_replaced() {
   printf 'check\treplacement\n' >&3
-  [ "$1" = 42 ] && [ "$2" = 0 ] || return 92
+  [ "$1" = 42 ] && [ "$2" -eq 0 ] || return 92
   if [ "$FAULT" = signal-replacement ]; then kill -TERM $$; fi
   [ "$FAULT" != replacement ]
 }

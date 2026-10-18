@@ -7,22 +7,14 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
+const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
 const DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS = 60;
 const TAVILY_API_KEY_ENV_VAR = "TAVILY_API_KEY";
 export const TAVILY_API_KEY_CONFIG_PATH = "plugins.entries.tavily.config.webSearch.apiKey";
 
-type PluginEntryConfig = {
-  webSearch?: {
-    apiKey?: unknown;
-    baseUrl?: string;
-  };
-};
-
-function resolveTavilySearchConfig(cfg?: OpenClawConfig): PluginEntryConfig["webSearch"] {
-  const pluginConfig = cfg?.plugins?.entries?.tavily?.config as PluginEntryConfig;
-  return asOptionalRecord(pluginConfig?.webSearch);
+function resolveTavilySearchConfig(cfg?: OpenClawConfig) {
+  return asOptionalRecord(cfg?.plugins?.entries?.tavily?.config?.webSearch);
 }
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {

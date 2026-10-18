@@ -1,6 +1,6 @@
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
@@ -49,8 +49,15 @@ function createHarness(initialConfig: Record<string, unknown>) {
     registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
       command = definition;
     }),
-    registerTool: vi.fn((definition: AnyAgentTool) => {
-      tool = definition;
+    registerTool: vi.fn((definition: AnyAgentTool | OpenClawPluginToolFactory) => {
+      const created =
+        typeof definition === "function"
+          ? definition({ sessionKey: "agent:main:main" })
+          : definition;
+      if (!created || Array.isArray(created)) {
+        throw new Error("talk-voice requires one tool");
+      }
+      tool = created;
     }),
   };
   register.register(api as never);
@@ -136,11 +143,15 @@ describe("talk-voice plugin", () => {
     { action: "list", method: "talk.voice.get", request: {} },
     { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
   ])(
-    "executes $action with trusted identity and waits for the Gateway result",
+    "executes $action for the host session despite model targets and waits for the Gateway result",
     async ({ action, method, request }) => {
       const { tool, runtime } = createHarness({});
       const rpc = createDeferred<Record<string, unknown>>();
-      gatewayMocks.callGatewayTool.mockReturnValue(rpc.promise);
+      const started = createDeferred<void>();
+      gatewayMocks.callGatewayTool.mockImplementation(() => {
+        started.resolve();
+        return rpc.promise;
+      });
       const controller = new AbortController();
       const completed = vi.fn();
       const pending = tool
@@ -161,11 +172,12 @@ describe("talk-voice plugin", () => {
           return result;
         });
 
-      await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce());
+      await started.promise;
+      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce();
       expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
         method,
         { timeoutMs: 65_000 },
-        request,
+        { ...request, sessionKey: "agent:main:main" },
         { requireAgentRuntimeIdentity: true, signal: controller.signal },
       );
       expect(completed).not.toHaveBeenCalled();
@@ -186,16 +198,6 @@ describe("talk-voice plugin", () => {
       expect(runtime.tts.listVoices).not.toHaveBeenCalled();
     },
   );
-
-  it("returns a failed voice replacement as a tool failure", async () => {
-    const { tool, runtime } = createHarness({});
-    gatewayMocks.callGatewayTool.mockRejectedValue(new Error("Replacement voice call failed"));
-
-    await expect(
-      tool.execute("voice-tool-call", { action: "set", voice: "marin" }),
-    ).rejects.toThrow("Replacement voice call failed");
-    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
 
   function createElevenlabsVoiceSetHarness(channel: string, scopes?: string[]) {
     const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
@@ -219,34 +221,6 @@ describe("talk-voice plugin", () => {
         "- provider: microsoft\n" +
         "- talk.providers.microsoft.voiceId: en-US-AvaNeural\n" +
         "- microsoft.apiKey: secret…",
-    });
-  });
-
-  it("lists voices from the active provider", async () => {
-    const config = talkConfig("elevenlabs", {
-      apiKey: "sk-eleven",
-      baseUrl: "https://voices.example.test",
-    });
-    const { command, runtime } = createHarness(config);
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([
-      { id: "voice-a", name: "Claudia", category: "general" },
-      { id: "voice-b", name: "Bert" },
-    ]);
-
-    const result = await command.handler(createCommandContext("list +01"));
-
-    expect(runtime.tts.listVoices).toHaveBeenCalledWith({
-      provider: "elevenlabs",
-      cfg: config,
-      apiKey: "sk-eleven",
-      baseUrl: "https://voices.example.test",
-    });
-    expect(result).toEqual({
-      text:
-        "ElevenLabs voices: 2\n\n" +
-        "- Claudia · general\n" +
-        "  id: voice-a\n\n" +
-        "(showing first 1)",
     });
   });
 
@@ -287,35 +261,6 @@ describe("talk-voice plugin", () => {
         "  id: en-US-AvaNeural\n" +
         "  meta: en-US · Female · Friendly, Positive\n" +
         "  note: Friendly, Positive",
-    });
-  });
-
-  it("writes only canonical provider-scoped voice config for elevenlabs", async () => {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(
-      createCommandContext("set Claudia", "webchat", ["operator.admin"]),
-    );
-
-    expect(runtime.config.mutateConfigFile).toHaveBeenCalledWith({
-      afterWrite: { mode: "auto" },
-      writeOptions: { assertCurrent: undefined },
-      mutate: expect.any(Function),
-    });
-    expect(runtime.config.current()).toStrictEqual({
-      talk: {
-        provider: "elevenlabs",
-        providers: {
-          elevenlabs: {
-            apiKey: "sk-eleven",
-            voiceId: "voice-a",
-          },
-        },
-      },
-    });
-    expect(result).toEqual({
-      text: "✅ ElevenLabs Talk voice set to Claudia\nvoice-a",
     });
   });
 

@@ -6,10 +6,16 @@ import {
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { testVideoGenerationDeadlines } from "../test-support/video-generation-deadline.test-support.js";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
@@ -51,6 +57,13 @@ function mockSuccessfulTask(
 }
 
 describe("runway video generation provider", () => {
+  it("rejects a duration that rounds to zero before submission", async () => {
+    await expect(generateVideo({ durationSeconds: 0.4 })).rejects.toThrow(
+      "durationSeconds must be a positive duration",
+    );
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("registers media-only API-key onboarding alongside video generation", async () => {
     const { default: plugin } = await import("./index.js");
     const captured = capturePluginRegistration(plugin);
@@ -92,10 +105,6 @@ describe("runway video generation provider", () => {
       flagName: "--runway-api-key",
       envVar: "RUNWAYML_API_SECRET",
     });
-  });
-
-  it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
   });
 
   it("submits a text-to-video task, polls it, and downloads the output", async () => {
@@ -141,6 +150,51 @@ describe("runway video generation provider", () => {
     await expect(generateVideo()).rejects.toThrow(
       "Runway generated video download: malformed video response",
     );
+  });
+
+  it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          runway: {
+            baseUrl: "",
+            models: [],
+            apiKey: { source: "file", provider: "x", id: "/runway" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        models: {
+          providers: { runway: { baseUrl: "", models: [], apiKey: "runway-resolved-test-key" } },
+        },
+      },
+      sourceConfig,
+    );
+    const providerAuth = await import("openclaw/plugin-sdk/provider-auth-runtime");
+    const realAuth = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/provider-auth-runtime")
+    >("openclaw/plugin-sdk/provider-auth-runtime");
+    try {
+      await vi
+        .mocked(providerAuth.resolveApiKeyForProvider)
+        .withImplementation(realAuth.resolveApiKeyForProvider, async () => {
+          mockSuccessfulTask();
+          await generateVideo({ cfg: sourceConfig, authStore: { version: 1, profiles: {} } });
+
+          const { headers } = requireFirstPostJsonRecordRequest(
+            postJsonRequestMock,
+            "Runway create request",
+          );
+          if (!(headers instanceof Headers)) {
+            throw new Error("expected Runway request headers");
+          }
+          expect(headers.get("authorization")).toBe("Bearer runway-resolved-test-key");
+        });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
@@ -221,4 +275,11 @@ describe("runway video generation provider", () => {
       "Runway video generation completed with malformed output URLs",
     );
   });
+});
+
+testVideoGenerationDeadlines({
+  providerId: "runway",
+  model: "gen4.5",
+  pendingStatus: "RUNNING",
+  loadPlugin: async () => (await import("./index.js")).default,
 });

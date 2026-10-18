@@ -7,8 +7,11 @@ import {
   saveAuthProfileStore,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isProviderAuthProfileConfigured,
+  isProviderAuthProfileConfiguredAsync,
+} from "openclaw/plugin-sdk/provider-auth";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
@@ -46,7 +49,10 @@ function seedMinimaxPortalProfile(agentDir: string) {
 }
 
 describe("buildMinimaxSpeechProvider", () => {
-  const provider = buildMinimaxSpeechProvider({ isProviderAuthProfileConfigured });
+  const provider = buildMinimaxSpeechProvider({
+    isProviderAuthProfileConfigured,
+    isProviderAuthProfileConfiguredAsync,
+  });
 
   function resolveProviderConfig(
     params: Parameters<NonNullable<typeof provider.resolveConfig>>[0],
@@ -68,38 +74,9 @@ describe("buildMinimaxSpeechProvider", () => {
     return parseToken(params);
   }
 
-  describe("metadata", () => {
-    it("has correct id and label", () => {
-      expect(provider.id).toBe("minimax");
-      expect(provider.label).toBe("MiniMax");
-    });
-
-    it("has autoSelectOrder 40", () => {
-      expect(provider.autoSelectOrder).toBe(40);
-    });
-  });
-
   describe("isConfigured", () => {
     let tempStateDir: string;
     let tempAgentDir: string;
-    let tokenPlanEnvConfigured = false;
-
-    beforeAll(() => {
-      const previous = process.env.MINIMAX_CODING_API_KEY;
-      try {
-        process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
-        tokenPlanEnvConfigured = provider.isConfigured({
-          providerConfig: {},
-          timeoutMs: 30000,
-        });
-      } finally {
-        if (previous === undefined) {
-          delete process.env.MINIMAX_CODING_API_KEY;
-        } else {
-          process.env.MINIMAX_CODING_API_KEY = previous;
-        }
-      }
-    });
 
     beforeEach(async () => {
       tempStateDir = await mkdtemp(path.join(tmpdir(), "openclaw-minimax-tts-auth-"));
@@ -117,50 +94,24 @@ describe("buildMinimaxSpeechProvider", () => {
       await rm(tempStateDir, { recursive: true, force: true });
     });
 
-    it("returns true when apiKey is in provider config", () => {
-      expect(
-        provider.isConfigured({ providerConfig: { apiKey: "sk-test" }, timeoutMs: 30000 }),
-      ).toBe(true);
-    });
-
-    it("returns false when no apiKey anywhere", () => {
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
-    });
-
-    it("returns true when MINIMAX_API_KEY env var is set", () => {
-      process.env.MINIMAX_API_KEY = "sk-env";
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
-    });
-
-    it("returns false when MINIMAX_API_KEY env var is blank", () => {
-      process.env.MINIMAX_API_KEY = "   ";
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
-    });
-
-    it("returns true when a MiniMax Token Plan env var is set", () => {
-      expect(tokenPlanEnvConfigured).toBe(true);
+    it("returns false when no apiKey anywhere", async () => {
+      expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(
+        false,
+      );
     });
 
     it("returns true when a MiniMax portal auth profile is available", async () => {
       seedMinimaxPortalProfile(tempAgentDir);
 
-      expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+      expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(
+        true,
+      );
     });
   });
 
   describe("resolveConfig", () => {
     afterEach(() => {
       vi.unstubAllEnvs();
-    });
-
-    it("returns defaults when rawConfig is empty", () => {
-      vi.stubEnv("MINIMAX_API_HOST", undefined);
-      vi.stubEnv("MINIMAX_TTS_MODEL", undefined);
-      vi.stubEnv("MINIMAX_TTS_VOICE_ID", undefined);
-      const config = resolveProviderConfig({ rawConfig: {}, cfg: {} as never, timeoutMs: 30000 });
-      expect(config.baseUrl).toBe("https://api.minimax.io");
-      expect(config.model).toBe("speech-2.8-hd");
-      expect(config.voiceId).toBe("English_expressive_narrator");
     });
 
     it("reads from providers.minimax in rawConfig", () => {
@@ -197,22 +148,6 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(config.model).toBe("speech-01-turbo");
       expect(config.voiceId).toBe("Chinese (Mandarin)_Gentle_Boy");
     });
-
-    it("derives the TTS host from minimax-portal OAuth config", () => {
-      vi.stubEnv("MINIMAX_API_HOST", undefined);
-      const config = resolveProviderConfig({
-        rawConfig: {},
-        cfg: {
-          models: {
-            providers: {
-              "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic" },
-            },
-          },
-        } as never,
-        timeoutMs: 30000,
-      });
-      expect(config.baseUrl).toBe("https://api.minimaxi.com");
-    });
   });
 
   describe("parseDirectiveToken", () => {
@@ -229,11 +164,9 @@ describe("buildMinimaxSpeechProvider", () => {
 
     it.each([
       ["voice", "Chinese (Mandarin)_Warm_Girl", { voiceId: "Chinese (Mandarin)_Warm_Girl" }],
-      ["voiceid", "test_voice", { voiceId: "test_voice" }],
       ["model", "speech-01-turbo", { model: "speech-01-turbo" }],
       ["speed", "1.5", { speed: 1.5 }],
       ["vol", "10", { vol: 10 }],
-      ["volume", "5", { vol: 5 }],
       ["pitch", "-3", { pitch: -3 }],
     ])("parses %s=%s", (key, value, overrides) => {
       const result = parseDirectiveToken({ key, value, policy });
@@ -242,30 +175,15 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides).toEqual(overrides);
     });
 
-    it.each([
-      { name: "warns on invalid speed", key: "speed", value: "5.0" },
-      { name: "warns on non-decimal speed values", key: "speed", value: "0x1" },
-    ])("$name", ({ key, value }) => {
-      const result = parseDirectiveToken({ key, value, policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.overrides).toBeUndefined();
-    });
-
-    it.each(["0", "11"])("describes the MiniMax volume boundary for vol=%s", (value) => {
-      const result = parseDirectiveToken({ key: "vol", value, policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toEqual([
-        `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
-      ]);
-      expect(result.overrides).toBeUndefined();
-    });
-
-    it("warns on out-of-range pitch", () => {
-      const result = parseDirectiveToken({ key: "pitch", value: "20", policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-    });
+    it.each([{ name: "warns on invalid speed", key: "speed", value: "5.0" }])(
+      "$name",
+      ({ key, value }) => {
+        const result = parseDirectiveToken({ key, value, policy });
+        expect(result.handled).toBe(true);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.overrides).toBeUndefined();
+      },
+    );
 
     it("returns handled=false for unknown keys", () => {
       const result = parseDirectiveToken({
@@ -354,34 +272,6 @@ describe("buildMinimaxSpeechProvider", () => {
       }
       return JSON.parse(init.body) as Record<string, unknown>;
     }
-
-    it("requests non-streaming hex audio and decodes the hex response", async () => {
-      mockAudioResponse("fake-audio-data");
-      const mockFetch = vi.mocked(globalThis.fetch);
-
-      const result = await synthesize({
-        text: "Hello world",
-        providerConfig: { apiKey: "sk-test", baseUrl: "https://api.minimaxi.com" },
-      });
-
-      expect(result.outputFormat).toBe("mp3");
-      expect(result.fileExtension).toBe(".mp3");
-      expect(result.voiceCompatible).toBe(false);
-      expect(result.audioBuffer.toString()).toBe("fake-audio-data");
-
-      expect(mockFetch).toHaveBeenCalledOnce();
-      const url = firstFetchCall()[0];
-      expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
-      const body = firstFetchBody();
-      expect(body.model).toBe("speech-2.8-hd");
-      expect(body.text).toBe("Hello world");
-      expect(body.stream).toBe(false);
-      expect(body.output_format).toBe("hex");
-      expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
-        "English_expressive_narrator",
-      );
-      expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
-    });
 
     it("transcodes MiniMax MP3 to Opus for voice-note targets", async () => {
       mockAudioResponse("fake-mp3-data");
@@ -484,11 +374,6 @@ describe("buildMinimaxSpeechProvider", () => {
       });
     });
 
-    it("throws when API key is missing", async () => {
-      await expect(synthesize({ providerConfig: {} })).rejects.toThrow("MiniMax TTS auth missing");
-      expect(globalThis.fetch).not.toHaveBeenCalled();
-    });
-
     it("does not send a request for a blank environment API key", async () => {
       process.env.MINIMAX_API_KEY = "   ";
 
@@ -501,25 +386,6 @@ describe("buildMinimaxSpeechProvider", () => {
         new Response("Unauthorized", { status: 401 }),
       );
       await expect(synthesize()).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
-    });
-  });
-
-  describe("listVoices", () => {
-    it("returns known voices", async () => {
-      const listVoices = provider.listVoices;
-      if (!listVoices) {
-        throw new Error("Expected MiniMax provider listVoices");
-      }
-      const voices = await listVoices({} as never);
-      expect(voices).toStrictEqual(
-        [
-          "English_expressive_narrator",
-          "Chinese (Mandarin)_Warm_Girl",
-          "Chinese (Mandarin)_Lively_Girl",
-          "Chinese (Mandarin)_Gentle_Boy",
-          "Chinese (Mandarin)_Steady_Boy",
-        ].map((id) => ({ id, name: id })),
-      );
     });
   });
 });

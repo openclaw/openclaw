@@ -9,6 +9,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -74,7 +78,9 @@ describe("managed image record SQLite store", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("creates, reads, and reopens managed metadata without parent SQL", async () => {
+  it("creates, reads, and reopens managed metadata without parent SQL", async ({
+    onTestFinished,
+  }) => {
     requireNodeSqlite();
     const counters = observeMainThreadSql();
     try {
@@ -82,7 +88,9 @@ describe("managed image record SQLite store", () => {
       expect(await readManagedImageRecord("missing", stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
       expect(await listManagedImageOriginalMediaIds(stateDir)).toEqual([]);
-      expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
+      await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       counters.expectIdle();
 
       const first = record();
@@ -100,6 +108,21 @@ describe("managed image record SQLite store", () => {
       counters.expectIdle();
       await closeOpenClawStateDatabaseAsync();
       counters.clear();
+      const readerQueues: string[] = [];
+      onTestFinished(
+        onInternalDiagnosticEvent(
+          (event) => {
+            if (
+              event.type === "worker.request" &&
+              event.phase === "queued" &&
+              event.requestClass === "managedImages"
+            ) {
+              readerQueues.push(event.kind);
+            }
+          },
+          { include: ["worker.request"] },
+        ),
+      );
       expect(await readManagedImageRecord(first.attachmentId, stateDir)).toEqual(first);
       expect(await readManagedImageRecord(claimed.attachmentId, stateDir)).toBeNull();
       expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
@@ -120,6 +143,8 @@ describe("managed image record SQLite store", () => {
         { record: first, cleanupPending: false },
         { record: claimed, cleanupPending: true },
       ]);
+      await waitForDiagnosticEventsDrained();
+      expect(readerQueues).toEqual(Array(5).fill("stateRead"));
       await closeOpenClawStateDatabaseAsync();
       counters.expectIdle();
     } finally {
@@ -127,7 +152,7 @@ describe("managed image record SQLite store", () => {
     }
   });
 
-  it("round-trips every typed field", async () => {
+  it("round-trips every typed field even when the debug JSON copy is corrupt", async () => {
     const expected = record({
       messageId: "message-1",
       updatedAt: "2026-07-15T00:01:00.000Z",
@@ -137,11 +162,6 @@ describe("managed image record SQLite store", () => {
     await insertManagedImageRecord(expected, stateDir);
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-  });
-
-  it("uses typed columns when the debug JSON copy is corrupt", async () => {
-    const expected = record();
-    await insertManagedImageRecord(expected, stateDir);
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -154,54 +174,6 @@ describe("managed image record SQLite store", () => {
     );
 
     expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
-  });
-
-  it("atomically promotes a transient row and refreshes its debug copy", async () => {
-    const initial = record();
-    await insertManagedImageRecord(initial, stateDir);
-
-    expect(
-      await attachManagedImageRecordsToMessage({
-        attachments: [initial],
-        messageId: "message-committed",
-        updatedAt: "2026-07-15T00:02:00.000Z",
-        stateDir,
-      }),
-    ).toBe(true);
-
-    const current = await readManagedImageRecord(initial.attachmentId, stateDir);
-    expect(current).toMatchObject({
-      messageId: "message-committed",
-      retentionClass: "history",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-    });
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
-        .selectFrom("managed_outgoing_image_records")
-        .select("record_json")
-        .where("attachment_id", "=", initial.attachmentId),
-    );
-    expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
-  });
-
-  it("keeps a row changed after cleanup planning", async () => {
-    const planned = record();
-    await insertManagedImageRecord(planned, stateDir);
-    await attachManagedImageRecordsToMessage({
-      attachments: [planned],
-      messageId: "message-committed",
-      updatedAt: "2026-07-15T00:02:00.000Z",
-      stateDir,
-    });
-
-    expect(await claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(false);
-    expect((await readManagedImageRecord(planned.attachmentId, stateDir))?.messageId).toBe(
-      "message-committed",
-    );
   });
 
   it("keeps a cleanup claim durable until the file deletion completes", async () => {
@@ -241,8 +213,8 @@ describe("managed image record SQLite store", () => {
       });
     const attaching = attachManagedImageRecordsToMessage({
       attachments: [initial],
-      messageId: "committed",
-      updatedAt: initial.createdAt,
+      messageId: "message-committed",
+      updatedAt: "2026-07-15T00:02:00.000Z",
       stateDir,
     });
     let claiming: Promise<boolean> | undefined;
@@ -256,10 +228,23 @@ describe("managed image record SQLite store", () => {
       release.resolve();
       expect(await attaching).toBe(true);
       expect(await claiming).toBe(false);
-      expect(await readManagedImageRecord(initial.attachmentId, stateDir)).toMatchObject({
-        messageId: "committed",
+      const current = await readManagedImageRecord(initial.attachmentId, stateDir);
+      expect(current).toMatchObject({
+        messageId: "message-committed",
         retentionClass: "history",
+        updatedAt: "2026-07-15T00:02:00.000Z",
       });
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        getNodeSqliteKysely<ManagedImageRecordDatabase>(database.db)
+          .selectFrom("managed_outgoing_image_records")
+          .select("record_json")
+          .where("attachment_id", "=", initial.attachmentId),
+      );
+      expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
     } finally {
       release.resolve();
       await Promise.allSettled([attaching, claiming]);
@@ -269,22 +254,32 @@ describe("managed image record SQLite store", () => {
 
   it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
     const initial = record();
+    const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const receive = brokerReply.receiveSqliteWorkerReply;
+    const commandTypes = new WeakMap<object, string>();
     const corrupted: string[] = [];
+    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commandTypes.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, onRejected);
+    });
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const command: unknown = deserialize(slot.current.request.input);
+        const commandType = commandTypes.get(slot.current.request);
         if (
-          isRecord(command) &&
-          typeof command.type === "string" &&
+          commandType &&
           [
             "managedImages.insert",
             "managedImages.attach",
             "managedImages.claimCleanup",
             "managedImages.deleteClaimed",
-          ].includes(command.type)
+          ].includes(commandType)
         ) {
-          corrupted.push(command.type);
+          corrupted.push(commandType);
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
       }

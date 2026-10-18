@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
@@ -7,6 +9,7 @@ import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS } from "./workspace-result-git.js";
 import {
@@ -23,24 +26,6 @@ import {
 } from "./workspace-result-inventory.js";
 
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
-
-async function readGitBlob(params: {
-  root: string;
-  objectId: string;
-  maxBytes: number;
-}): Promise<Buffer> {
-  const result = await runGitBuffered(params.root, ["cat-file", "blob", params.objectId], {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: params.maxBytes + 1,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  if (result.stdout.byteLength > params.maxBytes) {
-    throw new Error("Cloud workspace staged result exceeds its byte limit");
-  }
-  return result.stdout;
-}
 
 export async function loadStagedWorkerWorkspace(
   root: string,
@@ -108,6 +93,7 @@ export async function loadStagedWorkerWorkspace(
   if (tree.termination !== "exit" || tree.code !== 0) {
     throw new Error(tree.stderr.toString("utf8").trim() || "git ls-tree failed");
   }
+  const stagedInputs = stagedInputDirectoriesFromEntries(current.entries);
   const objectsByPath = new Map<string, { mode: string; objectId: string }>();
   for (const record of tree.stdout.toString("utf8").split("\0").filter(Boolean)) {
     const parsed = /^(100644|100755|120000) blob ([a-f0-9]{40}|[a-f0-9]{64})\t([\s\S]+)$/u.exec(
@@ -116,7 +102,13 @@ export async function loadStagedWorkerWorkspace(
     if (!parsed) {
       throw new Error("Cloud workspace staged result tree is invalid");
     }
-    objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
+    const entryPath = parsed[3]!;
+    // Older receipts can contain caches that the authenticated manifest reader
+    // now excludes. Apply the same rule without rewriting the retained result.
+    if (isDerivedWorkspacePath(entryPath, isStagedInputPath(entryPath, stagedInputs))) {
+      continue;
+    }
+    objectsByPath.set(entryPath, { mode: parsed[1]!, objectId: parsed[2]! });
   }
   if (objectsByPath.size !== treeEntries.length) {
     throw new Error("Cloud workspace staged result tree does not match its manifest");
@@ -176,16 +168,6 @@ export async function readStagedWorkerWorkspaceEntries(params: {
   if (params.entries.length > 1 && bytes > STAGED_WORKSPACE_READ_MAX_BYTES) {
     throw new Error("Cloud workspace staged result batch exceeds its byte limit");
   }
-  const only = params.entries.length === 1 ? params.entries[0] : undefined;
-  if (only) {
-    const content = await readGitBlob({
-      root: params.root,
-      objectId: only.object.objectId,
-      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    });
-    assertStagedEntryContent(only.entry, content);
-    return only.entry.type === "file" ? content : Buffer.alloc(0);
-  }
   if (params.entries.length === 0) {
     return Buffer.alloc(0);
   }
@@ -233,7 +215,7 @@ export async function readStagedWorkerWorkspaceEntries(params: {
     throw new Error("Cloud workspace staged result contains unexpected payload bytes");
   }
   // Links are validated above; their filesystem representation uses the manifest target.
-  return Buffer.concat(contents);
+  return contents.length === 1 ? contents[0]! : Buffer.concat(contents);
 }
 
 export async function collectStagedWorkerArtifacts(
@@ -259,6 +241,7 @@ export async function collectStagedWorkerArtifacts(
       })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const selected = snapshot.changedEntries.find((entry) => entry.path === input.previewPath);
+  const download = snapshot.changedEntries.find((entry) => entry.path === input.downloadPath);
   const preview =
     selected?.type === "file" && selected.size <= WORKSPACE_PREVIEW_MAX_BYTES
       ? await readStagedWorkerWorkspaceEntries({
@@ -273,6 +256,9 @@ export async function collectStagedWorkerArtifacts(
     current: { baseCommit: snapshot.current.baseCommit },
     changedEntries: snapshot.changedEntries,
     changes,
-    ...(preview === undefined ? {} : { preview }),
+    ...(preview === undefined ? {} : { preview: ownedWorkerBytes(preview) }),
+    ...(download?.type === "file"
+      ? { downloadObjectId: snapshot.objectsByPath.get(download.path)!.objectId }
+      : {}),
   };
 }

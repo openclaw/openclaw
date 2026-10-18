@@ -1,5 +1,5 @@
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
@@ -38,4 +38,12 @@ export type FinishUpdateParams = UpdateRestartParams & {
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
+};
+
+export type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
 };

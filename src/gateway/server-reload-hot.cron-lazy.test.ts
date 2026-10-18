@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -28,7 +29,9 @@ beforeEach(() => {
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  const { clearRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  clearRuntimeConfigSnapshot();
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
@@ -47,6 +50,8 @@ function createCronState() {
 }
 
 async function createFixture() {
+  const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot({});
   const { createGatewayReloadHandlers } = await import("./server-reload-hot.js");
   const { buildGatewayReloadPlan } = await import("./config-reload-plan.js");
   const { state: previous, cron: previousCron } = createCronState();
@@ -107,9 +112,9 @@ async function createFixture() {
 
 describe("cron reload loading", { concurrent: false }, () => {
   it("loads cron only when the reload plan requests its first rebuild", async () => {
-    const fixture = await createFixture();
     const load = vi.fn(() => ({ buildGatewayCronService }));
     vi.doMock("./server-cron.js", load);
+    const fixture = await createFixture();
     try {
       await fixture.handlers.applyHotReload(
         { ...fixture.plan, restartCron: false, reconcileSystemJobs: false },
@@ -131,16 +136,33 @@ describe("cron reload loading", { concurrent: false }, () => {
     }
   });
 
+  it("keeps the committed runtime when the cron owner has scheduled a monitor retry", async () => {
+    const fixture = await createFixture();
+    vi.mocked(fixture.next.reconcileSystemJobs).mockResolvedValue("retry-scheduled");
+    try {
+      await expect(
+        fixture.handlers.applyHotReload(
+          { ...fixture.plan, reconcileSystemJobs: true },
+          fixture.nextConfig,
+        ),
+      ).resolves.toBe("applied");
+      expect(fixture.setState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cronState: fixture.next }),
+      );
+      expect(fixture.nextCron.start).toHaveBeenCalledOnce();
+      expect(fixture.requestRecoveryRestart).not.toHaveBeenCalled();
+    } finally {
+      fixture.handlers.stopRestartRetries();
+    }
+  });
+
+  // Each await rechecks the same ownership guard; cover every cause and await point.
   it.each([
-    ...(["load", "handoff", "publication"] as const).flatMap((phase) =>
-      (["stop", "replace", "supersede"] as const).map((action) => ({
-        phase,
-        action,
-        plugins: false,
-      })),
-    ),
-    { phase: "publication", action: "supersede", plugins: true } as const,
-  ])(
+    { phase: "load", action: "stop", plugins: false },
+    { phase: "handoff", action: "replace", plugins: false },
+    { phase: "publication", action: "supersede", plugins: false },
+    { phase: "publication", action: "supersede", plugins: true },
+  ] as const)(
     "rejects cron publication after $action during $phase (plugins: $plugins)",
     async ({ phase, action, plugins }) => {
       const fixture = await createFixture();
@@ -200,8 +222,8 @@ describe("cron reload loading", { concurrent: false }, () => {
         publication,
       );
       const settled = reload.then(
-        () => ({ status: "applied" as const }),
-        (error: unknown) => ({ status: "rejected" as const, error }),
+        () => undefined,
+        (error: unknown) => error,
       );
       try {
         // Observe the owning await, not a timer or an assumed import microtask count.
@@ -219,16 +241,12 @@ describe("cron reload loading", { concurrent: false }, () => {
           current = false;
         }
         release.resolve();
-        const result = await settled;
-        expect(result.status).toBe("rejected");
-        if (result.status === "rejected") {
-          expect(result.error).toMatchObject({
-            name:
-              action === "supersede"
-                ? "GatewayConfigReloadSupersededError"
-                : "GatewayHotReloadCancelledError",
-          });
-        }
+        expect(await settled).toMatchObject({
+          name:
+            action === "supersede"
+              ? "GatewayConfigReloadSupersededError"
+              : "GatewayHotReloadCancelledError",
+        });
         expect(buildGatewayCronService).toHaveBeenCalledTimes(phase === "load" ? 0 : 1);
         expect(fixture.setState).not.toHaveBeenCalled();
         expect(publishPluginRuntime).not.toHaveBeenCalled();

@@ -26,34 +26,15 @@ type MatrixHttpRequestParams = {
 };
 
 export class MatrixAuthedHttpClient {
-  private readonly homeserver: string;
-  private readonly accessToken: string;
-  private readonly ssrfPolicy?: SsrFPolicy;
-  private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
-  private readonly captureRequestAuthority?: () => (() => void) | undefined;
-  private readonly captureSendCurrentness?: () => (() => void) | undefined;
-  private readonly signal?: AbortSignal;
-
-  constructor(params: MatrixAuthedHttpClientParams) {
-    this.homeserver = params.homeserver;
-    this.accessToken = params.accessToken;
-    this.ssrfPolicy = params.ssrfPolicy;
-    this.dispatcherPolicy = params.dispatcherPolicy;
-    this.captureRequestAuthority = params.captureRequestAuthority;
-    this.captureSendCurrentness = params.captureSendCurrentness;
-    this.signal = params.signal;
-  }
+  constructor(private readonly params: MatrixAuthedHttpClientParams) {}
 
   private async request(params: MatrixHttpRequestParams) {
+    const { captureRequestAuthority, captureSendCurrentness, ...auth } = this.params;
     const result = await performMatrixRequest({
       ...params,
-      homeserver: this.homeserver,
-      accessToken: this.accessToken,
-      ssrfPolicy: this.ssrfPolicy,
-      dispatcherPolicy: this.dispatcherPolicy,
-      assertCurrent: this.captureRequestAuthority?.(),
-      assertSendCurrent: this.captureSendCurrentness?.(),
-      signal: this.signal,
+      ...auth,
+      assertCurrent: captureRequestAuthority?.call(this),
+      assertSendCurrent: captureSendCurrentness?.call(this),
     });
     if (!result.response.ok) {
       throw buildHttpError(result.response.status, result.text);

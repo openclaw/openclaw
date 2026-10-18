@@ -15,6 +15,11 @@ import { createConfigIO } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "../../config/write-lock.js";
 import * as gatewayEntrypoint from "../../daemon/gateway-entrypoint.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+  type DeferredPluginMigration,
+} from "../../infra/deferred-plugin-migrations.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
@@ -58,6 +63,55 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   dirs.cleanup();
+});
+
+it("preserves deferred Canvas inputs through update preparation and a channel write", async () => {
+  const home = channelDirs.make("update-deferred-canvas-config-");
+  const configPath = path.join(home, "openclaw.json");
+  const canvasHost = { root: "/retained/canvas-documents" };
+  const authored = { gateway: { mode: "local" }, update: { channel: "stable" }, canvasHost };
+  const original = JSON.stringify(authored);
+  await fs.writeFile(configPath, original);
+  await withEnvAsync(
+    {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_STATE_DIR: home,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+    async () => {
+      const pending: DeferredPluginMigration = {
+        pluginId: "canvas",
+        reason: "Canvas document migration is unfinished.",
+        command: "openclaw doctor --fix",
+        requiresStateMigration: true,
+        configPaths: [["canvasHost"]],
+        validationExcludedPaths: [["canvasHost"]],
+      };
+      await recordDeferredPluginMigrations({ pending: [pending] });
+      await closeOpenClawStateDatabaseAsync();
+
+      const before = await readUpdateChannelConfig(false);
+      expect(before.configSnapshot.valid).toBe(true);
+      expect(before.storedChannel).toBe("stable");
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+      const prepared = await preparePostCorePluginConfig({
+        requestedChannel: "beta",
+        observe: false,
+      });
+
+      expect(prepared.configSnapshot.valid).toBe(true);
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toMatchObject({
+        canvasHost,
+        update: { channel: "beta" },
+      });
+      expect(readDeferredPluginMigrations()).toEqual([pending]);
+      expect((await config.readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+    },
+  );
 });
 
 it("retains the stored channel during tolerant invalid config reads without rewriting source", async () => {
@@ -380,7 +434,6 @@ it.each([
                   npm: { changed: false, outcomes: [] },
                   integrityDrifts: [],
                 },
-                freshDoctorRequired: false,
                 yes: true,
                 json: true,
                 timeoutMs: 1_000,

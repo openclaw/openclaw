@@ -146,9 +146,11 @@ describe("Code Mode model matrix options", () => {
   it("rejects ambiguous selectors and output paths", () => {
     expect(() => parseCodeModeMatrixOptions([])).toThrow("At least one --model");
     expect(() => parseCodeModeMatrixOptions(["--model", "qwen3.5:9b"])).toThrow("provider/model");
-    expect(() =>
-      parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b", "--skip-build"]),
-    ).toThrow("Unknown argument");
+    for (const arg of ["--skip-build", "constructor", "toString", "__proto__"]) {
+      expect(() => parseCodeModeMatrixOptions(["--model", "ollama/qwen3.5:9b", arg, "1"])).toThrow(
+        `Unknown argument: ${arg}`,
+      );
+    }
     expect(() =>
       parseCodeModeMatrixOptions([
         "--model",

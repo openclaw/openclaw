@@ -56,252 +56,162 @@ function sessionUpdate(sessionId: string, title = "Session"): AnyMessage {
 }
 
 describe("AcpSessionNewOrdering", () => {
-  it("does not establish a session ID named by a request the protocol has not accepted", async () => {
-    const prompted = sessionUpdate("never-created");
-    const result = newSessionResponse(2, "other-session");
+  const a1 = sessionUpdate("a", "a1");
+  const a2 = sessionUpdate("a", "a2");
+  const a3 = sessionUpdate("a", "a3");
+  const b1 = sessionUpdate("b", "b1");
+  const createdA = newSessionResponse(1, "a");
+  const createdB = newSessionResponse(2, "b");
+  const failed = (id: number): AnyMessage => ({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32602, message: "rejected" },
+  });
+  const load = (id: number) => request(id, "session/load", { sessionId: "a", cwd: "/tmp" });
+  const failA = failed(1);
+  const failB = failed(2);
+  const acceptedLoad: AnyMessage = { jsonrpc: "2.0", id: 11, result: {} };
+  const rejectedLoad = failed(10);
+  const stringIdResponse: AnyMessage = { jsonrpc: "2.0", id: "1", result: { sessionId: "a" } };
+  const permission = request(1, "session/request_permission", { options: [] });
 
-    // A prompt cannot establish a session the translator will reject as unknown.
-    await expect(
-      runSteps([
-        { inbound: request(5, "session/prompt", { sessionId: "never-created", prompt: [] }) },
+  const buffered = Array.from({ length: 257 }, (_, i) => sessionUpdate("unbounded", `update-${i}`));
+  const burstResults = Array.from({ length: 600 }, (_, i) => newSessionResponse(i + 1, `s${i}`));
+  const burstUpdates = Array.from({ length: 600 }, (_, i) => sessionUpdate(`s${i}`));
+  const establishedResults = Array.from({ length: 1100 }, (_, i) =>
+    newSessionResponse(i + 1, `s${i}`),
+  );
+  const lateUpdate = sessionUpdate("late-session");
+  const lateResult = newSessionResponse(9000, "late-session");
+
+  it.each<{ name: string; steps: Step[]; expected: AnyMessage[] }>([
+    {
+      name: "does not recognize a session named by an unaccepted prompt",
+      steps: [
+        { inbound: request(5, "session/prompt", { sessionId: "a", prompt: [] }) },
         { inbound: newSessionRequest(2) },
-        { outbound: prompted },
-        { outbound: result },
-      ]),
-    ).resolves.toEqual([result, prompted]);
-  });
-
-  it("keeps a numeric request ID distinct from the same string ID", async () => {
-    const stringIdResponse = { jsonrpc: "2.0", id: "2", result: { sessionId: "s" } } as AnyMessage;
-
-    await expect(
-      runSteps([
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [createdB, a1],
+    },
+    {
+      name: "keeps numeric and string request IDs distinct",
+      steps: [{ inbound: newSessionRequest(1) }, { outbound: a1 }, { outbound: stringIdResponse }],
+      expected: [stringIdResponse],
+    },
+    {
+      name: "retires recognition on session close",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: createdA },
+        { inbound: request(9, "session/close", { sessionId: "a" }) },
         { inbound: newSessionRequest(2) },
-        { outbound: sessionUpdate("s") },
-        { outbound: stringIdResponse },
-      ]),
-    ).resolves.toEqual([stringIdResponse]);
-  });
-
-  it("writes updates through once a session's buffer is full", async () => {
-    const buffered = Array.from({ length: 256 }, (_, index) =>
-      sessionUpdate("unbounded", `buffered-${index}`),
-    );
-    const overflow = sessionUpdate("unbounded", "overflow");
-
-    const output = await runSteps([
-      { inbound: newSessionRequest(1) },
-      ...buffered.map((outbound) => ({ outbound })),
-      { outbound: overflow },
-    ]);
-
-    // Overflow may bypass creation ordering, but must preserve the session's backlog.
-    expect(output).toEqual([...buffered, overflow]);
-  });
-
-  it("releases an established session ID when the session closes", async () => {
-    const created = newSessionResponse(2, "closing-session");
-    const afterClose = sessionUpdate("closing-session", "after close");
-    const other = newSessionResponse(3, "other-session");
-
-    const output = await runSteps([
-      { inbound: newSessionRequest(2) },
-      { outbound: created },
-      { inbound: request(9, "session/close", { sessionId: "closing-session" }) },
-      { inbound: newSessionRequest(3) },
-      { outbound: afterClose },
-      { outbound: other },
-    ]);
-
-    // A late update must wait again once close has retired recognition.
-    expect(output).toEqual([created, other, afterClose]);
-  });
-
-  it("releases interleaved updates in global arrival order when both creations fail", async () => {
-    const a1 = sessionUpdate("session-a", "a1");
-    const b1 = sessionUpdate("session-b", "b1");
-    const a2 = sessionUpdate("session-a", "a2");
-    const failA = { jsonrpc: "2.0", id: 1, error: { code: -32603, message: "a" } } as AnyMessage;
-    const failB = { jsonrpc: "2.0", id: 2, error: { code: -32603, message: "b" } } as AnyMessage;
-
-    const output = await runSteps([
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: failA },
-      { outbound: failB },
-    ]);
-
-    // Without any established session, drain globally rather than grouping a1 with a2.
-    expect(output).toEqual([failA, failB, a1, b1, a2]);
-  });
-
-  it("keeps ordering through a burst larger than any cap this file ever carried", async () => {
-    const steps: Step[] = [];
-    // Past the 512 distinct-session cap this used to carry. A rate limit bounds
-    // arrivals, not concurrency, so a slow backend can hold more than that.
-    const BURST = 600;
-    for (let id = 1; id <= BURST; id += 1) {
-      steps.push({ inbound: newSessionRequest(id) });
-    }
-    // All updates arrive before any creation settles.
-    const updates: AnyMessage[] = [];
-    for (let id = 1; id <= BURST; id += 1) {
-      const update = sessionUpdate(`s${id}`);
-      updates.push(update);
-      steps.push({ outbound: update });
-    }
-    const results: AnyMessage[] = [];
-    for (let id = 1; id <= BURST; id += 1) {
-      const result = newSessionResponse(id, `s${id}`);
-      results.push(result);
-      steps.push({ outbound: result });
-    }
-
-    const output = await runSteps(steps);
-
-    for (const [i, result] of results.entries()) {
-      const update = updates[i];
-      if (!update) {
-        throw new Error(`Missing update for result ${i}`);
-      }
-      expect(output.indexOf(result)).toBeGreaterThanOrEqual(0);
-      expect(output.indexOf(result)).toBeLessThan(output.indexOf(update));
-    }
-  });
-
-  it("keeps ordering for a bridge that outlives any established-session bound", async () => {
-    const steps: Step[] = [];
-    // A long-lived bridge that never closes its sessions: well past the 1024 bound
-    // this used to carry, ordering must still hold for the next session created.
-    for (let id = 1; id <= 1100; id += 1) {
-      steps.push(
-        { inbound: newSessionRequest(id) },
-        { outbound: newSessionResponse(id, `s${id}`) },
-      );
-    }
-    const update = sessionUpdate("late-session");
-    const created = newSessionResponse(9000, "late-session");
-    steps.push({ inbound: newSessionRequest(9000) }, { outbound: update }, { outbound: created });
-
-    const output = await runSteps(steps);
-
-    expect(output.slice(-2)).toEqual([created, update]);
-  });
-
-  it("retires a loaded session the agent rejected", async () => {
-    const rejected = {
-      jsonrpc: "2.0",
-      id: 4,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const late = sessionUpdate("client-chosen");
-    const other = newSessionResponse(5, "other-session");
-
-    const output = await runSteps([
-      {
-        inbound: request(4, "session/load", {
-          sessionId: "client-chosen",
-          cwd: "/tmp",
-          mcpServers: [{}],
-        }),
-      },
-      { outbound: rejected },
-      { inbound: newSessionRequest(5) },
-      { outbound: late },
-      { outbound: other },
-    ]);
-
-    // Rejection must retire the client-chosen ID so its late update waits again.
-    expect(output).toEqual([rejected, other, late]);
-  });
-
-  it("keeps recognizing a live session whose reload was rejected", async () => {
-    const created = newSessionResponse(2, "live-session");
-    const rejectedReload = {
-      jsonrpc: "2.0",
-      id: 6,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const update = sessionUpdate("live-session", "still live");
-
-    const output = await runSteps([
-      { inbound: newSessionRequest(2) },
-      { outbound: created },
-      { inbound: request(6, "session/load", { sessionId: "live-session", cwd: "/tmp" }) },
-      { outbound: rejectedReload },
-      { inbound: newSessionRequest(7) },
-      { outbound: update },
-    ]);
-
-    // Rejecting a reload must preserve recognition established by creation.
-    expect(output).toEqual([created, rejectedReload, update]);
-  });
-
-  it("never lets an update pass an earlier one from the same session", async () => {
-    const a1 = sessionUpdate("sa", "a1");
-    const b1 = sessionUpdate("sb", "b1");
-    const a2 = sessionUpdate("sa", "a2");
-    const a3 = sessionUpdate("sa", "a3");
-    const resultA = newSessionResponse(1, "sa");
-    const resultB = newSessionResponse(2, "sb");
-
-    const output = await runSteps([
-      { inbound: newSessionRequest(1) },
-      { inbound: newSessionRequest(2) },
-      { outbound: a1 },
-      { outbound: b1 },
-      { outbound: a2 },
-      { outbound: resultA },
-      { outbound: a3 },
-      { outbound: resultB },
-    ]);
-
-    // resultA releases sa's backlog in order, so a3 follows a2 rather than overtaking
-    // it, and neither waits on sb.
-    expect(output).toEqual([resultA, a1, a2, a3, resultB, b1]);
-  });
-
-  it("keeps recognition established by one load when an overlapping load fails", async () => {
-    const load = (id: number) => request(id, "session/load", { sessionId: "shared", cwd: "/tmp" });
-    const accepted = { jsonrpc: "2.0", id: 11, result: {} } as AnyMessage;
-    const rejected = {
-      jsonrpc: "2.0",
-      id: 10,
-      error: { code: -32602, message: "no" },
-    } as AnyMessage;
-    const update = sessionUpdate("shared");
-
-    const output = await runSteps([
-      { inbound: load(10) },
-      { inbound: load(11) },
-      // The second load succeeds first; the first is then rejected.
-      { outbound: accepted },
-      { outbound: rejected },
-      { inbound: newSessionRequest(12) },
-      { outbound: update },
-    ]);
-
-    // Load 11 confirmed the session. Load 10's rejection retires only its own claim,
-    // so the session stays recognized and its update goes straight out.
-    expect(output).toEqual([accepted, rejected, update]);
-  });
-
-  it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
-    const update = sessionUpdate("s");
-    // Agent-to-client request IDs may collide with an in-flight session/new.
-    const permission = request(5, "session/request_permission", { options: [] });
-    const created = newSessionResponse(5, "s");
-
-    await expect(
-      runSteps([
-        { inbound: newSessionRequest(5) },
-        { outbound: update },
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [createdA, createdB, a1],
+    },
+    {
+      name: "drains failed creations in global arrival order",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+        { outbound: b1 },
+        { outbound: a2 },
+        { outbound: failA },
+        { outbound: failB },
+      ],
+      expected: [failA, failB, a1, b1, a2],
+    },
+    {
+      name: "retires recognition after a rejected load",
+      steps: [
+        { inbound: request(1, "session/load", { sessionId: "a", cwd: "/tmp", mcpServers: [{}] }) },
+        { outbound: failA },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+        { outbound: createdB },
+      ],
+      expected: [failA, createdB, a1],
+    },
+    {
+      name: "preserves live recognition after a rejected reload",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: createdA },
+        { inbound: load(10) },
+        { outbound: rejectedLoad },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+      ],
+      expected: [createdA, rejectedLoad, a1],
+    },
+    {
+      name: "never lets a session update overtake its backlog",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+        { outbound: b1 },
+        { outbound: a2 },
+        { outbound: createdA },
+        { outbound: a3 },
+        { outbound: createdB },
+      ],
+      expected: [createdA, a1, a2, a3, createdB, b1],
+    },
+    {
+      name: "preserves an accepted load when an overlapping load fails",
+      steps: [
+        { inbound: load(10) },
+        { inbound: load(11) },
+        { outbound: acceptedLoad },
+        { outbound: rejectedLoad },
+        { inbound: newSessionRequest(2) },
+        { outbound: a1 },
+      ],
+      expected: [acceptedLoad, rejectedLoad, a1],
+    },
+    {
+      name: "does not settle a creation on an agent-initiated request with the same ID",
+      steps: [
+        { inbound: newSessionRequest(1) },
+        { outbound: a1 },
         { outbound: permission },
-        { outbound: created },
-      ]),
-    ).resolves.toEqual([permission, created, update]);
+        { outbound: createdA },
+      ],
+      expected: [permission, createdA, a1],
+    },
+    {
+      name: "writes a full session buffer through without dropping its backlog",
+      steps: [{ inbound: newSessionRequest(1) }, ...buffered.map((outbound) => ({ outbound }))],
+      expected: buffered,
+    },
+    {
+      name: "keeps ordering beyond the former 512 concurrent-session cap",
+      steps: [
+        ...burstResults.map((_, i) => ({ inbound: newSessionRequest(i + 1) })),
+        ...burstUpdates.map((outbound) => ({ outbound })),
+        ...burstResults.map((outbound) => ({ outbound })),
+      ],
+      expected: burstResults.flatMap((result, i) => [result, burstUpdates[i]!]),
+    },
+    {
+      name: "keeps ordering beyond the former 1024 established-session cap",
+      steps: [
+        ...establishedResults.flatMap((outbound, i) => [
+          { inbound: newSessionRequest(i + 1) },
+          { outbound },
+        ]),
+        { inbound: newSessionRequest(9000) },
+        { outbound: lateUpdate },
+        { outbound: lateResult },
+      ],
+      expected: [...establishedResults, lateResult, lateUpdate],
+    },
+  ])("$name", async ({ steps, expected }) => {
+    await expect(runSteps(steps)).resolves.toEqual(expected);
   });
 });

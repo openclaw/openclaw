@@ -35,16 +35,13 @@ final class MacControlServer {
     static let shared = MacControlServer()
     private nonisolated static let logger = Logger(subsystem: "ai.openclaw", category: "mac-control")
 
-    private var listener: LocalSocketServer?
-    private var startup: Task<Void, Never>?
-    private var cleanup: Task<Void, Never>?
-    private var generation: UInt64 = 0
+    private var startup = LocalSocketServer.Startup<LocalSocketServer>()
 
     func start() {
-        guard self.listener == nil, self.startup == nil,
+        guard self.startup.listener == nil, self.startup.task == nil,
               AppProfile.current.validationError == nil else { return }
-        self.generation &+= 1
-        let generation = self.generation
+        self.startup.generation &+= 1
+        let generation = self.startup.generation
         let directory = AppProfile.current.stateDirectoryURL()
         let tokenURL = directory.appendingPathComponent(MacControlCredentials.tokenFilename)
         let listener = LocalSocketServer(
@@ -52,9 +49,9 @@ final class MacControlServer {
             logger: Self.logger)
         let handler = MacControlRequestHandler(owner: MacControlLiveOwner())
         let authenticator = MacControlRequestAuthenticator()
-        let previousCleanup = self.cleanup
-        self.listener = listener
-        self.startup = Task { [weak self] in
+        let previousCleanup = self.startup.cleanup
+        self.startup.listener = listener
+        self.startup.task = Task { [weak self] in
             await previousCleanup?.value
             guard !Task.isCancelled else { return }
             let ready = await withTaskCancellationHandler {
@@ -70,37 +67,23 @@ final class MacControlServer {
             } onCancel: {
                 listener.stop()
             }
-            guard let self, self.generation == generation, !Task.isCancelled else {
+            guard let self, self.startup.generation == generation, !Task.isCancelled else {
                 await listener.stop().value
                 return
             }
-            self.startup = nil
+            self.startup.task = nil
             if !ready {
                 Self.logger
                     .error("App control listener could not start; check the profile socket and credential permissions.")
-                self.cleanup = listener.stop()
-                self.listener = nil
+                self.startup.cleanup = listener.stop()
+                self.startup.listener = nil
             }
         }
     }
 
     @discardableResult
     func stop() -> Task<Void, Never>? {
-        self.generation &+= 1
-        let startup = self.startup
-        startup?.cancel()
-        let shutdown = self.listener?.stop()
-        self.startup = nil
-        self.listener = nil
-        guard startup != nil || shutdown != nil else { return self.cleanup }
-        let previous = self.cleanup
-        let cleanup = Task {
-            await previous?.value
-            await startup?.value
-            await shutdown?.value
-        }
-        self.cleanup = cleanup
-        return cleanup
+        self.startup.stop { $0.stop() }
     }
 
     private nonisolated static func handleClient(

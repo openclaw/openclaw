@@ -1,12 +1,16 @@
 import { vi } from "vitest";
+import * as gatewayLockPayload from "../infra/gateway-lock-payload.js";
 import * as gatewayStateOwner from "../infra/gateway-state-owner.js";
+import * as processAncestry from "../infra/restart-stale-pids.js";
 
 const hostPlatform = process.platform;
 
 export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
   const actual = { ...gatewayStateOwner };
+  const actualPayload = { ...gatewayLockPayload };
+  const actualAncestry = { ...processAncestry };
   const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-  // Service transports are synthetic; physical state custody keeps the host filesystem rules.
+  // Service transports are synthetic; physical state and process probes keep the host rules.
   const onHost = <Args extends unknown[], Result>(operation: (...args: Args) => Result) => {
     return (...args: Args): Result => {
       const servicePlatform = process.platform;
@@ -33,6 +37,12 @@ export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
       return lease;
     };
   };
+  vi.spyOn(gatewayLockPayload, "readGatewayLockProcessNamespace").mockImplementation(
+    onHost(actualPayload.readGatewayLockProcessNamespace),
+  );
+  vi.spyOn(gatewayLockPayload, "classifyGatewayLockProcessNamespace").mockImplementation(
+    onHost(actualPayload.classifyGatewayLockProcessNamespace),
+  );
   vi.spyOn(gatewayStateOwner, "resolveGatewayStateOwnerPath").mockImplementation(
     onHost(actual.resolveGatewayStateOwnerPath),
   );
@@ -54,4 +64,15 @@ export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
   vi.spyOn(gatewayStateOwner, "assertStateDatabaseAccessAllowed").mockImplementation(
     onHost(actual.assertStateDatabaseAccessAllowed),
   );
+  // Sibling fixtures may already own synthetic ancestry; only route real probes to the host.
+  if (!vi.isMockFunction(actualAncestry.inspectSelfAndAncestorPidsSync)) {
+    vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockImplementation(
+      onHost(actualAncestry.inspectSelfAndAncestorPidsSync),
+    );
+  }
+  if (!vi.isMockFunction(actualAncestry.getSelfAndAncestorPidsSync)) {
+    vi.spyOn(processAncestry, "getSelfAndAncestorPidsSync").mockImplementation(
+      onHost(actualAncestry.getSelfAndAncestorPidsSync),
+    );
+  }
 }

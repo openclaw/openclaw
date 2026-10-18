@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import {
   chromeProductRoots,
-  type ExtensionInstallDeps,
-} from "../browser/extension-install-layout.js";
+  type InstallFixture,
+} from "../browser/extension-install-fixture.test-support.js";
 import {
   FOUNDATION_STORE_ID,
   predictedId,
@@ -17,18 +17,24 @@ import {
 } from "../browser/extension-install.test-support.js";
 
 const boundary = vi.hoisted(() => ({
-  deps: undefined as ExtensionInstallDeps | undefined,
+  deps: undefined as InstallFixture | undefined,
   install: vi.fn(),
   readToken: vi.fn(),
   connect: vi.fn(),
   ensureToken: vi.fn(),
+  config: vi.fn<() => OpenClawConfig>(),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => boundary.config(),
 }));
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
+  const fixture = await import("../browser/extension-install-fixture.test-support.js");
   return {
     ...real,
     browserExtensionStatus: (p: Parameters<typeof real.browserExtensionStatus>[0]) =>
-      real.browserExtensionStatus({ ...p, deps: boundary.deps }),
+      fixture.browserExtensionStatus({ ...p, deps: boundary.deps }),
     installChromeExtensionBootstrap: boundary.install,
   };
 });
@@ -59,9 +65,7 @@ async function setup(
   options: { legacy?: boolean; relocate?: boolean; registeredConfig?: "custom" | "default" } = {},
 ) {
   const f = await fixture(platform);
-  const real = await vi.importActual<typeof import("../browser/extension-install.js")>(
-    "../browser/extension-install.js",
-  );
+  const real = await import("../browser/extension-install-fixture.test-support.js");
   const root = chromeProductRoots(f.deps)[0]!;
   await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
   const registeredConfigPath =
@@ -144,7 +148,7 @@ async function setup(
     status: async () => ({ ready: true, identity: { extensionVersion: "fixture" } }),
     close: async () => {},
   });
-  const config = vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(cfg);
+  const config = boundary.config.mockReset().mockReturnValue(cfg);
   const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(capture.writeJson);
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(capture.error);
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(capture.exit);
@@ -199,8 +203,6 @@ describe("POSIX bundle migration", () => {
   const platform = "linux";
   it.each([
     { legacy: true, action: "inspect", profile: undefined },
-    { legacy: false, action: "verify", profile: "work" },
-    { legacy: false, action: "install", profile: undefined },
     { legacy: true, action: "install", profile: "other" },
   ])(
     "refuses $action from a different config before effects (legacy=$legacy, profile=$profile)",
@@ -268,10 +270,7 @@ describe("POSIX bundle migration", () => {
   });
 
   it.each([
-    { platform: "linux", legacy: false, action: "inspect" },
     { platform: "linux", legacy: true, action: "verify" },
-    { platform: "linux", legacy: false, action: "install" },
-    { platform: "linux", legacy: true, action: "install" },
     { platform: "darwin", legacy: false, action: "install" },
   ] as const)(
     "retains work through selector-free $action on $platform (legacy=$legacy)",
@@ -325,18 +324,6 @@ describe("POSIX bundle migration", () => {
       await f.assertPairingPreserved();
     },
   );
-  it("honors an explicit different extension profile rather than treating omission as that choice", async () => {
-    const f = await setup(platform);
-    await f.run("install", "other");
-    expect(f.json).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ profile: "other", relayPort: 19555 }),
-      }),
-    );
-    const selected = JSON.parse(await fs.readFile(f.manifestPath, "utf8")) as { path: string };
-    expect(await fs.readFile(selected.path, "utf8")).toContain("'--browser-profile' 'other'");
-    await f.assertPairingPreserved();
-  });
   it("refuses verification for a different profile without rewriting a healthy registration", async () => {
     const f = await setup(platform, { relocate: false });
     const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);

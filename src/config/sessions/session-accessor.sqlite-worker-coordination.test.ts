@@ -1,12 +1,15 @@
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
+import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   withSqliteMutationWorkerCoordination,
@@ -25,6 +28,75 @@ function createWaitingWorker() {
 }
 
 describe("SQLite mutation worker ownership", () => {
+  it("admits a host profile write while reconciliation publishes a cold quarantine fact", async () => {
+    await withOpenClawTestState(
+      { scenario: "external-service", label: "reconcile-cold-quarantine" },
+      async (state) => {
+        openOpenClawStateDatabase();
+        seedOpenClawDatabaseQuarantine({
+          path: state.path("unrelated.sqlite"),
+          kind: "agent",
+          reason: "synthetic unrelated damage",
+        });
+        const context = captureOpenClawStateWorkerContext();
+        const release = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+        // Task workers also have a general metadata relay. The lifecycle channel
+        // must win when a synchronous host write needs to service the lock holder.
+        const fallback = createSqliteDatabaseAdmissionRelay(() => {});
+        const worker = new Worker(
+          new URL(
+            "./session-accessor.sqlite-worker-coordination.worker.test-support.mjs",
+            import.meta.url,
+          ),
+          {
+            execArgv: [],
+            workerData: {
+              operation: "cold-quarantine",
+              release: release.buffer,
+              agentPath: state.path("cold.sqlite"),
+              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
+            },
+          },
+        );
+        try {
+          await withSqliteWorkerLifecycleCoordination(
+            context,
+            "cold-quarantine",
+            async (coordination) => {
+              const held = once(worker, "message");
+              const exited = once(worker, "exit");
+              worker.postMessage({ ...coordination, fallbackAdmission: fallback.port }, [
+                fallback.port,
+                ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
+              ]);
+              expect(await held).toEqual(["held"]);
+              const finished = once(worker, "message");
+              Atomics.store(release, 0, 1);
+              Atomics.notify(release, 0);
+              const profile = ensureProfileForEmail("concurrent@example.test");
+              expect(
+                openOpenClawStateDatabase()
+                  .db.prepare("SELECT profile_id FROM user_profile_emails WHERE email = ?")
+                  .get("concurrent@example.test"),
+              ).toEqual({ profile_id: profile.id });
+              expect(await finished).toEqual(["checked"]);
+              expect(await exited).toEqual([0]);
+            },
+            async () => {
+              await worker.terminate();
+            },
+            "reconciliation",
+          );
+        } finally {
+          Atomics.store(release, 0, 1);
+          Atomics.notify(release, 0);
+          await worker.terminate();
+          fallback.finish();
+        }
+      },
+    );
+  });
+
   it("allows accepted cleanup after the close owner revokes new reads", async () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "mutation-worker-retained-close" },

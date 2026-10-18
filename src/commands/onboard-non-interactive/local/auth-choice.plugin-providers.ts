@@ -10,6 +10,8 @@ import {
   materializeUtilityModelSeparation,
   resolveUtilityModelSeparationError,
 } from "../../../config/utility-model-separation-migration.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
+import { runBestEffortCleanup } from "../../../infra/non-fatal-cleanup.js";
 import { enablePluginWithCapabilityConsent } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
 import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
@@ -25,7 +27,6 @@ import type {
   ProviderPlugin,
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { createLazyRuntimeNamedExport } from "../../../shared/lazy-runtime.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import {
   prepareAgentModelDefaults,
@@ -38,11 +39,6 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureModelSelectionRuntimePlugins,
 } from "../../runtime-plugin-install.js";
-
-const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeNamedExport(
-  () => import("./auth-choice.plugin-providers.runtime.js"),
-  "authChoicePluginProvidersRuntime",
-);
 
 /** Applies a plugin-defined auth choice, or returns undefined when it is not plugin-backed. */
 export async function applyNonInteractivePluginProviderChoice(
@@ -106,7 +102,7 @@ export async function applyNonInteractivePluginProviderChoice(
     resolveOwningPluginIdsForProviderRef,
     resolveProviderPluginChoice,
     resolvePluginProviders,
-  } = await loadAuthChoicePluginProvidersRuntime();
+  } = (await import("./auth-choice.plugin-providers.runtime.js")).authChoicePluginProvidersRuntime;
   const owningPluginIds = preferredProviderId
     ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
@@ -297,7 +293,7 @@ export async function applyNonInteractivePluginProviderChoice(
     await import("../../../system-agent/setup-inference-credentials.js");
   let result: OpenClawConfig | null;
   if (
-    isSetupCredentialReplacement({
+    await isSetupCredentialReplacement({
       provider: providerChoice.provider.id,
       baseConfig: params.baseConfig,
       agentDir,
@@ -305,10 +301,12 @@ export async function applyNonInteractivePluginProviderChoice(
   ) {
     const [
       { withAuthProfileStoreAgentDir, clearRuntimeAuthProfileStoreSnapshot },
-      { loadAuthProfileStoreWithoutExternalProfiles, saveAuthProfileStore },
+      { loadAuthProfileStoreWithoutExternalProfilesAsync, saveAuthProfileStore },
       { loadPersistedAuthProfileStore },
       { closeAuthProfileReadPool },
-      { closeOpenClawAgentDatabases },
+      { closeOpenClawAgentDatabasesAsync },
+      { closeOpenClawStateDatabaseByPathAsync },
+      { resolveOpenClawStateSqlitePath },
       { splitTrailingAuthProfile },
       { resolveSetupModel },
       { prepareCustomSetupCredentials },
@@ -318,11 +316,13 @@ export async function applyNonInteractivePluginProviderChoice(
       import("../../../agents/auth-profiles/persisted.js"),
       import("../../../agents/auth-profiles/sqlite.js"),
       import("../../../state/openclaw-agent-db.js"),
+      import("../../../state/openclaw-state-db.js"),
+      import("../../../state/openclaw-state-db.paths.js"),
       import("../../../agents/model-ref-profile.js"),
       import("../../../system-agent/setup-inference-core.js"),
       import("../../../system-agent/setup-inference-custom.js"),
     ]);
-    const realStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+    const realStore = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
     // This is preparation for the same owner, not a new agent. Preserve static
     // metadata even when cross-agent copying is disabled; never clone refresh material.
     const seeded = {
@@ -377,7 +377,7 @@ export async function applyNonInteractivePluginProviderChoice(
       if (profiles.length > 0) {
         const selected =
           modelTarget === "utility"
-            ? result.agents?.defaults?.utilityModel?.trim()
+            ? resolveAgentModelPrimaryValue(result.agents?.defaults?.utilityModel)
             : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
         const modelRef = resolveSetupModel({
           label: providerChoice.provider.label,
@@ -410,8 +410,18 @@ export async function applyNonInteractivePluginProviderChoice(
     } finally {
       clearRuntimeAuthProfileStoreSnapshot(stagingAgentDir);
       closeAuthProfileReadPool({ kind: "root", rootPath: stagingRoot });
-      closeOpenClawAgentDatabases(stagingRoot);
-      await fs.rm(stagingRoot, { recursive: true, force: true });
+      await closeOpenClawAgentDatabasesAsync(stagingRoot);
+      await closeOpenClawStateDatabaseByPathAsync(
+        resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stagingRoot }),
+      );
+      await runBestEffortCleanup({
+        cleanup: () =>
+          fs.rm(stagingRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }),
+        onError: (error) =>
+          params.runtime.error(
+            `Warning: Could not remove setup credential staging directory ${stagingRoot}: ${formatErrorMessage(error)}. Remove it manually if it persists.`,
+          ),
+      });
     }
     if (savedProfileId) {
       return reject(
@@ -426,7 +436,7 @@ export async function applyNonInteractivePluginProviderChoice(
   }
   const selectedModel =
     modelTarget === "utility"
-      ? result.agents?.defaults?.utilityModel?.trim()
+      ? resolveAgentModelPrimaryValue(result.agents?.defaults?.utilityModel)
       : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
   if (modelTarget === "utility") {
     if (!selectedModel) {

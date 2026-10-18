@@ -10,6 +10,10 @@ const { default: plugin } = await import(
 const { createPluginStateSyncKeyedStore } = await import(
   pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-state-store-runtime.js"))
 );
+const { createTestPluginServiceScheduler } = await import(
+  pathToFileURL(path.join(root, "dist/plugin-sdk/plugin-test-api.js"))
+);
+const scheduler = createTestPluginServiceScheduler();
 const stores = new Map();
 const openKeyedStore = (options) => {
   if (!stores.has(options.namespace)) {
@@ -164,7 +168,11 @@ const timer = setTimeout(
   15000,
 );
 try {
-  service.start({ logger, serviceHealth: { clearFailure() {}, reportFailure: completed.reject } });
+  await service.start({
+    scheduler,
+    logger,
+    serviceHealth: { clearFailure() {}, reportFailure: completed.reject },
+  });
   await completed.promise;
   const cursor = cursors.lookup("fixture");
   const subjects = dispatched.map((turn) => turn.sessionKey);
@@ -198,7 +206,8 @@ try {
     assert(!logs.some((text) => text.includes("sweep failed=")));
     await service.stop();
     completed = Promise.withResolvers();
-    service.start({
+    await service.start({
+      scheduler,
       logger,
       serviceHealth: { clearFailure() {}, reportFailure: completed.reject },
     });
@@ -211,6 +220,7 @@ try {
 } finally {
   clearTimeout(timer);
   await service.stop();
+  await scheduler.stop();
   for (const socket of sockets) {
     socket.destroy();
   }

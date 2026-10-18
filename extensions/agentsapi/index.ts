@@ -7,7 +7,21 @@ export default definePluginEntry({
   name: "OpenAI Agents API",
   description: "OpenAI Agents API harness with hosted or self-hosted sessions.",
   configSchema: buildPluginConfigSchema(agentsApiConfigSchema),
+  reload: {
+    noopPrefixes: ["plugins.entries.agentsapi.config.plugins"],
+  },
   register(api) {
-    api.registerAgentHarness(createAgentsApiHarness(api.runtime));
+    const config = agentsApiConfigSchema.parse(api.pluginConfig ?? {});
+    api.registerAgentHarness({
+      ...createAgentsApiHarness(api.runtime),
+      ...(config.environment === "openai_hosted"
+        ? {
+            workspaceEnvironment: {
+              kind: "provider-hosted" as const,
+              label: "OpenAI (Agents API)",
+            },
+          }
+        : {}),
+    });
   },
 });

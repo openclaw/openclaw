@@ -1,19 +1,23 @@
-import type { SessionsListResult } from "../../api/types.ts";
-import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
+import { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { compareSessionRowsByUpdatedAt } from "../../lib/sessions/navigation.ts";
 import { normalizeAgentId, resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import {
+  hasSessionChangedAncestorCoverage,
+  parseSessionChangedEvent,
+  matchesExistingSession,
+  reconcileSessionChangedRow,
+  sessionChangedSnapshots,
+} from "../../lib/sessions/session-row-reconcile.ts";
 
-export type CurrentWorkChange = Pick<
-  NonNullable<ReturnType<typeof readSessionChangedEvent>>,
-  | "key"
-  | "agentId"
-  | "sessionId"
-  | "runId"
-  | "reason"
-  | "updatedAt"
-  | "hasActiveRun"
-  | "activeRunIds"
-  | "status"
->;
+export type CurrentWorkChange = NonNullable<ReturnType<typeof parseSessionChangedEvent>>[0] & {
+  snapshot?: unknown;
+  eventTs?: number;
+  parentKeys: readonly string[];
+  ancestorSnapshots?: readonly unknown[];
+};
+
+export const CURRENT_WORK_CHANGE_LIMIT = 1_000;
 
 export function currentWorkIdentity(session: {
   key: string;
@@ -31,10 +35,14 @@ export function currentWorkIdentity(session: {
 }
 
 export function readCurrentWorkChange(payload: unknown): CurrentWorkChange | null {
-  const change = readSessionChangedEvent(payload);
+  const parsed = parseSessionChangedEvent(payload);
+  const change = parsed?.[0];
+  const snapshot =
+    Array.isArray(parsed?.[1].ancestorSessions) && parsed?.[1].session ? payload : undefined;
   if (
     !change?.sessionId ||
-    (change.hasActiveRun === null &&
+    (!snapshot &&
+      change.hasActiveRun === null &&
       change.activeRunIds === undefined &&
       change.status === null &&
       change.reason !== "delete")
@@ -42,43 +50,137 @@ export function readCurrentWorkChange(payload: unknown): CurrentWorkChange | nul
     return null;
   }
   return {
-    key: change.key,
-    agentId: change.agentId,
-    sessionId: change.sessionId,
-    runId: change.runId,
-    reason: change.reason,
-    updatedAt: change.updatedAt,
-    hasActiveRun: change.hasActiveRun,
-    activeRunIds: change.activeRunIds,
-    status: change.status,
+    ...change,
+    parentKeys: [
+      parsed?.[2].spawnedBy,
+      parsed?.[2].controlOwnerSessionKey,
+      parsed?.[2].parentSessionKey,
+    ].filter((key): key is string => typeof key === "string" && Boolean(key)),
+    ...(typeof parsed?.[1].ts === "number" && Number.isFinite(parsed[1].ts)
+      ? { eventTs: parsed[1].ts }
+      : {}),
+    ...(snapshot ? { snapshot } : {}),
   };
+}
+
+export function readCurrentWorkChanges(payload: unknown): CurrentWorkChange[] {
+  const snapshots = sessionChangedSnapshots(payload);
+  return snapshots.flatMap((snapshot) => {
+    const change = readCurrentWorkChange(snapshot);
+    if (change?.snapshot) {
+      // Flattened ancestors retain the original event's coverage, including grandparents.
+      change.ancestorSnapshots = snapshots;
+    }
+    return change ? [change] : [];
+  });
+}
+
+export function isOlderCurrentWorkChange(
+  change: Pick<CurrentWorkChange, "updatedAt" | "snapshotAt">,
+  observed: Pick<GatewaySessionRow, "updatedAt" | "snapshotAt">,
+): boolean {
+  return (
+    (change.updatedAt !== null && (observed.updatedAt ?? 0) > change.updatedAt) ||
+    (change.snapshotAt !== undefined && (observed.snapshotAt ?? 0) > change.snapshotAt)
+  );
 }
 
 export function reconcileCurrentWork(
   result: SessionsListResult,
   changes: Iterable<CurrentWorkChange>,
-): { result: SessionsListResult; requiresRefresh: boolean; canPublish: boolean } {
+): {
+  result: SessionsListResult;
+  requiresRefresh: boolean;
+  canPublish: boolean;
+} {
   const rows = new Map(
     result.sessions.map((row) => [currentWorkIdentity(row), { row, requiresRefresh: false }]),
   );
-  const unseenActive = new Set<string>();
+  let requiresAncestorRefresh = false;
+  let requiresMembershipRefresh = false;
   for (const change of changes) {
     const identity = currentWorkIdentity(change);
     const state = rows.get(identity);
+    // A stale read can seed a retired child whose lineage still identifies held parents.
+    const lineage =
+      state?.row ?? result.sessions.find((row) => currentWorkIdentity(row) === identity);
+    if (!lineage || !isOlderCurrentWorkChange(change, lineage)) {
+      requiresAncestorRefresh ||= !hasSessionChangedAncestorCoverage(
+        result.sessions,
+        change.key,
+        [
+          lineage?.spawnedBy,
+          lineage?.controlOwnerSessionKey,
+          lineage?.parentSessionKey,
+          ...change.parentKeys,
+        ],
+        change.ancestorSnapshots,
+      );
+    }
     const activeStatus =
       change.status === "running" || change.status === "queued" ? change.status : undefined;
     const active =
       change.hasActiveRun === true || (change.hasActiveRun !== false && activeStatus !== undefined);
+    const inactive =
+      change.reason === "delete" ||
+      (change.hasActiveRun === false &&
+        (change.snapshot !== undefined || change.activeRunIds !== undefined || !change.runId));
+    const terminal = change.hasActiveRun === false || change.status !== null;
     if (!state) {
-      if (active) {
-        unseenActive.add(identity);
-      } else if (change.hasActiveRun === false || change.reason === "delete") {
-        unseenActive.delete(identity);
+      if (
+        [...rows.values()].some(({ row }) =>
+          matchesExistingSession(row, change.key, change.agentId),
+        )
+      ) {
+        requiresMembershipRefresh = true;
+        continue;
       }
+      if (change.isAncestorReference) {
+        // An unchanged reference for an entirely unheld target changes no query membership.
+        continue;
+      }
+      if (
+        isCronRunSessionKey(change.key) ||
+        (change.snapshot && parseSessionChangedEvent(change.snapshot)?.[2].isDock === true)
+      ) {
+        continue;
+      }
+      if (
+        change.snapshot &&
+        change.reason !== "delete" &&
+        change.hasActiveRun === true &&
+        !result.hasMore &&
+        rows.size < (result.limitApplied ?? 100)
+      ) {
+        const row = reconcileSessionChangedRow(undefined, change.snapshot, {
+          archivedFilter: "all",
+          admitSnapshot: true,
+        }).admittedRow;
+        if (row?.hasActiveRun === true) {
+          rows.set(identity, { row, requiresRefresh: false });
+          continue;
+        }
+      }
+      requiresMembershipRefresh ||= !inactive && (active || terminal);
       continue;
     }
     const { row } = state;
-    if (change.updatedAt !== null && (row.updatedAt ?? 0) > change.updatedAt) {
+    if (isOlderCurrentWorkChange(change, row)) {
+      continue;
+    }
+    if (change.snapshot) {
+      const reduced = reconcileSessionChangedRow(row, change.snapshot, { archivedFilter: "all" });
+      if (reduced.admittedRow) {
+        state.row = reduced.admittedRow;
+        state.requiresRefresh = false;
+        if (reduced.admittedRow.hasActiveRun !== true) {
+          rows.delete(identity);
+        }
+      } else if (reduced.deletedKey) {
+        rows.delete(identity);
+      } else {
+        state.requiresRefresh = true;
+      }
       continue;
     }
     const next = { ...row, updatedAt: change.updatedAt ?? row.updatedAt };
@@ -95,7 +197,6 @@ export function reconcileCurrentWork(
         next.activeRunIds = undefined;
       }
     } else {
-      const terminal = change.hasActiveRun === false || change.status !== null;
       if (
         terminal &&
         row.hasActiveRun === true &&
@@ -106,10 +207,7 @@ export function reconcileCurrentWork(
         state.requiresRefresh = true;
         continue;
       }
-      if (
-        (change.hasActiveRun === false && (change.activeRunIds !== undefined || !change.runId)) ||
-        change.activeRunIds?.length === 0
-      ) {
+      if (inactive || change.activeRunIds?.length === 0) {
         next.hasActiveRun = false;
         next.activeRunIds = [];
       } else if (terminal) {
@@ -124,12 +222,29 @@ export function reconcileCurrentWork(
         next.activeRunIds = change.activeRunIds ?? undefined;
       }
     }
+    if (next.hasActiveRun !== true) {
+      rows.delete(identity);
+      continue;
+    }
     state.row = next;
     state.requiresRefresh = false;
   }
   const current = [...rows.values()].filter(({ row }) => row.hasActiveRun === true);
-  const sessions = current.map(({ row }) => row);
+  const sessions = current.map(({ row }) => row).toSorted(compareSessionRowsByUpdatedAt);
   const canPublish = !current.some((state) => state.requiresRefresh);
-  const requiresRefresh = !canPublish || (!result.hasMore && unseenActive.size > 0);
-  return { result: { ...result, count: sessions.length, sessions }, requiresRefresh, canPublish };
+  const requiresRefresh =
+    requiresAncestorRefresh ||
+    requiresMembershipRefresh ||
+    !canPublish ||
+    (result.hasMore === true && sessions.length < result.sessions.length);
+  return {
+    result: {
+      ...result,
+      count: sessions.length,
+      ...(!result.hasMore ? { totalCount: sessions.length } : {}),
+      sessions,
+    },
+    requiresRefresh,
+    canPublish,
+  };
 }

@@ -1,4 +1,3 @@
-/** Playwright browser session facade. */
 export type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
@@ -20,7 +19,6 @@ export {
   armObservedDialogResponseOnPage,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
-  getObservedBrowserStateForPage,
   markObservedDialogsHandledRemotelyForPage,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,

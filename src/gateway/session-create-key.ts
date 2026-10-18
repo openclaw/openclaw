@@ -1,7 +1,25 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCatalogLocator } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toAgentStoreSessionKey } from "../routing/session-key.js";
+
+export function buildSessionCatalogImportKey(
+  agentId: string,
+  locator: SessionCatalogLocator,
+): string {
+  const digest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        locator.catalogId,
+        locator.hostId,
+        locator.sourceHomeId ?? null,
+        locator.threadId,
+      ]),
+    )
+    .digest("hex");
+  return toAgentStoreSessionKey({ agentId, requestKey: `catalog-import:${digest}` });
+}
 
 export function buildDashboardSessionKey(
   agentId: string,

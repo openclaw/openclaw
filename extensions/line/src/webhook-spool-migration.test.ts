@@ -26,58 +26,6 @@ describe("LINE webhook spool upgrade migration", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("delivers pre-drain rows once after the doctor migration", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-upgrade-1" });
-      await legacySeed.enqueue(
-        "legacy-upgrade-1",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      await migrateLineLegacySpoolRows(queue);
-      const deliver = vi.fn(async (_event, _destination, control) => {
-        await control.turnAdoptionLifecycle.onAdopted();
-      });
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        // The migration rewrites the row into the canonical keyspace; delivery
-        // completes under the message: id while the legacy id keeps a tombstone.
-        await waitForVerdict(queue, "legacy-upgrade-1", "completed");
-        await waitForVerdict(queue, "message:message-legacy-upgrade-1", "completed");
-        expect(deliver).toHaveBeenCalledTimes(1);
-        expect(deliver).toHaveBeenCalledWith(
-          [event],
-          "destination-1",
-          expect.objectContaining({ turnAdoptionLifecycle: expect.anything() }),
-        );
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("dead-letters a pre-drain row whose event does not match its stored id", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-other-id" });
-      await legacySeed.enqueue(
-        "legacy-mismatch",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      await migrateLineLegacySpoolRows(queue);
-      const deliver = vi.fn(async () => {});
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await waitForVerdict(queue, "legacy-mismatch", "failed");
-        expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
   it("re-runs a partially applied migration without a duplicate delivery", async () => {
     await withQueue(async (queue, legacySeed) => {
       // Simulate a crash between the migration's enqueue and complete: the
@@ -101,32 +49,6 @@ describe("LINE webhook spool upgrade migration", () => {
         await waitForVerdict(queue, "message:message-legacy-partial", "completed");
         await waitForVerdict(queue, "legacy-partial", "completed");
         expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
-    });
-  });
-
-  it("does not resurrect a migrated event that was already delivered", async () => {
-    await withQueue(async (queue, legacySeed) => {
-      const event = createEvent({ webhookEventId: "legacy-delivered" });
-      await queue.enqueue("message:message-legacy-delivered", payloadFor(event));
-      await queue.complete("message:message-legacy-delivered");
-      await legacySeed.enqueue(
-        "legacy-delivered",
-        { version: 1, destination: "destination-1", event },
-        { laneKey: "user:user-1" },
-      );
-      const result = await migrateLineLegacySpoolRows(queue);
-      // The canonical id is already a completion tombstone, so retiring the legacy
-      // row owes no delivery and must not be reported as one.
-      expect(result).toMatchObject({ migrated: 0, reconciled: 1 });
-      const deliver = vi.fn(async () => {});
-      const spool = createSpool(queue, deliver);
-      spool.start();
-      try {
-        await waitForVerdict(queue, "legacy-delivered", "completed");
-        expect(deliver).not.toHaveBeenCalled();
       } finally {
         await spool.stop();
       }

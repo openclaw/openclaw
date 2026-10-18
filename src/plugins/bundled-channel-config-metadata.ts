@@ -16,19 +16,16 @@ import type {
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
-const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
-  path.join("src", "config-schema.ts"),
-  path.join("src", "config-schema.js"),
-  path.join("src", "config-schema.mts"),
-  path.join("src", "config-schema.mjs"),
-  path.join("src", "config-schema.cts"),
-  path.join("src", "config-schema.cjs"),
-] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
+const CONFIG_SCHEMA_CANDIDATES = [
+  ...[".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"].map((extension) =>
+    path.join("src", `config-schema${extension}`),
+  ),
+  ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) => `channel-config-api${extension}`),
+];
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
@@ -84,45 +81,24 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
     }
   }
 
-  for (const value of Object.values(imported)) {
-    if (isBuiltChannelConfigSchema(value)) {
-      return value;
-    }
-  }
-
-  return null;
-}
-
-function getModuleLoader(modulePath: string) {
-  return getCachedPluginModuleLoader({
-    modulePath,
-    importerUrl: import.meta.url,
-    preferBuiltDist: true,
-    loaderFilename: import.meta.url,
-  });
+  return Object.values(imported).find(isBuiltChannelConfigSchema) ?? null;
 }
 
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
-  for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
-    const candidate = path.join(pluginDir, relativePath);
-    if (pluginCacheExistsSync(candidate)) {
-      return candidate;
-    }
-  }
-  for (const basename of PUBLIC_CONFIG_SURFACE_BASENAMES) {
-    for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-      const candidate = path.join(pluginDir, `${basename}${extension}`);
-      if (pluginCacheExistsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return undefined;
+  return CONFIG_SCHEMA_CANDIDATES.map((relativePath) => path.join(pluginDir, relativePath)).find(
+    pluginCacheExistsSync,
+  );
 }
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
+    const load = getCachedPluginModuleLoader({
+      modulePath,
+      importerUrl: import.meta.url,
+      preferBuiltDist: true,
+      loaderFilename: import.meta.url,
+    });
+    const imported = load(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;

@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy-shared.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
@@ -67,19 +68,36 @@ describe("Claw tool profile consent", () => {
     );
   });
 
-  it("preserves an explicit allowlist as a frozen profile intersection", async () => {
-    const settings = materializeClawToolProfile({
-      tools: {
-        profile: "coding",
-        allow: ["read", "write", "github__list_issues"],
-      },
-    });
+  it.each([
+    { deny: undefined, explicitReader: false, readable: true },
+    { deny: ["read"], explicitReader: false, readable: false },
+    { deny: ["skills_read"], explicitReader: false, readable: false },
+    { deny: ["read"], explicitReader: true, readable: true },
+  ])(
+    "freezes profile grants without changing skill-read access: %j",
+    ({ deny, explicitReader, readable }) => {
+      const allow = ["read", "write", "github__list_issues"];
+      if (explicitReader) {
+        allow.push("skills_read");
+      }
+      const settings = materializeClawToolProfile({
+        tools: { profile: "coding", allow, deny },
+      });
 
-    expect(settings.tools).toEqual({
-      profile: "full",
-      allow: ["read", "write", "apply_patch", "github__list_issues"],
-    });
-  });
+      expect(isToolAllowedByPolicyName("skills_read", settings.tools)).toBe(readable);
+      expect(settings.tools).toEqual({
+        profile: "full",
+        allow: [
+          ...(deny?.includes("read") ? [] : ["read"]),
+          "write",
+          "apply_patch",
+          ...(readable ? ["skills_read"] : []),
+          "github__list_issues",
+        ],
+        ...(deny ? { deny } : {}),
+      });
+    },
+  );
 
   it("freezes a standalone allowlist against inherited host profiles", () => {
     expect(

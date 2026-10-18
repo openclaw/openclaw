@@ -9,6 +9,13 @@ export type AgentAttemptLifecycleState = {
   lifecycleEnded: boolean;
 };
 
+export function resetAgentAttemptLifecycle(state: AgentAttemptLifecycleState): void {
+  state.lifecycleError = undefined;
+  state.lifecycleErrorObservation = undefined;
+  state.lifecycleFinishing = false;
+  state.lifecycleEnded = false;
+}
+
 type AgentAttemptLifecycleEvent = {
   stream: string;
   data?: Record<string, unknown>;
@@ -30,10 +37,18 @@ export function createAgentAttemptLifecycleCallbacks(
   state: AgentAttemptLifecycleState,
   onRuntimeTurnStarted?: () => void | Promise<void>,
 ): {
+  onAttemptStart: () => void;
+  onAttemptTerminalReplaced: () => void;
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
+    onAttemptStart: () => resetAgentAttemptLifecycle(state),
+    onAttemptTerminalReplaced: () => {
+      if (!state.lifecycleEnded) {
+        resetAgentAttemptLifecycle(state);
+      }
+    },
     onUserMessagePersisted: () => {
       state.currentTurnUserMessagePersisted = true;
     },
@@ -44,10 +59,7 @@ export function createAgentAttemptLifecycleCallbacks(
       if (evt.data.phase === "start") {
         // A same-candidate retry replaces deferred terminal state from the
         // preceding attempt; retaining it would abort a recovered run.
-        state.lifecycleError = undefined;
-        state.lifecycleErrorObservation = undefined;
-        state.lifecycleFinishing = false;
-        state.lifecycleEnded = false;
+        resetAgentAttemptLifecycle(state);
         return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {

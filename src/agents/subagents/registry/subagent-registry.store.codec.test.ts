@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
-import {
-  bindCapturedSubagentRunRecord,
-  bindSubagentRunRecord,
-} from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(): SubagentRunRecord {
@@ -21,48 +18,87 @@ function createRun(): SubagentRunRecord {
   };
 }
 
-it.each([
-  { kind: "success", hasReply: false },
-  { kind: "bigint", hasReply: false },
-  { kind: "bigint", hasReply: true },
-  { kind: "cycle", hasReply: false },
-  { kind: "cycle", hasReply: true },
-] as const)(
-  "restores captured completion after $kind encoding (reply present=$hasReply)",
-  ({ kind, hasReply }) => {
-    const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
-    const captured = normalizeSubagentRunState({
-      ...createRun(),
-      completion: {
-        required: true,
-        terminalReply: { disposition: "visible", text: `${timestamp}${timestamp}reply` },
-      },
-    });
-    if (!hasReply) {
-      delete captured.completion!.terminalReply;
-    }
-    captured.queuedLaunch = {
-      request: { value: kind === "bigint" ? 1n : kind === "cycle" ? captured : "plain" },
-      timeoutMs: 100,
-      schedulerGroupKey: "synthetic",
-      maxConcurrent: 1,
-    };
-    const before = structuredClone(captured);
-    if (kind === "success") {
-      expect(bindCapturedSubagentRunRecord(captured)).toEqual(bindSubagentRunRecord(captured));
-    } else {
-      expect(() => bindCapturedSubagentRunRecord(captured)).toThrow(TypeError);
-    }
-    expect(captured).toStrictEqual(before);
+it("persists the child owner and identity independently of a redirected transcript", () => {
+  const entry = createRun();
+  entry.childSessionKey = "global";
+  entry.childAgentId = "research";
+  entry.childSessionIdentity = { sessionId: "original-child", lifecycleRevision: "original" };
+  entry.execution.transcriptTarget = { sessionId: "hidden-transcript" };
+  const restored = rowToSubagentRunRecord(bindSubagentRunRecord(entry));
+  expect(restored).toMatchObject({
+    childSessionKey: "global",
+    childAgentId: "research",
+    childSessionIdentity: { sessionId: "original-child", lifecycleRevision: "original" },
+    execution: { transcriptTarget: { sessionId: "hidden-transcript" } },
+  });
+});
+
+it("encodes restart-safe cleanup without changing the live lease or its shared reply", () => {
+  const entry = createRun();
+  entry.cleanupHandled = true;
+  entry.completion = {
+    required: true,
+    terminalReply: { disposition: "visible", text: "[Mon 2026-09-21 12:00 UTC] reply" },
+  };
+  const completion = entry.completion;
+  const reply = completion.terminalReply;
+  const before = structuredClone(entry);
+  const row = bindSubagentRunRecord(entry);
+  expect(entry).toStrictEqual(before);
+  expect(entry.completion).toBe(completion);
+  expect(completion.terminalReply).toBe(reply);
+  expect(JSON.parse(row.payload_json)).toMatchObject({
+    cleanupHandled: false,
+    completion: { required: true, terminalReply: { disposition: "visible", text: "reply" } },
+  });
+});
+
+it.each([{ version: 2 }, { snapshot: "x".repeat(65_537) }])(
+  "keeps interrupted results when stored operator evidence is invalid",
+  (operatorRecoverySource) => {
+    const entry = createRun();
+    entry.execution.outcome = { status: "error", error: "interrupted by a Gateway restart" };
+    const row = bindSubagentRunRecord(entry);
+    row.payload_json = JSON.stringify({ ...entry, operatorRecoverySource });
+    const restored = rowToSubagentRunRecord(row);
+    expect(restored?.operatorRecoverySource).toBeUndefined();
+    expect(restored?.execution.outcome).toEqual(entry.execution.outcome);
+    expect(restored?.delivery?.status).toBe("pending");
   },
 );
 
-it.each(["root", "completion"] as const)("rejects a captured array %s", (location) => {
-  const entry =
-    location === "root"
-      ? Object.assign([], createRun())
-      : { ...createRun(), completion: Object.assign([], { required: true }) };
-  for (const bind of [bindSubagentRunRecord, bindCapturedSubagentRunRecord]) {
-    expect(() => bind(entry)).toThrow("subagent run is missing canonical nested state");
-  }
-});
+it.each(["reply", "no reply", "root array", "completion array"] as const)(
+  "rejects invalid encoding without mutating the run: %s",
+  (kind) => {
+    const timestamp = "[Mon 2026-09-21 12:00 UTC] ";
+    const invalidArray = kind === "root array" || kind === "completion array";
+    const captured: SubagentRunRecord =
+      kind === "root array"
+        ? Object.assign([], createRun())
+        : kind === "completion array"
+          ? { ...createRun(), completion: Object.assign([], { required: true }) }
+          : normalizeSubagentRunState({
+              ...createRun(),
+              completion: {
+                required: true,
+                terminalReply: { disposition: "visible", text: `${timestamp}${timestamp}reply` },
+              },
+            });
+    if (!invalidArray) {
+      if (kind === "no reply") {
+        delete captured.completion!.terminalReply;
+      }
+      captured.queuedLaunch = {
+        request: { value: 1n },
+        timeoutMs: 100,
+        schedulerGroupKey: "synthetic",
+        maxConcurrent: 1,
+      };
+    }
+    const before = structuredClone(captured);
+    expect(() => bindSubagentRunRecord(captured)).toThrow(
+      invalidArray ? "subagent run is missing canonical nested state" : TypeError,
+    );
+    expect(captured).toStrictEqual(before);
+  },
+);

@@ -16,10 +16,8 @@ function fixture(
     CREATE TABLE memory_index_chunks (
       id TEXT PRIMARY KEY, path TEXT COLLATE ${options.chunkCollation ?? "BINARY"}, source TEXT, updated_at INTEGER
     );
-    CREATE TABLE revision (value INTEGER);
-    INSERT INTO revision VALUES (0);
-    CREATE TRIGGER source_revision AFTER UPDATE ON memory_index_sources
-    BEGIN UPDATE revision SET value = value + 1; END;
+    CREATE TABLE memory_index_state (id INTEGER PRIMARY KEY, revision INTEGER);
+    INSERT INTO memory_index_state VALUES (1, 0);
     INSERT INTO memory_index_sources(path, source, hash) VALUES
       ('notes.md', 'memory', 'stale'), ('notes.md', 'sessions', 'untouched');
     INSERT INTO memory_index_chunks VALUES
@@ -39,16 +37,25 @@ describe("memory chunk provenance backfill", () => {
     (_name, columns, withoutRowid) => {
       const db = fixture(columns, { withoutRowid });
       db.exec(MEMORY_INDEX_CHUNK_PROVENANCE_SCHEMA_SQL);
+      db.exec(`CREATE TRIGGER memory_index_chunk_provenance_after_insert
+        AFTER INSERT ON memory_index_chunks BEGIN SELECT 1; END`);
       db.exec(`INSERT INTO memory_index_chunk_provenance VALUES
       ('owned', 'owner', 'interactive', 3, 'prior')`);
       ensureMemoryChunkProvenance(db);
+      expect(
+        db
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+          )
+          .get(),
+      ).toBeUndefined();
       expect(
         db.prepare("SELECT source, hash FROM memory_index_sources ORDER BY source").all(),
       ).toEqual([
         { source: "memory", hash: "" },
         { source: "sessions", hash: "untouched" },
       ]);
-      expect(db.prepare("SELECT value FROM revision").get()).toEqual({ value: 1 });
+      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
       expect(
         db.prepare("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id").all(),
       ).toEqual([
@@ -75,7 +82,7 @@ describe("memory chunk provenance backfill", () => {
         },
       ]);
       ensureMemoryChunkProvenance(db);
-      expect(db.prepare("SELECT value FROM revision").get()).toEqual({ value: 1 });
+      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     },
   );
@@ -92,7 +99,7 @@ describe("memory chunk provenance backfill", () => {
     expect(db.prepare("SELECT hash FROM memory_index_sources WHERE source IS NULL").get()).toEqual({
       hash: "",
     });
-    expect(db.prepare("SELECT value FROM revision").get()).toEqual({ value: 2 });
+    expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 1 });
     expect(
       db
         .prepare(
@@ -103,20 +110,23 @@ describe("memory chunk provenance backfill", () => {
   });
 
   it.each([false, true])(
-    "preserves invalidation failure and rollback with caller transaction %s",
+    "rolls back source invalidation and provenance when revision publication fails (caller transaction %s)",
     (outer) => {
       const db = fixture("path TEXT, source TEXT, hash TEXT");
-      db.exec(`CREATE TRIGGER refuse_invalidation BEFORE UPDATE ON memory_index_sources
-      BEGIN SELECT RAISE(ABORT, 'invalidation refused'); END`);
+      db.exec(`CREATE TRIGGER refuse_revision BEFORE UPDATE ON memory_index_state
+      BEGIN SELECT RAISE(ABORT, 'revision refused'); END`);
       if (outer) {
         db.exec("BEGIN IMMEDIATE");
       }
-      expect(() => ensureMemoryChunkProvenance(db)).toThrow("invalidation refused");
+      expect(() => ensureMemoryChunkProvenance(db)).toThrow("revision refused");
       expect(db.isTransaction).toBe(outer);
       if (outer) {
         db.exec("ROLLBACK");
       }
-      expect(db.prepare("SELECT value FROM revision").get()).toEqual({ value: 0 });
+      expect(db.prepare("SELECT revision FROM memory_index_state").get()).toEqual({ revision: 0 });
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE source = 'memory'").get(),
+      ).toEqual({ hash: "stale" });
       expect(
         db
           .prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_index_chunk_provenance'")

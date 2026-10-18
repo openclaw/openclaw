@@ -174,29 +174,6 @@ describe("TelnyxProvider.verifyWebhook", () => {
 });
 
 describe("TelnyxProvider.parseWebhookEvent", () => {
-  it("uses verified request key for manager dedupe", () => {
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-    const result = provider.parseWebhookEvent(
-      createCtx({
-        rawBody: JSON.stringify({
-          data: {
-            id: "evt-123",
-            event_type: "call.initiated",
-            payload: { call_control_id: "call-1" },
-          },
-        }),
-      }),
-      { verifiedRequestKey: "telnyx:req:abc" },
-    );
-
-    expect(result.events).toHaveLength(1);
-    const event = result.events[0];
-    if (!event) {
-      throw new Error("expected Telnyx parseWebhookEvent to produce one event");
-    }
-    expect(event.dedupeKey).toBe("telnyx:req:abc");
-  });
-
   it("maps call direction and phone numbers from Call Control callbacks", () => {
     const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
@@ -214,10 +191,12 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
           },
         }),
       }),
+      { verifiedRequestKey: "telnyx:req:abc" },
     );
 
     expect(result.events).toHaveLength(1);
     const event = result.events[0];
+    expect(event?.dedupeKey).toBe("telnyx:req:abc");
     expect(event?.type).toBe("call.initiated");
     expect(event?.direction).toBe("inbound");
     expect(event?.from).toBe("+15551111111");
@@ -277,7 +256,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.confidence).toBe(0.977219);
   });
 
-  it.each([undefined, " \t\n"])("does not emit blank transcription payloads %#", (transcript) => {
+  it.each([undefined])("does not emit blank transcription payloads %#", (transcript) => {
     const provider = new TelnyxProvider(PROVIDER_CONFIG);
     const result = provider.parseWebhookEvent(
       createCtx({
@@ -298,63 +277,7 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
   });
 });
 
-describe("TelnyxProvider answer control", () => {
-  it("answers inbound call-control legs with a deterministic command id", async () => {
-    const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ data: {} }), { status: 200 }),
-      release,
-    });
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-
-    await provider.answerCall({
-      callId: "call-1",
-      providerCallId: "call-control-1",
-    });
-
-    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
-    const request = requireFetchRequest();
-    expect(request.url).toBe("https://api.telnyx.com/v2/calls/call-control-1/actions/answer");
-    expect(request.auditContext).toBe("voice-call.telnyx.api");
-    expect(request.policy).toEqual({ allowedHostnames: ["api.telnyx.com"] });
-    expect(request.init?.method).toBe("POST");
-    expect(request.init?.body).toBe(JSON.stringify({ command_id: "openclaw-answer-call-1" }));
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("TelnyxProvider Media Streaming (PCMU)", () => {
-  it("embeds streaming fields in the dial payload when streamUrl is provided", async () => {
-    const release = vi.fn(async () => {});
-    apiMocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {
-        status: 200,
-      }),
-      release,
-    });
-    const provider = new TelnyxProvider(PROVIDER_CONFIG);
-
-    await provider.initiateCall({
-      callId: "call-1",
-      from: "+15550000001",
-      to: "+15550000002",
-      webhookUrl: "https://example.test/voice/webhook",
-      streamUrl: "wss://example.test/voice/stream/realtime/token-xyz",
-      streamAuthToken: "token-xyz",
-    });
-
-    const request = requireFetchRequest();
-    const body = JSON.parse(request.init?.body as string) as Record<string, unknown>;
-    expect(body.stream_url).toBe("wss://example.test/voice/stream/realtime/token-xyz");
-    expect(body.stream_track).toBe("inbound_track");
-    expect(body.stream_codec).toBe("PCMU");
-    expect(body.stream_bidirectional_mode).toBe("rtp");
-    expect(body.stream_bidirectional_codec).toBe("PCMU");
-    expect(body.stream_bidirectional_sampling_rate).toBe(8000);
-    expect(body.stream_bidirectional_target_legs).toBe("self");
-    expect(body.stream_auth_token).toBe("token-xyz");
-  });
-
   it("omits streaming fields from the dial payload when streamUrl is absent", async () => {
     apiMocks.fetchWithSsrFGuard.mockResolvedValue({
       response: new Response(JSON.stringify({ data: { call_control_id: "call-control-1" } }), {

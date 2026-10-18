@@ -1,13 +1,25 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { DatabaseSync } from "node:sqlite";
+import { MessageChannel } from "node:worker_threads";
+import {
+  parseRemoteModelCatalogBundle,
+  parseRemoteModelCatalogBundleV2,
+} from "@openclaw/model-catalog-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import * as bundledStamp from "./bundled-catalog-stamp.js";
 import { resolveRemoteCatalogUrl } from "./remote-config.js";
-import { refreshRemoteModelCatalog, REMOTE_MODEL_CATALOG_TTL_MS } from "./remote-refresh.js";
-import { readRemoteModelCatalog, writeRemoteModelCatalog } from "./remote-store.js";
+import { refreshRemoteModelCatalog } from "./remote-refresh.js";
+import { readRemoteModelCatalog, writeRemoteModelCatalogAsync } from "./remote-store.js";
 
-const roots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const DEFAULT_REMOTE_MODEL_CATALOG_URL = resolveRemoteCatalogUrl({});
 const bundle = {
   schemaVersion: 2,
@@ -19,26 +31,119 @@ const bundle = {
 };
 
 function options() {
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-refresh-")));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-refresh-");
   return { path: path.join(root, "state.sqlite") };
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+beforeEach(() => {
+  vi.spyOn(bundledStamp, "bundledCatalogGeneratedAt").mockReturnValue(bundle.generatedAt - 1);
+});
+
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("remote model catalog refresh", () => {
+  it("lets the caller release a contended writer while persistence waits", async () => {
+    const databaseOptions = options();
+    const database = openOpenClawStateDatabase(databaseOptions);
+    database.db.exec("PRAGMA busy_timeout=0");
+    const competitor = new DatabaseSync(databaseOptions.path);
+    const { port1, port2 } = new MessageChannel();
+    const released = new Promise<void>((resolve) => {
+      port1.once("message", () => {
+        competitor.exec("ROLLBACK");
+        resolve();
+      });
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
+      competitor.exec("BEGIN IMMEDIATE");
+      // Native port delivery needs a caller event-loop turn; no timer races the write.
+      port2.postMessage("release");
+      return new Response(JSON.stringify(bundle));
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+    try {
+      await expect(
+        refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
+      ).resolves.toMatchObject({ status: "updated" });
+      await released;
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(readRemoteModelCatalog(databaseOptions)?.generated_at).toBe(bundle.generatedAt);
+    } finally {
+      port1.removeAllListeners();
+      port1.close();
+      port2.close();
+      if (competitor.isTransaction) {
+        competitor.exec("ROLLBACK");
+      }
+      competitor.close();
+    }
+  });
+
+  it("persists valid rows and revalidates without caller-thread SQL", async () => {
+    const databaseOptions = options();
+    const downloaded = {
+      ...bundle,
+      models: [
+        { ...bundle.models[0], input: ["text", "future"] },
+        { id: "bad-pricing", provider: "anthropic", pricing: { status: "unknown", input: 0 } },
+      ],
+    };
+    openOpenClawStateDatabase(databaseOptions);
+    const sql = observeMainThreadSql();
+    sql.calibrate();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(JSON.stringify(downloaded))),
+      );
+      await expect(
+        refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
+      ).resolves.toMatchObject({ status: "updated", models: 1 });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 304 })),
+      );
+      await expect(
+        refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
+      ).resolves.toMatchObject({ status: "unchanged" });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual({
+      ...bundle,
+      models: [{ ...bundle.models[0], input: ["text"] }],
+    });
+  });
+
+  it("keeps the original physical store while the download yields", async () => {
+    const original = options();
+    const replacement = options();
+    const databaseOptions = { ...original };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        databaseOptions.path = replacement.path;
+        return new Response(JSON.stringify(bundle));
+      }),
+    );
+    await expect(
+      refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
+    ).resolves.toMatchObject({ status: "updated" });
+    expect(readRemoteModelCatalog(original)?.generated_at).toBe(bundle.generatedAt);
+    expect(readRemoteModelCatalog(replacement)).toBeUndefined();
+  });
+
   it("does not invoke fetch when disabled", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchImpl);
     await expect(
       refreshRemoteModelCatalog({
         config: { models: { catalogRefresh: { enabled: false } } },
-        fetchImpl,
       }),
     ).resolves.toMatchObject({ status: "disabled" });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -46,7 +151,7 @@ describe("remote model catalog refresh", () => {
 
   it("skips fresh rows and force bypasses the TTL", async () => {
     const databaseOptions = options();
-    writeRemoteModelCatalog(
+    await writeRemoteModelCatalogAsync(
       {
         bundle_json: JSON.stringify(bundle),
         generated_at: bundle.generatedAt,
@@ -54,23 +159,18 @@ describe("remote model catalog refresh", () => {
         source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
         etag: '"one"',
         last_modified: null,
-        checked_at: 10_000,
+        checked_at: Date.now(),
       },
-      databaseOptions,
+      captureOpenClawStateWorkerContext(databaseOptions),
     );
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 304 }));
-    await expect(
-      refreshRemoteModelCatalog({ config: {}, fetchImpl, databaseOptions, now: () => 10_001 }),
-    ).resolves.toMatchObject({ status: "fresh" });
+    vi.stubGlobal("fetch", fetchImpl);
+    await expect(refreshRemoteModelCatalog({ config: {}, databaseOptions })).resolves.toMatchObject(
+      { status: "fresh" },
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
     await expect(
-      refreshRemoteModelCatalog({
-        config: {},
-        fetchImpl,
-        databaseOptions,
-        force: true,
-        now: () => 10_001 + REMOTE_MODEL_CATALOG_TTL_MS,
-      }),
+      refreshRemoteModelCatalog({ config: {}, databaseOptions, force: true }),
     ).resolves.toMatchObject({ status: "unchanged" });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
@@ -80,18 +180,104 @@ describe("remote model catalog refresh", () => {
     const fetchImpl = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify(bundle), { status: 200, headers: { etag: '"two"' } }),
     );
+    vi.stubGlobal("fetch", fetchImpl);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl,
         databaseOptions,
         force: true,
-        bundledGeneratedAt: () => bundle.generatedAt - 1,
       }),
     ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
     const persisted = JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null");
     expect(persisted).toEqual(bundle);
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://catalog.openclaw.ai/models/v2/catalog.json");
+  });
+
+  it("stores configured v3 capabilities without changing either released client slot", async () => {
+    const databaseOptions = options();
+    const legacyBundle = {
+      schemaVersion: 1,
+      generatedAt: bundle.generatedAt,
+      sourceCommit: bundle.sourceCommit,
+      providers: { anthropic: { models: [{ id: "claude-test" }] } },
+    };
+    const previous = {
+      bundle_json: JSON.stringify(bundle),
+      generated_at: bundle.generatedAt,
+      min_version: null,
+      source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
+      etag: null,
+      last_modified: null,
+      checked_at: 1,
+    };
+    const legacy = { ...previous, bundle_json: JSON.stringify(legacyBundle) };
+    writeConfigMachineState("modelCatalog.remote.v2", previous, databaseOptions);
+    writeConfigMachineState("modelCatalog.remote", legacy, databaseOptions);
+    const downloaded = {
+      ...bundle,
+      schemaVersion: 3,
+      models: [
+        {
+          ...bundle.models[0],
+          inference: {
+            chat: false,
+            decision: {
+              protocol: "fixture.decisions",
+              input: ["text"],
+              questions: { boolean: { probabilities: "boolean", abstention: false } },
+              billing: {
+                unit: "tokens",
+                source: "provider-docs",
+                usdPerMillion: { input: 0, output: 0 },
+              },
+            },
+          },
+        },
+      ],
+    };
+    const config = {
+      models: { catalogRefresh: { url: "https://mirror.example.test/v3/catalog.json" } },
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json(downloaded));
+    vi.stubGlobal("fetch", fetchImpl);
+    await expect(
+      refreshRemoteModelCatalog({
+        config,
+        databaseOptions,
+        force: true,
+      }),
+    ).resolves.toMatchObject({ status: "updated", models: 1 });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null")).toEqual(
+      downloaded,
+    );
+    const retainedV2 = readConfigMachineState<typeof previous>(
+      "modelCatalog.remote.v2",
+      databaseOptions,
+    );
+    const retainedV1 = readConfigMachineState<typeof legacy>(
+      "modelCatalog.remote",
+      databaseOptions,
+    );
+    expect(retainedV2).toEqual(previous);
+    expect(retainedV1).toEqual(legacy);
+    // A downgraded, offline client can still parse its unchanged version-specific slot.
+    expect(parseRemoteModelCatalogBundleV2(JSON.parse(retainedV2!.bundle_json))).toEqual(bundle);
+    expect(parseRemoteModelCatalogBundle(JSON.parse(retainedV1!.bundle_json))).toEqual(
+      legacyBundle,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("fresh v3 must not fetch");
+      }),
+    );
+    await expect(
+      refreshRemoteModelCatalog({
+        config,
+        databaseOptions,
+      }),
+    ).resolves.toMatchObject({ status: "fresh", models: 1 });
   });
 
   it("keeps a configured v1 mirror's pricing-only rows and sanitizes transport", async () => {
@@ -110,15 +296,14 @@ describe("remote model catalog refresh", () => {
       pricing: { "anthropic/history-only": { input: 2, output: 8 } },
     };
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(legacy)));
+    vi.stubGlobal("fetch", fetchImpl);
     await expect(
       refreshRemoteModelCatalog({
         config: {
           models: { catalogRefresh: { url: "https://mirror.example.test/v1/catalog.json" } },
         },
-        fetchImpl,
         databaseOptions,
         force: true,
-        bundledGeneratedAt: () => bundle.generatedAt - 1,
       }),
     ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
     const persisted = JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null");
@@ -130,13 +315,13 @@ describe("remote model catalog refresh", () => {
 
   it("does not report a catalog older than the bundled build as applicable", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(bundle)));
+    vi.stubGlobal("fetch", fetchImpl);
+    vi.mocked(bundledStamp.bundledCatalogGeneratedAt).mockReturnValue(bundle.generatedAt);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl,
         databaseOptions: options(),
         force: true,
-        bundledGeneratedAt: () => bundle.generatedAt,
       }),
     ).resolves.toMatchObject({ status: "unchanged", generatedAt: bundle.generatedAt });
   });
@@ -144,7 +329,7 @@ describe("remote model catalog refresh", () => {
   it("treats another source URL as unrelated and rejects rollback", async () => {
     const databaseOptions = options();
     const newerBundle = { ...bundle, generatedAt: bundle.generatedAt + 100 };
-    writeRemoteModelCatalog(
+    await writeRemoteModelCatalogAsync(
       {
         bundle_json: JSON.stringify(newerBundle),
         generated_at: newerBundle.generatedAt,
@@ -152,33 +337,30 @@ describe("remote model catalog refresh", () => {
         source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
         etag: '"newer"',
         last_modified: null,
-        checked_at: 10_000,
+        checked_at: Date.now(),
       },
-      databaseOptions,
+      captureOpenClawStateWorkerContext(databaseOptions),
     );
     const rollbackFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(bundle)));
+    vi.stubGlobal("fetch", rollbackFetch);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl: rollbackFetch,
         databaseOptions,
         force: true,
-        now: () => 20_000,
       }),
     ).resolves.toMatchObject({ status: "unchanged", generatedAt: newerBundle.generatedAt });
     expect(readRemoteModelCatalog(databaseOptions)?.generated_at).toBe(newerBundle.generatedAt);
 
     const mirrorBundle = { ...bundle, generatedAt: newerBundle.generatedAt + 100 };
     const mirrorFetch = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(mirrorBundle)));
+    vi.stubGlobal("fetch", mirrorFetch);
     await expect(
       refreshRemoteModelCatalog({
         config: {
           models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
         },
-        fetchImpl: mirrorFetch,
         databaseOptions,
-        now: () => 20_001,
-        bundledGeneratedAt: () => bundle.generatedAt - 1,
       }),
     ).resolves.toMatchObject({ status: "updated", generatedAt: mirrorBundle.generatedAt });
     expect(mirrorFetch).toHaveBeenCalledOnce();
@@ -186,10 +368,10 @@ describe("remote model catalog refresh", () => {
 
   it("returns typed failures for invalid JSON, newer minVersion, and timeout", async () => {
     const invalid = vi.fn<typeof fetch>(async () => new Response("not json"));
+    vi.stubGlobal("fetch", invalid);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl: invalid,
         databaseOptions: options(),
         force: true,
       }),
@@ -198,10 +380,10 @@ describe("remote model catalog refresh", () => {
     const newer = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify({ ...bundle, minVersion: "9999.1.1" })),
     );
+    vi.stubGlobal("fetch", newer);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl: newer,
         databaseOptions: options(),
         force: true,
       }),
@@ -210,17 +392,17 @@ describe("remote model catalog refresh", () => {
     const timeout = vi.fn<typeof fetch>(async () => {
       throw new DOMException("timed out", "TimeoutError");
     });
+    vi.stubGlobal("fetch", timeout);
     await expect(
       refreshRemoteModelCatalog({
         config: {},
-        fetchImpl: timeout,
         databaseOptions: options(),
         force: true,
       }),
     ).resolves.toMatchObject({ status: "error" });
   });
 
-  it.each(["invalid UTF-8", "unsupported schema", "rates on unknown pricing"])(
+  it.each(["invalid UTF-8", "unsupported schema", "empty models", "rates on unknown pricing"])(
     "preserves the previous catalog without a fallback request after %s",
     async (failure) => {
       const databaseOptions = options();
@@ -233,13 +415,17 @@ describe("remote model catalog refresh", () => {
         last_modified: "Wed, 23 Jul 2025 00:00:00 GMT",
         checked_at: 10_000,
       };
-      writeRemoteModelCatalog(previous, databaseOptions);
+      await writeRemoteModelCatalogAsync(
+        previous,
+        captureOpenClawStateWorkerContext(databaseOptions),
+      );
 
       const corrupt = Buffer.from(
         JSON.stringify({
           ...bundle,
           generatedAt: bundle.generatedAt + 1,
-          ...(failure === "unsupported schema" ? { schemaVersion: 3 } : {}),
+          ...(failure === "unsupported schema" ? { schemaVersion: 4 } : {}),
+          ...(failure === "empty models" ? { models: [] } : {}),
           ...(failure === "rates on unknown pricing"
             ? { models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }] }
             : {}),
@@ -252,10 +438,10 @@ describe("remote model catalog refresh", () => {
       }
 
       const fetchImpl = vi.fn<typeof fetch>(async () => new Response(corrupt, { status: 200 }));
+      vi.stubGlobal("fetch", fetchImpl);
       await expect(
         refreshRemoteModelCatalog({
           config: {},
-          fetchImpl,
           databaseOptions,
           force: true,
         }),

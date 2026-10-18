@@ -1,57 +1,40 @@
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
+import { ciWorkflowTree, createPriorCiCandidateFactory } from "./pr-merge-prior-ci.test-support.js";
 
 const { describePosix, fixture } = createMergeOutcomeFixtureHarness();
-function candidate() {
-  const f = fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
+const { candidate, preExistingCandidate } = createPriorCiCandidateFactory(fixture);
+
+type Fixture = ReturnType<typeof fixture>;
+function expectResult(
+  f: Fixture,
+  result: ReturnType<Fixture["verifyPriorCi"]>,
+  message?: string | RegExp,
+  mutations = 0,
+) {
+  if (message === undefined) {
+    expect(result.status, result.output).toBe(0);
+  } else if (typeof message === "string") {
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toContain(message);
+  } else {
+    expect(result.status, result.output).not.toBe(0);
+    expect(result.output).toMatch(message);
+  }
+  expect(f.state().mutations).toBe(mutations);
+}
+function expectNoIntent(f: Fixture) {
+  expect(
+    f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-merge-outcomes/123"]),
+  ).toBe("");
+}
+function delegate(f: ReturnType<typeof preExistingCandidate>) {
   const state = f.state();
-  const path = join(f.root, "admin.json");
-  state.priorCi.enabled = true;
-  state.priorCi.evidencePath = path;
-  state.repoAuthority.owner = { login: "fixture", type: "Organization" };
-  state.restPolicy = "rules";
-  state.requiredCheckName = "openclaw/ci-gate";
-  state.restContexts = ["openclaw/ci-gate", "Security Review"];
-  state.gates = "pending";
-  state.pr.mergeStateStatus = "BEHIND";
-  f.save(state);
-  writeFileSync(
-    join(f.worktree, ".local/gates.env"),
-    `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
-  );
-  const delta = f.git([
-    "diff",
-    "--raw",
-    "--abbrev=40",
-    "--no-renames",
-    "-z",
-    state.priorCi.head,
-    f.head,
-    "--",
-  ]);
-  // The fixture git helper trims output; this raw form terminates with NUL, so
-  // no bytes belonging to the delta are removed.
-  const evidence = {
-    version: 1,
-    changeKind: "conflict-resolution",
-    repository: "fixture/repo",
-    pr: 123,
-    head: f.head,
-    priorHead: state.priorCi.head,
-    runId: 501,
-    runAttempt: 2,
-    deltaSha256: createHash("sha256").update(delta).digest("hex"),
-    reason: "Explicit operator approval after resolving the source conflict",
-    contracts: ["owner output"],
-    checks: [
-      { command: "owner test", result: "passed", evidence: "Observed resolved owner output" },
-    ],
-  };
-  writeFileSync(path, JSON.stringify(evidence));
-  return { ...f, path, evidence };
+  state.repoAuthority.permissions = { admin: false, maintain: true, push: true };
+  Object.assign(state.priorCi, { membership: "member", rulesetBypass: "always" });
+  return state;
 }
 
 const matrixWorkflow = [
@@ -64,125 +47,6 @@ const matrixWorkflow = [
   "      matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}",
   "",
 ].join("\n");
-
-function ciWorkflowTree(f: ReturnType<typeof candidate>, treeish: string, workflow: string) {
-  const blob = f.git(["hash-object", "-w", "--stdin"], workflow);
-  const workflows = f.git(["mktree"], `100644 blob ${blob}\tci.yml\n`);
-  const github = f.git(["mktree"], `040000 tree ${workflows}\tworkflows\n`);
-  const entries = f
-    .git(["ls-tree", treeish])
-    .split("\n")
-    .filter((entry) => !entry.endsWith("\t.github"));
-  return f.git(["mktree"], [...entries, `040000 tree ${github}\t.github`, ""].join("\n"));
-}
-
-function preExistingCandidate(workflow?: string) {
-  const f = candidate();
-  let main = f.base;
-  if (workflow) {
-    main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);
-    f.git(["push", "-q", "origin", `${main}:refs/heads/main`]);
-    f.prepare(f.head, main);
-    writeFileSync(
-      join(f.worktree, ".local/gates.env"),
-      `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
-    );
-  }
-  const state = f.state();
-  state.gates = "fail";
-  state.pr.mergeStateStatus = "BLOCKED";
-  state.priorCi.runHead = f.head;
-  state.priorCi.event = "pull_request";
-  state.priorCi.runConclusion = "cancelled";
-  state.priorCi.security.enabled = true;
-  const job = (id: number, name: string, conclusion: string) => ({
-    id,
-    name,
-    conclusion,
-    status: "completed",
-    run_id: 501,
-    head_sha: f.head,
-    steps: [],
-  });
-  state.priorCi.jobs = [
-    job(601, "owner-tests", "failure"),
-    {
-      ...job(602, "openclaw/ci-gate", "failure"),
-      check_run_url: "https://api.github.com/repos/fixture/repo/check-runs/1",
-    },
-    {
-      ...job(603, "pr-fail-fast", "success"),
-      steps: [
-        {
-          number: 2,
-          name: "Cancel remaining PR work after a failure",
-          status: "completed",
-          conclusion: "success",
-        },
-      ],
-    },
-    job(604, "cancelled-sibling", "cancelled"),
-    job(605, "security-fast", "success"),
-  ];
-  f.save(state);
-  const artifact = join(f.root, "qualification.txt");
-  writeFileSync(
-    artifact,
-    "Inspected checkout, unchanged sibling input, independent baseline failure, and fail-fast cancellation.\n",
-  );
-  const evidence = {
-    ...f.evidence,
-    changeKind: "pre-existing-failure",
-    priorHead: main,
-    testedMerge: f.commit(f.git(["merge-tree", "--write-tree", main, f.head]), [main, f.head]),
-    deltaSha256: createHash("sha256")
-      .update(f.git(["diff", "--raw", "--abbrev=40", "--no-renames", "-z", main, f.head, "--"]))
-      .digest("hex"),
-    artifacts: [
-      {
-        name: "qualification",
-        path: artifact,
-        sha256: createHash("sha256").update(readFileSync(artifact)).digest("hex"),
-      },
-    ],
-    checkout: { reason: "Inspected the exact preflight checkout", evidence: ["qualification"] },
-    failures: [
-      {
-        jobId: 601,
-        reason: "The same independent failure predates the PR",
-        cases: ["sibling assertion"],
-        sourcePaths: ["sibling.txt"],
-        evidence: ["qualification"],
-      },
-    ],
-    aggregate: {
-      jobId: 602,
-      causedBy: [601],
-      reason: "Aggregate reports the admitted root failure",
-      evidence: ["qualification"],
-    },
-    cancellation: {
-      jobId: 603,
-      step: 2,
-      jobIds: [604],
-      causedBy: [601],
-      reason: "Inspected fail-fast step cancelled the sibling",
-      evidence: ["qualification"],
-    },
-  };
-  writeFileSync(f.path, JSON.stringify(evidence));
-  const reviewPath = join(f.worktree, ".local/review.json");
-  const review = JSON.parse(readFileSync(reviewPath, "utf8"));
-  review.tests.result = "fail";
-  review.tests.preExistingCi = {
-    head: f.head,
-    runId: 501,
-    runAttempt: 2,
-    reason: "Independently qualified baseline failure; cancelled siblings remain unrun",
-  };
-  writeFileSync(reviewPath, JSON.stringify(review));
-  return { ...f, base: main, evidence, artifact };
-}
 
 function matrixCandidate(workflow = matrixWorkflow) {
   const f = preExistingCandidate(workflow);
@@ -211,60 +75,97 @@ function matrixCandidate(workflow = matrixWorkflow) {
   return { ...f, evidence };
 }
 
+function mixedMatrixCandidate(workflow = matrixWorkflow) {
+  const f = matrixCandidate(workflow);
+  const state = f.state();
+  state.priorCi.jobs!.push({
+    ...state.priorCi.jobs![0]!,
+    id: 606,
+    name: "checks-ui-e2e-real-gateway",
+  });
+  f.save(state);
+  f.evidence.failures.push({ ...f.evidence.failures[0]!, jobId: 606 });
+  f.evidence.aggregate.causedBy.push(606);
+  writeFileSync(f.path, JSON.stringify(f.evidence));
+  return f;
+}
+
 describePosix("explicit prior-CI admin landing", () => {
-  it.each(["success", "pending"])("revalidates a same-name %s security projection", (state) => {
+  it.each([false, true])(
+    "revalidates delegated CI bypass before dispatch (revoked=%s)",
+    (revoked) => {
+      const f = preExistingCandidate();
+      const state = delegate(f);
+      state.graphqlMergeProjection = { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" };
+      state.priorCi.revokeRulesetAfterRead = revoked;
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      if (revoked) {
+        expectResult(f, result, "CI-only ruleset bypass");
+        expect(f.state().priorCi.rulesetReads).toBe(2);
+        expectNoIntent(f);
+      } else {
+        expectResult(f, result, undefined, 1);
+        expect(f.record().transport).toBe("rest");
+        expect(f.record().priorCiAdmin.delegation).toEqual({
+          kind: "ci-ruleset-bypass",
+          repositoryId: 1103012935,
+          actor: state.operator,
+          rulesets: [{ id: 41, mode: "always" }],
+        });
+        expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
+      }
+    },
+  );
+
+  it("refuses a generic protection 404 without treating hidden GraphQL rules as absent", () => {
     const f = preExistingCandidate();
-    const server = f.state();
-    server.priorCi.security.combinedState = state;
-    f.save(server);
+    f.save({ ...f.state(), restPolicy: "not-found" });
     const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(JSON.parse(result.stdout).securityReview).toMatchObject({
-      combinedStatusId: 801,
-      runId: 901,
-      runAttempt: 1,
-      guardStatusIds: [802, 803],
-    });
+    expectResult(f, result, "classic branch-protection policy is unavailable");
+    expect(result.output).toContain("ordinary green-CI landing");
+    expect(result.output).toContain(
+      "does not establish environment approval or production deployment authority",
+    );
+    expect(f.state().calls.some((call) => call.includes("graphql"))).toBe(false);
+    expect(() => f.record()).toThrow();
   });
 
-  it.each([
-    ["missing-status", "current combined CI/security status is required"],
-    ["missing-guard", "unsuccessful openclaw/security-sensitive-review"],
-    ["failed-guard", "unsuccessful openclaw/security-sensitive-review"],
-    ["foreign-publisher", "unsuccessful openclaw/ci-gate"],
-    ["stale-status", "unsuccessful openclaw/ci-gate"],
-    ["foreign-workflow", "successful protected Security Review publisher is required"],
-    ["new-publisher-attempt", "publisher attempt identity changed"],
-    ["changed-publisher-source", "publisher source differs from the current owner"],
-    ["untrusted-publisher-source", "publisher source is not on protected main"],
-    ["missing-enforcement", "successful exact-head security enforcement is required"],
-    ["incomplete-publisher", "incomplete Security Review job identities"],
-    ["status-drift", "security publisher or current statuses changed"],
-    ["revoked-role", "approval is no longer current"],
-    ["other-required-check", "does not waive other required checks"],
-  ])("refuses %s security evidence without dispatch", (fault, message) => {
+  it.each(["review", "security", "new attempt"])("delegation cannot waive %s", (fault) => {
     const f = preExistingCandidate();
-    const state = f.state();
-    state.priorCi.security.fault = fault!;
-    if (fault === "revoked-role") {
-      state.priorCi.security.approval = true;
-      state.priorCi.security.role = "write";
+    const state = delegate(f);
+    if (fault === "review") {
+      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
     }
-    if (fault === "other-required-check") {
-      state.restFailedContext = "Security Review";
+    if (fault === "security") {
+      state.priorCi.security.fault = "failed-guard";
+    }
+    if (fault === "new attempt") {
+      state.priorCi.latestAttempt++;
     }
     f.save(state);
     const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(message);
-    expect(f.state().mutations).toBe(0);
+    expectResult(f, result, /current enforced reviews|security-sensitive|newer or running/);
+    expect(() => f.record()).toThrow();
   });
 
-  it("lands attributed matrix fail-fast without inventing a successful monitor", () => {
-    const f = matrixCandidate();
-    const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
+  it("lands fork matrix cancellation while retaining independent UI failure attribution", () => {
+    const f = mixedMatrixCandidate();
+    const state = f.state();
+    state.priorCi.omitPullRequests = true;
+    state.priorCi.sourceRepository = { id: 123456, full_name: "contributor/repo" };
+    f.save(state);
+    const result = f.verifyPriorCi(f.path);
+    expectResult(f, result);
+    const proof = JSON.parse(result.stdout);
+    expect(proof).toMatchObject({
+      failures: [{ jobId: 601 }, { jobId: 606 }],
+      cancellation: { causedBy: [601], members: [{ jobId: 601 }, { jobId: 604 }] },
+      cancelledJobIds: [604],
+      runAssociation: "exact-source-and-current-check",
+    });
+    const landed = f.adminPriorCi(f.path);
+    expectResult(f, landed, undefined, 1);
     expect(f.record().priorCiAdmin.cancellation).toMatchObject({
       kind: "matrix-fail-fast",
       workflowJob: "checks-node-core-test-nondist-shard",
@@ -273,30 +174,17 @@ describePosix("explicit prior-CI admin landing", () => {
     });
   });
 
-  it("qualifies fork matrix cancellation with empty PR associations", () => {
-    const f = matrixCandidate();
-    const state = f.state();
-    state.priorCi.omitPullRequests = true;
-    state.priorCi.sourceRepository = { id: 123456, full_name: "contributor/repo" };
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(JSON.parse(result.stdout).runAssociation).toBe("exact-source-and-current-check");
-  });
-
-  it.each(["monitor", "matrix"])("rejects a cancelled failed step under %s attribution", (kind) => {
-    const f = kind === "matrix" ? matrixCandidate() : preExistingCandidate();
-    const state = f.state();
-    state.priorCi.jobs![3]!.steps = [
-      { number: 1, name: "Product assertion", status: "completed", conclusion: "failure" },
-    ];
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("cancelled jobs must not hide failed steps");
-  });
-
   it.each([
+    "empty causes",
+    "duplicate cause",
+    "unknown cause",
+    "nonfailed cause",
+    "cancelled cause",
+    "unrelated failure as cause",
+    "extra unrelated member",
+    "missing causal member",
+    "aggregate omits unrelated failure",
+    "missing cancellation qualification",
     "disabled",
     "continue-on-error",
     "changed workflow",
@@ -304,14 +192,36 @@ describePosix("explicit prior-CI admin landing", () => {
     "missing member",
     "wrong owner",
     "dispatch",
-  ])("rejects %s matrix attribution", (fault) => {
+  ])("refuses mixed matrix %s without dispatch", (fault) => {
     const workflow =
       fault === "disabled"
         ? matrixWorkflow.replace("${{ github.event_name == 'pull_request' }}", "false")
         : fault === "continue-on-error"
           ? matrixWorkflow.replace("    needs:", "    continue-on-error: true\n    needs:")
           : matrixWorkflow;
-    const f = matrixCandidate(workflow);
+    const f = mixedMatrixCandidate(workflow);
+    const cancellation = f.evidence.cancellation;
+    const causes: Record<string, number[]> = {
+      "empty causes": [],
+      "duplicate cause": [601, 601],
+      "unknown cause": [999],
+      "nonfailed cause": [605],
+      "cancelled cause": [604],
+      "unrelated failure as cause": [606],
+    };
+    cancellation.causedBy = causes[fault] ?? cancellation.causedBy;
+    if (fault === "extra unrelated member") {
+      cancellation.members.push({ jobId: 606, name: "checks-ui-e2e-real-gateway" });
+    }
+    if (fault === "missing causal member") {
+      cancellation.members.shift();
+    }
+    if (fault === "aggregate omits unrelated failure") {
+      f.evidence.aggregate.causedBy = [601];
+    }
+    if (fault === "missing cancellation qualification") {
+      cancellation.evidence = [];
+    }
     if (fault === "changed workflow") {
       f.evidence.testedMerge = f.commit(
         ciWorkflowTree(f, f.evidence.testedMerge, matrixWorkflow + "# changed by PR\n"),
@@ -334,11 +244,89 @@ describePosix("explicit prior-CI admin landing", () => {
     }
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toMatch(
-      fault === "changed workflow" ? /tested merge tree/u : /matrix|workflow/u,
-    );
-    expect(f.state().mutations).toBe(0);
+    expectResult(f, result, /Prior-CI admin admission:/u);
+    if (
+      [
+        "disabled",
+        "continue-on-error",
+        "changed workflow",
+        "foreign member",
+        "missing member",
+        "wrong owner",
+        "dispatch",
+      ].includes(fault)
+    ) {
+      expect(result.output).toMatch(
+        fault === "changed workflow" ? /tested merge tree/u : /matrix|workflow/u,
+      );
+    }
+  });
+
+  it.each([
+    ["success", ""],
+    ["pending", ""],
+    ["automation-dispatch", "successful protected Security Review publisher is required"],
+    ["missing-job", "security-fast must pass independently"],
+    ["duplicate-job", "security-fast must pass independently"],
+    ["missing-status", "current combined CI/security status is required"],
+    ["missing-guard", "unsuccessful openclaw/security-sensitive-review"],
+    ["failed-guard", "unsuccessful openclaw/security-sensitive-review"],
+    ["foreign-publisher", "unsuccessful openclaw/ci-gate"],
+    ["stale-status", "unsuccessful openclaw/ci-gate"],
+    ["foreign-workflow", "successful protected Security Review publisher is required"],
+    ["new-publisher-attempt", "publisher attempt identity changed"],
+    ["changed-publisher-source", "publisher source differs from the current owner"],
+    ["untrusted-publisher-source", "publisher source is not on protected main"],
+    ["missing-enforcement", "successful exact-head security enforcement is required"],
+    ["incomplete-publisher", "incomplete Security Review job identities"],
+    ["status-drift", "security publisher or current statuses changed"],
+    ["revoked-role", "approval is no longer current"],
+    ["other-required-check", "does not waive other required checks"],
+  ])("validates %s security evidence without dispatch", (fault, message) => {
+    const f = preExistingCandidate();
+    const state = f.state();
+    const accepted = fault === "success" || fault === "pending";
+    if (fault === "success" || fault === "pending") {
+      state.priorCi.security.combinedState = fault;
+    } else {
+      state.priorCi.security.fault = fault!;
+    }
+    if (fault === "missing-job" || fault === "duplicate-job") {
+      const security = state.priorCi.jobs!.find((job) => job.name === "security-fast")!;
+      state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job !== security);
+      if (fault === "duplicate-job") {
+        state.priorCi.jobs.push(security, { ...security, id: 606 });
+      }
+    }
+    if (fault === "revoked-role") {
+      state.priorCi.security.approval = true;
+      state.priorCi.security.role = "write";
+    }
+    if (fault === "other-required-check") {
+      state.restFailedContext = "Security Review";
+    }
+    f.save(state);
+    const result = f.verifyPriorCi(f.path);
+    expectResult(f, result, accepted ? undefined : message);
+    if (accepted) {
+      expect(JSON.parse(result.stdout).securityReview).toMatchObject({
+        combinedStatusId: 801,
+        runId: 901,
+        runAttempt: 1,
+        guardStatusIds: [802, 803],
+      });
+    }
+  });
+
+  it.each(["monitor", "matrix"])("rejects a cancelled failed step under %s attribution", (kind) => {
+    const f = kind === "matrix" ? matrixCandidate() : preExistingCandidate();
+    const state = f.state();
+    state.priorCi.jobs![3]!.steps = [
+      { number: 1, name: "Product assertion", status: "completed", conclusion: "failure" },
+    ];
+    f.save(state);
+    const result = f.verifyPriorCi(f.path);
+    expectResult(f, result, "cancelled jobs must not hide failed steps");
   });
 
   it.each([
@@ -350,15 +338,11 @@ describePosix("explicit prior-CI admin landing", () => {
     state.priorCi.jobs![2]!.steps![0]!.name = name;
     f.save(state);
     const result = f.verifyPriorCi(f.path);
-    if (accepted) {
-      expect(result.status, result.output).toBe(0);
-    } else {
-      expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain(
-        "all cancelled jobs require explicit inspected fail-fast provenance",
-      );
-    }
-    expect(f.state().mutations).toBe(0);
+    expectResult(
+      f,
+      result,
+      accepted ? undefined : "all cancelled jobs require explicit inspected fail-fast provenance",
+    );
   });
 
   it.each([
@@ -384,15 +368,11 @@ describePosix("explicit prior-CI admin landing", () => {
       });
       f.save(state);
       const result = f.verifyPriorCi(f.path);
-      if (accepted) {
-        expect(result.status, result.output).toBe(0);
-      } else {
-        expect(result.status, result.output).not.toBe(0);
-        expect(result.output).toContain(
-          threads ? "required review threads" : "current enforced reviews",
-        );
-      }
-      expect(f.state().mutations).toBe(0);
+      expectResult(
+        f,
+        result,
+        accepted ? undefined : threads ? "required review threads" : "current enforced reviews",
+      );
     },
   );
 
@@ -404,8 +384,7 @@ describePosix("explicit prior-CI admin landing", () => {
       state.priorCi.runConclusion = conclusion;
       f.save(state);
       const result = f.adminPriorCi(f.path);
-      expect(result.status, result.output).toBe(0);
-      expect(f.state().mutations).toBe(1);
+      expectResult(f, result, undefined, 1);
       expect(f.record()).toMatchObject({
         phase: "complete",
         route: "admin",
@@ -422,51 +401,22 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it("requires the explicit operator confirmation even with valid baseline evidence", () => {
-    const f = preExistingCandidate();
-    const result = f.adminPriorCi(f.path, false);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.status).toBe(2);
-    expect(f.state().mutations).toBe(0);
-  });
-
-  it("keeps ordinary merge admission closed for an attributed failing review", () => {
-    const f = preExistingCandidate();
-    const result = f.run();
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("requires explicit confirmed admin admission");
-    expect(f.state().mutations).toBe(0);
-  });
-
-  it("qualifies a fork run without PR associations only through exact source and current-check identity", () => {
-    const f = preExistingCandidate();
-    const state = f.state();
-    state.priorCi.omitPullRequests = true;
-    state.priorCi.sourceRepository = { id: 123456, full_name: "contributor/repo" };
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(JSON.parse(result.stdout).runAssociation).toBe("exact-source-and-current-check");
-  });
-
-  it.each(["missing", "duplicate"])(
-    "requires one successful security job when it is %s",
-    (kind) => {
+  it.each(["unconfirmed", "ordinary"])(
+    "keeps %s admission closed for attributed failures",
+    (route) => {
       const f = preExistingCandidate();
-      const state = f.state();
-      const security = state.priorCi.jobs!.find((job) => job.name === "security-fast")!;
-      state.priorCi.jobs = state.priorCi.jobs!.filter((job) => job !== security);
-      if (kind === "duplicate") {
-        state.priorCi.jobs.push(security, { ...security, id: 606 });
-      }
-      f.save(state);
-      const result = f.verifyPriorCi(f.path);
+      const result = route === "unconfirmed" ? f.adminPriorCi(f.path, false) : f.run();
       expect(result.status, result.output).not.toBe(0);
-      expect(result.output).toContain("security-fast must pass independently");
+      if (route === "unconfirmed") {
+        expect(result.status).toBe(2);
+      } else {
+        expect(result.output).toContain("requires explicit confirmed admin admission");
+      }
+      expect(f.state().mutations).toBe(0);
     },
   );
 
-  it.each([
+  it.each<[string, string]>([
     ["changed source", "failed input changed"],
     ["wrong merge parents", "ordered parents"],
     ["forged merge tree", "tested merge tree"],
@@ -529,25 +479,18 @@ describePosix("explicit prior-CI admin landing", () => {
       state.priorCi.omitPullRequests = true;
       state.priorCi.runRepository = { id: 654321, full_name: "unrelated/repo" };
     }
-    if (
-      [
-        "stale review head",
-        "different review run",
-        "different review attempt",
-        "green review claim",
-      ].includes(fault)
-    ) {
+    const reviewChanges: Record<
+      string,
+      Partial<{ head: string; runId: number; runAttempt: number }>
+    > = {
+      "stale review head": { head: f.base },
+      "different review run": { runId: 502 },
+      "different review attempt": { runAttempt: 1 },
+    };
+    if (reviewChanges[fault] || fault === "green review claim") {
       const reviewPath = join(f.worktree, ".local/review.json");
       const review = JSON.parse(readFileSync(reviewPath, "utf8"));
-      if (fault === "stale review head") {
-        review.tests.preExistingCi.head = f.base;
-      }
-      if (fault === "different review run") {
-        review.tests.preExistingCi.runId = 502;
-      }
-      if (fault === "different review attempt") {
-        review.tests.preExistingCi.runAttempt = 1;
-      }
+      Object.assign(review.tests.preExistingCi, reviewChanges[fault]);
       if (fault === "green review claim") {
         review.tests.result = "pass";
       }
@@ -556,25 +499,24 @@ describePosix("explicit prior-CI admin landing", () => {
     f.save(state);
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain(message);
-    expect(f.state().mutations).toBe(0);
-    expect(
-      f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-merge-outcomes/123"]),
-    ).toBe("");
+    expectResult(f, result, message);
+    expectNoIntent(f);
   });
 
   it("lands one pinned REST squash and retains honest historical CI and scoped proof", () => {
     const f = candidate();
+    const state = f.state();
+    state.priorCi.workflowPath = ".github/workflows/ci.yml@refs/heads/topic";
+    f.save(state);
     const result = f.adminPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(f.state().mutations).toBe(1);
+    expectResult(f, result, undefined, 1);
     expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
     expect(f.record()).toMatchObject({
       phase: "complete",
       route: "admin",
       head: f.head,
       priorCiAdmin: {
+        head: f.head,
         priorHead: f.evidence.priorHead,
         runId: 501,
         runAttempt: 2,
@@ -582,16 +524,6 @@ describePosix("explicit prior-CI admin landing", () => {
       },
     });
     expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
-  });
-
-  it("accepts an exact CI workflow path with its GitHub run-attempt ref suffix", () => {
-    const f = candidate();
-    const state = f.state();
-    state.priorCi.workflowPath = ".github/workflows/ci.yml@refs/heads/topic";
-    f.save(state);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ head: f.head, runId: 501, runAttempt: 2 });
   });
 
   it.each([
@@ -611,55 +543,33 @@ describePosix("explicit prior-CI admin landing", () => {
   ])("refuses %s before retaining a merge intent or dispatching", (fault) => {
     const f = candidate();
     const state = f.state();
-    if (fault === "head") {
-      f.evidence.head = f.base;
-    }
-    if (fault === "delta") {
-      f.evidence.deltaSha256 = "0".repeat(64);
-    }
-    if (fault === "prior-run") {
-      state.priorCi.runHead = f.base;
-    }
-    if (fault === "wrong-branch") {
-      state.priorCi.branch = "unrelated";
-    }
-    if (fault === "review") {
-      state.priorCi.reviewDecision = "REVIEW_REQUIRED";
-    }
-    if (fault === "null-review") {
-      state.priorCi.reviewDecision = null;
-    }
-    if (fault === "threads") {
-      state.priorCi.requireThreads = true;
-      state.priorCi.resolved = false;
-    }
-    if (fault === "failed-ci") {
-      state.gates = "fail";
-    }
-    if (fault === "security") {
-      state.priorCi.otherCheck = "Security Review";
-      state.restFailedContext = "Security Review";
-    }
-    if (fault === "missing-security") {
-      state.priorCi.missingCheck = "Security Review";
-    }
-    if (fault === "wrong-publisher") {
-      state.restCheckApp = 999;
-    }
-    if (fault === "authority") {
-      state.priorCi.membership = "member";
-    }
-    if (fault === "changed-evidence") {
-      state.priorCi.mutateEvidence = true;
-    }
+    const evidenceChanges: Record<string, Partial<typeof f.evidence>> = {
+      head: { head: f.base },
+      delta: { deltaSha256: "0".repeat(64) },
+    };
+    const ciChanges: Record<string, Partial<typeof state.priorCi>> = {
+      "prior-run": { runHead: f.base },
+      "wrong-branch": { branch: "unrelated" },
+      review: { reviewDecision: "REVIEW_REQUIRED" },
+      "null-review": { reviewDecision: null },
+      threads: { requireThreads: true, resolved: false },
+      security: { otherCheck: "Security Review" },
+      "missing-security": { missingCheck: "Security Review" },
+      authority: { membership: "member" },
+      "changed-evidence": { mutateEvidence: true },
+    };
+    const stateChanges: Record<string, Partial<typeof state>> = {
+      "failed-ci": { gates: "fail" },
+      security: { restFailedContext: "Security Review" },
+      "wrong-publisher": { restCheckApp: 999 },
+    };
+    Object.assign(f.evidence, evidenceChanges[fault]);
+    Object.assign(state.priorCi, ciChanges[fault]);
+    Object.assign(state, stateChanges[fault]);
     f.save(state);
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = fault === "changed-evidence" ? f.adminPriorCi(f.path) : f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("Prior-CI admin admission:");
-    expect(f.state().mutations).toBe(0);
-    expect(
-      f.git(["for-each-ref", "--format=%(refname)", "refs/openclaw/pr-merge-outcomes/123"]),
-    ).toBe("");
+    expectResult(f, result, "Prior-CI admin admission:");
+    expectNoIntent(f);
   });
 });

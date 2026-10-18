@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
@@ -109,7 +110,7 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   };
   return new Map([
     ["dark", layer(blocks.get(':root[data-theme="dark"]'))],
-    ["light", layer(light)],
+    ["light", layer(light, blocks.get(':root[data-theme="light"]'))],
     ["openknot", layer(blocks.get(':root[data-theme="openknot"]'))],
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
@@ -361,21 +362,27 @@ function readBubbleBackgrounds(groupedCss: string): {
   senderTint: string;
   lightSenderTint: string;
 } {
-  const readBackground = (selector: string): string => {
-    const background = readRuleBody(groupedCss, selector).match(
-      /^\s*--chat-bubble-background:\s*([^;]+);/mu,
-    )?.[1];
-    if (!background) {
-      throw new Error(`could not read bubble background token from "${selector}"`);
+  const rules: Rule[] = [];
+  postcss.parse(groupedCss).walkRules((rule) => {
+    rules.push(rule);
+  });
+  const readPaint = (selector: string, property: string): string => {
+    // Read only this rule's declarations, including those after nested artwork treatments.
+    const declaration = rules
+      .find((rule) => rule.selector === selector)
+      ?.nodes.filter((node) => node.type === "decl")
+      .find((node) => node.prop === property);
+    if (!declaration) {
+      throw new Error(`could not read ${property} from "${selector}"`);
     }
-    return background.trim();
+    return declaration.value;
   };
+  const readBackground = (selector: string) => readPaint(selector, "--chat-bubble-background");
   return {
     user: readBackground(USER_BUBBLE_RULE),
     lightUser: readBackground(LIGHT_USER_BUBBLE_RULE),
     lightUserText:
-      readRuleBody(groupedCss, LIGHT_USER_BUBBLE_RULE).match(/color:\s*var\((--[\w-]+)\)/u)?.[1] ??
-      "",
+      readPaint(LIGHT_USER_BUBBLE_RULE, "color").match(/^var\((--[\w-]+)\)$/u)?.[1] ?? "",
     senderTint: readBackground(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: readBackground(LIGHT_SENDER_TINT_BUBBLE_RULE),
   };
@@ -384,26 +391,19 @@ function readBubbleBackgrounds(groupedCss: string): {
 describe("Control UI theme contrast", () => {
   const baseCss = readPaletteSources(stylesDir);
   const themes = resolveThemes(parseThemeBlocks(baseCss));
-
-  it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {
-    for (const [themeName, tokens] of themes) {
-      for (const textToken of TEXT_TOKENS) {
-        const foreground = resolveOpaqueColor(`var(${textToken})`, tokens);
-        for (const surfaceToken of SURFACE_TOKENS) {
-          const background = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
-          const ratio = contrastRatio(foreground, background);
-          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-          expect(
-            ratio,
-            `${themeName}: ${textToken} rgb(${foreground.join(", ")}) on ${surfaceToken} rgb(${background.join(", ")})`,
-          ).toBeGreaterThanOrEqual(floor);
-        }
-      }
-    }
-  });
-
-  it("keeps selected controls and session labels at WCAG AA across themes", () => {
-    const cases = [
+  type Paint = readonly [ink: string, fill: string, minimum: number, host?: string];
+  const paletteCases = (
+    paints: (themeName: string, tokens: TokenMap, floor: number) => readonly Paint[],
+  ) =>
+    [...themes].flatMap(([themeName, tokens]) =>
+      paints(
+        themeName,
+        tokens,
+        AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN,
+      ).map(([ink, fill, minimum, host]) => ({ themeName, tokens, ink, fill, minimum, host })),
+    );
+  const controls = (
+    [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
       [
         "settings-controls.css",
@@ -412,27 +412,116 @@ describe("Control UI theme contrast", () => {
       ],
       ["sessions.css", ".session-label-chip", null],
       ["sessions.css", ".session-kind--direct", null],
-    ] as const;
-    const failures: string[] = [];
-    for (const [filename, selector, tint] of cases) {
-      const rule = readRuleBody(fs.readFileSync(path.join(stylesDir, filename), "utf8"), selector);
-      const ink = rule.match(/(?:^|;)\s*color:\s*([^;]+);/u)?.[1];
-      if (!ink) {
-        throw new Error(`could not read text color from "${selector}"`);
-      }
-      for (const [themeName, tokens] of themes) {
-        const foreground = resolveOpaqueColor(ink, tokens);
-        for (const surfaceToken of SURFACE_TOKENS) {
-          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
-          const background = tint ? composite(resolveColor(tint, tokens), host) : host;
-          const ratio = contrastRatio(foreground, background);
-          if (ratio < AA_NORMAL_TEXT_MIN) {
-            failures.push(`${themeName}: ${selector} on ${surfaceToken} = ${ratio.toFixed(2)}:1`);
-          }
+    ] as const
+  ).flatMap(([filename, selector, tint]) => {
+    const rule = readRuleBody(fs.readFileSync(path.join(stylesDir, filename), "utf8"), selector);
+    const ink = rule.match(/(?:^|;)\s*color:\s*([^;]+);/u)?.[1];
+    if (!ink) {
+      throw new Error(`could not read text color from "${selector}"`);
+    }
+    return SURFACE_TOKENS.map(
+      (surface) =>
+        [
+          ink,
+          tint ?? `var(${surface})`,
+          AA_NORMAL_TEXT_MIN,
+          tint ? `var(${surface})` : undefined,
+        ] as const,
+    );
+  });
+  const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
+  const diffs = DIFF_SELECTORS.map((selector) => {
+    const rule = readRuleBody(componentsCss, selector);
+    const foregroundToken = rule.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+    const tint = rule.match(/background:\s*([^;]+);/u)?.[1];
+    if (!foregroundToken || !tint) {
+      throw new Error(`could not read diff colors from "${selector}"`);
+    }
+    return { foregroundToken, tint };
+  });
+  const confirmation = readConfirmButtonPaint(
+    fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
+  );
+
+  it.each([
+    [
+      "keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it",
+      paletteCases((_theme, _tokens, floor) =>
+        TEXT_TOKENS.flatMap((ink) =>
+          SURFACE_TOKENS.map((fill) => [`var(${ink})`, `var(${fill})`, floor] as const),
+        ),
+      ),
+    ],
+    [
+      "keeps selected controls and session labels at WCAG AA across themes",
+      paletteCases(() => controls),
+    ],
+    [
+      "keeps filled action labels and accent glyphs legible across palettes",
+      paletteCases(() => [
+        ["var(--primary-foreground)", "var(--primary)", AA_NORMAL_TEXT_MIN],
+        ["var(--primary-foreground)", "var(--primary-hover)", AA_NORMAL_TEXT_MIN],
+        ["var(--destructive-foreground)", "var(--destructive-hover)", AA_NORMAL_TEXT_MIN],
+        ["var(--accent-foreground)", "var(--accent)", 3],
+      ]),
+    ],
+    [
+      "keeps the chat confirmation button legible on every theme",
+      paletteCases((themeName, tokens, floor) => {
+        const paint = confirmation.overrides.get(themeName) ?? confirmation.base;
+        const fill = tokens.get(paint.background);
+        const ink = tokens.get(paint.color);
+        return fill?.startsWith("#") && ink?.startsWith("#") ? [[ink, fill, floor]] : [];
+      }),
+    ],
+    [
+      "keeps highlighted diff lines at WCAG AA on every code surface",
+      paletteCases((_theme, _tokens, floor) =>
+        diffs.flatMap(({ foregroundToken, tint }) =>
+          DIFF_HOST_SURFACES.map(
+            (surface) => [`var(${foregroundToken})`, tint, floor, `var(${surface})`] as const,
+          ),
+        ),
+      ),
+    ],
+  ] as const)("%s", (_name, samples) => {
+    for (const { themeName, tokens, ink, fill, minimum, host } of samples) {
+      const foreground = resolveOpaqueColor(ink, tokens);
+      const background = host
+        ? composite(resolveColor(fill, tokens), resolveOpaqueColor(host, tokens))
+        : resolveOpaqueColor(fill, tokens);
+      expect(
+        contrastRatio(foreground, background),
+        `${themeName}: ${ink} on ${fill}${host ? ` over ${host}` : ""}`,
+      ).toBeGreaterThanOrEqual(minimum);
+    }
+  });
+
+  it("preserves imported fill/ink contrast when no hover pair is supplied", () => {
+    const defaults = parseThemeBlocks(baseCss).get(":root") ?? new Map<string, string>();
+    for (const text of ["#fafafa", "#211e1a"]) {
+      for (const [primary, destructive, foreground] of [
+        ["#d92a3f", "#d32f2f", "#fafafa"],
+        ["#ffc233", "#ffabab", "#000000"],
+      ] as const) {
+        const imported = new Map(defaults);
+        imported.set("--text", text);
+        imported.set("--primary", primary);
+        imported.set("--primary-foreground", foreground);
+        imported.set("--destructive", destructive);
+        imported.set("--destructive-foreground", foreground);
+        for (const fill of ["--primary", "--destructive"]) {
+          const ink = resolveOpaqueColor(`var(${fill}-foreground)`, imported);
+          const rest = contrastRatio(ink, resolveOpaqueColor(`var(${fill})`, imported));
+          const hover = contrastRatio(ink, resolveOpaqueColor(`var(${fill}-hover)`, imported));
+          expect(rest).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
+          expect(
+            hover,
+            `${fill} hover must not reduce the imported pair contrast`,
+          ).toBeGreaterThanOrEqual(rest);
         }
       }
     }
-    expect(failures).toEqual([]);
   });
 
   it("keeps the markdown code chip separated from every surface it sits on", () => {
@@ -462,55 +551,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps the chat confirmation button legible on every theme", () => {
-    const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
-    const { base, overrides } = readConfirmButtonPaint(groupedCss);
-    for (const [themeName, tokens] of themes) {
-      const paint = overrides.get(themeName) ?? base;
-      const background = tokens.get(paint.background);
-      const color = tokens.get(paint.color);
-      if (!background?.startsWith("#") || !color?.startsWith("#")) {
-        continue;
-      }
-      const ratio = contrastRatio(parseHex(color), parseHex(background));
-      const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-      expect(
-        ratio,
-        `${themeName}: ${paint.color} ${color} on ${paint.background} ${background}`,
-      ).toBeGreaterThanOrEqual(floor);
-    }
-  });
-
-  it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
-    const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
-    const diffStyles = DIFF_SELECTORS.map((selector) => {
-      const rule = readRuleBody(componentsCss, selector);
-      const foregroundToken = rule.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
-      const tint = rule.match(/background:\s*([^;]+);/u)?.[1];
-      if (!foregroundToken || !tint) {
-        throw new Error(`could not read diff colors from "${selector}"`);
-      }
-      return { foregroundToken, tint };
-    });
-    for (const [themeName, tokens] of themes) {
-      for (const { foregroundToken, tint } of diffStyles) {
-        const foreground = resolveOpaqueColor(`var(${foregroundToken})`, tokens);
-        const resolvedTint = resolveColor(tint, tokens);
-        for (const surfaceToken of DIFF_HOST_SURFACES) {
-          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
-          const background = composite(resolvedTint, host);
-          const ratio = contrastRatio(foreground, background);
-          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-          expect(
-            ratio,
-            `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken}`,
-          ).toBeGreaterThanOrEqual(floor);
-        }
-      }
-    }
-  });
-
-  it("keeps GitHub item ink and focus legible across every tone, theme and bubble", () => {
+  it("keeps GitHub item surfaces neutral and ink and focus legible across themes and bubbles", () => {
     const css = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const bubble = readBubbleBackgrounds(
       fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
@@ -554,6 +595,10 @@ describe("Control UI theme contrast", () => {
         // Forwarded assistant messages retain the translucent sender skin in light mode.
         hosts.push(composite(resolveColor(bubble.senderTint, tokens), page));
       }
+      const neutralTokens = new Map(palette).set(
+        "--github-item-tone",
+        declaration(base, "--github-item-tone"),
+      );
       for (const tone of ["unknown", "neutral", "positive", "negative", "accent", "attention"]) {
         const rule =
           tone === "unknown" || tone === "neutral"
@@ -564,6 +609,11 @@ describe("Control UI theme contrast", () => {
           declaration(rule, "--github-item-tone"),
         );
         for (const surface of surfaces) {
+          const fill = resolveColor(surface, tokens);
+          expect(fill, `${theme}/${tone}: chip fill is opaque and independent of status`).toEqual({
+            ...resolveColor(surface, neutralTokens),
+            alpha: 1,
+          });
           for (const host of hosts) {
             const background = composite(resolveColor(surface, tokens), host);
             const ink = composite(resolveColor(foreground, tokens), background);

@@ -76,11 +76,6 @@ public enum OpenClawComputerAction: String, Codable, CaseIterable, Sendable {
         }
         self = action
     }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        try container.encode(self.rawValue)
-    }
 }
 
 public enum OpenClawComputerScrollDirection: String, Codable, Sendable {

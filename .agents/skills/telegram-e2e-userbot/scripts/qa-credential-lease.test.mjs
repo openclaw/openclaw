@@ -734,58 +734,55 @@ test("project-access errors do not misdiagnose missing authentication", async (c
   });
 });
 
-test("cancellation joins the active Convex launcher and never tries another", async (context) => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const fixture = await launcherFixture(context, {
-    // A create event can arrive before writeFileSync publishes the PID bytes.
-    convex: `
-const pidPath = require('node:path').join(__dirname, 'pid');
-fs.writeFileSync(pidPath + '.tmp', String(process.pid));
-fs.renameSync(pidPath + '.tmp', pidPath);
+test(
+  "cancellation joins the active Convex launcher and never tries another",
+  { timeout: 60_000 },
+  async (context) => {
+    const { once } = await import("node:events");
+    const net = await import("node:net");
+    const controller = new AbortController();
+    const reason = new Error("cancelled credential lookup");
+    let pending;
+    // Join the launcher even when the body times out before its own cancellation.
+    context.after(async () => {
+      controller.abort(reason);
+      await pending;
+    });
+    // The launcher reports its PID over a socket: directory notifications can be
+    // dropped on a busy temp directory, which left this test waiting on a live launcher.
+    const started = Promise.withResolvers();
+    const server = net.createServer((socket) => {
+      let pid = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk) => (pid += chunk));
+      socket.on("end", () => started.resolve(Number(pid)));
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    context.after(() => server.close());
+    const fixture = await launcherFixture(context, {
+      convex: `
+const socket = require('node:net').connect(${server.address().port}, '127.0.0.1', () => socket.end(String(process.pid)));
 setInterval(() => {}, 1000);
 `,
-    bunx: authenticatedLauncher,
-  });
-  const pidPath = path.join(fixture.convexProjectDir, "pid");
-  const started = Promise.withResolvers();
-  const watcher = fs.watch(fixture.convexProjectDir, () => {
-    if (fs.existsSync(pidPath)) {
-      started.resolve();
-    }
-  });
-  const controller = new AbortController();
-  const reason = new Error("cancelled credential lookup");
-  const pending = acquireQaLease({
-    kind: "telegram-test-userbot",
-    ...fixture,
-    signal: controller.signal,
-    fetchImpl: async () => assert.fail("cancelled discovery cannot acquire a lease"),
-  }).catch((error) => error);
-  let timer;
-  try {
-    await Promise.race([
-      started.promise,
-      new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error("launcher did not start")), 5_000);
-      }),
-    ]);
+      bunx: authenticatedLauncher,
+    });
+    pending = acquireQaLease({
+      kind: "telegram-test-userbot",
+      ...fixture,
+      signal: controller.signal,
+      fetchImpl: async () => assert.fail("cancelled discovery cannot acquire a lease"),
+    }).catch((error) => error);
+    const pid = await started.promise;
     controller.abort(reason);
     assert.equal(await pending, reason);
-    assert.throws(() => process.kill(Number(fs.readFileSync(pidPath, "utf8")), 0), {
-      code: "ESRCH",
-    });
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     assert.deepEqual(
       fixture.calls().map(({ name }) => name),
       ["convex"],
     );
-  } finally {
-    clearTimeout(timer);
-    controller.abort(reason);
-    await pending;
-    watcher.close();
-  }
-});
+  },
+);
 
 test("normal scoped release revokes the lease without turning successful work into cancellation", async () => {
   const { withTelegramRun } = await import("./telegram-run-scope.mjs");

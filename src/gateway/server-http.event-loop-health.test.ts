@@ -1,11 +1,30 @@
 import { get } from "node:http";
-import { describe, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
+
+const nativeDelay = vi.hoisted(() => ({ max: 20_000_000 }));
+vi.mock("node:perf_hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:perf_hooks")>()),
+  monitorEventLoopDelay: () => ({
+    get max() {
+      return nativeDelay.max;
+    },
+    percentile: () => nativeDelay.max,
+    reset: () => {
+      nativeDelay.max = 20_000_000;
+    },
+    enable: () => true,
+    disable: () => true,
+  }),
+}));
+
+afterEach(() => vi.restoreAllMocks());
 
 async function readJson(url: string): Promise<Record<string, unknown>> {
   const { statusCode, body: responseBody } = await new Promise<{
@@ -31,9 +50,9 @@ async function readJson(url: string): Promise<Record<string, unknown>> {
 describe("Gateway HTTP event-loop sampling", () => {
   it("retains a blocked request interval when readiness is read before the sampler resumes", async () => {
     const clock = createGatewaySchedulerClock();
+    vi.spyOn(performance, "now").mockImplementation(clock.clock.now);
     const monitor = createGatewayEventLoopHealthMonitor({
       scheduler: createTestGatewayScheduler(clock.clock),
-      now: clock.clock.now,
     });
     let blockNextRead = false;
     try {
@@ -44,6 +63,7 @@ describe("Gateway HTTP event-loop sampling", () => {
           getReadiness: () => {
             if (blockNextRead) {
               blockNextRead = false;
+              nativeDelay.max = 1_200_000_000;
               clock.setTime(clock.clock.now() + 1_200);
               const beforePendingSample = monitor.snapshot();
               for (let index = 0; index < 100; index++) {

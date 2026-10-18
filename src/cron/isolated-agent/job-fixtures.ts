@@ -1,3 +1,4 @@
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 /** Shared loose cron fixtures for isolated-agent tests. */
 type LooseRecord = Record<string, unknown>;
 
@@ -18,7 +19,8 @@ export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
   // without repeating unrelated scheduler defaults.
   const jobOverrides =
     overrides && "job" in overrides ? (overrides.job as LooseRecord | undefined) : undefined;
-  return {
+  const params = {
+    deliveryAttemptFence: null,
     cfg: {},
     deps: {} as never,
     job: makeIsolatedAgentJobFixture(jobOverrides),
@@ -26,4 +28,6 @@ export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
     sessionKey: "cron:test",
     ...overrides,
   };
+  setRuntimeConfigSnapshot(params.cfg);
+  return params;
 }

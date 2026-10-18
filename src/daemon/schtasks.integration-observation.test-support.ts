@@ -1,11 +1,18 @@
 // Native task/process inspection and sanitized proof rendering.
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import os from "node:os";
+import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
-import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
+import { decodeXml } from "../shared/xml.js";
 import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;
@@ -14,7 +21,8 @@ const TASK_STATE_READY = 3;
 
 export const DIAGNOSTIC_TEXT_LIMIT = 16_384;
 const DIAGNOSTIC_PROCESS_LIMIT = 32;
-export const TASK_LOGON_INTERACTIVE_TOKEN = 3;
+export const TASK_LOGON_S4U = 2;
+const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 export const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
 
 export type ScheduledTaskPrincipal = {
@@ -28,15 +36,49 @@ export type ScheduledTaskPrincipal = {
 
 export type WindowsProcessDiagnostic = {
   CommandLine?: string | null;
+  CreationDate?: string | null;
+  UserModeTime?: number | string;
+  KernelModeTime?: number | string;
+  ReadOperationCount?: number | string;
+  WriteOperationCount?: number | string;
   ParentProcessId?: number;
   ProcessId?: number;
 };
+
+type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+export async function canBindLoopbackPort(port: number): Promise<boolean> {
+  const server = createServer();
+  return new Promise<boolean>((resolve) => {
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
 
 export async function readTaskXml(taskName: string): Promise<string | null> {
   const result = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+export async function readTaskDefinitionSnapshot(
+  taskName: string,
+): Promise<TaskDefinitionSnapshot> {
+  const exists = probeScheduledTaskExists(taskName);
+  if (exists === null) {
+    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
+  }
+  if (!exists) {
+    return { exists: false, taskXml: null };
+  }
+  const taskXml = await readTaskXml(taskName);
+  if (!taskXml) {
+    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
+  }
+  return { exists: true, taskXml };
 }
 
 export function disableScheduledTaskXmlForFixture(xml: string): string {
@@ -125,7 +167,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
 } {
   const script = [
     "$ErrorActionPreference='Stop'",
-    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress",
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
   const result = spawnSync(
     getWindowsPowerShellExePath(),
@@ -295,6 +337,36 @@ export function assertInteractiveLeastPrivilegeTask(params: {
 }): void {
   expect(params.taskXml).toContain("<LogonType>InteractiveToken</LogonType>");
   expect(params.principal.logonType).toBe(TASK_LOGON_INTERACTIVE_TOKEN);
+  assertLeastPrivilegeTask(params);
+}
+
+export function assertUnattendedLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+  scriptPath: string;
+}): void {
+  expect(params.taskXml).toContain("<LogonType>S4U</LogonType>");
+  expect(params.principal.logonType).toBe(TASK_LOGON_S4U);
+  expect(params.taskXml).toMatch(/<BootTrigger(?:\s[^>]*)?\/?>/u);
+  expect(params.taskXml).toMatch(/<LogonTrigger(?:\s[^>]*)?\/?>/u);
+  const normalizePath = (value: string) => path.win32.normalize(value).toLowerCase();
+  const command = decodeXml(params.taskXml.match(/<Command>([^<]*)<\/Command>/u)?.[1] ?? "");
+  const args = decodeXml(params.taskXml.match(/<Arguments>([^<]*)<\/Arguments>/u)?.[1] ?? "");
+  const workingDirectory = decodeXml(
+    params.taskXml.match(/<WorkingDirectory>([^<]*)<\/WorkingDirectory>/u)?.[1] ?? "",
+  );
+  expect(normalizePath(command)).toBe(normalizePath(getWindowsCmdExePath()));
+  expect(args).toBe(`/d /s /c ""${params.scriptPath}""`);
+  expect(normalizePath(workingDirectory)).toBe(
+    normalizePath(path.win32.dirname(params.scriptPath)),
+  );
+  assertLeastPrivilegeTask(params);
+}
+
+function assertLeastPrivilegeTask(params: {
+  principal: ScheduledTaskPrincipal;
+  taskXml: string;
+}): void {
   expect(params.principal.runLevel).toBe(TASK_RUNLEVEL_LEAST_PRIVILEGE);
   const exportedRunLevel = params.taskXml.match(/<RunLevel>([^<]+)<\/RunLevel>/u)?.[1];
   // Task Scheduler may omit the default LeastPrivilege node when exporting XML.

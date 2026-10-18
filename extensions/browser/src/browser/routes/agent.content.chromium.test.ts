@@ -10,7 +10,7 @@ import { getPlaywrightCore } from "../playwright-core.runtime.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
 import { getFreePort } from "../test-port.js";
-import { registerBrowserAgentRoutes } from "./agent.js";
+import { registerBrowserRoutes } from "./index.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,7 +62,7 @@ async function withContentPage(
       profiles: new Map(),
     };
     const routes = createBrowserRouteApp();
-    registerBrowserAgentRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
+    registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
     await run({
       page,
       call: async (method, route, values, params, signal) => {

@@ -356,48 +356,6 @@ export function runWithCronCreatorAuthorityCapability<T>(
   }
 }
 
-/** Combines an admitted capability with a late exact-thread tool-surface resolver. */
-function bindCronCreatorAuthorityResolver(params: {
-  capability: CronCreatorAuthorityCapability | undefined;
-  runId: string | undefined;
-  resolve: CronCreatorAuthorityMaterializer;
-}): CronCreatorAuthorityResolver | undefined {
-  const normalizedRunId = params.runId?.trim();
-  const authority = params.capability;
-  if (
-    !normalizedRunId ||
-    authority?.active !== true ||
-    authority.runId !== normalizedRunId ||
-    (authority.managementEntitlement && authority.callerOrigin.kind === "unknown")
-  ) {
-    return undefined;
-  }
-  return async (options) => {
-    // Tool callbacks can run after construction; retain the exact scope object
-    // and let its owner revoke it when the admitted run settles.
-    const operationSignal = options?.signal;
-    authority.signal.throwIfAborted();
-    operationSignal?.throwIfAborted();
-    if (authority.isCurrent?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
-    }
-    const signal = operationSignal
-      ? AbortSignal.any([authority.signal, operationSignal])
-      : authority.signal;
-    const snapshot = await params.resolve({ signal });
-    authority.signal.throwIfAborted();
-    operationSignal?.throwIfAborted();
-    if (!authority.active) {
-      authority.signal.throwIfAborted();
-    }
-    return Object.freeze({
-      tools: snapshot.tools,
-      provenance: snapshot.provenance,
-      grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
-    });
-  };
-}
-
 /** Installs an explicitly transported capability only for synchronous tool construction. */
 export function runWithCronCreatorAuthorityCapabilityResolver<T>(params: {
   capability: CronCreatorAuthorityCapability | undefined;
@@ -437,14 +395,41 @@ export function bindActiveCronCreatorAuthorityResolver(
   const authority = activeCronCreatorAuthority.getStore();
   const resolver = activeCronCreatorAuthorityResolver.getStore();
   const normalizedRunId = runId?.trim();
-  if (!normalizedRunId || resolver?.runId !== normalizedRunId) {
+  if (
+    !normalizedRunId ||
+    resolver?.runId !== normalizedRunId ||
+    authority?.active !== true ||
+    authority.runId !== normalizedRunId ||
+    (authority.managementEntitlement && authority.callerOrigin.kind === "unknown")
+  ) {
     return undefined;
   }
-  return bindCronCreatorAuthorityResolver({
-    capability: authority,
-    runId: normalizedRunId,
-    resolve: resolver.resolve,
-  });
+  const resolve = resolver.resolve;
+  return async (options) => {
+    // Tool callbacks can run after construction; retain the exact scope object
+    // and let its owner revoke it when the admitted run settles.
+    const operationSignal = options?.signal;
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
+    if (authority.isCurrent?.() === false) {
+      throw new Error("Automation caller authority is no longer active.");
+    }
+    const signal = operationSignal
+      ? AbortSignal.any([authority.signal, operationSignal])
+      : authority.signal;
+    const snapshot = await resolve({ signal });
+    authority.signal.throwIfAborted();
+    operationSignal?.throwIfAborted();
+    if (!authority.active) {
+      authority.signal.throwIfAborted();
+    }
+    return Object.freeze({
+      tools: snapshot.tools,
+      provenance: snapshot.provenance,
+      grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+      ...(snapshot.runtimeAuthority ? { holdsRuntimeAuthority: true as const } : {}),
+    });
+  };
 }
 
 /** Retains the exact admitted owner turn only while its run scope remains live. */

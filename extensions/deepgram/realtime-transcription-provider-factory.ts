@@ -17,17 +17,6 @@ import { DEFAULT_DEEPGRAM_AUDIO_BASE_URL, DEFAULT_DEEPGRAM_AUDIO_MODEL } from ".
 
 type DeepgramRealtimeTranscriptionEncoding = "linear16" | "mulaw" | "alaw";
 
-type DeepgramRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-  language?: string;
-  sampleRate?: number;
-  encoding?: DeepgramRealtimeTranscriptionEncoding;
-  interimResults?: boolean;
-  endpointingMs?: number;
-};
-
 type DeepgramRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
   baseUrl: string;
@@ -56,11 +45,7 @@ type DeepgramRealtimeTranscriptionEvent = {
 const DEEPGRAM_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const DEEPGRAM_REALTIME_DEFAULT_ENCODING: DeepgramRealtimeTranscriptionEncoding = "mulaw";
 const DEEPGRAM_REALTIME_DEFAULT_ENDPOINTING_MS = 800;
-const DEEPGRAM_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
 const DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const DEEPGRAM_REALTIME_RECONNECT_DELAY_MS = 1000;
-const DEEPGRAM_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 const DEEPGRAM_REALTIME_MAX_RETAINED_TRANSCRIPT_BYTES = 256 * 1024;
 const DEEPGRAM_REALTIME_FINALIZE_FALLBACK_MS = DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS - 100;
 
@@ -97,10 +82,8 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
   if (!resolved) {
     return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(resolved);
-  } catch {
+  const parsed = URL.parse(resolved);
+  if (!parsed) {
     throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
   }
   const { protocol } = parsed;
@@ -115,7 +98,7 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
-  const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
+  const url = new URL(config.baseUrl);
   // Self-hosted Deepgram may explicitly use ws:// without TLS. Translate only
   // matching HTTP schemes so direct WebSocket endpoints keep their contract.
   if (url.protocol === "http:") {
@@ -136,9 +119,7 @@ function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionCon
   return url.toString();
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): DeepgramRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = readNestedDeepgramConfig(config);
   return {
     apiKey: normalizeResolvedSecretInputString({
@@ -177,10 +158,8 @@ function createDeepgramRealtimeTranscriptionSession(
   let finalizeFallbackTimer: ReturnType<typeof setTimeout> | undefined;
   let openedOnce = false;
 
-  const collapseWhitespace = (value: string) => value.replace(/\s+/g, " ").trim();
-
   const joinTranscript = (left: string, right: string) =>
-    collapseWhitespace(left && right ? `${left} ${right}` : left || right);
+    (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
   const clearFinalizeFallback = () => {
     if (finalizeFallbackTimer) {
@@ -253,18 +232,13 @@ function createDeepgramRealtimeTranscriptionSession(
         if (!text) {
           return;
         }
-        if (event.is_final) {
-          const nextFinalized = joinTranscript(finalizedTranscript, text);
-          if (!updateTurn(nextFinalized, "", transport)) {
-            return;
-          }
-          config.onPartial?.(nextFinalized);
-        } else {
-          if (!updateTurn(finalizedTranscript, text, transport)) {
-            return;
-          }
-          config.onPartial?.(joinTranscript(finalizedTranscript, text));
+        const nextFinalized = event.is_final
+          ? joinTranscript(finalizedTranscript, text)
+          : finalizedTranscript;
+        if (!updateTurn(nextFinalized, event.is_final ? "" : text, transport)) {
+          return;
         }
+        config.onPartial?.(event.is_final ? nextFinalized : joinTranscript(nextFinalized, text));
         return;
       }
       case "SpeechStarted":
@@ -285,11 +259,7 @@ function createDeepgramRealtimeTranscriptionSession(
     url: () => toDeepgramRealtimeWsUrl(config),
     headers: { Authorization: `Token ${config.apiKey}` },
     readyOnOpen: true,
-    connectTimeoutMs: DEEPGRAM_REALTIME_CONNECT_TIMEOUT_MS,
     closeTimeoutMs: DEEPGRAM_REALTIME_CLOSE_TIMEOUT_MS,
-    maxReconnectAttempts: DEEPGRAM_REALTIME_MAX_RECONNECT_ATTEMPTS,
-    reconnectDelayMs: DEEPGRAM_REALTIME_RECONNECT_DELAY_MS,
-    maxQueuedBytes: DEEPGRAM_REALTIME_MAX_QUEUED_BYTES,
     connectTimeoutMessage: "Deepgram realtime transcription connection timeout",
     connectClosedBeforeReadyMessage:
       "Deepgram realtime transcription connection closed before ready",
@@ -343,6 +313,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) => Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.DEEPGRAM_API_KEY);
   return {
     id: "deepgram",
     label: "Deepgram Realtime Transcription",
@@ -350,8 +323,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
     defaultModel: DEFAULT_DEEPGRAM_AUDIO_MODEL,
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.DEEPGRAM_API_KEY),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.DEEPGRAM_API_KEY;

@@ -1,4 +1,3 @@
-// Route-first CLI entry point for commands that can run before full Commander setup.
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { type LogLevel, tryParseLogLevel } from "../logging/levels.js";
@@ -45,7 +44,6 @@ function resolveRoutedCliLogLevel(argv: string[]): LogLevel | null | undefined {
   return logLevel;
 }
 
-/** Try a lightweight route-first command before falling back to the full CLI program. */
 export async function tryRouteCli(
   argv: string[],
   options: { machineOutput?: boolean } = {},

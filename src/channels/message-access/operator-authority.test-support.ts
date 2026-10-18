@@ -1,3 +1,4 @@
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { formatAllowFromLowercase } from "../../plugin-sdk/allow-from.js";
@@ -8,7 +9,8 @@ import {
 } from "../../plugins/runtime.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { publishCanonicalUserChannelPolicy } from "../../state/user-channel-identity-operations.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -27,7 +29,7 @@ export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
 }
 
 export async function withAdminIngress(
-  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+  run: (fixture: Awaited<ReturnType<typeof createAdminIngressFixture>>) => Promise<void>,
   authority: "role" | "identity-grant" = "role",
   channelId: "discord" | "slack" = "discord",
 ) {
@@ -50,7 +52,7 @@ export async function withAdminIngress(
   }
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = await createFixture(state, authority, channelId);
+      const fixture = await createAdminIngressFixture(state, authority, channelId);
       try {
         await run(fixture);
       } finally {
@@ -64,7 +66,7 @@ export async function withAdminIngress(
   }
 }
 
-async function createFixture(
+export async function createAdminIngressFixture(
   state: OpenClawTestState,
   authority: "role" | "identity-grant",
   channelId: "discord" | "slack",
@@ -113,6 +115,7 @@ async function createFixture(
     cfg.gateway = gateway;
   };
   await activatePolicy({});
+  setRuntimeConfigSnapshot(cfg);
   let live = true;
   let gateway = createCommandOwnerTestGateway(cfg);
   const owner = {
@@ -169,8 +172,8 @@ async function createFixture(
     admins,
     gateway,
     context,
-    replaceGatewayContext: () => {
-      gateway = createCommandOwnerTestGateway(cfg);
+    replaceGatewayContext: (replacement?: GatewayRequestContext) => {
+      gateway = replacement ?? createCommandOwnerTestGateway(cfg);
     },
     unregister,
     retire: () => {

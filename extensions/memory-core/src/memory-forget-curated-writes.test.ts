@@ -2,61 +2,28 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { zstdCompressSync } from "node:zlib";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { forgetMemoryEntries } from "./memory-forget.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  createMemoryCoreTestHarness,
-} from "./test-helpers.js";
+import { describe, expect, it } from "vitest";
+import { memoryForgetHarness } from "./memory-forget.suite.test-support.js";
 
 describe("memory forget curated writes", () => {
-  const { createTempWorkspace } = createMemoryCoreTestHarness();
-  let stateDir: string;
-  let workspaceDir: string;
-  let cfg: OpenClawConfig;
+  const h = memoryForgetHarness();
+  const forget = (dryRun = false) => h.forget({ sessionIds: ["target"], dryRun });
 
-  beforeEach(async () => {
-    stateDir = await fs.realpath(await createTempWorkspace("memory-forget-curated-writes-"));
-    workspaceDir = path.join(stateDir, "workspace");
-    await fs.mkdir(workspaceDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await configureMemoryCoreDreamingStateForTests();
-    cfg = {
-      agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
-    } as OpenClawConfig;
+  const toolCall = (id: string, name: string, args: unknown) => ({
+    type: "toolCall",
+    id,
+    name,
+    arguments: args,
   });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    resetPluginStateStoreForTests();
-    vi.unstubAllEnvs();
-  });
-
-  async function seedSession(sessionId: string): Promise<void> {
-    await upsertSessionEntry({
-      agentId: "main",
-      sessionKey: `agent:main:${sessionId}`,
-      entry: { sessionId, updatedAt: 1_000 },
-    });
-  }
 
   it("reports session-authored curated memory without deleting unattributable file content", async () => {
-    await seedSession("target");
+    await h.seedSession("target");
     const curatedContent = "# Long-Term Memory\nThe launch code is violet.\n";
     const writeTool = createOpenClawCodingTools({
-      workspaceDir,
-      config: cfg,
+      workspaceDir: h.workspaceDir,
+      config: h.cfg,
       sessionId: "target",
       sessionKey: "agent:main:target",
       senderIsOwner: true,
@@ -66,53 +33,32 @@ describe("memory forget curated writes", () => {
       path: "MEMORY.md",
       content: curatedContent,
     });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "observed-write",
-            name: "write",
-            arguments: { path: "MEMORY.md" },
-          },
-        ],
-      },
+    await h.append("target", {
+      role: "assistant",
+      content: [toolCall("observed-write", "write", { path: "MEMORY.md" })],
     });
 
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
+    const preview = await forget(true);
     expect(preview.curatedWrites).toEqual([
       { relativePath: "MEMORY.md", observedAt: expect.any(Number) },
     ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
+    expect(await h.read("MEMORY.md")).toBe(curatedContent);
 
-    const report = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-    });
+    const report = await forget();
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(curatedContent);
+    expect(await h.read("MEMORY.md")).toBe(curatedContent);
   });
 
   it("reports harness memory writes from selected live and archived transcripts without observer state", async () => {
-    await seedSession("survivor");
-    await seedSession("target");
+    await h.seedSession("survivor");
+    await h.seedSession("target");
     const observedAt = Date.parse("2026-08-26T12:34:56.000Z");
     const memoryContent = "# Long-Term Memory\nA harness-authored private fact.\n";
-    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memoryContent);
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "# User\n");
-    await fs.writeFile(path.join(workspaceDir, "memory", "profile.md"), "# Profile\n");
+    await fs.mkdir(h.path("memory"), { recursive: true });
+    await h.write("MEMORY.md", memoryContent);
+    await h.write("USER.md", "# User\n");
+    await fs.writeFile(h.path("memory", "profile.md"), "# Profile\n");
     const patchInput = [
       "*** Begin Patch",
       "*** Update File: MEMORY.md",
@@ -123,55 +69,35 @@ describe("memory forget curated writes", () => {
       "+Not a memory file.",
       "*** End Patch",
     ].join("\n");
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "target",
-      sessionKey: "agent:main:target",
-      message: {
-        role: "assistant",
-        timestamp: observedAt,
-        content: [
-          { type: "toolCall", id: "patch", name: "apply_patch", arguments: { input: patchInput } },
-          { type: "toolCall", id: "profile", name: "write", arguments: { path: "USER.md" } },
-          {
-            type: "toolCall",
-            id: "nested",
-            name: "edit",
-            input: { file_path: path.join(workspaceDir, "memory", "profile.md") },
-          },
-          {
-            type: "toolCall",
-            id: "structured",
-            name: "apply_patch",
-            arguments: { changes: [{ path: "memory/structured.md" }, { path: "README.md" }] },
-          },
-          { type: "toolCall", id: "ordinary", name: "write", arguments: { path: "README.md" } },
-          { type: "toolCall", id: "escaping", name: "edit", arguments: { path: "../MEMORY.md" } },
-          { type: "toolCall", id: "malformed", name: "apply_patch", arguments: { input: 42 } },
-          { type: "toolCall", id: "read-only", name: "read", arguments: { path: "MEMORY.md" } },
-          { type: "toolCall", id: "missing", name: "write", arguments: null },
-          null,
-        ],
-      },
+    await h.append("target", {
+      role: "assistant",
+      timestamp: observedAt,
+      content: [
+        toolCall("patch", "apply_patch", { input: patchInput }),
+        toolCall("profile", "write", { path: "USER.md" }),
+        {
+          type: "toolCall",
+          id: "nested",
+          name: "edit",
+          input: { file_path: h.path("memory", "profile.md") },
+        },
+        toolCall("structured", "apply_patch", {
+          changes: [{ path: "memory/structured.md" }, { path: "README.md" }],
+        }),
+        toolCall("ordinary", "write", { path: "README.md" }),
+        toolCall("escaping", "edit", { path: "../MEMORY.md" }),
+        toolCall("malformed", "apply_patch", { input: 42 }),
+        toolCall("read-only", "read", { path: "MEMORY.md" }),
+        toolCall("missing", "write", null),
+        null,
+      ],
     });
-    await appendSessionTranscriptMessageByIdentity({
-      agentId: "main",
-      sessionId: "survivor",
-      sessionKey: "agent:main:survivor",
-      message: {
-        role: "assistant",
-        timestamp: observedAt + 1,
-        content: [
-          {
-            type: "toolCall",
-            id: "unselected",
-            name: "write",
-            arguments: { path: "memory/keep.md" },
-          },
-        ],
-      },
+    await h.append("survivor", {
+      role: "assistant",
+      timestamp: observedAt + 1,
+      content: [toolCall("unselected", "write", { path: "memory/keep.md" })],
     });
-    const archiveDir = path.join(stateDir, "agents", "main", "sessions");
+    const archiveDir = path.join(h.stateDir, "agents", "main", "sessions");
     await fs.mkdir(archiveDir, { recursive: true });
     const archivedMessage = {
       type: "message",
@@ -198,14 +124,9 @@ describe("memory forget curated writes", () => {
         expect.objectContaining({ sessionId: "target", artifactKind: "archive-artifact" }),
       ]),
     );
-    expect(await listMemoryArtifactProvenance({ workspaceDir })).toEqual([]);
+    expect(await listMemoryArtifactProvenance({ workspaceDir: h.workspaceDir })).toEqual([]);
 
-    const preview = await forgetMemoryEntries({
-      cfg,
-      agentId: "main",
-      sessionIds: ["target"],
-      dryRun: true,
-    });
+    const preview = await forget(true);
 
     expect(preview.curatedWrites).toEqual([
       { relativePath: "MEMORY.md", observedAt },
@@ -214,11 +135,11 @@ describe("memory forget curated writes", () => {
       { relativePath: "memory/structured.md", observedAt },
       { relativePath: "USER.md", observedAt },
     ]);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await h.read("MEMORY.md")).toBe(memoryContent);
 
-    const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
+    const report = await forget();
     expect(report).toEqual({ ...preview, dryRun: false });
     expect(report.artifacts.memoryFiles).toBe(0);
-    expect(await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf8")).toBe(memoryContent);
+    expect(await h.read("MEMORY.md")).toBe(memoryContent);
   });
 });

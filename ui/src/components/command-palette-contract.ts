@@ -1,7 +1,5 @@
-import {
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "../lib/keyboard-shortcut-contract.ts";
+import { COMMAND_PALETTE_SHORTCUTS } from "../../../src/shared/keyboard-shortcuts.ts";
+import { matchesShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
 
 export const COMMAND_PALETTE_DIALOG_STYLE =
   "--openclaw-modal-width: min(740px, calc(100vw - 32px));";
@@ -39,7 +37,7 @@ export function shellNavDrawerTriggerFromEvent(event: Event): HTMLElement | unde
 }
 
 export function isCommandPaletteShortcut(event: KeyboardEvent): boolean {
-  return matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette, event);
+  return COMMAND_PALETTE_SHORTCUTS.some((combo) => matchesShortcutCombo(combo, event));
 }
 
 export type CommandPaletteTargetDetail = {
@@ -59,9 +57,9 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
 }
 
 export function applyCommandPaletteTargetEvent(
-  host: HTMLElement & {
+  host: {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-    requestUpdate(): void;
+    invalidate(): void;
   },
   event: Event,
 ): void {
@@ -74,7 +72,7 @@ export function applyCommandPaletteTargetEvent(
     : host.commandPaletteTarget?.owner === detail.owner
       ? undefined
       : host.commandPaletteTarget;
-  host.requestUpdate();
+  host.invalidate();
 }
 
 export type CommandPaletteElement = HTMLElement & {

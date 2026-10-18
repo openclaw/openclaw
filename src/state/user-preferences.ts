@@ -1,28 +1,19 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ok, type Result } from "@openclaw/normalization-core/result";
+import type { Result } from "@openclaw/normalization-core/result";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import {
-  executeOpenClawStateWorker,
-  runOpenClawStateWorkerOperation,
-} from "./openclaw-state-worker-store.js";
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "./openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import {
   beginUserPreferenceMutation,
   captureUserPreferenceRead,
 } from "./user-preferences-publication.js";
-import {
-  ensureUserPreferencesSchema,
-  readUserPreferences,
-  updatesGitCoauthorPreference,
-  writeUserPreferences,
-} from "./user-preferences.store.js";
+import { updatesGitCoauthorPreference } from "./user-preferences.store.js";
 import type {
   CanonicalUserPreferences,
   UserPreferenceCoauthorMutation,
@@ -30,18 +21,6 @@ import type {
 } from "./user-preferences.types.js";
 import { prepareUserPreferenceUpdate } from "./user-preferences.validation.js";
 import { fenceUserProfileMutationAuthority } from "./user-profile-events.js";
-
-export function getUserPreferences(
-  profileId: string,
-  keys?: readonly string[],
-  options: OpenClawStateDatabaseOptions = {},
-): Record<string, unknown> {
-  if (keys?.length === 0) {
-    return {};
-  }
-  ensureUserPreferencesSchema(options);
-  return readUserPreferences(openOpenClawStateDatabase(options).db, profileId, keys);
-}
 
 /** Read one preference for a canonical profile batch without opening SQLite on the caller. */
 export async function getUserPreferenceValues(
@@ -53,52 +32,34 @@ export async function getUserPreferenceValues(
     return { values: new Map(), isCurrent: () => true };
   }
   const ids = [...new Set(profileIds)];
-  const context = captureOpenClawStateWorkerContext(options);
+  const context = captureOpenClawStateReadWorkerContext(options);
   const isCurrent = await captureUserPreferenceRead(context.admission);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userPreferences.values", profileIds: ids, key },
     { context, current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "userPreferences.values")) {
-    throw new Error(reply.ok ? "Unexpected user preference values reply" : reply.message);
-  }
   return { values: reply?.values ?? new Map(), isCurrent };
 }
 
-export function setUserPreferences(
-  profileId: string,
-  entries: Record<string, unknown>,
-  options: OpenClawStateDatabaseOptions & { expectedEntries?: Record<string, unknown> } = {},
-): Result<void, UserPreferenceError> {
-  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
-  if (!prepared.ok) {
-    return prepared;
-  }
-  if (
-    prepared.value.serialized.length === 0 &&
-    prepared.value.deletionKeys.length === 0 &&
-    prepared.value.expected.length === 0
-  ) {
-    return ok(undefined);
-  }
-  ensureUserPreferencesSchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => writeUserPreferences(db, profileId, prepared.value),
-    options,
-    { operationLabel: "users.preferences.set" },
-  );
-}
-
-export function getCanonicalUserPreferences(
+export async function getCanonicalUserPreferences(
   profileId: string,
   keys?: readonly string[],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<CanonicalUserPreferences | undefined> {
-  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext(options), {
-    type: "userPreferences.read",
-    input: { profileId, keys },
-  });
+  const context = captureOpenClawStateReadWorkerContext(options);
+  for (;;) {
+    const isCurrent = await captureUserPreferenceRead(context.admission);
+    const reply = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env: context.environment },
+      { type: "userPreferences.read", profileId, keys },
+      { context, current: true },
+    );
+    // A preference write or profile merge must not publish an older result afterward.
+    if (isCurrent()) {
+      return reply?.preferences;
+    }
+  }
 }
 
 export async function setCanonicalUserPreferences(
@@ -127,7 +88,6 @@ export async function setCanonicalUserPreferences(
       {
         assertCurrent: options.assertCurrent,
         createAdmission: (operation) => {
-          let stage: "transaction" | "commit" | "complete" = "transaction";
           let pending:
             | {
                 facts: UserPreferenceCoauthorMutation;
@@ -138,19 +98,13 @@ export async function setCanonicalUserPreferences(
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
             context.admission.assertCurrent();
             options.assertCurrent?.();
-            if (
-              stage === "transaction" &&
-              request.stage === "transaction" &&
-              request.facts === undefined
-            ) {
-              stage = "commit";
+            if (request.stage === "transaction") {
               grant();
               return;
             }
-            if (stage !== "commit" || request.stage !== "commit") {
+            if (request.stage !== "commit") {
               throw new Error("Profile preference mutation requires transaction admission");
             }
-            stage = "complete";
             if (request.facts === undefined) {
               grant();
               return;

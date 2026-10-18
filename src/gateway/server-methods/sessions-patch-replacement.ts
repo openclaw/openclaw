@@ -87,7 +87,10 @@ export function createSessionPatchGroupWriter(params: {
     Parameters<typeof applySessionEntryCanonicalReplacements<GroupAdmissionResult>>[0],
     "update"
   > & { sessionKeys: string[] };
-  patch: Pick<SessionsPatchParams, "agentRuntime" | "archived" | "label">;
+  patch: Pick<
+    SessionsPatchParams,
+    "agentRuntime" | "archived" | "label" | "model" | "nativeRuntimeConsent"
+  >;
   project: (
     entries: SqliteLifecycleTargetSnapshot,
     admission: "admitted" | "detached",
@@ -106,9 +109,12 @@ export function createSessionPatchGroupWriter(params: {
     const admitted = await applySessionEntryCanonicalReplacements<GroupAdmissionResult>({
       ...store,
       update: (entries) => {
+        // Archive removal belongs to maintenance; only restore prepares a checkout here.
         const needsExternalPreparation =
           typeof params.patch.agentRuntime === "string" ||
-          (typeof params.patch.archived === "boolean" &&
+          typeof params.patch.model === "string" ||
+          typeof params.patch.nativeRuntimeConsent === "string" ||
+          (params.patch.archived === false &&
             entries.some(({ sessionKey, entry }) => targetKeys.has(sessionKey) && entry.worktree));
         if (needsExternalPreparation) {
           return { result: { kind: "detached", snapshot: entries } };

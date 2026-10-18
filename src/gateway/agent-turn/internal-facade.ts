@@ -15,13 +15,14 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import {
-  authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry,
   runWithGatewayRequestEnvelope,
 } from "../server-methods.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { authorizeGatewayRequestPreDispatch } from "../server-methods/request-authorization.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
+import { runWithGatewayObservationScope } from "../server-request-lifecycle.js";
 import type {
   InternalAgentTurnDispatchOptions,
   InternalAgentTurnFacade,
@@ -79,6 +80,9 @@ export function createInternalAgentTurnFacade(
         context,
         methodRegistry,
       });
+      // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
       throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {
@@ -220,13 +224,16 @@ export function createInternalAgentTurnFacade(
                 import("./agent-turn-service.js"),
                 import("./principal.js"),
               ]);
+              if (dispatchOptions.prepareDispatchCurrent) {
+                await dispatchOptions.prepareDispatchCurrent();
+              }
               throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
               entry?.assertOpen();
               options.assertContextCurrent?.();
               dispatchOptions.assertAdmissionCurrent?.();
               entry?.release();
               const principal = captureAgentTurnPrincipal(options.client);
-              const preflight = prepareAgentRequestPreflight({
+              const preflight = await prepareAgentRequestPreflight({
                 request,
                 context,
                 client: principal,
@@ -249,6 +256,7 @@ export function createInternalAgentTurnFacade(
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
+                replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
               });
             },
@@ -334,6 +342,7 @@ export function createInternalAgentTurnFacade(
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ): Promise<T> => {
     const method = "agent.wait";
     throwIfGatewayDispatchAborted(method, signal);
@@ -347,49 +356,69 @@ export function createInternalAgentTurnFacade(
     let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
-      const authorization = await authorizeGatewayRequestPreDispatch({
-        method,
-        requestParams: params,
-        client: options.client,
-        context,
-        methodRegistry,
-      });
-      throwIfGatewayDispatchAborted(method, signal);
-      entry?.assertOpen();
-      if (authorization.error) {
-        return throwEnvelopeRejection(method, authorization.error);
-      }
-      const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
-      if (validationError) {
-        return throwEnvelopeRejection(method, validationError);
-      }
-      options.assertContextCurrent?.();
       const result = context.trackExecution(async () => {
         preparationOwnedByExecution = true;
         try {
-          return await runWithGatewayRequestEnvelope(
-            method,
-            options.client,
-            async () => {
-              const { createAgentTurnService } = await import("./agent-turn-service.js");
-              throwIfGatewayDispatchAborted(method, signal);
-              entry?.assertOpen();
-              options.assertContextCurrent?.();
-              entry?.release();
-              const observation = await createAgentTurnService({
+          const observe = async (retainRoot?: () => void) => {
+            const authorization = await authorizeGatewayRequestPreDispatch({
+              method,
+              requestParams: params,
+              client: options.client,
+              context,
+              methodRegistry,
+            });
+            authorization.sessionMutationAuthorization?.release?.();
+            authorization.sessionAccessAuthority?.release();
+            throwIfGatewayDispatchAborted(method, signal);
+            entry?.assertOpen();
+            if (authorization.error) {
+              return throwEnvelopeRejection(method, authorization.error);
+            }
+            const validationError = validateGatewayMethodParams(
+              params,
+              validateAgentWaitParams,
+              method,
+            );
+            if (validationError) {
+              return throwEnvelopeRejection(method, validationError);
+            }
+            options.assertContextCurrent?.();
+            return await runWithGatewayRequestEnvelope(
+              method,
+              options.client,
+              async () => {
+                retainRoot?.();
+                const { createAgentTurnService } = await import("./agent-turn-service.js");
+                if (prepareDispatchCurrent) {
+                  await prepareDispatchCurrent();
+                }
+                throwIfGatewayDispatchAborted(method, signal);
+                entry?.assertOpen();
+                options.assertContextCurrent?.();
+                entry?.release();
+                const observation = await createAgentTurnService({
+                  context,
+                  isWebchatConnect,
+                }).waitForTurn(params);
+                return observation.result;
+              },
+              {
                 context,
                 isWebchatConnect,
-              }).waitForTurn(params);
-              return observation.result;
-            },
-            {
-              context,
-              isWebchatConnect,
-              methodRegistry,
-              reject: (error) => throwEnvelopeRejection(method, error),
-              signal,
-            },
-          );
+                methodRegistry,
+                reject: (error) => throwEnvelopeRejection(method, error),
+                signal,
+              },
+            );
+          };
+          return await (methodRegistry.isObservation(method)
+            ? runWithGatewayObservationScope(
+                method,
+                observe,
+                [signal, options.client?.connectionSignal],
+                (error) => throwEnvelopeRejection(method, error),
+              )
+            : observe());
         } finally {
           entry?.release();
         }

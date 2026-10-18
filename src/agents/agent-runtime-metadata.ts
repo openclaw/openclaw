@@ -34,7 +34,6 @@ export function resolveModelAgentRuntimeMetadata(
   if (persistedRuntimeId && !isDefaultAgentRuntimeId(persistedRuntimeId)) {
     return applyAcpRuntimeOverlay(
       { id: persistedRuntimeId, source: "session" },
-      params.sessionKey,
       params.acpRuntime,
       params.acpBackend,
     );
@@ -57,7 +56,7 @@ export function resolveModelAgentRuntimeMetadata(
     id: policy.runtime,
     source: policy.runtimeSource ?? "implicit",
   };
-  return applyAcpRuntimeOverlay(meta, params.sessionKey, params.acpRuntime, params.acpBackend);
+  return applyAcpRuntimeOverlay(meta, params.acpRuntime, params.acpBackend);
 }
 
 /** Resolves the runtime selected for the next turn, excluding historical producer metadata. */

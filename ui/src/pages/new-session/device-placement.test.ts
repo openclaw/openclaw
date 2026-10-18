@@ -1,7 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { projectDevicePlacements } from "./device-placement.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
 const updateIssue = {
@@ -31,13 +34,6 @@ describe("device placement projection", () => {
   });
 
   it.each([
-    {
-      name: "available host",
-      environment: node({}),
-      selectable: true,
-      reason: undefined,
-      facts: ["macOS", "Camera"],
-    },
     {
       name: "ignores unknown capabilities that match object prototype properties",
       environment: node({ capabilities: ["constructor", "__proto__", "camera.snap"] }),
@@ -84,9 +80,9 @@ describe("device placement projection", () => {
       environment: node({ sessionHost: false, workerSlots: undefined }),
       selectable: false,
       reason:
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
       facts: [
-        "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
+        "Session hosting is disabled. On the paired device, run openclaw config set nodeHost.workerRuns.enabled true, then openclaw node install --force.",
         "macOS",
         "Camera",
       ],
@@ -122,6 +118,28 @@ describe("device placement projection", () => {
         { id: "worker:cloud", type: "worker", status: "available" },
       ]),
     ).toEqual([]);
+  });
+
+  it("shows the host's actionable failure before generic offline or disabled-host hints", () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const environments = [
+      node({
+        status: "available",
+        sessionHost: false,
+        workerSlots: undefined,
+        issues: [{ code: "worker-host-unavailable", message }],
+      }),
+    ];
+    const devices = projectDevicePlacements(environments);
+
+    expect(devices[0]).toMatchObject({
+      selectable: false,
+      disabledReason: message,
+      hideDetails: false,
+      remediation: undefined,
+      facts: [message, "macOS", "Camera"],
+    });
+    expect(resolveAutomaticDevicePlacementDisabledReason(environments, devices)).toBe(message);
   });
 
   it("adds short device ids only when labels collide", () => {
@@ -190,4 +208,22 @@ describe("device placement projection", () => {
       expect(device?.disabledReason).toBe(reason);
     }
   });
+
+  it.each(["undeclared", "invocable"] as const)(
+    "uses Gateway command remediation without changing %s eligibility",
+    (state) => {
+      const message = "Enable the codex plugin on this node with openclaw plugins enable codex.";
+      const [device] = projectDevicePlacements(
+        [
+          node({
+            requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state, message },
+          }),
+        ],
+        { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
+      );
+
+      expect(device?.selectable).toBe(state === "invocable");
+      expect(device?.disabledReason).toBe(state === "invocable" ? undefined : message);
+    },
+  );
 });

@@ -7,7 +7,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { resolveChannelTtsVoiceDelivery } from "./tts-capabilities.js";
-import type { ChannelPlugin } from "./types.js";
+import type { ChannelPlugin } from "./types.plugin.js";
 
 function createChannelPlugin(
   id: string,

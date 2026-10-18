@@ -4,22 +4,28 @@ import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plu
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
-import type { ConfigUiPresentation, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
+import type { ConfigUiHint, ConfigUiGroup } from "../shared/config-ui-hints-types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
+import type {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 /** UI hint metadata for plugin config schema fields. */
-export type PluginConfigUiHint = {
-  label?: string;
-  help?: string;
-  tags?: string[];
-  advanced?: boolean;
-  sensitive?: boolean;
-  placeholder?: string;
-  presentation?: ConfigUiPresentation;
-};
+export type PluginConfigUiHint = Pick<
+  ConfigUiHint,
+  | "label"
+  | "help"
+  | "tags"
+  | "advanced"
+  | "sensitive"
+  | "placeholder"
+  | "presentation"
+  | "multiline"
+>;
 
 /** Static, portable palettes; no plugin JavaScript or native UI activation is required. */
 export type PluginManifestTheme = {
@@ -27,8 +33,10 @@ export type PluginManifestTheme = {
   name: string;
   description: string;
   source: string;
+  icons?: Record<string, string>;
   hats?: Record<string, string>;
   critters?: Record<string, { source: string; title?: string; crossMs?: number }>;
+  backgrounds?: Partial<Record<"light" | "dark", string>>;
 };
 
 /** Top-level plugin manifest format. */
@@ -141,6 +149,8 @@ export type PluginManifestProviderEndpoint = {
 export type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
+  /** Schema for this provider's per-model params; defaults are documentation only. */
+  modelParamsSchema?: JsonSchemaObject;
   openAICompletions?: {
     supportsStreamingUsage?: boolean;
   };
@@ -319,6 +329,9 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** Omission retains ordinary runtime activation. */
+  activation?: "settings-only";
+  settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
@@ -381,11 +394,10 @@ export type PluginManifestCatalog = {
   order?: number;
 };
 
-/** Static transcript setup metadata; runtime registration does not gate configuration. */
 export type PluginManifestTranscriptSource = {
   name?: string;
   autoStart?: Partial<
-    Record<"accountId" | "guildId" | "channelId" | "meetingUrl", "optional" | "required">
+    Record<(typeof TRANSCRIPT_SOURCE_LOCATOR_FIELDS)[number], "optional" | "required">
   >;
 };
 
@@ -394,6 +406,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Shared-state databases retained under this state-scoped resource. */
+  databaseFamily?: "state";
 };
 
 /** Provider-authored limits and result semantics available before runtime activation. */
@@ -437,6 +451,8 @@ export type PluginManifest = {
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;
   providers?: string[];
+  /** The declared providers own transient rate-limit/overload recovery, never auth or billing. */
+  managesOwnAvailability?: boolean;
   /**
    * Optional lightweight module that exports provider plugin metadata for
    * auth/catalog discovery. It should not import the full plugin runtime.
@@ -547,39 +563,9 @@ export type PluginManifest = {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 
-export type PluginManifestContracts = {
-  /** Executor ids implemented by the plugin's code-mode-executor-api artifact. */
-  codeModeExecutors?: string[];
-  embeddedExtensionFactories?: string[];
-  agentToolResultMiddleware?: string[];
-  trustedToolPolicies?: string[];
-  /**
-   * Provider ids whose external auth profile hook can contribute runtime-only
-   * credentials. Declaring this lets auth-store overlays load only the owning
-   * plugin instead of every provider plugin.
-   */
-  externalAuthProviders?: string[];
-  decisionProviders?: string[];
-  embeddingProviders?: string[];
-  speechProviders?: string[];
-  realtimeTranscriptionProviders?: string[];
-  realtimeVoiceProviders?: string[];
-  mediaUnderstandingProviders?: string[];
-  transcriptSourceProviders?: string[];
-  documentExtractors?: string[];
-  imageGenerationProviders?: string[];
-  videoGenerationProviders?: string[];
-  musicGenerationProviders?: string[];
-  webContentExtractors?: string[];
-  webFetchProviders?: string[];
-  webSearchProviders?: string[];
-  workerProviders?: string[];
-  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
-  usageProviders?: string[];
-  migrationProviders?: string[];
-  gatewayMethodDispatch?: string[];
-  tools?: string[];
-};
+export type PluginManifestContracts = Partial<
+  Record<(typeof PLUGIN_MANIFEST_CONTRACT_KEYS)[number], string[]>
+>;
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 

@@ -1,77 +1,50 @@
-import type { CronJob } from "../types.js";
-import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { resolveCronCompletionStatus } from "../completion-status.js";
+import type { CronRunHistorySource } from "../store/run-history.js";
+import type {
+  CronFailureNotificationDetail,
+  CronRunErrorClassification,
+  CronTriggerEvalOutcome,
+} from "../types.js";
 import { finishCronRun } from "./run-history.js";
-import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
+import {
+  cronFailureNotificationEventContext,
+  emit,
+  type CronEvent,
+  type CronServiceState,
+} from "./state.js";
 
-/** Records a terminal task/event fact before the fallible runtime-row commit. */
-export async function emitCronOutcomeForJob(
+export type ManualRunTerminalTracker = { emitted: boolean };
+
+export async function emitCronRunFinished(
   state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
+  evt: CronEvent & { action: "finished" },
+  tracker?: ManualRunTerminalTracker,
+  taskRunId?: string,
+  details?: {
+    triggerEval?: CronTriggerEvalOutcome;
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
+    errorClassification?: CronRunErrorClassification;
+    failureNotificationDetail?: CronFailureNotificationDetail;
+    historySource?: CronRunHistorySource;
+  },
 ): Promise<void> {
-  if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
-    return;
-  }
-  await recordCronOutcomeForJob(state, job, result);
-  emitCronOutcomeEventForJob(state, job, result);
-}
-
-export function createCronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome) {
-  return {
-    jobId: job.id,
-    action: "finished",
-    job,
-    status: result.status,
-    completionStatus: result.completionStatus,
-    error: result.error,
-    summary: result.summary,
-    diagnostics: result.diagnostics,
-    delivered: job.state.lastDelivered,
-    deliveryStatus: job.state.lastDeliveryStatus,
-    deliveryError: job.state.lastDeliveryError,
-    deliverySuppressionReason: job.state.deliverySuppressionReason,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-    delivery: result.delivery,
-    sessionId: result.sessionId,
-    sessionKey: result.sessionKey,
-    runAtMs: result.startedAt,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
-    model: result.model,
-    provider: result.provider,
-    usage: result.usage,
-  } as const;
-}
-
-export async function recordCronOutcomeForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): Promise<void> {
-  const event = createCronOutcomeEvent(job, result);
+  const event = {
+    ...evt,
+    completionStatus:
+      evt.completionStatus ??
+      resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
+  };
   await finishCronRun(state, {
-    taskRunId: result.taskRunId,
-    job,
+    taskRunId,
+    job: evt.job,
     event,
-    errorClassification: result.errorClassification,
-    scriptResult: {
-      scriptStateChanged: result.scriptStateChanged,
-      scriptState: result.scriptState,
-    },
-    ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
+    historySource: details?.historySource,
+    errorClassification: details?.errorClassification,
+    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
+    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
-}
-
-export function emitCronOutcomeEventForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  emit(
-    state,
-    createCronOutcomeEvent(job, result),
-    cronFailureNotificationEventContext(result.failureNotificationDetail),
-  );
+  emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
+  if (tracker) {
+    tracker.emitted = true;
+  }
 }

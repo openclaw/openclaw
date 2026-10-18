@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
@@ -62,8 +63,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 describe("node-host runtime worker supervisor lifetime", () => {
   it("keeps a claimed worker alive across invoke cancel and reconnect until runtime close", async () => {
+    const platform = mockProcessPlatform("linux");
+    onTestFinished(() => platform.mockRestore());
     const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-runtime-"));
-    fs.mkdirSync(fixture.stateDir, { recursive: true });
+    fs.mkdirSync(fixture.stateDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(fixture.stateDir, 0o700);
     fs.renameSync(fixture.bundleRoot, path.join(fixture.stateDir, "node-host"));
     const input = testWorkerLaunchInput(fixture.workspaceDir, "launch-runtime", "wait");
     const launchResponseEntered = createDeferred();
@@ -88,12 +92,11 @@ describe("node-host runtime worker supervisor lifetime", () => {
         nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 2 } },
       },
       env: { ...fixture.env, PATH: process.env.PATH },
-      enableWorkerRuns: true,
-      platform: "linux",
     });
-    expect(prepared.manifest.commands).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
-    );
+    expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
+    for (const command of NODE_WORKER_PRIVATE_COMMANDS) {
+      expect(prepared.manifest.commands, command).not.toContain(command);
+    }
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const capacityReady = createDeferred();
     const runtime = prepared.start({
@@ -126,7 +129,7 @@ describe("node-host runtime worker supervisor lifetime", () => {
       expect((await store.get(input.launchId))?.state).toBe("running");
 
       runtime.cancel("invoke-launch");
-      runtime.cancelAll();
+      await runtime.cancelAll();
       expect((await store.get(input.launchId))?.state).toBe("running");
       launchResponseHeld.resolve();
       await launching;

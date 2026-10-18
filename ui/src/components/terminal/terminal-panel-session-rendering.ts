@@ -45,7 +45,7 @@ export function reattachTerminalSessionHosts(
   if (!viewport) {
     return;
   }
-  // Hiding the panel returns `nothing`, which detaches each session's ghostty
+  // Hiding the panel removes its viewport, which detaches each session's Ghostty
   // host. Re-attach live hosts whenever the viewport is rendered so a
   // hide/show cycle keeps the terminals intact instead of blanking them.
   for (const tab of tabs) {

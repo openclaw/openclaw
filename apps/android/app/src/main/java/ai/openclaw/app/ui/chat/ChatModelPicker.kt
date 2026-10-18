@@ -142,25 +142,16 @@ internal fun selectedChatModelUnavailableReason(
   }
 }
 
-internal fun selectedChatModelSendUnavailableReason(
-  selectedModelRef: String?,
-  catalog: List<GatewayModelSummary>,
-): GatewayModelUnavailableReason? =
-  selectedChatModelUnavailableReason(selectedModelRef, catalog).takeIf {
-    it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
-  }
-
 internal fun selectedChatModelSendBlockingReason(
   gatewayReady: Boolean,
   selectedModelRef: String?,
   catalog: List<GatewayModelSummary>,
-): GatewayModelUnavailableReason? = if (gatewayReady) selectedChatModelSendUnavailableReason(selectedModelRef, catalog) else null
-
-internal fun chatModelSendBlocked(
-  gatewayReady: Boolean,
-  selectedModelRef: String?,
-  catalog: List<GatewayModelSummary>,
-): Boolean = selectedChatModelSendBlockingReason(gatewayReady, selectedModelRef, catalog) != null
+): GatewayModelUnavailableReason? {
+  if (!gatewayReady) return null
+  return selectedChatModelUnavailableReason(selectedModelRef, catalog).takeIf {
+    it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
+  }
+}
 
 internal fun chatModelPickerAction(model: GatewayModelSummary): ChatModelPickerAction =
   when {
@@ -190,12 +181,5 @@ internal fun chatModelPickerChoices(
 ): List<GatewayModelSummary> {
   val choices = catalog.filter { it.manualSelectionAllowed != false }
   val modelsByRef = choices.associateBy { it.providerQualifiedRef() }
-  val includedRefs = mutableSetOf<String>()
-  return buildList {
-    for (ref in favorites + recents) {
-      val model = modelsByRef[ref] ?: continue
-      if (includedRefs.add(ref)) add(model)
-    }
-    addAll(choices.filter { includedRefs.add(it.providerQualifiedRef()) })
-  }
+  return ((favorites + recents).mapNotNull(modelsByRef::get) + choices).distinctBy { it.providerQualifiedRef() }
 }

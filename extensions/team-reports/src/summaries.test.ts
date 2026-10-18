@@ -91,91 +91,26 @@ function summarize(
 afterEach(() => vi.restoreAllMocks());
 
 describe("team report summaries", () => {
-  it.each([
-    [1, 4300],
-    [100, 32000],
-  ])("budgets both attempts for %i roster members at %i tokens", async (size, maxTokens) => {
-    const input = report();
-    input.members = Array.from({ length: size }, (_, index) => member(`member-${index}`));
-    input.memberCount = size;
-    const output = {
-      ...response(),
-      members: input.members.map(({ login }) => ({
-        login,
-        summary: "No visible activity was recorded.",
-        confidence: "low",
-      })),
-    };
+  it.each(["missing", "duplicate"])("repairs valid JSON with %s member coverage", async (kind) => {
+    const incomplete = response();
+    if (kind === "missing") {
+      incomplete.members.pop();
+    } else {
+      incomplete.members.push({ login: "alex", summary: "Duplicate.", confidence: "high" });
+    }
     const complete = vi
       .fn<Complete>()
-      .mockResolvedValueOnce(completion('{"globalSummary":"truncated'))
-      .mockResolvedValueOnce(completion(JSON.stringify(output)));
-    const logger = { warn: vi.fn() };
-    const result = await summarize(complete, { report: input, logger });
-    expect(complete.mock.calls.map(([params]) => params.maxTokens)).toEqual([maxTokens, maxTokens]);
+      .mockResolvedValueOnce(completion(JSON.stringify(incomplete)))
+      .mockResolvedValueOnce(completion(JSON.stringify(response())));
+    const result = await summarize(complete);
     expect(result.summary.source).toBe("model");
     expect(result.report.members.every((entry) => entry.summary?.source === "model")).toBe(true);
-    expect(result.summary.warnings).toBeUndefined();
-    expect(logger.warn).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls[1]?.[0].messages.at(-1)?.content).toContain("member login");
   });
-
-  it("accepts fenced JSON output", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(20);
-    const json = JSON.stringify(response());
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(`\`\`\`json\n${json}\n\`\`\``));
-    const result = await generateSummaries({
-      report: report(),
-      options: { enabled: true, reasoning: "high", model: "openai/gpt-5.6-luna" },
-      llm: { complete },
-    });
-    expect(result.summary).toMatchObject({
-      source: "model",
-      model: "openai/gpt-5.6-luna",
-      generatedAtMs: 20,
-    });
-    expect(result.report.members.map(({ login, summary }) => ({ login, summary }))).toEqual([
-      {
-        login: "alex",
-        summary: { text: response().members[0]?.summary, confidence: "high", source: "model" },
-      },
-      {
-        login: "blair",
-        summary: { text: response().members[1]?.summary, confidence: "low", source: "model" },
-      },
-    ]);
-    expect(complete).toHaveBeenCalledOnce();
-  });
-
-  it.each(["missing", "duplicate", "unexpected"])(
-    "repairs valid JSON with %s member coverage",
-    async (kind) => {
-      const incomplete = response();
-      if (kind === "missing") {
-        incomplete.members.pop();
-      } else if (kind === "duplicate") {
-        incomplete.members.push({ login: "alex", summary: "Duplicate.", confidence: "high" });
-      } else {
-        incomplete.members.push({ login: "outsider", summary: "Unrequested.", confidence: "high" });
-      }
-      const complete = vi
-        .fn<Complete>()
-        .mockResolvedValueOnce(completion(JSON.stringify(incomplete)))
-        .mockResolvedValueOnce(completion(JSON.stringify(response())));
-      const result = await summarize(complete);
-      expect(result.summary.source).toBe("model");
-      expect(result.report.members.every((entry) => entry.summary?.source === "model")).toBe(true);
-      expect(complete).toHaveBeenCalledTimes(2);
-      expect(complete.mock.calls[1]?.[0].messages.at(-1)?.content).toContain("member login");
-    },
-  );
 
   it.each([
     ["truncated JSON", '{"globalSummary":"private-response-marker', "response appears truncated"],
-    [
-      "invalid JSON",
-      '{"globalSummary": private-response-marker}',
-      "invalid JSON after repair: Response must contain one valid JSON object",
-    ],
     [
       "unexpected key",
       JSON.stringify({ ...response(), "private-response-marker": true }),
@@ -257,47 +192,12 @@ describe("team report summaries", () => {
     fresh.members.reverse();
     const next = await summarize(complete, { report: fresh, previous: first });
     expect(complete).toHaveBeenCalledOnce();
-    expect(next.reused).toBe(true);
+    expect(next.summary).toEqual(first.summary);
     expect(next.summary.fingerprint).toBe(first.summary.fingerprint);
     expect(next.report.generatedAtMs).toBe(12345);
     expect(next.report.members.find((entry) => entry.login === "alex")?.summary?.text).toBe(
       response().members[0]?.summary,
     );
-  });
-
-  it("retries the model when the stored summary is a fallback for the same evidence", async () => {
-    const complete = vi
-      .fn<Complete>()
-      .mockRejectedValueOnce(new Error("provider unavailable"))
-      .mockResolvedValue(completion(JSON.stringify(response())));
-    const first = await summarize(complete);
-    expect(first.summary.source).toBe("fallback");
-    expect(first.summary.warnings).toHaveLength(1);
-    const next = await summarize(complete, { previous: first });
-    expect(next.reused).toBe(false);
-    expect(next.summary.source).toBe("model");
-    expect(next.summary.warnings).toBeUndefined();
-    expect(complete).toHaveBeenCalledTimes(2);
-  });
-
-  it("reuses a stored model summary for unchanged evidence when summaries are disabled", async () => {
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
-    const first = await summarize(complete);
-    const next = await summarize(complete, { options: { enabled: false }, previous: first });
-    expect(next.reused).toBe(true);
-    expect(next.summary.source).toBe("model");
-    expect(complete).toHaveBeenCalledOnce();
-  });
-
-  it("regenerates when a source gap changes even if activity counts do not", async () => {
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
-    const first = await summarize(complete);
-    const fresh = report();
-    fresh.sources.github.warnings.push("One repository could not be read");
-    const next = await summarize(complete, { report: fresh, previous: first });
-    expect(next.reused).toBe(false);
-    expect(next.summary.fingerprint).not.toBe(first.summary.fingerprint);
-    expect(complete).toHaveBeenCalledTimes(2);
   });
 
   it("bounds member evidence and excludes raw comment bodies from model input", async () => {

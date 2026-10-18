@@ -1,6 +1,5 @@
-// Message-action input normalization infers channel/target context and rewrites
-// legacy target fields before dispatch validation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isMessageToolSendActionName } from "../../agents/embedded-agent-messaging.js";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
@@ -23,13 +22,17 @@ import { missingMessageActionTargetError } from "./target-errors.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
+  action?: ChannelMessageActionName,
 ): string | undefined {
-  for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
+  // Content replies follow the effective delivery route; message resources still
+  // belong to the native conversation that supplied the inbound message.
+  const candidates =
+    isMessageToolSendActionName(action) || action === "poll"
+      ? [toolContext?.currentMessagingTarget, toolContext?.currentChannelId]
+      : [toolContext?.currentChannelId, toolContext?.currentMessagingTarget];
+  for (const value of candidates) {
     const target = normalizeOptionalString(value);
-    if (!target) {
-      continue;
-    }
-    if (isInternalNonDeliveryChannel(target)) {
+    if (!target || isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is
@@ -42,7 +45,6 @@ export function resolveImplicitMessageActionTarget(
   return undefined;
 }
 
-/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -97,24 +99,21 @@ export function normalizeMessageActionInput(params: {
     normalizedArgs.target = deliveryAliasTarget;
   }
 
-  if (
-    !explicitTarget &&
-    !hasExplicitTargets &&
-    !legacyTarget &&
-    !deliveryAliasTarget &&
-    actionRequiresTarget(action) &&
-    (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
-  ) {
-    const inferredTarget = resolveImplicitMessageActionTarget(toolContext);
-    if (inferredTarget) {
-      normalizedArgs.target = inferredTarget;
+  if (!explicitTarget && actionRequiresTarget(action)) {
+    if (legacyTarget) {
+      normalizedArgs.target = legacyTarget;
+      delete normalizedArgs.to;
+      delete normalizedArgs.channelId;
+    } else if (
+      !hasExplicitTargets &&
+      !deliveryAliasTarget &&
+      (hasResourceReference || !actionHasTarget(action, normalizedArgs, targetAliasOptions))
+    ) {
+      const inferredTarget = resolveImplicitMessageActionTarget(toolContext, action);
+      if (inferredTarget) {
+        normalizedArgs.target = inferredTarget;
+      }
     }
-  }
-
-  if (!explicitTarget && actionRequiresTarget(action) && legacyTarget) {
-    normalizedArgs.target = legacyTarget;
-    delete normalizedArgs.to;
-    delete normalizedArgs.channelId;
   }
 
   if (!explicitChannel && inferredChannel && isDeliverableMessageChannel(inferredChannel)) {

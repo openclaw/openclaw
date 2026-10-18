@@ -12,6 +12,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -21,6 +22,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import java.time.Instant
+import java.time.ZoneId
 import java.util.concurrent.atomic.AtomicReference
 
 internal object AndroidScreenshotFixture {
@@ -39,7 +41,13 @@ internal object AndroidScreenshotFixture {
   const val gatewayId = "android-screenshot-gateway"
   val browserFocusAvailable: Boolean get() = scene == AndroidScreenshotScene.Browser
   const val controlUiBaseUrl = "http://127.0.0.1:18789"
-  val mainSessionKey: String get() = if (workScene) "agent:main:node-work-proof" else "agent:main:node-screenshot"
+  val mainSessionKey: String
+    get() =
+      when {
+        workScene -> "agent:main:node-work-proof"
+        scene == AndroidScreenshotScene.Snooze -> "agent:main:dashboard:snooze-active"
+        else -> "agent:main:node-screenshot"
+      }
   val sourcePreviewConfig: GatewaySourcePreviewConfig?
     get() = if (scene == AndroidScreenshotScene.Sources) GatewaySourcePreviewConfig(controlUiBaseUrl, "", "https://gateway.example", true, 0L) else null
 
@@ -54,8 +62,47 @@ internal object AndroidScreenshotFixture {
   const val cronJobName = "Android release digest"
   private val branchLeaves = (1..12).map { "android-screenshot-branch-${it.toString().padStart(2, '0')}" }
 
-  fun createRequester(branchesEnabled: Boolean = this.branchesEnabled): (String, String?) -> String {
+  fun createRequester(
+    branchesEnabled: Boolean = this.branchesEnabled,
+    onEvent: (String, String) -> Unit = { _, _ -> },
+  ): (String, String?) -> String {
+    val fixtureNowMs = System.currentTimeMillis()
     val activeLeaf = AtomicReference(branchLeaves.first())
+    val reactions =
+      AtomicReference(
+        if (scene == AndroidScreenshotScene.Chat) {
+          mapOf(
+            "screenshot-message-1783555260000" to JsonArray(listOf(reactionSummary("👍", listOf("screenshot-viewer" to "Riley", "screenshot-alex" to "Alex")), reactionSummary("👀", listOf("screenshot-sam" to "Sam")))),
+            "screenshot-message-1783555320000" to JsonArray(listOf(reactionSummary("🎉", listOf("screenshot-alex" to "Alex", "screenshot-sam" to "Sam")))),
+          )
+        } else {
+          emptyMap()
+        },
+      )
+
+    fun history(paramsJson: String?): String =
+      when {
+        branchesEnabled -> {
+          branchRequestParams(paramsJson)
+          branchHistory(activeLeaf.get())
+        }
+
+        scene == AndroidScreenshotScene.Sources -> {
+          sourceHistory()
+        }
+
+        scene == AndroidScreenshotScene.Browser -> {
+          browserHistory(paramsJson)
+        }
+
+        workScene -> {
+          workHistory()
+        }
+
+        else -> {
+          chatHistory()
+        }
+      }
     // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
     val pendingQuestion =
       System.currentTimeMillis().let { nowMs ->
@@ -126,22 +173,67 @@ internal object AndroidScreenshotFixture {
         }
 
         "chat.history" -> {
-          if (branchesEnabled) {
-            branchRequestParams(paramsJson)
-            branchHistory(activeLeaf.get())
-          } else if (scene == AndroidScreenshotScene.Sources) {
-            sourceHistory()
-          } else if (scene == AndroidScreenshotScene.Browser) {
-            browserHistory(paramsJson)
-          } else if (workScene) {
-            workHistory()
-          } else {
-            chatHistory()
-          }
+          history(paramsJson)
+        }
+
+        "session.reactions.list" -> {
+          buildJsonObject {
+            put("sessionId", Json.parseToJsonElement(history(paramsJson)).jsonObject.getValue("sessionId"))
+            put("reactions", JsonObject(reactions.get()))
+          }.toString()
+        }
+
+        "session.reactions.set" -> {
+          val params = Json.parseToJsonElement(requireNotNull(paramsJson)).jsonObject
+          require(params["sessionKey"] == JsonPrimitive(mainSessionKey) && params["agentId"] == JsonPrimitive("main"))
+          val messageId = params.getValue("messageId").jsonPrimitive.content
+          val emoji = params.getValue("emoji").jsonPrimitive.content
+          val remove = params["remove"]?.jsonPrimitive?.booleanOrNull == true
+          val updated =
+            reactions
+              .updateAndGet { current ->
+                val previous = current[messageId].orEmpty()
+                val identities =
+                  previous
+                    .firstOrNull { it.jsonObject["emoji"] == JsonPrimitive(emoji) }
+                    ?.jsonObject
+                    ?.get("identities") as? JsonArray
+                val nextIdentities =
+                  identities.orEmpty().mapNotNull {
+                    val identity = it.jsonObject
+                    val id = identity.getValue("id").jsonPrimitive.content
+                    if (id == "screenshot-viewer") null else id to identity.getValue("label").jsonPrimitive.content
+                  } + if (remove) emptyList() else listOf("screenshot-viewer" to "Riley")
+                val next =
+                  previous.filter { it.jsonObject["emoji"] != JsonPrimitive(emoji) } +
+                    if (nextIdentities.isEmpty()) emptyList() else listOf(reactionSummary(emoji, nextIdentities))
+                current + (messageId to JsonArray(next))
+              }.getValue(messageId)
+          onEvent(
+            "session.reaction",
+            buildJsonObject {
+              put("sessionKey", mainSessionKey)
+              put("agentId", "main")
+              put("sessionId", "screenshot-session")
+              put("messageId", messageId)
+              put("emoji", emoji)
+              put("action", if (remove) "removed" else "added")
+              putJsonObject("actor") {
+                put("type", "human")
+                put("id", "screenshot-viewer")
+                put("label", "Riley")
+              }
+              put("reactions", updated)
+            }.toString(),
+          )
+          buildJsonObject {
+            put("messageId", messageId)
+            put("reactions", updated)
+          }.toString()
         }
 
         "sessions.list" -> {
-          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson)
+          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson, fixtureNowMs)
         }
 
         "sessions.branches.list" -> {
@@ -232,6 +324,23 @@ internal object AndroidScreenshotFixture {
       }
     }
   }
+
+  private fun reactionSummary(
+    emoji: String,
+    identities: List<Pair<String, String>>,
+  ): JsonObject =
+    buildJsonObject {
+      put("emoji", emoji)
+      put("count", identities.size)
+      putJsonArray("identities") {
+        identities.forEach { (id, label) ->
+          addJsonObject {
+            put("id", id)
+            put("label", label)
+          }
+        }
+      }
+    }
 
   private fun branchRequestParams(
     paramsJson: String?,
@@ -775,7 +884,14 @@ internal object AndroidScreenshotFixture {
               },
           ),
         )
-        add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
+        add(
+          chatMessage(
+            "user",
+            "Draft a short status update for the team.",
+            1_783_555_260_000,
+            marker = buildJsonObject { put("id", "screenshot-message-1783555260000") },
+          ),
+        )
         add(
           chatMessage(
             role = "assistant",
@@ -783,6 +899,7 @@ internal object AndroidScreenshotFixture {
               "The Android release is close. Two review follow-ups and one localization pass remain; once those land, " +
                 "the changelog can be reviewed and the tag can go out.",
             timestamp = 1_783_555_320_000,
+            marker = buildJsonObject { put("id", "screenshot-message-1783555320000") },
             provider = "openai",
             model = "gpt-5.2",
             usage =
@@ -803,6 +920,9 @@ internal object AndroidScreenshotFixture {
       }
       putJsonObject("sessionInfo") {
         put("key", JsonPrimitive(mainSessionKey))
+        put("sessionId", "screenshot-session")
+        put("sharingRole", "owner")
+        put("visibility", "shared")
         put("displayName", JsonPrimitive("New chat"))
         put("updatedAt", JsonPrimitive(1_783_555_320_000))
         put("unread", JsonPrimitive(false))
@@ -848,7 +968,39 @@ internal object AndroidScreenshotFixture {
     cost?.let { put("cost", it) }
   }
 
-  private fun sessionList(paramsJson: String?): String {
+  private fun sessionList(
+    paramsJson: String?,
+    fixtureNowMs: Long,
+  ): String {
+    if (scene == AndroidScreenshotScene.Snooze) {
+      val wakeAtMs =
+        Instant
+          .ofEpochMilli(fixtureNowMs)
+          .atZone(ZoneId.systemDefault())
+          .toLocalDate()
+          .plusDays(1)
+          .atTime(9, 0)
+          .atZone(ZoneId.systemDefault())
+          .toInstant()
+          .toEpochMilli()
+      return buildJsonObject {
+        putJsonArray("sessions") {
+          addJsonObject {
+            session("agent:main:dashboard:snooze-active", "Trip checklist", fixtureNowMs).forEach { (key, value) -> put(key, value) }
+            put("sessionId", "screenshot-snooze-active")
+          }
+          addJsonObject {
+            session("agent:main:dashboard:snooze-sleeping", "Weekend reading", fixtureNowMs - 60_000).forEach { (key, value) -> put(key, value) }
+            put("sessionId", "screenshot-snooze-sleeping")
+            put("snoozedAt", fixtureNowMs)
+            put("snoozedUntil", wakeAtMs)
+          }
+        }
+        put("count", 2)
+        put("totalCount", 2)
+        put("hasMore", false)
+      }.toString()
+    }
     if (scene == AndroidScreenshotScene.Browser) {
       return buildJsonObject {
         putJsonArray("sessions") {

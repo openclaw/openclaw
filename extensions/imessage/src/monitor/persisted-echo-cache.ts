@@ -1,6 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeIMessageMessageId } from "../message-guid.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
@@ -12,15 +13,7 @@ import {
 } from "../state-contract.js";
 import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
-type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
-
-function normalizeMessageId(messageId: string | undefined): string | undefined {
-  const normalized = messageId?.trim();
-  if (!normalized || normalized === "ok" || normalized === "unknown") {
-    return undefined;
-  }
-  return normalized;
-}
+type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry, 2>;
 
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
@@ -44,7 +37,7 @@ function normalizeMedia(
 }
 
 function openPersistedEchoStore(): PersistedEchoStore {
-  return getIMessageRuntime().state.openKeyedStore<PersistedEchoEntry>({
+  return getIMessageRuntime().state.openKeyedStoreV2<PersistedEchoEntry>({
     namespace: IMESSAGE_SENT_ECHOES_NAMESPACE,
     maxEntries: IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
   });
@@ -53,13 +46,6 @@ function openPersistedEchoStore(): PersistedEchoStore {
 function remainingTtlMs(timestamp: number): number | undefined {
   const remaining = IMESSAGE_SENT_ECHOES_TTL_MS - Math.max(0, Date.now() - timestamp);
   return remaining > 0 ? remaining : undefined;
-}
-
-function resolveEntryTtlMs(entry: PersistedEchoEntry, ttlMs?: number): number | undefined {
-  if (typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0) {
-    return ttlMs;
-  }
-  return remainingTtlMs(entry.timestamp);
 }
 
 function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
@@ -71,9 +57,7 @@ async function readRecentEntries(): Promise<PersistedEchoEntry[]> {
   try {
     return (await openPersistedEchoStore().entries())
       .map(({ value }) => value)
-      .filter((entry) => isLiveEntry(entry))
-      .toSorted((a, b) => a.timestamp - b.timestamp)
-      .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
+      .filter((entry) => isLiveEntry(entry));
   } catch (err) {
     reportFailure("read", err);
     return [];
@@ -84,14 +68,13 @@ async function persistEntry(
   entry: PersistedEchoEntry,
   ttlMs?: number,
 ): Promise<string | undefined> {
-  const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
-  if (!effectiveTtlMs) {
+  if (!ttlMs) {
     return undefined;
   }
   const key = resolveIMessageSentEchoEntryKey(entry);
   try {
     await openPersistedEchoStore().register(key, entry, {
-      ttlMs: effectiveTtlMs,
+      ttlMs,
     });
   } catch (err) {
     reportFailure("write", err);
@@ -110,7 +93,7 @@ export async function rememberPersistedIMessageEcho(params: {
 }): Promise<string | undefined> {
   const text = normalizeIMessageEchoText(params.text);
   const media = normalizeMedia(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
@@ -119,13 +102,17 @@ export async function rememberPersistedIMessageEcho(params: {
     ...(messageId ? { messageId } : {}),
     ...(params.pending ? { pending: true } : {}),
   };
-  if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
-    entry.expiresAt = entry.timestamp + params.ttlMs;
+  const ttlMs =
+    typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0
+      ? params.ttlMs
+      : undefined;
+  if (ttlMs !== undefined) {
+    entry.expiresAt = entry.timestamp + ttlMs;
   }
   if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
-  return await persistEntry(entry, params.ttlMs);
+  return await persistEntry(entry, ttlMs ?? remainingTtlMs(entry.timestamp));
 }
 
 export async function forgetPersistedIMessageEchoKey(key: string | undefined): Promise<void> {
@@ -149,7 +136,7 @@ export async function hasPersistedIMessageEcho(params: {
 }): Promise<boolean> {
   const text = normalizeIMessageEchoText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   if (!text && !mediaKey && !messageId) {
     return false;
   }

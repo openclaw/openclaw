@@ -455,11 +455,13 @@ import Testing
     }
 
     @Test func `remote gateway probe applies SSH host key policy`() throws {
-        let strict = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let strict = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .strict))
-        let openssh = try #require(RemoteGatewayProbe._testSSHCheckCommand(
+        let openssh = try #require(RemoteGatewayProbe.sshCheckCommand(
             target: "gateway-alias",
+            identity: "",
             hostKeyPolicy: .openssh))
 
         #expect(strict.contains("StrictHostKeyChecking=yes"))
@@ -534,6 +536,25 @@ import Testing
 }
 
 struct CommandResolverLocalRoutingTests {
+    @Test func `unavailable CLI diagnostics remain literal shell data`() async throws {
+        let message = "first line\n__OPENCLAW_ERR__\nprintf marker-executed >&2\n#"
+        let command = await CommandResolver.localOpenclawCommand(
+            subcommand: "gateway",
+            profile: AppProfile(environment: [:]),
+            resolveCLI: { _, _ in .unavailable(message) })
+        let process = Process()
+        let stderr = Pipe()
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        process.standardError = stderr
+        try process.run()
+        process.waitUntilExit()
+        let output = stderr.fileHandleForReading.readDataToEndOfFile()
+
+        #expect(process.terminationStatus == 1)
+        #expect(output == Data((message + "\n").utf8))
+    }
+
     @Test(arguments: [
         ["/fixture/managed/openclaw"],
         ["/fixture/node", "/fixture/project/openclaw.mjs"],

@@ -1,19 +1,17 @@
 import { resolveSessionAuthProfileOverrideSource } from "./auth-profile-override-provenance.js";
 import { hasSessionActiveAutoModelFallback } from "./model-override-provenance.js";
-import type { SessionPatchProjectionSnapshot } from "./session-accessor.types.js";
+import type {
+  SessionPatchProjectionSnapshot,
+  SessionPatchProjectionTarget,
+} from "./session-accessor.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
-
-type SessionProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
 
 export class SessionLabelOwnerIndex {
   readonly #owners = new Map<string, Set<string>>();
 
   constructor(private readonly store: Record<string, SessionEntry>) {
     for (const [sessionKey, entry] of Object.entries(this.store)) {
-      this.#update(sessionKey, entry.label, true);
+      this.#add(sessionKey, entry.label);
     }
   }
 
@@ -32,26 +30,25 @@ export class SessionLabelOwnerIndex {
     entry: SessionEntry,
   ): SessionEntry {
     for (const sessionKey of new Set([...candidateKeys, primaryKey])) {
-      this.#update(sessionKey, this.store[sessionKey]?.label, false);
+      const label = this.store[sessionKey]?.label;
+      if (label !== undefined) {
+        this.#owners.get(label)?.delete(sessionKey);
+      }
       delete this.store[sessionKey];
     }
     const cloned = structuredClone(entry);
     this.store[primaryKey] = cloned;
-    this.#update(primaryKey, cloned.label, true);
+    this.#add(primaryKey, cloned.label);
     return cloned;
   }
 
-  #update(sessionKey: string, label: string | undefined, add: boolean): void {
+  #add(sessionKey: string, label: string | undefined): void {
     if (label === undefined) {
       return;
     }
     const owners = this.#owners.get(label) ?? new Set<string>();
-    if (add) {
-      owners.add(sessionKey);
-      this.#owners.set(label, owners);
-      return;
-    }
-    owners.delete(sessionKey);
+    owners.add(sessionKey);
+    this.#owners.set(label, owners);
   }
 }
 
@@ -122,7 +119,7 @@ export function inheritSessionSelection(
 
 export function resolveProjectionExistingEntry(
   snapshot: SessionPatchProjectionSnapshot,
-  target: SessionProjectionTarget,
+  target: SessionPatchProjectionTarget,
 ): SessionEntry | undefined {
   const candidateKeys = target.candidateKeys ?? [target.primaryKey];
   let freshest: SessionEntry | undefined;

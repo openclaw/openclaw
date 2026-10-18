@@ -1,9 +1,9 @@
-// Root Commander help, global options, banner, version, and example formatting.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../../infra/git-commit.js";
 import { formatConsoleDiagnosticBlock } from "../../logging/json-console-line.js";
+import { ExitError } from "../../runtime.js";
 import { escapeRegExp } from "../../utils.js";
 import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
@@ -136,7 +136,7 @@ export function configureProgramHelp(
     console.log(
       commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,
     );
-    process.exit(0);
+    throw new ExitError(0);
   }
 
   program.addHelpText("beforeAll", () => {

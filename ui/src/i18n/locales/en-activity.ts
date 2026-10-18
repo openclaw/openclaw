@@ -11,12 +11,16 @@ const enActivity = {
       incomplete: "Images too large to preview here",
     },
     pulse: {
+      sessionsOne: "session",
       sessions: "sessions",
       started: "started",
+      peopleOne: "person",
       people: "people",
       running: "running now",
-      hour: "{hour} · {count} sessions",
-      description: "{count} sessions today; peak hour {hour}",
+      bucketOne: "{period} · {count} session",
+      bucket: "{period} · {count} sessions",
+      descriptionOne: "{window}: {count} session; busiest {period}",
+      description: "{window}: {count} sessions; busiest {period}",
     },
     git: {
       pullRequest: "{repository} pull request #{number}: {title} ({state})",
@@ -47,7 +51,7 @@ const enActivity = {
     toolCallId: "Tool call",
     runId: "Run",
     session: "Session",
-    outputTruncated: "Preview redacted and truncated.",
+    outputTruncated: "Preview truncated.",
     noOutputPreview: "No output preview.",
     currentWork: {
       title: "Active sessions",

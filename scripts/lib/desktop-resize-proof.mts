@@ -133,7 +133,7 @@ function desktopNodeStreamCloses(value: unknown) {
 }
 
 /** Read at most 1 MiB, including when a live fixture log grows after admission. */
-async function readDesktopProofLog(file: string) {
+async function readDesktopProofLog<T>(file: string, project: (records: unknown[]) => T) {
   try {
     const stat = await lstat(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
@@ -162,7 +162,7 @@ async function readDesktopProofLog(file: string) {
     } finally {
       await handle.close();
     }
-    return text.split("\n").flatMap((line): unknown[] => {
+    const records = text.split("\n").flatMap((line): unknown[] => {
       try {
         return [JSON.parse(line)];
       } catch {
@@ -170,6 +170,7 @@ async function readDesktopProofLog(file: string) {
         return [];
       }
     });
+    return project(records);
   } catch {
     // Diagnostic collection must not replace the framebuffer assertion failure.
     return null;
@@ -178,12 +179,8 @@ async function readDesktopProofLog(file: string) {
 
 /** Preserve the existing node projection while sharing the actual-byte read bound. */
 export async function readDesktopProofNodeStreamCloses(file: string) {
-  const records = await readDesktopProofLog(file);
-  if (!records) {
-    return null;
-  }
-  try {
-    return desktopNodeStreamCloses(
+  return await readDesktopProofLog(file, (records) =>
+    desktopNodeStreamCloses(
       records
         .flatMap((record) =>
           isRecord(record) &&
@@ -195,10 +192,8 @@ export async function readDesktopProofNodeStreamCloses(file: string) {
             : [],
         )
         .slice(-8),
-    );
-  } catch {
-    return null;
-  }
+    ),
+  );
 }
 
 function diagnosticEvents<T>(value: unknown, project: (event: unknown) => T) {
@@ -343,28 +338,22 @@ function desktopGatewayCloses(value: unknown) {
 }
 
 export async function readDesktopProofGatewayCloses(file: string) {
-  const records = await readDesktopProofLog(file);
-  if (!records) {
-    return null;
-  }
-  const events = (message: string) => {
-    const matching = records.flatMap((record) =>
-      isRecord(record) &&
-      record["0"] === '{"subsystem":"gateway/desktop"}' &&
-      record["2"] === message
-        ? [record["1"]]
-        : [],
-    );
-    return { events: matching.slice(-8), omitted: Math.max(0, matching.length - 8) };
-  };
-  try {
+  return await readDesktopProofLog(file, (records) => {
+    const events = (message: string) => {
+      const matching = records.flatMap((record) =>
+        isRecord(record) &&
+        record["0"] === '{"subsystem":"gateway/desktop"}' &&
+        record["2"] === message
+          ? [record["1"]]
+          : [],
+      );
+      return { events: matching.slice(-8), omitted: Math.max(0, matching.length - 8) };
+    };
     return desktopGatewayCloses({
       observerCloses: events("desktop observer closed"),
       sshTunnelExits: events("desktop SSH tunnel exited"),
     });
-  } catch {
-    return null;
-  }
+  });
 }
 
 function desktopViewerResizeFailure(value: unknown) {
@@ -765,7 +754,7 @@ export function desktopProofAssets(value: unknown) {
   return Object.fromEntries(
     Object.entries(value).map(([name, hash]) => {
       if (
-        !/^(?:index|desktop)[\w.-]*\.js$/u.test(name) ||
+        !/^(?:index|desktop|novnc-)[\w.-]*\.js$/u.test(name) ||
         typeof hash !== "string" ||
         !digest.test(hash)
       ) {

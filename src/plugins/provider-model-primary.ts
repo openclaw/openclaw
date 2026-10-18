@@ -6,43 +6,44 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Applies a primary model to agent defaults while preserving model fallback metadata. */
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
-  return applyDefaultModel(cfg, model);
-}
-
-export function applyDefaultModel(
+export function applyPrimaryModel(
   cfg: OpenClawConfig,
   model: string,
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
   const normalizedModel = normalizeAgentModelRefForConfig(model);
-  const defaults = cfg.agents?.defaults;
-  const existingModel = defaults?.model;
-  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
+  const models = {
+    ...normalizeAgentModelMapForConfig(cfg.agents?.defaults?.models ?? {}),
+  };
+  models[normalizedModel] = models[normalizedModel] ?? {};
+
+  const existingModel = cfg.agents?.defaults?.model;
   const existingPrimary =
-    typeof existingModel === "string" ? existingModel : existingModel?.primary;
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
-          normalizeAgentModelRefForConfig(fallback),
-        )
+    typeof existingModel === "string"
+      ? existingModel
+      : typeof existingModel === "object"
+        ? existingModel?.primary
+        : undefined;
+  const normalizedExistingPrimary = existingPrimary
+    ? normalizeAgentModelRefForConfig(existingPrimary)
+    : undefined;
+  const existingFallbacks =
+    typeof existingModel === "object"
+      ? existingModel?.fallbacks?.map(normalizeAgentModelRefForConfig)
       : undefined;
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
-        ...defaults,
+        ...cfg.agents?.defaults,
+        models,
         model: {
-          ...(fallbacks ? { fallbacks } : undefined),
+          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
           primary:
-            opts?.preserveExistingPrimary === true && existingPrimary
-              ? normalizeAgentModelRefForConfig(existingPrimary)
+            opts?.preserveExistingPrimary === true
+              ? (normalizedExistingPrimary ?? normalizedModel)
               : normalizedModel,
-        },
-        models: {
-          ...existingModels,
-          [normalizedModel]: existingModels?.[normalizedModel] ?? {},
         },
       },
     },

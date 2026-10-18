@@ -115,7 +115,7 @@ describe("New Session notification onboarding", () => {
       } else if (scenario === "command") {
         flow.setMessage("/status");
       } else if (scenario === "blocked") {
-        flow.attachmentDraft.updatePending(flow.attachmentDraft.readSignal, 1);
+        flow.attachmentDraft.reads.updatePending(flow.attachmentDraft.reads.readSignal, 1);
       }
 
       await (scenario === "programmatic" ? flow.submit() : submitFromClick(flow));

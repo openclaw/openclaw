@@ -158,6 +158,12 @@ export class OpenAIQuicksilverPendingAudio {
     return readBytes;
   }
 
+  take(limit = this.length): Buffer<ArrayBuffer> {
+    const output = Buffer.alloc(Math.min(limit, this.length));
+    this.readInto(output);
+    return output;
+  }
+
   clear(): void {
     this.storage = undefined;
     this.readOffset = 0;

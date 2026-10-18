@@ -28,7 +28,13 @@ struct ChatCommandPalette: View {
             sections: self.sections,
             remote: self.search.rows(for: self.request),
             query: self.query,
-            preview: self.preview)
+            preview: self.preview).filter { item in
+            guard self.viewModel.usesWebConversation else { return true }
+            switch item {
+            case .action(.find), .action(.export): return false
+            default: return true
+            }
+        }
     }
 
     var body: some View {
@@ -259,7 +265,7 @@ struct ChatCommandPalette: View {
     private func searchThreads() async {
         guard !Task.isCancelled else { return }
         let request = self.request
-        let generation = self.search.begin(request)
+        self.search.begin(request, owner: self.viewModel.sidebarData)
         guard !request.query.isEmpty else { return }
         do {
             try await Task.sleep(for: .milliseconds(250))
@@ -267,11 +273,9 @@ struct ChatCommandPalette: View {
             let rows = await self.viewModel.fetchSessionList(search: request.query, archived: false)
             try Task.checkCancellation()
             guard self.request == request else { return }
-            self.search.complete(rows, generation: generation)
-        } catch is CancellationError {
-            // The replacement task (or dismissed sheet) owns the presentation.
+            self.search.complete(rows)
         } catch {
-            self.search.complete([], generation: generation)
+            // The replacement task (or dismissed sheet) owns the presentation.
         }
     }
 }

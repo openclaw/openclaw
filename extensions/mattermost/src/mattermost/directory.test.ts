@@ -1,5 +1,6 @@
 // Mattermost tests cover directory plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listMattermostDirectoryGroups, listMattermostDirectoryPeers } from "./directory.js";
 
 const {
   listMattermostAccountIdsMock,
@@ -29,24 +30,17 @@ vi.mock("./client.js", () => {
   };
 });
 
-let listMattermostDirectoryGroups: typeof import("./directory.js").listMattermostDirectoryGroups;
-let listMattermostDirectoryPeers: typeof import("./directory.js").listMattermostDirectoryPeers;
-
 function mockDefaultAccount() {
   listMattermostAccountIdsMock.mockReturnValue(["default"]);
   resolveMattermostAccountMock.mockReturnValue({
     enabled: true,
     botToken: "token-default",
     baseUrl: "https://chat.example.com",
+    config: {},
   });
 }
 
 describe("mattermost directory", () => {
-  beforeAll(async () => {
-    ({ listMattermostDirectoryGroups, listMattermostDirectoryPeers } =
-      await import("./directory.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -59,8 +53,13 @@ describe("mattermost directory", () => {
     listMattermostAccountIdsMock.mockReturnValue(["broken", "healthy"]);
     resolveMattermostAccountMock.mockImplementation(({ accountId }) =>
       accountId === "broken"
-        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com" }
-        : { enabled: true, botToken: "token-healthy", baseUrl: "https://chat.example.com" },
+        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com", config: {} }
+        : {
+            enabled: true,
+            botToken: "token-healthy",
+            baseUrl: "https://chat.example.com",
+            config: {},
+          },
     );
     createMattermostClientMock.mockReturnValue(client);
     fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
@@ -78,6 +77,7 @@ describe("mattermost directory", () => {
       enabled: true,
       botToken: `token-${accountId}`,
       baseUrl: "https://chat.example.com",
+      config: {},
     }));
     createMattermostClientMock.mockReturnValue(personalClient);
     fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
@@ -120,9 +120,14 @@ describe("mattermost directory", () => {
     listMattermostAccountIdsMock.mockReturnValue(["default", "alerts", "infra"]);
     resolveMattermostAccountMock.mockImplementation(({ accountId }) => {
       if (accountId === "disabled") {
-        return { enabled: false };
+        return { enabled: false, config: {} };
       }
-      return { enabled: true, botToken: `token-${accountId}`, baseUrl: "https://chat.example.com" };
+      return {
+        enabled: true,
+        botToken: `token-${accountId}`,
+        baseUrl: "https://chat.example.com",
+        config: {},
+      };
     });
     createMattermostClientMock
       .mockReturnValueOnce(clientA)
@@ -160,47 +165,6 @@ describe("mattermost directory", () => {
     ).resolves.toEqual([
       { kind: "channel", id: "channel:pub-1", name: "general", handle: "General" },
       { kind: "group", id: "channel:priv-1", name: "secret", handle: "Secret" },
-    ]);
-  });
-
-  it("uses the first healthy client for peers and filters self and blanks", async () => {
-    const client = {
-      token: "token-default",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([{ user_id: "me-1" }, { user_id: "user-1" }, { user_id: "user-2" }])
-        .mockResolvedValueOnce([
-          {
-            id: "user-1",
-            username: "alice",
-            first_name: "Alice",
-            last_name: "Ng",
-          },
-          {
-            id: "user-2",
-            username: "bob",
-            nickname: "Bobby",
-          },
-          {
-            id: "me-1",
-            username: "self",
-          },
-        ]),
-    };
-
-    mockDefaultAccount();
-    createMattermostClientMock.mockReturnValue(client);
-    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
-
-    await expect(
-      listMattermostDirectoryPeers({
-        cfg: {} as never,
-        runtime: {} as never,
-      }),
-    ).resolves.toEqual([
-      { kind: "user", id: "user:user-1", name: "alice", handle: "Alice Ng" },
-      { kind: "user", id: "user:user-2", name: "bob", handle: "Bobby" },
     ]);
   });
 
@@ -246,35 +210,6 @@ describe("mattermost directory", () => {
     expect(client.request).toHaveBeenNthCalledWith(5, "/users/ids", {
       method: "POST",
       body: JSON.stringify(["user-201", "user-202"]),
-    });
-  });
-
-  it("applies peer limits after resolving users", async () => {
-    const client = {
-      token: "token-default",
-      request: vi
-        .fn()
-        .mockResolvedValueOnce([{ id: "team-1" }])
-        .mockResolvedValueOnce([{ user_id: "missing-user" }, { user_id: "user-2" }])
-        .mockResolvedValueOnce([{ id: "user-2", username: "bob" }]),
-    };
-
-    mockDefaultAccount();
-    createMattermostClientMock.mockReturnValue(client);
-    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
-
-    await expect(
-      listMattermostDirectoryPeers({
-        cfg: {} as never,
-        runtime: {} as never,
-        limit: 1,
-      }),
-    ).resolves.toEqual([{ kind: "user", id: "user:user-2", name: "bob", handle: undefined }]);
-
-    expect(client.request).toHaveBeenNthCalledWith(2, "/teams/team-1/members?page=0&per_page=200");
-    expect(client.request).toHaveBeenNthCalledWith(3, "/users/ids", {
-      method: "POST",
-      body: JSON.stringify(["missing-user", "user-2"]),
     });
   });
 

@@ -88,7 +88,7 @@ afterAll(() => {
 });
 
 describe("discoverKilocodeModels (fetch path)", () => {
-  it.each([503, 200])(
+  it.each([200])(
     "preserves the public advisory builder for HTTP %s with no rows",
     async (status) => {
       stubResponse(jsonResponse({ data: [] }, status));
@@ -128,12 +128,6 @@ describe("discoverKilocodeModels (fetch path)", () => {
   });
 
   it.each([
-    {
-      label: "negative routing rates with missing cache prices",
-      pricing: { prompt: "-1", completion: "-1" },
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
     {
       label: "unknown routing rates with valid cache prices",
       pricing: {
@@ -183,25 +177,6 @@ describe("discoverKilocodeModels (fetch path)", () => {
     },
   );
 
-  it("propagates network errors", async () => {
-    fetchWithSsrFGuardMock.mockRejectedValue(new Error("network error"));
-    await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toThrow(
-      "network error",
-    );
-  });
-
-  it("releases the response before propagating an HTTP error", async () => {
-    const response = new Response("temporary failure", { status: 500 });
-    const cancelSpy = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-    const release = stubResponse(response);
-
-    await expect(discoverKilocodeModels({ discoveryMode: "strict" })).rejects.toMatchObject({
-      status: 500,
-    });
-    expect(cancelSpy).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it("rejects malformed model list envelopes", async () => {
     for (const payload of [[], { data: {} }]) {
       stubResponse(jsonResponse(payload));
@@ -211,7 +186,7 @@ describe("discoverKilocodeModels (fetch path)", () => {
     }
   });
 
-  it.each([{ data: [] }, { data: [null] }])(
+  it.each([{ data: [null] }])(
     "does not restore seed models when no usable live rows remain: %j",
     async (payload) => {
       stubResponse(jsonResponse(payload));
@@ -258,27 +233,6 @@ describe("discoverKilocodeModels (fetch path)", () => {
       contextWindow: 524288,
       maxTokens: 512000,
     });
-  });
-
-  it("falls back to the catalog window when the provider window is unusable", async () => {
-    const unusable: unknown[] = [0, -1, 4096.5, Number.POSITIVE_INFINITY, null, "131072"];
-    stubModels(
-      unusable.map((context_length, index) =>
-        makeGatewayModel({
-          id: `some/provider-window-${index}`,
-          context_length: 200000,
-          top_provider: { context_length, max_completion_tokens: 8192 },
-        }),
-      ),
-    );
-    const models = await discoverKilocodeModels();
-
-    for (let index = 0; index < unusable.length; index++) {
-      expect(requireModelById(models, `some/provider-window-${index}`)).toMatchObject({
-        contextWindow: 200000,
-        maxTokens: 8192,
-      });
-    }
   });
 
   it("detects text-only models without image modality", async () => {

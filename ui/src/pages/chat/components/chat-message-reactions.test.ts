@@ -1,0 +1,211 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
+/* @vitest-environment jsdom */
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { MessageGroup } from "./chat-message-group-view.tsx";
+import { createMessageGroup } from "./chat-message.test-support.ts";
+
+const reactions: MessageReactionSummary[] = [
+  {
+    emoji: "👍",
+    count: 2,
+    identities: [
+      { id: "peer", label: "Riley" },
+      { id: "self", label: "Alex" },
+    ],
+  },
+  {
+    emoji: "🎉",
+    count: 5,
+    identities: ["Ana", "Ben", "Cy", "Dee", "Eli"].map((label, index) => ({
+      id: String.fromCharCode(97 + index),
+      label,
+    })),
+  },
+];
+let host: HTMLDivElement;
+afterEach(() => {
+  if (host) {
+    cleanupSolid();
+    host.remove();
+  }
+});
+
+function show(
+  options: { role?: string; persisted?: boolean; streaming?: boolean; writable?: boolean } = {},
+) {
+  host = document.body.appendChild(document.createElement("div"));
+  const role = options.role ?? "user";
+  const onReact = vi.fn();
+  const message = {
+    role,
+    content: [{ type: "text", text: "A shared prompt" }],
+    timestamp: 1,
+    ...(options.persisted === false ? {} : { __openclaw: { id: "message-1" } }),
+  };
+  mountSolid(
+    MessageGroup,
+    {
+      group: createMessageGroup(message, role, { isStreaming: options.streaming ?? false }),
+      options: {
+        showReasoning: false,
+        userId: "self",
+        messageReactions: new Map([["message-1", reactions]]),
+        onReact: options.writable === false ? undefined : onReact,
+      },
+    },
+    host,
+  );
+  return {
+    onReact,
+    pickers: [
+      ...host.querySelectorAll<SolidBridgeElement<object>>("openclaw-message-reaction-picker"),
+    ],
+  };
+}
+
+function pickerButton(picker: SolidBridgeElement<object>, label: string) {
+  // Compare emoji labels directly; JSDOM selectors do not reliably match non-BMP values.
+  return [...picker.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.getAttribute("aria-label") === label,
+  );
+}
+
+async function customEntry() {
+  const { pickers, onReact } = show();
+  const picker = pickers[0]!;
+  await picker.updateComplete;
+  const root = picker;
+  root.querySelector<HTMLButtonElement>(".trigger")!.click();
+  root.querySelector<HTMLButtonElement>(".more")!.click();
+  flush();
+  return {
+    picker,
+    root,
+    onReact,
+    input: root.querySelector<HTMLInputElement>(".emoji-search-panel__search")!,
+  };
+}
+
+function hidden(picker: Element) {
+  return new Promise<void>((resolve) => {
+    picker
+      .querySelector(".chat-reaction-picker")!
+      .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+  });
+}
+
+describe("transcript message reactions", () => {
+  it.each([
+    [{ role: "user" }, "writable"],
+    [{ role: "assistant" }, "writable"],
+    [{ writable: false }, "readonly"],
+    [{ persisted: false }, "ineligible"],
+    [{ streaming: true }, "ineligible"],
+    [{ role: "system" }, "ineligible"],
+  ] as const)("renders %j reactions as %s", async (options, access) => {
+    const { onReact, pickers } = show(options);
+    expect(pickers).toHaveLength(access === "writable" ? 2 : 0);
+    if (access === "ineligible") {
+      expect(host.querySelector(".chat-message-reactions")).toBeNull();
+      return;
+    }
+    const chips = host.querySelectorAll<HTMLButtonElement>("button.chat-reaction-chip");
+    if (access === "readonly") {
+      expect(chips[0]!.disabled).toBe(true);
+      chips[0]!.click();
+      expect(onReact).not.toHaveBeenCalled();
+      return;
+    }
+    expect(chips).toHaveLength(2);
+    const [own, crowd] = [...chips] as [HTMLButtonElement, HTMLButtonElement];
+    expect(own.getAttribute("aria-pressed")).toBe("true");
+    expect(own.getAttribute("aria-label")).toBe("👍 2");
+    expect((own.parentElement as HTMLElement & { content: string }).content).toBe(
+      "You, Riley reacted with 👍",
+    );
+    expect((crowd.parentElement as HTMLElement & { content: string }).content).toBe(
+      "Ana, Ben, Cy and 2 others reacted with 🎉",
+    );
+    own.click();
+    expect(onReact).toHaveBeenCalledWith("message-1", "👍", true);
+    crowd.click();
+    expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
+    const picker = pickers[0]!;
+    await picker.updateComplete;
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
+    const pressed = pickerButton(picker, "👍")!;
+    expect(pressed.getAttribute("aria-pressed")).toBe("true");
+    const didHide = hidden(picker);
+    pressed.click();
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
+    await didHide;
+    expect(picker.querySelector(".palette")).toBeNull();
+    picker.querySelector<HTMLButtonElement>(".trigger")!.click();
+    pickerButton(picker, "🚀")!.click();
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "🚀", false);
+  });
+
+  it("searches emoji by name and selects the first match on Enter", async () => {
+    const { root, onReact, input } = await customEntry();
+    input.value = ":banana";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    expect(onReact).not.toHaveBeenCalled();
+    expect(pickerButton(root, "banana")?.textContent).toBe("🍌");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "🍌", false);
+  });
+
+  it("shows an empty state for unmatched text and applies a pasted emoji", async () => {
+    const { root, onReact, input } = await customEntry();
+    for (const value of ["zzqx", "👍👀"]) {
+      input.value = value;
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      flush();
+      expect(onReact).not.toHaveBeenCalled();
+      expect(root.querySelector(".emoji-search-panel__empty")?.textContent).toBe(
+        "No matching emoji",
+      );
+    }
+    input.value = " 🦞 ";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "🦞", false);
+  });
+
+  it("waits for IME composition to commit before applying an emoji", async () => {
+    const { onReact, input } = await customEntry();
+    input.value = "👍";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    expect(onReact).not.toHaveBeenCalled();
+    input.value = "👀";
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "👀" }));
+    expect(onReact).toHaveBeenLastCalledWith("message-1", "👀", false);
+  });
+
+  it("returns from the custom entry to the palette on backspace", async () => {
+    const { root, input } = await customEntry();
+    expect(document.activeElement).toBe(input);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    flush();
+    expect(root.querySelector("input")).toBeNull();
+    expect(root.querySelector(".palette")).not.toBeNull();
+    expect(document.activeElement).toBe(pickerButton(root, "👍"));
+  });
+
+  it("resets a closed custom picker without moving focus into its hidden palette", async () => {
+    const { root } = await customEntry();
+    const nextControl = host.appendChild(document.createElement("button"));
+    const didHide = hidden(root);
+    nextControl.focus();
+    await didHide;
+    flush();
+    expect(root.querySelector("input")).toBeNull();
+    expect(document.activeElement).toBe(nextControl);
+  });
+});

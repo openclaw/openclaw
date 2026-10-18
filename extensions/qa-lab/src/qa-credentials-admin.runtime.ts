@@ -8,6 +8,7 @@ import {
   normalizeQaCredentialConvexSiteUrl,
   normalizeQaCredentialEndpointPrefix,
   parseQaCredentialPositiveIntegerEnv,
+  parseQaCredentialResponsePayload,
 } from "./qa-credentials-common.runtime.js";
 import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.js";
 
@@ -32,18 +33,23 @@ const credentialLeaseSchema = z.object({
   expiresAtMs: z.number().int(),
 });
 
-const credentialRecordSchema = z.object({
-  credentialId: z.string().min(1),
-  credentialFingerprint: z.string().optional(),
-  kind: z.string().min(1),
-  status: credentialStatusSchema,
-  createdAtMs: z.number().int(),
-  updatedAtMs: z.number().int(),
-  lastLeasedAtMs: z.number().int(),
-  note: z.string().optional(),
-  lease: credentialLeaseSchema.optional(),
-  payload: z.unknown().optional(),
-});
+const credentialRecordSchema = z
+  .object({
+    credentialId: z.string().min(1),
+    credentialFingerprint: z.string().optional(),
+    kind: z.string().min(1),
+    status: credentialStatusSchema,
+    createdAtMs: z.number().int(),
+    updatedAtMs: z.number().int(),
+    lastLeasedAtMs: z.number().int(),
+    note: z.string().optional(),
+    lease: credentialLeaseSchema.optional(),
+    payload: z.unknown().optional(),
+  })
+  .transform((credential) => ({
+    ...credential,
+    credentialFingerprint: fingerprintQaCredentialId(credential.credentialId),
+  }));
 
 const addCredentialResponseSchema = z.object({
   status: z.literal("ok"),
@@ -77,15 +83,6 @@ export class QaCredentialAdminError extends Error {
   }
 }
 
-type AdminConfig = {
-  actorId: string;
-  authToken: string;
-  addUrl: string;
-  httpTimeoutMs: number;
-  listUrl: string;
-  removeUrl: string;
-};
-
 type AdminBaseOptions = {
   actorId?: string;
   endpointPrefix?: string;
@@ -118,21 +115,16 @@ type QaCredentialDoctorCheck = {
   status: "fail" | "pass" | "warn";
 };
 
-type QaCredentialDoctorResult = {
-  checks: QaCredentialDoctorCheck[];
-  status: "fail" | "pass" | "warn";
-};
+function adminErrorFactory(code: string) {
+  return (message: string) => new QaCredentialAdminError({ code, message });
+}
 
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   return parseQaCredentialPositiveIntegerEnv({
     env,
     key,
     fallback,
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_ENV",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_ENV"),
   });
 }
 
@@ -140,11 +132,7 @@ function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
   return normalizeQaCredentialConvexSiteUrl({
     raw,
     env,
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_SITE_URL",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_SITE_URL"),
   });
 }
 
@@ -154,11 +142,7 @@ function normalizeEndpointPrefix(value: string | undefined): string {
     invalidAbsoluteMessage:
       '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
     invalidSegmentsMessage: '--endpoint-prefix must not contain backslashes or ".." path segments.',
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_ARGUMENT",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_ARGUMENT"),
   });
 }
 
@@ -173,61 +157,30 @@ function resolveAdminAuthToken(env: NodeJS.ProcessEnv): string {
   });
 }
 
-function summarizeQaCredentialDoctorStatus(checks: readonly QaCredentialDoctorCheck[]) {
-  if (checks.some((check) => check.status === "fail")) {
-    return "fail" as const;
-  }
-  if (checks.some((check) => check.status === "warn")) {
-    return "warn" as const;
-  }
-  return "pass" as const;
-}
-
 export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {}) {
   const env = options.env ?? process.env;
   const checks: QaCredentialDoctorCheck[] = [];
   const siteUrl = options.siteUrl?.trim() || env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   const endpointPrefix = options.endpointPrefix?.trim() || env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX;
-  let normalizedSiteUrl: string | null = null;
-  let normalizedEndpointPrefix: string | null = null;
-
-  if (!siteUrl) {
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_SITE_URL",
-      status: "fail",
-      details: "missing Convex credential broker site URL",
-    });
-  } else {
+  const checkSetting = (name: string, resolve: () => string) => {
     try {
-      normalizedSiteUrl = normalizeConvexSiteUrl(siteUrl, env);
-      checks.push({
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "pass",
-        details: normalizedSiteUrl,
-      });
+      const details = resolve();
+      checks.push({ name, status: "pass", details });
+      return details;
     } catch (error) {
-      checks.push({
-        name: "OPENCLAW_QA_CONVEX_SITE_URL",
-        status: "fail",
-        details: formatErrorMessage(error),
-      });
+      checks.push({ name, status: "fail", details: formatErrorMessage(error) });
+      return null;
     }
-  }
-
-  try {
-    normalizedEndpointPrefix = normalizeEndpointPrefix(endpointPrefix);
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "pass",
-      details: normalizedEndpointPrefix,
-    });
-  } catch (error) {
-    checks.push({
-      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+  };
+  const normalizedSiteUrl = checkSetting("OPENCLAW_QA_CONVEX_SITE_URL", () => {
+    if (!siteUrl) {
+      throw new Error("missing Convex credential broker site URL");
+    }
+    return normalizeConvexSiteUrl(siteUrl, env);
+  });
+  const normalizedEndpointPrefix = checkSetting("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX", () =>
+    normalizeEndpointPrefix(endpointPrefix),
+  );
 
   for (const [name, requiredFor] of [
     ["OPENCLAW_QA_CONVEX_SECRET_CI", "live lane leasing"],
@@ -241,24 +194,14 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
     });
   }
 
-  try {
+  checkSetting("OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS", () => {
     const timeoutMs = parsePositiveIntegerEnv(
       env,
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     );
-    checks.push({
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "pass",
-      details: `${timeoutMs}ms`,
-    });
-  } catch (error) {
-    checks.push({
-      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
-      status: "fail",
-      details: formatErrorMessage(error),
-    });
-  }
+    return `${timeoutMs}ms`;
+  });
 
   if (normalizedSiteUrl && normalizedEndpointPrefix && env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER) {
     try {
@@ -293,11 +236,15 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
 
   return {
     checks,
-    status: summarizeQaCredentialDoctorStatus(checks),
-  } satisfies QaCredentialDoctorResult;
+    status: checks.some((check) => check.status === "fail")
+      ? "fail"
+      : checks.some((check) => check.status === "warn")
+        ? "warn"
+        : "pass",
+  } as const;
 }
 
-function resolveAdminConfig(options: AdminBaseOptions): AdminConfig {
+function resolveAdminConfig(options: AdminBaseOptions, operation: "add" | "remove" | "list") {
   const env = options.env ?? process.env;
   const siteUrl = options.siteUrl?.trim() || env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
   if (!siteUrl) {
@@ -323,43 +270,17 @@ function resolveAdminConfig(options: AdminBaseOptions): AdminConfig {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
-    addUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/add"),
-    removeUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/remove"),
-    listUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/list"),
+    url: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, `admin/${operation}`),
+    fetchImpl: options.fetchImpl ?? fetch,
   };
 }
 
-function parseJsonResponsePayload(text: string) {
-  if (!text.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
-}
-
-function toBrokerError(payload: unknown, httpStatus: number) {
-  const parsed = brokerErrorSchema.safeParse(payload);
-  if (!parsed.success) {
-    return null;
-  }
-  return new QaCredentialAdminError({
-    code: parsed.data.code,
-    message: parsed.data.message,
-    httpStatus,
-  });
-}
-
-async function postJson<T>(params: {
-  authToken: string;
-  body: Record<string, unknown>;
-  fetchImpl: typeof fetch;
-  httpTimeoutMs: number;
-  responseSchema: z.ZodType<T>;
-  url: string;
-}) {
+async function postJson<T>(
+  params: ReturnType<typeof resolveAdminConfig> & {
+    body: Record<string, unknown>;
+    responseSchema: z.ZodType<T>;
+  },
+) {
   const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
   let text: string;
@@ -388,11 +309,15 @@ async function postJson<T>(params: {
       message: `Convex credential admin request failed: ${formatErrorMessage(error)}`,
     });
   }
-  const payload = parseJsonResponsePayload(text);
+  const payload = parseQaCredentialResponsePayload(text);
 
-  const brokerError = toBrokerError(payload, response.status);
-  if (brokerError) {
-    throw brokerError;
+  const brokerError = brokerErrorSchema.safeParse(payload);
+  if (brokerError.success) {
+    throw new QaCredentialAdminError({
+      code: brokerError.data.code,
+      message: brokerError.data.message,
+      httpStatus: response.status,
+    });
   }
   if (!response.ok) {
     throw new QaCredentialAdminError({
@@ -433,7 +358,7 @@ function normalizeLimit(value: number | undefined) {
   if (value === undefined) {
     return undefined;
   }
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+  if (!Number.isInteger(value) || value < 1) {
     throw new QaCredentialAdminError({
       code: "INVALID_ARGUMENT",
       message: "--limit must be a positive integer.",
@@ -442,21 +367,10 @@ function normalizeLimit(value: number | undefined) {
   return value;
 }
 
-function withQaCredentialFingerprint(credential: QaCredentialRecord): QaCredentialRecord {
-  return {
-    ...credential,
-    credentialFingerprint: fingerprintQaCredentialId(credential.credentialId),
-  };
-}
-
 export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
-  const config = resolveAdminConfig(options);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const result = await postJson({
-    fetchImpl,
-    authToken: config.authToken,
-    httpTimeoutMs: config.httpTimeoutMs,
-    url: config.addUrl,
+  const config = resolveAdminConfig(options, "add");
+  return postJson({
+    ...config,
     responseSchema: addCredentialResponseSchema,
     body: {
       kind: options.kind,
@@ -466,42 +380,26 @@ export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
       actorId: config.actorId,
     },
   });
-  return {
-    ...result,
-    credential: withQaCredentialFingerprint(result.credential),
-  };
 }
 
 export async function removeQaCredentialSet(options: RemoveQaCredentialSetOptions) {
-  const config = resolveAdminConfig(options);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const result = await postJson({
-    fetchImpl,
-    authToken: config.authToken,
-    httpTimeoutMs: config.httpTimeoutMs,
-    url: config.removeUrl,
+  const config = resolveAdminConfig(options, "remove");
+  return postJson({
+    ...config,
     responseSchema: removeCredentialResponseSchema,
     body: {
       credentialId: options.credentialId,
       actorId: config.actorId,
     },
   });
-  return {
-    ...result,
-    credential: withQaCredentialFingerprint(result.credential),
-  };
 }
 
 export async function listQaCredentialSets(options: ListQaCredentialSetsOptions) {
-  const config = resolveAdminConfig(options);
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const config = resolveAdminConfig(options, "list");
   const status = normalizeStatus(options.status);
   const limit = normalizeLimit(options.limit);
-  const result = await postJson({
-    fetchImpl,
-    authToken: config.authToken,
-    httpTimeoutMs: config.httpTimeoutMs,
-    url: config.listUrl,
+  return postJson({
+    ...config,
     responseSchema: listCredentialsResponseSchema,
     body: {
       ...(options.kind ? { kind: options.kind } : {}),
@@ -510,8 +408,4 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
       ...(limit !== undefined ? { limit } : {}),
     },
   });
-  return {
-    ...result,
-    credentials: result.credentials.map(withQaCredentialFingerprint),
-  };
 }

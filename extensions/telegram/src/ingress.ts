@@ -3,7 +3,7 @@ import {
   defineStableChannelIngressIdentity,
   type ChannelIngressEventInput,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
 import { isTelegramCommandsAllowFromConfigured } from "./bot/helpers.js";
@@ -135,9 +135,9 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
   hasControlCommand?: boolean;
   modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
   includeDmAllowForGroupCommands?: boolean;
-  ownerContext?: Parameters<typeof resolveCommandAuthorization>[0]["ctx"];
+  ownerContext?: Parameters<typeof resolveCommandAuthorizationAsync>[0]["ctx"];
 }) {
-  const ownerAccess = resolveCommandAuthorization({
+  const ownerAccess = await resolveCommandAuthorizationAsync({
     cfg: params.cfg,
     ctx: params.ownerContext ?? {
       Provider: "telegram",
@@ -152,12 +152,11 @@ export async function resolveTelegramCommandIngressAuthorization(params: {
     ? ownerAccess.isAuthorizedSender
     : ownerAccess.senderIsOwner;
   if (commandsAllowFromConfigured || authorizedByConfig) {
-    const authorized = authorizedByConfig;
     const shouldBlockControlCommand =
-      params.allowTextCommands === true && params.hasControlCommand === true && !authorized;
+      params.allowTextCommands === true && params.hasControlCommand === true && !authorizedByConfig;
     return {
       requested: true,
-      authorized,
+      authorized: authorizedByConfig,
       authorizedByConfig,
       senderIsOwner: ownerAccess.senderIsOwner,
       assertOwnerCurrent: ownerAccess.assertOwnerCurrent,
@@ -209,10 +208,10 @@ export async function resolveTelegramNativeCommandAdmission(
       "accountId" | "cfg" | "dmPolicy" | "isGroup" | "chatId" | "senderId"
     >,
 ): Promise<boolean> {
-  if (resolveTelegramNativeCommandBody(params) === undefined) {
-    return false;
-  }
-  return (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig;
+  return (
+    resolveTelegramNativeCommandBody(params) !== undefined &&
+    (await resolveTelegramCommandIngressAuthorization(params)).authorizedByConfig
+  );
 }
 
 export async function resolveTelegramEventIngressAuthorization(params: {

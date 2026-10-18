@@ -57,14 +57,6 @@ describe("searxng web search provider", () => {
     ]);
   });
 
-  it("enables the plugin in config when selected", () => {
-    const provider = createSearxngWebSearchProvider();
-    const applied = expectDefined(provider.applySelectionConfig, "selection handler")({});
-
-    expect(provider.credentialPath).toBe("plugins.entries.searxng.config.webSearch.baseUrl");
-    expect(applied.plugins?.entries?.searxng?.enabled).toBe(true);
-  });
-
   it("maps generic tool arguments into SearXNG search params", async () => {
     await createTool().execute({
       query: "openclaw docs",

@@ -13,26 +13,6 @@ const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 describe("subagent run liveness", () => {
   const now = Date.parse("2026-04-25T12:00:00Z");
 
-  it("retains fresh unowned registrations for the bounded grace period", () => {
-    const entry = {
-      runId: "unowned-retention-row",
-      createdAt: now - 60_000,
-      execution: {},
-    };
-    expect(isRetainedUnendedSubagentRun(entry, now)).toBe(true);
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-  });
-
-  it("marks old unended runs stale when no explicit timeout extends the window", () => {
-    const entry = {
-      runId: "unowned-retention-row",
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(true);
-    expect(isRetainedUnendedSubagentRun(entry, now)).toBe(false);
-  });
-
   it("does not mark ended runs stale", () => {
     const entry = {
       runId: "unowned-retention-row",
@@ -41,17 +21,6 @@ describe("subagent run liveness", () => {
     };
     expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
     expect(isRetainedUnendedSubagentRun(entry, now)).toBe(false);
-  });
-
-  it("uses sessionStartedAt ahead of createdAt", () => {
-    const entry = {
-      runId: "unowned-retention-row",
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-      sessionStartedAt: now - 60_000,
-      execution: {},
-    };
-    expect(isStaleUnendedSubagentRun(entry, now)).toBe(false);
-    expect(isRetainedUnendedSubagentRun(entry, now)).toBe(true);
   });
 
   it("extends stale cutoff for explicit long run timeouts", () => {

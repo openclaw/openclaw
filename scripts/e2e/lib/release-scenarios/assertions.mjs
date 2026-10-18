@@ -10,6 +10,7 @@ import {
   assertOpenAiEnvAuthProfileStore,
   readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
@@ -19,12 +20,6 @@ import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-asser
 import { assertFileContainsText, fileContainsText, readJson } from "../release-assertion-files.mjs";
 
 const command = process.argv[2];
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
 
 function configPath() {
   return (
@@ -120,10 +115,6 @@ function sessionMemoryHookConfigProjection(cfg) {
 function assertSessionMemoryHookEnabled() {
   const cfg = readJson(configPath());
   if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
-    return;
-  }
-  if (process.env.OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE === "interactive") {
-    process.stdout.write("session-memory hook unavailable in selected interactive onboarding\n");
     return;
   }
   throw new Error(

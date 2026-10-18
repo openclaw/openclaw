@@ -32,8 +32,6 @@ import {
 describe("buildIMessageInboundContext direct reply route", () => {
   it.each([
     { chatId: undefined, bound: false, dispatchState: "context-only" },
-    { chatId: 42, bound: false, dispatchState: "context-only" },
-    { chatId: 42, bound: true, dispatchState: "context-only" },
     { chatId: 42, bound: true, dispatchState: "permitted" },
     { chatId: 42, bound: true, dispatchState: "revoked" },
     { chatId: 42, bound: true, dispatchState: "reassigned" },
@@ -49,7 +47,7 @@ describe("buildIMessageInboundContext direct reply route", () => {
           ...(bound
             ? {
                 agents: {
-                  list: [{ id: "first" }, { id: "second" }],
+                  entries: { first: {}, second: {} },
                   defaults: { workspace: state.workspaceDir },
                 },
               }

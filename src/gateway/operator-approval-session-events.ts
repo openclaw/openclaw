@@ -19,8 +19,8 @@ import {
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
-  expireDueOperatorApprovals,
   listPendingOperatorApprovals,
+  prepareOperatorApprovalReplay,
   type OperatorApprovalRecord,
 } from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
@@ -28,7 +28,6 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayClient, PreparedSessionApprovalReplay } from "./server-methods/types.js";
 
 const MAX_SESSION_APPROVAL_REPLAY = 1_000;
-type ApprovalSessionClient = GatewayClient & { invalidated?: boolean };
 type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release">;
 type ApprovalReplayScope = {
   sessionKey: string;
@@ -57,7 +56,7 @@ function resolveApprovalSourceStreamKeyForRecord(record: OperatorApprovalRecord)
 
 /** Project durable approval truth to exact, explicitly opted-in session audiences. */
 export function createOperatorApprovalSessionEventRuntime(params: {
-  clients: Iterable<ApprovalSessionClient>;
+  clients: Iterable<GatewayClient>;
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
@@ -72,12 +71,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const now = params.now ?? Date.now;
   const replayScopes = new Map<string, ApprovalReplayScope>();
-
-  const canAccessRecord = (client: GatewayClient | null, record: OperatorApprovalRecord): boolean =>
-    canAccessOperatorApproval({
-      client,
-      binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-    });
 
   const authorizedRecipients = (
     sessionKey: string,
@@ -94,7 +87,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         !client.invalidated &&
         connId &&
         subscribed.has(connId) &&
-        canAccessRecord(client, record)
+        canAccessOperatorApproval({ client, binding: record })
       ) {
         recipients.add(connId);
       }
@@ -182,29 +175,31 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   const prepareReplay = async (scope: ApprovalReplayScope): Promise<ApprovalReplaySnapshot> => {
     const { sessionKey, reviewerDeviceId } = scope;
     const snapshotAtMs = now();
-    const expired = await expireDueOperatorApprovals({
-      nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
-    });
-    // A replay read can be the first observer after a suspended timer. Emit
-    // the durable timeout tombstone before returning the authoritative set.
-    for (const record of expired.records) {
-      const reconciled = await params.reconcileTerminal?.(record);
-      if (reconciled !== true) {
-        publish({ phase: "terminal", record });
-      }
-    }
-    if (params.isCurrent?.() === false) {
-      throw new Error("Operator approval replay authority is no longer current");
-    }
-    const revision = scope.revision;
-    const records = await listPendingOperatorApprovals({
+    const input = {
       audienceSessionKey: sessionKey,
       reviewerDeviceId,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
       databaseOptions: params.databaseOptions,
-    });
+    };
+    const readRevision = scope.revision;
+    const prepared = await prepareOperatorApprovalReplay(input);
+    // A replay read can be the first observer after a suspended timer. Emit
+    // the durable timeout tombstone before returning the authoritative set.
+    if (prepared.outcome === "expired") {
+      for (const record of prepared.records) {
+        const reconciled = await params.reconcileTerminal?.(record);
+        if (reconciled !== true) {
+          publish({ phase: "terminal", record });
+        }
+      }
+    }
+    if (params.isCurrent?.() === false) {
+      throw new Error("Operator approval replay authority is no longer current");
+    }
+    const revision = prepared.outcome === "expired" ? scope.revision : readRevision;
+    const records =
+      prepared.outcome === "expired" ? await listPendingOperatorApprovals(input) : prepared.records;
     const isCurrent = () => revision === scope.revision;
     const approvals: PendingApprovalSnapshot[] = [];
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;

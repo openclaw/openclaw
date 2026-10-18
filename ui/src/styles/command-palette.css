@@ -358,8 +358,14 @@
   gap: 12px;
   padding: 8px 18px;
   border-top: 1px solid var(--border);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   color: var(--muted);
+}
+
+.cmd-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .cmd-palette__footer kbd {
@@ -371,7 +377,7 @@
   border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 12px; /* was 10px */
+  font-size: 12px;
   line-height: 1.4;
 }
 

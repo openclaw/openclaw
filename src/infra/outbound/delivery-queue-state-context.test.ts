@@ -9,7 +9,7 @@ import {
   withEnvAsync,
 } from "../../test-utils/env.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -235,10 +235,9 @@ describe("captured delivery queue state", () => {
     );
     await fs.mkdir(path.dirname(artifact), { recursive: true });
     await fs.writeFile(artifact, "synthetic audio");
-    const stage = createDeliveryQueueMediaRetention(
+    const stage = await createDeliveryQueueMediaRetention(
       [artifact],
       "outbound-media-stage",
-      undefined,
       undefined,
       context,
     );

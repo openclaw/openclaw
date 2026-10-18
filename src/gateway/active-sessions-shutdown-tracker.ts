@@ -1,5 +1,3 @@
-// Active session shutdown tracker.
-// Remembers sessions needing `session_end` hooks during gateway shutdown/restart.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 

@@ -1,4 +1,3 @@
-// Defines core dangerous config flag metadata for security audits.
 import { listAgentEntriesWithSource, type ListedAgentEntry } from "../agents/agent-scope-config.js";
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,10 +36,6 @@ type DangerousConfigFlagContractInputs = {
   collectPluginConfigContractMatches?: CollectPluginConfigContractMatches;
 };
 
-function formatDangerousConfigFlagValue(value: DangerousFlagValue): string {
-  return value === null ? "null" : String(value);
-}
-
 function getAgentDangerousFlagPathSegment(listed: ListedAgentEntry): string {
   if (listed.source.kind === "entries") {
     return `agents.entries.${listed.source.key}`;
@@ -63,7 +58,6 @@ function collectExactPluginConfigContractMatches({
 }
 
 /**
- * Return every enabled dangerous flag from core config plus plugin config contracts.
  * The returned strings are stable audit/report labels, not user-edited config paths.
  */
 export function collectEnabledInsecureOrDangerousFlagsFromContracts(
@@ -96,15 +90,13 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
     enabledFlags.push("tools.fs.workspaceOnly=false");
   }
   collectSandboxDockerDangerousFlags(
-    isRecord(cfg.agents?.defaults?.sandbox?.docker)
-      ? cfg.agents?.defaults?.sandbox?.docker
-      : undefined,
+    cfg.agents?.defaults?.sandbox?.docker,
     "agents.defaults.sandbox.docker",
   );
   for (const listed of listAgentEntriesWithSource(cfg)) {
     const agent = listed.entry;
     collectSandboxDockerDangerousFlags(
-      isRecord(agent?.sandbox?.docker) ? agent.sandbox.docker : undefined,
+      agent?.sandbox?.docker,
       `${getAgentDangerousFlagPathSegment(listed)}.sandbox.docker`,
     );
   }
@@ -135,9 +127,7 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
         if (!Object.is(match.value, flag.equals)) {
           continue;
         }
-        const rendered =
-          `plugins.entries.${pluginId}.config.${match.path}` +
-          `=${formatDangerousConfigFlagValue(flag.equals)}`;
+        const rendered = `plugins.entries.${pluginId}.config.${match.path}=${String(flag.equals)}`;
         if (seenFlags.has(rendered)) {
           continue;
         }

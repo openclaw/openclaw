@@ -1,7 +1,6 @@
 // OC Path tests cover edit emit roundtrip plugin behavior.
 import { describe, expect, it } from "vitest";
 import { setJsoncOcPath } from "../../jsonc/edit.js";
-import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { resolveJsoncOcPath } from "../../jsonc/resolve.js";
 import { parseOcPath } from "../../oc-path.js";
@@ -13,13 +12,11 @@ describe("edit-then-emit round-trip", () => {
       kind: "number",
       value: 99,
     });
-    if (r.ok) {
-      expect(JSON.parse(emitJsonc(r.ast))).toEqual({
-        a: 1,
-        b: { c: 99, d: 3 },
-        e: 4,
-      });
-    }
+    expect(JSON.parse(r.raw)).toEqual({
+      a: 1,
+      b: { c: 99, d: 3 },
+      e: 4,
+    });
   });
 
   it("jsonc edit composes: two sequential edits both land", () => {
@@ -28,17 +25,13 @@ describe("edit-then-emit round-trip", () => {
       kind: "number",
       value: 10,
     });
-    if (r.ok) {
-      ast = r.ast;
-    }
+    ast = r;
     r = setJsoncOcPath(ast, parseOcPath("oc://config/b"), {
       kind: "number",
       value: 20,
     });
-    if (r.ok) {
-      ast = r.ast;
-    }
-    expect(JSON.parse(emitJsonc(ast))).toEqual({ a: 10, b: 20 });
+    ast = r;
+    expect(JSON.parse(ast.raw)).toEqual({ a: 10, b: 20 });
   });
 
   it("jsonc parser-backed edit preserves comments", () => {
@@ -48,15 +41,13 @@ describe("edit-then-emit round-trip", () => {
       kind: "number",
       value: 2,
     });
-    if (r.ok) {
-      expect(emitJsonc(r.ast)).toContain("// comment");
-      const reparsed = resolveJsoncOcPath(r.ast, parseOcPath("oc://config/k"));
-      expect(reparsed?.kind).toBe("object-entry");
-      if (reparsed?.kind === "object-entry") {
-        expect(reparsed.node.value.kind).toBe("number");
-        if (reparsed.node.value.kind === "number") {
-          expect(reparsed.node.value.value).toBe(2);
-        }
+    expect(r.raw).toContain("// comment");
+    const reparsed = resolveJsoncOcPath(r, parseOcPath("oc://config/k"));
+    expect(reparsed?.kind).toBe("object-entry");
+    if (reparsed?.kind === "object-entry") {
+      expect(reparsed.node.value.kind).toBe("number");
+      if (reparsed.node.value.kind === "number") {
+        expect(reparsed.node.value.value).toBe(2);
       }
     }
   });

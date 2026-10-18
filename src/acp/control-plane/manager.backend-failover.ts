@@ -11,30 +11,22 @@ export type BackendAttempt = {
   sawOutput: boolean;
 };
 
-/** Ordered backend candidates plus display helper for diagnostics. */
-type BackendCandidatePlan = {
-  candidateBackends: string[];
-  describeBackendCandidate: (backend: string) => string;
-};
-
 /** Builds the deduped backend order from configured primary, resolved primary, and fallbacks. */
 export function resolveBackendCandidatePlan(params: {
   configuredPrimaryBackend?: string;
   resolvedPrimaryBackend?: string;
   fallbackBackends?: readonly unknown[];
-}): BackendCandidatePlan {
+}) {
   const configuredPrimaryBackend = normalizeText(params.configuredPrimaryBackend);
   const resolvedPrimaryBackend = normalizeText(params.resolvedPrimaryBackend);
-  const fallbackBackends = Array.isArray(params.fallbackBackends)
-    ? params.fallbackBackends
-        .map((backend) => normalizeText(backend))
-        .filter((backend): backend is string => backend != null)
-    : [];
+  const fallbackBackends = (params.fallbackBackends ?? [])
+    .map((backend) => normalizeText(backend))
+    .filter((backend): backend is string => backend != null);
   return {
     candidateBackends: Array.from(
       new Set([configuredPrimaryBackend ?? resolvedPrimaryBackend ?? "", ...fallbackBackends]),
     ),
-    describeBackendCandidate: (backend) =>
+    describeBackendCandidate: (backend: string) =>
       backend || resolvedPrimaryBackend || configuredPrimaryBackend || "<auto>",
   };
 }
@@ -51,12 +43,4 @@ export function isFailoverWorthyBackendError(attempt: BackendAttempt): boolean {
       attempt.error,
     )
   );
-}
-
-/** Returns whether another backend candidate remains after the current index. */
-export function shouldAttemptBackendFailover(params: {
-  backendIndex: number;
-  candidateBackends: readonly string[];
-}): boolean {
-  return params.backendIndex < params.candidateBackends.length - 1;
 }

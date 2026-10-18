@@ -19,11 +19,9 @@ export async function restartGatewayChannels(options: {
   restartChannelAccounts: ReadonlyMap<ChannelKind, Set<string>>;
   activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null;
   shouldSkipChannelRestart: boolean;
-  skipChannelRestartLogMessage: string;
   isLifecycleReloadAborted: () => boolean;
   getChannelAutostartSuppression: () => unknown;
   channelReloadTargets: () => Set<ChannelKind>;
-  logSuppressedChannelRestart: (channels: ReadonlySet<ChannelKind>, action: string) => void;
   scheduleRecoveryRestart: (surface: string, err?: unknown) => void;
 }): Promise<void> {
   const {
@@ -33,11 +31,9 @@ export async function restartGatewayChannels(options: {
     restartChannelAccounts,
     activePluginChannelsAfterReload,
     shouldSkipChannelRestart,
-    skipChannelRestartLogMessage,
     isLifecycleReloadAborted,
     getChannelAutostartSuppression,
     channelReloadTargets,
-    logSuppressedChannelRestart,
     scheduleRecoveryRestart,
   } = options;
   // Suppressed and normal reloads share fallback selection so stale account
@@ -87,7 +83,9 @@ export async function restartGatewayChannels(options: {
     return;
   }
   if (shouldSkipChannelRestart) {
-    params.logChannels.info(skipChannelRestartLogMessage);
+    params.logChannels.info(
+      "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+    );
     return;
   }
   const accountTargets = await collectChannelAccountTargets();
@@ -119,6 +117,7 @@ export async function restartGatewayChannels(options: {
       });
       if (canRestart()) {
         const outcomes = await params.startChannel(channel, accountId, {
+          reason: "config-reload",
           preserveManualStop: true,
           skipUnavailableAccounts: true,
         });
@@ -141,6 +140,11 @@ export async function restartGatewayChannels(options: {
     scheduleRecoveryRestart(`channel ${operation} (${failures.join(", ")})`);
   }
   if (suppressed) {
-    logSuppressedChannelRestart(channelReloadTargets(), "channel restart during hot reload");
+    const channels = channelReloadTargets();
+    if (getChannelAutostartSuppression()) {
+      params.logChannels.info(
+        `channel restart during hot reload suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
+      );
+    }
   }
 }

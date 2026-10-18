@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { listenLoopback, writeFixtureReply } from "./gateway-recovery.test-support.js";
 
 const MODEL_REF = "mock-openai/gpt-5.6-luna";
 const RESPONSE_MARKER = "ACTIVE_MEMORY_TRIGGER_STALL_PROOF_OK";
@@ -35,30 +36,12 @@ afterEach(async () => {
 });
 
 function writeTextResponse(response: ServerResponse, text: string): void {
-  const message = {
-    type: "message",
-    id: `trigger-stall-proof-${randomUUID()}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: `trigger-stall-proof-response-${randomUUID()}`,
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
+  writeFixtureReply(
+    response,
+    text,
+    `trigger-stall-proof-${randomUUID()}`,
+    `trigger-stall-proof-response-${randomUUID()}`,
+  );
 }
 
 function writeToolCallResponse(
@@ -178,16 +161,9 @@ async function startMockProvider() {
       response.end(error instanceof Error ? error.message : String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("mock provider did not bind a loopback port");
-  }
+  const baseUrl = await listenLoopback(server, "mock provider did not bind a loopback port");
   return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl,
     requests,
     stop: async () => {
       server.closeAllConnections();
@@ -353,17 +329,18 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
             recallRounds: modelRequests.filter((entry) => entry.kind !== "chat").length,
             contextInjected: modelRequests.some((entry) => entry.kind === "chat" && entry.injected),
           };
-          console.log(JSON.stringify(record));
           return record;
         };
 
         // Control turn: no lock, trigger lookup completes, grounded recall lands in the prompt.
         const control = await runTurn("control");
-        expect(control.terminalStatus).toBe("ok");
-        expect(control.preflightTimedOut).toBe(false);
+        expect(control).toMatchObject({
+          terminalStatus: "ok",
+          preflightTimedOut: false,
+          contextInjected: true,
+          replyGrounded: true,
+        });
         expect(control.recallRounds).toBeGreaterThanOrEqual(2);
-        expect(control.contextInjected).toBe(true);
-        expect(control.replyGrounded).toBe(true);
         await fs.access(lockPath);
 
         // Stalled turn: another process holds the index generation lock, so
@@ -382,28 +359,14 @@ describe.runIf(process.env.OPENCLAW_ACTIVE_MEMORY_TRIGGER_STALL_PROOF === "1")(
         } finally {
           releaseOnce();
         }
-        console.log(
-          JSON.stringify({
-            phase: "active-memory-trigger-stall-proof-complete",
-            control: {
-              recallRounds: control.recallRounds,
-              contextInjected: control.contextInjected,
-            },
-            stalled: {
-              preflightTimedOut: stalled.preflightTimedOut,
-              laneOneFailed: stalled.laneOneFailed,
-              recallRounds: stalled.recallRounds,
-              contextInjected: stalled.contextInjected,
-            },
-            marker: RESPONSE_MARKER,
-          }),
-        );
-        expect(stalled.terminalStatus).toBe("ok");
-        expect(stalled.preflightTimedOut).toBe(false);
-        expect(stalled.laneOneFailed).toBe(true);
+        expect(stalled).toMatchObject({
+          terminalStatus: "ok",
+          preflightTimedOut: false,
+          contextInjected: true,
+          replyGrounded: true,
+          laneOneFailed: true,
+        });
         expect(stalled.recallRounds).toBeGreaterThanOrEqual(2);
-        expect(stalled.contextInjected).toBe(true);
-        expect(stalled.replyGrounded).toBe(true);
       },
     );
   },

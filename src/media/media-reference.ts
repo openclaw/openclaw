@@ -1,4 +1,3 @@
-// Media reference helpers resolve media refs to file, URL, or inline payloads.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "@openclaw/fs-safe/advanced";
@@ -19,13 +18,10 @@ export {
 
 type InboundMediaReference = {
   id: string;
-  normalizedSource: string;
   physicalPath: string;
-  sourceType: "uri" | "path";
 };
 
 type MediaReferenceSourceInfo = {
-  hasScheme: boolean;
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
   isFileUrl: boolean;
@@ -54,7 +50,6 @@ export function classifyMediaReferenceSource(
     !isMediaStoreUrl &&
     !(allowDataUrl && isDataUrl);
   return {
-    hasScheme,
     hasUnsupportedScheme,
     isDataUrl,
     isFileUrl,
@@ -126,20 +121,6 @@ export function buildInboundMediaUriFromPath(source: string): string | undefined
   }
 }
 
-async function resolveInboundMediaUri(
-  normalizedSource: string,
-): Promise<InboundMediaReference | null> {
-  const uri = parseInboundMediaUri(normalizedSource);
-  if (!uri) {
-    return null;
-  }
-  return {
-    ...uri,
-    physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
-    sourceType: "uri",
-  };
-}
-
 /** Rewrites inbound media-store URIs to sandbox-relative paths for staged agent inputs. */
 export function resolveMediaReferenceSandboxPath(
   source: string,
@@ -165,9 +146,12 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const uriSource = await resolveInboundMediaUri(normalizedSource);
-  if (uriSource) {
-    return uriSource;
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (uri) {
+    return {
+      id: uri.id,
+      physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
+    };
   }
 
   const localPath = maybeLocalPathFromSource(normalizedSource);
@@ -192,9 +176,7 @@ export async function resolveInboundMediaReference(
 
   return {
     id: rel,
-    normalizedSource,
     physicalPath: await resolveInboundMediaPath(rel, normalizedSource),
-    sourceType: "path",
   };
 }
 

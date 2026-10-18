@@ -81,7 +81,11 @@ describe("Code Mode matrix paired admission", () => {
     const result = await runCodeModeModelMatrix(
       matrixOptions(root, { schedulePath: schedule, repetitions: 2, concurrency: 2, ...limit }),
       {
-        readGitSha: async () => "synthetic-source",
+        readSourceIdentity: async () => ({
+          gitSha: "synthetic-source",
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }),
         readBuildSha256: async () => "synthetic-build",
         buildCliArtifacts: async () => {},
         runCell: async ({ cell }) => {
@@ -122,7 +126,11 @@ describe("Code Mode matrix paired admission", () => {
           concurrency,
         }),
         {
-          readGitSha: async () => "synthetic-source",
+          readSourceIdentity: async () => ({
+            gitSha: "synthetic-source",
+            sourceDirty: false,
+            sourcePatchSha256: null,
+          }),
           readBuildSha256: async () => "synthetic-build",
           buildCliArtifacts: async () => {},
           runCell: async ({ cell }) => {
@@ -155,7 +163,11 @@ describe("Code Mode model matrix runtime and output admission", () => {
     });
     await expect(
       runCodeModeModelMatrix(options, {
-        readGitSha: async () => "synthetic-source",
+        readSourceIdentity: async () => ({
+          gitSha: "synthetic-source",
+          sourceDirty: false,
+          sourcePatchSha256: null,
+        }),
         readBuildSha256: async () =>
           createHash("sha256")
             .update(await fs.readFile(artifact))

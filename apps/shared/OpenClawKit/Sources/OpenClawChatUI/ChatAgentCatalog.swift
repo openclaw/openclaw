@@ -7,13 +7,24 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     public let id: String
     public let name: String?
     public let emoji: String?
+    public let avatar: String?
     public let workspaceGit: Bool?
+    public let workspace: String?
 
-    public init(id: String, name: String? = nil, emoji: String? = nil, workspaceGit: Bool? = nil) {
+    public init(
+        id: String,
+        name: String? = nil,
+        emoji: String? = nil,
+        avatar: String? = nil,
+        workspaceGit: Bool? = nil,
+        workspace: String? = nil)
+    {
         self.id = id
         self.name = Self.normalizedName(name)
         self.emoji = Self.textAvatar(emoji)
+        self.avatar = Self.imageAvatar(avatar)
         self.workspaceGit = workspaceGit
+        self.workspace = workspace
     }
 
     public var displayName: String {
@@ -25,11 +36,9 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     }
 
     static func normalizedName(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        guard let value = ChatPayloadDecoding.trimmedNonEmptyString(value) else { return nil }
         // Match normalizeAssistantIdentity's UTF-16 bound without splitting a surrogate pair.
-        var units = Array(value.utf16.prefix(50))
-        if let last = units.last, (0xD800...0xDBFF).contains(last) { units.removeLast() }
-        return String(decoding: units, as: UTF16.self)
+        return ChatReplyQuote.truncateUTF16Safe(value, limit: 50)
     }
 
     static func textAvatar(_ value: String?) -> String? {
@@ -43,13 +52,24 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
         return value
     }
 
+    static func imageAvatar(_ value: String?) -> String? {
+        guard let value = ChatPayloadDecoding.trimmedNonEmptyString(value),
+              value.utf16.count <= OpenClawSidebarAgentAvatarSource.maximumCharacters,
+              value.lowercased().hasPrefix("data:image/") || (value.hasPrefix("/") && !value.hasPrefix("//"))
+        else { return nil }
+        return value
+    }
+
     func resolving(_ identity: AgentIdentityResult?) -> Self {
         guard let identity, identity.agentid == self.id else { return self }
         return Self(
             id: self.id,
             name: self.name ?? identity.name,
             emoji: self.emoji ?? Self.textAvatar(identity.emoji) ?? Self.textAvatar(identity.avatar),
-            workspaceGit: self.workspaceGit)
+            // ui/src/lib/avatar.ts:17: the resolved identity image precedes the roster image.
+            avatar: Self.imageAvatar(identity.avatar) ?? self.avatar,
+            workspaceGit: self.workspaceGit,
+            workspace: self.workspace)
     }
 }
 

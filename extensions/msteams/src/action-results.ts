@@ -1,11 +1,10 @@
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+
 export function jsonActionResult(
   data: Record<string, unknown>,
   details: Record<string, unknown> = data,
 ) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data) }],
-    details,
-  };
+  return textResult(JSON.stringify(data), details);
 }
 
 export function jsonMSTeamsActionResult(action: string, data: Record<string, unknown> = {}) {
@@ -30,7 +29,6 @@ export function jsonMSTeamsConversationResult(conversationId: string | undefined
 export function actionError(message: string) {
   return {
     isError: true as const,
-    content: [{ type: "text" as const, text: message }],
-    details: { error: message },
+    ...textResult(message, { error: message }),
   };
 }

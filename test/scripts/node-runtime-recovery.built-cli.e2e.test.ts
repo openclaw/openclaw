@@ -41,7 +41,7 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
        fs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, stdio: options.stdio, marker: options.env.OPENCLAW_NODE_UPDATE_RESPAWNED }));
        const child = new EventEmitter();
        child.kill = () => true;
-       setImmediate(() => child.emit("exit", 23, null));
+       setImmediate(() => { child.emit("exit", 23, null); child.emit("close", 23, null); });
        return child;
      };
      syncBuiltinESMExports();`,
@@ -121,7 +121,7 @@ it.each([
          startupMarker: options.env.OPENCLAW_NODE_OPTIONS_READY };
        const child = new EventEmitter();
        child.kill = () => true;
-       setImmediate(() => child.emit("exit", 23, null));
+       setImmediate(() => { child.emit("exit", 23, null); child.emit("close", 23, null); });
        return child;
      };
      process.on("exit", () => fs.writeFileSync(${JSON.stringify(report)}, JSON.stringify({

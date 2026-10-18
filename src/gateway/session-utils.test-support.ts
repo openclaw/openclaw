@@ -80,7 +80,7 @@ export function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig
   return {
     session: { mainKey: "main" },
     agents: {
-      list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
+      entries: { main: { workspace, identity: { avatar: "avatar-link.png" } } },
     },
   } as OpenClawConfig;
 }

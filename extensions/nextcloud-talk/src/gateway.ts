@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements gateway behavior.
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   createAccountStatusSink,
@@ -23,10 +22,7 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
 
     ctx.log?.info(`[${account.accountId}] starting Nextcloud Talk Gateway webhook route`);
 
-    const statusSink = createAccountStatusSink({
-      accountId: ctx.accountId,
-      setStatus: ctx.setStatus,
-    });
+    const statusSink = createAccountStatusSink(ctx);
 
     await runPassiveAccountLifecycle({
       abortSignal: ctx.abortSignal,

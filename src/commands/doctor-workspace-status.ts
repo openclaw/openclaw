@@ -1,10 +1,5 @@
-/** Doctor status summary for workspace skills and plugins. */
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -48,6 +43,12 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
   }
   seen.add(key);
   return true;
+}
+
+function pluginTargetResolutionError(entry: PluginVersionDriftReport["drifts"][number]): string {
+  return entry.targetResolution?.status === "unresolved"
+    ? entry.targetResolution.error
+    : "npm registry target was not resolved";
 }
 
 function pluginVersionReadinessToHealthFindings(
@@ -99,10 +100,7 @@ function pluginVersionReadinessToHealthFindings(
     }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
-    const targetError =
-      targetResolution?.status === "unresolved"
-        ? targetResolution.error
-        : "npm registry target was not resolved";
+    const targetError = pluginTargetResolutionError(entry);
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
@@ -128,20 +126,9 @@ function isGatewayRestartPending(
   );
 }
 
-function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message,
-    path: "plugins",
-    requirement: "plugin-compatibility",
-    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
-  };
-}
-
 function pluginDiagnosticToHealthFinding(
   diagnostic: WorkspacePluginDiagnostic,
-  message = diagnostic.message,
+  message: string,
 ): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
@@ -210,7 +197,6 @@ function visitWorkspacePluginStatus(
       inspect();
     }
   }
-  return scopes;
 }
 
 export function collectWorkspaceStatusHealthFindings(
@@ -221,9 +207,15 @@ export function collectWorkspaceStatusHealthFindings(
   visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
     const prefix = agentLabel ? `${agentLabel} ` : "";
     workspaceFindings.push(
-      ...compatibilityWarnings.map((message) =>
-        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
-      ),
+      ...compatibilityWarnings.map((message): HealthFinding => ({
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning",
+        message: `${prefix}${message}`,
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        fixHint:
+          "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+      })),
       ...diagnostics.map((diagnostic) =>
         pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
       ),
@@ -269,17 +261,14 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   const repairs = drift.drifts.map((entry) => ({
     entry,
     command: resolvePluginVersionDriftUpdateCommand(entry),
+    registryLag: resolvePluginVersionDriftRegistryLag(entry),
   }));
   const updateCommands = repairs
     .map(({ command }) => command)
     .filter((command): command is string => Boolean(command))
     .map((command) => formatCliCommand(command));
-  const registryLagRepairs = repairs.filter(({ entry }) =>
-    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
-  );
-  const unresolvedRepairs = repairs.filter(
-    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-  );
+  const registryLagRepairs = repairs.filter(({ registryLag }) => registryLag);
+  const unresolvedRepairs = repairs.filter(({ command, registryLag }) => !command && !registryLag);
   const lines = [
     ...(readiness.runningGatewayVersion
       ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
@@ -295,18 +284,14 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
           : drift.gatewayVersion;
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
     }),
-    ...registryLagRepairs.map(({ entry }) => {
-      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
-      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
-    }),
-    ...unresolvedRepairs.map(({ entry }) => {
-      const targetResolution = entry.targetResolution;
-      const detail =
-        targetResolution?.status === "unresolved"
-          ? targetResolution.error
-          : "npm registry target was not resolved";
-      return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
-    }),
+    ...registryLagRepairs.map(
+      ({ entry, registryLag }) =>
+        `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`,
+    ),
+    ...unresolvedRepairs.map(
+      ({ entry }) =>
+        `Repair target resolution failed for ${entry.pluginId}: ${pluginTargetResolutionError(entry)}. No install command generated.`,
+    ),
     singleDrift && updateCommands.length === 1
       ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
       : updateCommands.length > 0
@@ -325,10 +310,8 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   );
 }
 
-/** Emits plugin recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const scopes = visitWorkspacePluginStatus(
+  visitWorkspacePluginStatus(
     cfg,
     options,
     ({ agentLabel, registry, compatibilityWarnings, diagnostics }) => {
@@ -364,10 +347,4 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     },
   );
   notePluginVersionReadiness(options.pluginVersionReadiness);
-
-  return {
-    workspaceDir:
-      scopes.find((scope) => scope.agentId === defaultAgentId)?.workspaceDir ??
-      scopes[0]?.workspaceDir,
-  };
 }

@@ -19,8 +19,7 @@ export function encodeSlackQuestionAction(action: SlackQuestionAction): string |
   ) {
     return undefined;
   }
-  const value = `${SLACK_QUESTION_VALUE_PREFIX}${action.questionId}:${action.optionIndex}`;
-  return value.length <= SLACK_BUTTON_VALUE_MAX ? value : undefined;
+  return `${SLACK_QUESTION_VALUE_PREFIX}${action.questionId}:${action.optionIndex}`;
 }
 
 export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction | null {

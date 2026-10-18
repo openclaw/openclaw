@@ -1,23 +1,28 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { BootRecord } from "../../app/boot-record.ts";
 import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
+import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
-import { subscribeAgentSelection, type SessionAgentSelection } from "./session-agent-selection.ts";
+import { captureBootRoster } from "./session-boot-roster.ts";
+import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import type { SessionCapability, SessionGateway, SessionState } from "./session-capability.ts";
 import { createSessionDeletions } from "./session-deletions.ts";
 import { createSessionEventSubscriptionOwner } from "./session-event-subscription.ts";
 import { createSessionGitHubPublication } from "./session-github-publication.ts";
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
+import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import { createSessionMutations } from "./session-mutations.ts";
 import { optimisticSessionRowFields } from "./session-pending-rows.ts";
 import { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import { createSessionReconciliation } from "./session-reconciliation.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
-import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
-import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
@@ -59,8 +64,9 @@ export type {
 
 export function createSessionCapability(
   gateway: SessionGateway,
-  agentSelection: SessionAgentSelection,
-  cacheOptions: SessionRosterCacheOptions & {
+  agentSelection: SelectedAgentSource,
+  cacheOptions: {
+    bootRecord?: BootRecord | null;
     connectionBootstrap?: ConnectionBootstrapCoordinator;
   } = {},
 ): SessionCapability {
@@ -87,19 +93,22 @@ export function createSessionCapability(
     }
     presentation = { result: null, agentId: null };
   };
-  const cacheLifecycle = createSessionRosterCacheLifecycle(gateway, agentSelection, cacheOptions, {
+  const cacheLifecycle = createSessionBootSnapshot(gateway, agentSelection, cacheOptions, {
     readState: () => state,
     publish: (next) => {
       // Cache admission and retirement already own credential/profile boundaries.
       roster.retireWarmLists();
       retirePresentation();
       if (next.resultCached) {
-        presentation = { result: next.result, agentId: next.agentId, resultCached: true };
+        presentation = {
+          result: next.result,
+          agentId: next.agentId,
+          resultCached: true,
+          profileId: presentationProfileId,
+        };
       }
       publish(next);
     },
-    connected: () => connection.capture() !== null,
-    query: () => roster.lastOptions(),
   });
 
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
@@ -123,6 +132,7 @@ export function createSessionCapability(
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   const thinkingClaims = createSessionThinkingClaims(gateway, () => roster.requestRevision);
+  let publicationRevision = 0;
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
@@ -131,6 +141,7 @@ export function createSessionCapability(
   let publishedErrorSource: "session-observer" | "operation" | null = null;
 
   const notifySubscribers = () => {
+    publicationRevision += 1;
     for (const listener of listeners) {
       listener(state);
     }
@@ -149,13 +160,13 @@ export function createSessionCapability(
         result: next.result,
         agentId: next.agentId,
         resultCached: next.resultCached,
+        profileId: presentationProfileId,
       };
       if (!next.resultCached) {
         reconnectListRevision = null;
       }
     }
     githubPublication.observeRows(next.result?.sessions ?? [], next.agentId);
-    cacheLifecycle.persist(next);
     notifySubscribers();
   };
 
@@ -181,10 +192,7 @@ export function createSessionCapability(
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.observations.inherit(annotated, projected);
-    const decorated = deletions.apply(
-      mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
-      owner,
-    );
+    const decorated = deletions.apply(mutations.applyRows(annotated, owner.scope.agentId), owner);
     roster.observations.inherit(decorated, result);
     return decorated;
   };
@@ -200,12 +208,16 @@ export function createSessionCapability(
       sessionEventSubscriptionError = error;
       if (error !== null) {
         roster.retireWarmLists();
+        roster.observations.descriptions.clear();
       }
       const observerOwnsVisibleError = publishedErrorSource === "session-observer";
       if (error !== null && (state.error === null || observerOwnsVisibleError)) {
         publish({ ...state, error }, "session-observer");
       } else if (error === null && observerOwnsVisibleError) {
         publish({ ...state, error: null });
+      } else if (previousError !== error) {
+        // Query and operation errors must not hide observer transitions from other views.
+        notifySubscribers();
       }
       if (previousError !== null && error === null) {
         // Observer outages do not replay events; every held query must close the gap.
@@ -242,27 +254,24 @@ export function createSessionCapability(
         revision,
         agentId,
       );
-      const sources = roster.observations.observeReadRows(
-        admitted?.sessions ?? [],
-        revision,
-        agentId,
-      );
+      roster.observations.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observeArchiveRead(row);
+      }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.observations.projectRows(projected.sessions);
-      sessions.forEach((row, index) => {
-        const source = sources[index];
-        if (source) {
-          mutations.observePendingFields(
-            source.row,
-            source.select(row, optimisticSessionRowFields),
-            agentId,
-          );
-        }
-      });
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observePendingFields(
+          row,
+          row.rowMode
+            ? optimisticSessionRowFields.filter((field) => Object.hasOwn(row, field))
+            : optimisticSessionRowFields,
+          agentId,
+        );
+      }
       return projected;
     },
     onCanonicalList(result, requestRevision, agentId, observed) {
@@ -296,6 +305,7 @@ export function createSessionCapability(
     // A local mutation can complete without an event or successful refresh.
     // Retire inactive windows before exposing its publication to selection.
     roster.retireWarmLists();
+    roster.observations.descriptions.clear();
     publish(next, errorSource);
   };
 
@@ -381,7 +391,6 @@ export function createSessionCapability(
     createSessionReconciliation({
       readState: () => state,
       publish,
-      canonicalListRevision: () => canonicalListRevision,
       connection,
       snapshot: () => gateway.snapshot,
       permissions,
@@ -450,6 +459,7 @@ export function createSessionCapability(
         deletions.clear();
       }
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
+      const hadSubscriptionError = sessionEventSubscriptionError !== null;
       thinkingClaims.reset();
       permissions.clear();
       roster.reset();
@@ -462,7 +472,7 @@ export function createSessionCapability(
       pullRequestSummaries.clear();
       pullRequestEpochs.clear();
       // Client replacement needs a publish; disconnect publishes cleared state below.
-      if (hadPullRequestSummaries && connected && next.client) {
+      if ((hadPullRequestSummaries || hadSubscriptionError) && connected && next.client) {
         publish({ ...state });
       }
     }
@@ -475,6 +485,7 @@ export function createSessionCapability(
         agentId: state.resultCached ? state.agentId : null,
         loading: false,
         error: null,
+        startupPending: false,
         deletedSessions: [],
       });
       return;
@@ -514,7 +525,7 @@ export function createSessionCapability(
     }
   });
 
-  const stopSelection = subscribeAgentSelection(agentSelection, (nextAgentId, foreground) => {
+  const stopSelection = watchSelectedAgent(agentSelection, (nextAgentId, foreground) => {
     retirePresentation();
     notifySubscribers();
     // Selection publishes before Gateway hydration. A new connection bootstraps
@@ -525,6 +536,13 @@ export function createSessionCapability(
   });
 
   const stopEvents = gateway.subscribeEvents((event) => {
+    if (event.event === CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
+      githubPublication.observePullRequests(event.payload);
+      return;
+    }
+    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+      roster.observations.descriptions.clear();
+    }
     if (event.event === "config.changed") {
       // Config can change configured-agent membership even with no chat pane mounted.
       roster.scheduleEvent();
@@ -533,6 +551,7 @@ export function createSessionCapability(
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
+    roster.observations.descriptions.invalidateEvent(event.payload);
     const payload = event.payload as {
       agentId?: unknown;
       reason?: unknown;
@@ -560,7 +579,6 @@ export function createSessionCapability(
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
-    let primaryPublished = false;
     if (
       claimChanged ||
       swarmChanged ||
@@ -573,10 +591,9 @@ export function createSessionCapability(
       const result = decorateRows(reconciled.result);
       if (claimChanged || result !== state.result) {
         publishReconciledState({ ...state, result });
-        primaryPublished = true;
       }
     }
-    notifyManaged?.(primaryPublished);
+    notifyManaged?.();
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
@@ -598,13 +615,20 @@ export function createSessionCapability(
       primarySnapshotApplied,
       affectsPrimary: eventObservation.affectsPrimary,
       affectedLists: eventObservation.lists,
+      immediate: event.event === "sessions.changed" && eventReason === "create",
     });
     notifyEvent?.(event);
   });
 
   return {
+    get revision() {
+      return publicationRevision;
+    },
     get state() {
       return state;
+    },
+    get eventSubscriptionError() {
+      return sessionEventSubscriptionError;
     },
     get presentation() {
       return presentation.result
@@ -615,9 +639,19 @@ export function createSessionCapability(
       return canonicalListRevision;
     },
     githubPublication,
+    get cachedRoutingDefaults() {
+      return cacheLifecycle.routingDefaults;
+    },
     whenCachedRosterSettled: () => cacheLifecycle.settled,
+    captureBootRoster: () =>
+      connection.capture() &&
+      reconnectListRevision === null &&
+      isPrimarySessionListQuery(roster.lastOptions())
+        ? captureBootRoster(state)
+        : null,
     captureConnectionScope: connection.capture,
     isConnectionScopeCurrent: connection.isCurrent,
+    describe: roster.observations.descriptions.describe,
     list: roster.list,
     observeList: roster.observeList,
     listSnapshot: roster.listSnapshot,
@@ -625,9 +659,7 @@ export function createSessionCapability(
       if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
-      const notify = () => listener(roster.listSnapshot(scope));
-      listeners.add(notify);
-      return () => listeners.delete(notify);
+      return registerListener(listeners, () => listener(roster.listSnapshot(scope)));
     },
     refreshList: roster.refreshList,
     reconcile,
@@ -635,6 +667,9 @@ export function createSessionCapability(
     observeRow,
     inheritRow: roster.observations.inheritRow,
     projectRows: roster.observations.projectRows,
+    // Answer/finishing progress can precede the final stream tail. Only the
+    // shared run owner settles roster activity, including passive sessions.
+    isRunVisuallyActive: isSessionRunActive,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -662,21 +697,14 @@ export function createSessionCapability(
     deletionState: deletions.deletionState,
     reset: mutations.reset,
     groupsLoad: groups.load,
-    groupsGeneration: groups.generation,
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,
     groupsRename: groups.rename,
     groupsUpdate: groups.update,
     groupsDelete: groups.delete,
-    subscribeCreated(listener) {
-      createdListeners.add(listener);
-      return () => createdListeners.delete(listener);
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribeCreated: (listener) => registerListener(createdListeners, listener),
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       retirePresentation();
       cacheLifecycle.dispose();

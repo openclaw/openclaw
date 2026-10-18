@@ -46,6 +46,11 @@ describe("Control UI GitHub credential", () => {
     expect(githubApiToken(env, {})).toBe("ambient-gh");
     expect(
       githubApiToken(env, {
+        gateway: { github: { host: "ghe.example.test" } },
+      }),
+    ).toBeUndefined();
+    expect(
+      githubApiToken(env, {
         gateway: { controlUi: { github: { token: "preview-service-token" } } },
         tools: {
           github: {
@@ -94,5 +99,26 @@ describe("Control UI GitHub credential", () => {
     );
     expect(hasConfiguredGitHubApiCredential({}, config)).toBe(true);
     expect(githubApiToken({ GH_TOKEN: "ambient" }, {})).toBe("ambient");
+  });
+
+  it("requires the structured service credential to name the selected Enterprise host", () => {
+    const gateway = { github: { host: "ghe.example.test" } };
+    expect(() =>
+      githubApiToken(
+        { GH_TOKEN: "public-token" },
+        { gateway: { ...gateway, controlUi: { github: { token: "public-service-token" } } } },
+      ),
+    ).toThrow(SecretSurfaceUnavailableError);
+    expect(
+      githubApiToken(
+        { GH_TOKEN: "public-token" },
+        {
+          gateway: {
+            ...gateway,
+            controlUi: { github: { host: "ghe.example.test", token: "enterprise-token" } },
+          },
+        },
+      ),
+    ).toBe("enterprise-token");
   });
 });

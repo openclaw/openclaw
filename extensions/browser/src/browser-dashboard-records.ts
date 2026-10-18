@@ -1,5 +1,6 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { BrowserDashboardDefinition } from "./browser-dashboard.types.js";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import { closeBrowserDashboardTabs } from "./browser/session-tab-registry.js";
 import {
   deleteBrowserSessionTabIf,
@@ -8,7 +9,6 @@ import {
   sameBrowserSessionTabRecord,
   updateBrowserSessionTab,
   withoutBrowserSessionTabCleanup,
-  type BrowserSessionTabAuthority,
   type BrowserSessionTabRecord,
 } from "./browser/session-tab-store.js";
 
@@ -107,11 +107,29 @@ export async function releaseTab(
   authority: BrowserSessionTabAuthority,
   params: Parameters<typeof closeBrowserDashboardTabs>[1] = {},
 ): Promise<{ released: boolean; closed: number }> {
+  if (
+    (params.prepareCurrent && !(await params.prepareCurrent())) ||
+    params.isCurrent?.() === false
+  ) {
+    return { released: false, closed: 0 };
+  }
+  const releaseAuthority = {
+    ...authority,
+    ...(params.sessionEntryCurrent ? { sessionEntryCurrent: params.sessionEntryCurrent } : {}),
+    assertCurrent: () => {
+      authority.assertCurrent?.();
+      if (params.isCurrent?.() === false) {
+        throw new Error("Browser dashboard cleanup caller changed");
+      }
+    },
+  };
   if (tab.dashboard?.state === "stopped") {
-    return { released: await deleteStoppedTab(tab, authority), closed: 0 };
+    return { released: await deleteStoppedTab(tab, releaseAuthority), closed: 0 };
   }
   const released =
-    tab.dashboard?.state === "released" ? tab : await changeTabState(tab, "released", authority);
+    tab.dashboard?.state === "released"
+      ? tab
+      : await changeTabState(tab, "released", releaseAuthority);
   const closed = released
     ? await closeBrowserDashboardTabs([released], { ...params, authority })
     : 0;

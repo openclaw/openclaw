@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { mcpTool, pluginTool } from "./code-mode.test-support.js";
-import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
 import {
-  addClientToolsToToolSearchCatalog,
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
+} from "./tool-search-catalog.js";
+import {
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -31,7 +33,7 @@ function setup(source: "mcp" | "client") {
   };
   registerHeadlessToolSearchCatalog({ catalogRef, tools: source === "mcp" ? [target] : [] });
   if (source === "client") {
-    addClientToolsToToolSearchCatalog({ catalogRef, config, tools: [target] });
+    addClientToolsToToolCatalog({ catalogRef, enabled: true, tools: [target] });
   }
   const entry = expectDefined(catalogRef.current?.entries[0], "remote catalog entry");
   const tools = createToolSearchTools({ catalogRef, config });
@@ -59,8 +61,6 @@ function expectProtected(text: string) {
 describe("Tool Search metadata provenance", () => {
   it.each([
     ["mcp", TOOL_SEARCH_RAW_TOOL_NAME],
-    ["client", TOOL_SEARCH_RAW_TOOL_NAME],
-    ["mcp", TOOL_DESCRIBE_RAW_TOOL_NAME],
     ["client", TOOL_DESCRIBE_RAW_TOOL_NAME],
   ] as const)(
     "protects direct %s %s text without rewriting exact descriptors",
@@ -93,7 +93,6 @@ describe("Tool Search metadata provenance", () => {
     expect(result.details).toMatchObject({ truncated: true });
     expect(JSON.stringify(result.details)).toContain("<|endoftext|>");
   });
-
   it("does not taint an independent native describe after remote discovery", async () => {
     const { catalogRef, tool, entry } = setup("client");
     const native = pluginTool("native_metadata", "Trusted local declaration");

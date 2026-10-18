@@ -7,11 +7,36 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { forgetMemoryEntries } from "../memory-forget.js";
 import * as cpuRuntime from "./manager-cpu-worker-runtime.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
 const execFileAsync = promisify(execFile);
+
+it("sees published replacements through reused search and curated readers", async () => {
+  const filename = path.join(fixture.paths.workspace, "MEMORY.md");
+  await fs.writeFile(filename, "- Remember violetcompass. <!-- trigger: compass -->");
+  const manager = await fixture.getFreshManager(
+    fixture.createConfig({ provider: "none", sources: ["memory"], vectorEnabled: false }),
+    "cli",
+  );
+  await manager.sync({ reason: "before-reader-reuse", force: true });
+  expect((await manager.search("violetcompass", { lexicalOnly: true }))[0]?.snippet).toContain(
+    "violetcompass",
+  );
+  expect((await manager.listTriggerCandidates())[0]?.snippet).toContain("violetcompass");
+
+  await fs.writeFile(filename, "- Remember ambercompass. <!-- trigger: compass -->");
+  await manager.sync({ reason: "replace-after-reader-reuse", force: true });
+  await expect(manager.search("violetcompass", { lexicalOnly: true })).resolves.toEqual([]);
+  expect((await manager.search("ambercompass", { lexicalOnly: true }))[0]?.snippet).toContain(
+    "ambercompass",
+  );
+  expect((await manager.listTriggerCandidates())[0]?.snippet).toContain("ambercompass");
+});
 
 it("cancels post-probe metadata reads and releases the generation for publication", async () => {
   await fixture.seedSessionTranscript({
@@ -104,6 +129,102 @@ it("discards a worker hit forgotten before authoritative metadata enrichment", a
   }
 });
 
+it.for(["completed", "cancelled"] as const)(
+  "settles a %s fused search before close and a queued forget",
+  async (outcome, { signal }) => {
+    const sessionId = "fused-search-custody";
+    const sessionPath = `sessions/main/${sessionId}.jsonl`;
+    await fixture.seedSessionTranscript({
+      sessionId,
+      sessionKey: `agent:main:chat:${sessionId}`,
+      messages: [{ role: "user", timestamp: Date.now(), content: "Private violetcustody." }],
+    });
+    const cfg = fixture.createConfig({
+      provider: "none",
+      sources: ["sessions"],
+      sessionMemory: true,
+      vectorEnabled: false,
+    });
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "before-fused-search", force: true });
+    const ready = createDeferred<void>();
+    const release = createDeferred<void>();
+    const caller = new AbortController();
+    const cancellation = new Error("cancel fused search during result delivery");
+    const run = cpuRuntime.runMemoryKeywordSearch;
+    const query = vi
+      .spyOn(cpuRuntime, "runMemoryKeywordSearch")
+      .mockImplementationOnce(async (...args) => {
+        const result = await run(...args);
+        expect(result.body.rows.some((row) => row.path === sessionPath)).toBe(true);
+        expect(result.recallData?.sourceMtimes.sessions.has(sessionPath)).toBe(true);
+        expect(result.body.rows.every((row) => result.recallData?.rows.has(row.id))).toBe(true);
+        ready.resolve();
+        await release.promise;
+        return result;
+      });
+    const abort = () => release.resolve();
+    signal.addEventListener("abort", abort, { once: true });
+    const search = manager.search("violetcustody", {
+      lexicalOnly: true,
+      sources: ["sessions"],
+      signal: AbortSignal.any([signal, caller.signal]),
+    });
+    void search.catch(() => undefined);
+    let forgetting: ReturnType<typeof forgetMemoryEntries> | undefined;
+    let closing: Promise<void> | undefined;
+    let forgetSettled = false;
+    try {
+      await Promise.race([
+        ready.promise,
+        search.then(() => {
+          throw new Error("Search settled before its fused result was gated");
+        }),
+      ]);
+      forgetting = forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] }).then(
+        (report) => {
+          forgetSettled = true;
+          return report;
+        },
+      );
+      void forgetting.catch(() => undefined);
+      closing = manager.close();
+      void closing.catch(() => undefined);
+      await expect(manager.search("violetcustody")).rejects.toThrow("manager is closed");
+      expect(forgetSettled).toBe(false);
+      if (outcome === "cancelled") {
+        caller.abort(cancellation);
+      }
+      release.resolve();
+      if (outcome === "cancelled") {
+        await expect(search).rejects.toBe(cancellation);
+      } else {
+        expect((await search).map((result) => result.path)).toEqual([sessionPath]);
+      }
+      await Promise.all([forgetting, closing]);
+      query.mockRestore();
+
+      const reopened = await fixture.getFreshManager(cfg, "cli");
+      await reopened.sync({ reason: "after-fused-forget", force: true });
+      await expect(
+        reopened.search("violetcustody", { lexicalOnly: true, sources: ["sessions"] }),
+      ).resolves.toEqual([]);
+      const db = Reflect.get(reopened, "db") as DatabaseSync;
+      expect(
+        db.prepare("SELECT id FROM memory_index_chunks WHERE path = ?").get(sessionPath),
+      ).toBeUndefined();
+      expect(
+        db.prepare("SELECT session_id FROM session_windows WHERE session_id = ?").get(sessionId),
+      ).toEqual({ session_id: sessionId });
+    } finally {
+      signal.removeEventListener("abort", abort);
+      release.resolve();
+      await Promise.allSettled([search, forgetting, closing]);
+      query.mockRestore();
+    }
+  },
+);
+
 async function tryIndependentWriter(databasePath: string): Promise<string> {
   const result = await execFileAsync(process.execPath, [
     "--input-type=module",
@@ -134,7 +255,7 @@ it("keeps the owner's SQLite writer lock across worker reads and reader close", 
   if (!databasePath) {
     throw new Error("Expected a persistent memory database");
   }
-  const db = Reflect.get(manager, "db") as DatabaseSync;
+  const db = memoryIndexFixtureWriter(manager);
   db.exec("BEGIN IMMEDIATE");
   try {
     expect(await tryIndependentWriter(databasePath)).toBe("busy");

@@ -2,12 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   autoMigrateLegacyPluginDoctorState,
+  runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
 import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
@@ -32,7 +35,16 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
         // The lease owner validates again after the callback returns. Model a lost
         // lease at that boundary, after migrations have already committed.
         if (controls.failSettlement) {
-          throw new Error("lease settlement failed");
+          throw createOpenClawStateLeaseLostError(
+            {
+              scope: "core:agent-database-maintenance",
+              key: "global",
+              leaseLabel: "agent database maintenance lease",
+            },
+            new Error(
+              "state lease heartbeat exited: lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
+            ),
+          );
         }
         return result;
       })) satisfies typeof actual.withPluginLifecycleLease,
@@ -51,7 +63,84 @@ afterEach(async () => {
 });
 
 describe("plugin Doctor migrations", () => {
-  it("requires explicit Doctor to repair shared schema before plugin migrations", async () => {
+  it.each([
+    { engine: "postgres", familyEngine: undefined, skipped: true },
+    { engine: "postgres", familyEngine: "sqlite", skipped: false },
+    { engine: "sqlite", familyEngine: "postgres", skipped: true },
+    { engine: "sqlite", familyEngine: undefined, skipped: false },
+  ] as const)(
+    "uses the effective family for legacy imports and replay: $engine / $familyEngine",
+    async ({ engine, familyEngine, skipped }) => {
+      const stateDir = await tempDirs.make("openclaw-doctor-sqlite-only-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const config: OpenClawConfig = {
+        database: {
+          engine,
+          ...(familyEngine ? { families: { state: { engine: familyEngine } } } : {}),
+        },
+      };
+      let imported = false;
+      const detectLegacyState = vi.fn(() => (imported ? null : { preview: ["legacy"] }));
+      const migrateLegacyState = vi.fn(() => {
+        imported = true;
+        return { changes: ["imported"], warnings: [] };
+      });
+      const undeclaredDetector = vi.fn(() => null);
+      controls.entries = [
+        {
+          pluginId: "legacy-owner",
+          channelIds: [],
+          migration: {
+            id: "legacy-import",
+            label: "Legacy import",
+            sqliteOnly: { family: "state", postgresNote: "Preserve the source." },
+            detectLegacyState,
+            migrateLegacyState,
+          },
+        },
+        {
+          pluginId: "unrestricted-owner",
+          channelIds: [],
+          migration: {
+            id: "ordinary-repair",
+            label: "Ordinary repair",
+            detectLegacyState: undeclaredDetector,
+            migrateLegacyState: () => ({ changes: [], warnings: [] }),
+          },
+        },
+      ];
+      const params = {
+        detected: { stateDir, oauthDir: stateDir, doctorOnlyStateMigrations: true },
+        config,
+        env,
+        plannedActions: controls.entries.map(({ pluginId, migration }) => ({
+          pluginId,
+          id: migration.id,
+        })),
+      };
+      const first = await runPluginDoctorStateMigrationPlans(params);
+      const replay = await runPluginDoctorStateMigrationPlans(params);
+
+      expect(first.warnings).toEqual([]);
+      expect(replay.warnings).toEqual([]);
+      expect(first.changes).toEqual(skipped ? [] : ["imported"]);
+      expect(replay.changes).toEqual([]);
+      expect(detectLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 2);
+      expect(migrateLegacyState).toHaveBeenCalledTimes(skipped ? 0 : 1);
+      expect(undeclaredDetector).toHaveBeenCalledTimes(2);
+      expect(first.notices).toEqual(
+        skipped
+          ? [
+              "Legacy import: legacy SQLite migration not applicable on PostgreSQL; legacy data is migrated before port. Preserve the source.",
+            ]
+          : undefined,
+      );
+      expect(replay.notices).toEqual(first.notices);
+      expect(replay.completedPluginIds).toEqual(["legacy-owner", "unrestricted-owner"]);
+    },
+  );
+
+  it("refuses pre-July shared schema before plugin migrations", async () => {
     const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
     const stateDir = path.join(root, ".openclaw");
     const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
@@ -92,7 +181,7 @@ describe("plugin Doctor migrations", () => {
 
     await expect(
       autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
-    ).rejects.toThrow("agent-databases-composite-primary-key");
+    ).rejects.toThrow("unsupported agent database registry schema");
     expect(migrateLegacyState).not.toHaveBeenCalled();
     const preserved = new DatabaseSync(stateDbPath, { readOnly: true });
     try {
@@ -116,12 +205,11 @@ describe("plugin Doctor migrations", () => {
       doctorOnlyStateMigrations: true,
     });
 
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes).toContain(
-      "Migrated shared state agent database registry primary key → agent_id,path",
-    );
-    expect(result.changes).toContain("plugin state migrated");
-    expect(migrateLegacyState).toHaveBeenCalledOnce();
+    expect(result.warnings).toEqual([
+      expect.stringContaining("unsupported agent database registry schema"),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(migrateLegacyState).not.toHaveBeenCalled();
   });
   it.each([
     {
@@ -237,6 +325,8 @@ describe("plugin Doctor migrations", () => {
           pluginId,
           id: migration.id,
         })),
+        // Replay certification needs a consumer; model the session owner's settlement hook.
+        beforeCompletion: async () => {},
       };
 
       const first = await runPostSessionPluginDoctorStateRepairs(params);
@@ -262,7 +352,7 @@ describe("plugin Doctor migrations", () => {
               ? "refusal"
               : failure === "detector"
                 ? "second detector failed"
-                : "lease settlement failed",
+                : "lease expired or ownership lost (exitCode=0, acquiredAt=1800000000000, lastRenewedAt=1800000020000)",
         );
       }
 
@@ -275,4 +365,50 @@ describe("plugin Doctor migrations", () => {
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
     },
   );
+
+  it("runs default-phase detectors only when completion certification has a consumer", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-certification-");
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_STATE_DIR: root,
+    };
+    const detected: string[] = [];
+    controls.entries = (["default", "after-session-repair"] as const).map((phase) => ({
+      pluginId: "owner",
+      channelIds: [],
+      trustedForDurableStores: false,
+      migration: {
+        id: `${phase}-action`,
+        label: `${phase} action`,
+        ...(phase === "after-session-repair" ? { phase } : {}),
+        detectLegacyState: () => {
+          detected.push(phase);
+          return null;
+        },
+        migrateLegacyState: () => ({ changes: [], warnings: [] }),
+      },
+    }));
+    const params = { config: {}, env, maintenanceAuthority: { assertCurrent() {} } };
+
+    // Nothing deferred and no retained sources: the fresh-install shape.
+    const uncertified = await runPostSessionPluginDoctorStateRepairs(params);
+
+    expect(detected).toEqual(["after-session-repair"]);
+    expect(uncertified).toEqual({
+      changes: [],
+      completedPluginIds: undefined,
+      requiredPluginIds: ["owner"],
+      warnings: [],
+    });
+
+    const certified = await runPostSessionPluginDoctorStateRepairs({
+      ...params,
+      beforeCompletion: async () => {},
+    });
+
+    expect(detected).toEqual(["after-session-repair", "after-session-repair", "default"]);
+    expect(certified.completedPluginIds).toEqual(["owner"]);
+  });
 });

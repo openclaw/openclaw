@@ -26,10 +26,15 @@ export function replayConfigDraftEdits(
       const nextPath = [...path, key];
       if (!Object.hasOwn(after, key)) {
         removePathValue(draft, nextPath);
-      } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
-        replay(before[key], after[key], canonical[key], nextPath);
+      } else if (
+        (isRecord(before[key]) || !Object.hasOwn(before, key)) &&
+        isRecord(after[key]) &&
+        isRecord(canonical[key])
+      ) {
+        // Separate fields can be added under the same previously absent object.
+        replay(isRecord(before[key]) ? before[key] : {}, after[key], canonical[key], nextPath);
       } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, structuredClone(after[key]));
+        setPathValue(draft, nextPath, after[key]);
       }
     }
   };
@@ -70,23 +75,12 @@ export function configContentConflicts(
   original: Record<string, unknown>,
   current: Record<string, unknown>,
   canonical: Record<string, unknown>,
+  mode: "content" | "form" = "content",
 ): boolean {
   const before = projectConfigContent(original, canonical);
   const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft)
-  );
-}
-
-export function configFormContentConflicts(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean {
-  const before = projectConfigContent(original, canonical);
-  const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
-    stableStringify(replayConfigDraftEdits(before, canonical, draft))
-  );
+  return mode === "form"
+    ? stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
+        stableStringify(replayConfigDraftEdits(before, canonical, draft))
+    : stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft);
 }

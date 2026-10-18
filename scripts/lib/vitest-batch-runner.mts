@@ -3,9 +3,14 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { signalExitCode } from "./managed-child-process.mts";
 import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  vitestInfrastructureExitCode,
+} from "./vitest-outcome.mts";
 import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
@@ -70,7 +75,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   // Artifact verification can outlive the child's signal handlers.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  let outcome: VitestReportOutcome;
+  let outcome: VitestReportOutcome = { code: VITEST_INFRASTRUCTURE_EXIT_CODE, signal: null };
   try {
     // Match project runs: native workers borrow this invocation's prepared source,
     // rather than compiling the application independently inside every worker.
@@ -79,7 +84,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       ...testCommand,
       options: {
         cwd: repoRoot,
-        env,
+        env: testCommand.envOverrides ? { ...env, ...testCommand.envOverrides } : env,
         stdio: workers ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
       },
     });
@@ -91,13 +96,22 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     try {
       const { code, signal } = await (workers ? workers.borrow(child, completion) : completion);
       interrupted ??= cleanup.getForwardedSignal() ?? signal ?? undefined;
-      outcome = { code: code ?? 1, signal: interrupted ?? null };
+      outcome = {
+        code: interrupted ? signalExitCode(interrupted) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE),
+        signal: interrupted ?? null,
+      };
     } finally {
       cleanup.teardown();
     }
+  } catch (error) {
+    console.error(error);
+    outcome.code = vitestInfrastructureExitCode(outcome.code);
   } finally {
     try {
-      await workers?.dispose();
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
+        console.error(error);
+        outcome.code = vitestInfrastructureExitCode(outcome.code);
+      });
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);

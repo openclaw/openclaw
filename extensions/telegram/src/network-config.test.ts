@@ -1,5 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("node:dns", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns")>()),
+  getDefaultResultOrder: () => "verbatim",
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   isWSL2Sync: vi.fn(() => false),
@@ -62,29 +67,28 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
         },
       },
       {
-        name: "uses Node 22 default when not on WSL2",
+        name: "uses the supported runtime default when not on WSL2",
         wsl2: false,
         env: {},
-        expected: { value: true, source: "default-node22" },
+        expected: { value: true, source: "default-dns-order" },
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
       const decision = resolveTelegramAutoSelectFamilyDecision({
         env,
         network,
-        nodeMajor: 22,
       });
       expect(decision).toEqual(expected);
     });
 
     it("memoizes WSL2 detection across repeated defaults", () => {
       vi.mocked(isWSL2Sync).mockReturnValue(true);
-      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
+      expect(resolveTelegramAutoSelectFamilyDecision({ env: {} })).toEqual({
         value: false,
         source: "default-wsl2",
       });
       vi.mocked(isWSL2Sync).mockReturnValue(false);
-      expect(resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 })).toEqual({
+      expect(resolveTelegramAutoSelectFamilyDecision({ env: {} })).toEqual({
         value: false,
         source: "default-wsl2",
       });

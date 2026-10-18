@@ -226,8 +226,8 @@ struct ChatSourcePreviewProjector {
     private static func result(callID: String?, name: String?, details: AnyCodable?, text: String?) -> Result {
         let payload: [String: AnyCodable]? = if let details {
             details.dictionaryValue
-        } else if let text, text.utf16.count <= 100_000, let data = text.data(using: .utf8) {
-            (try? JSONDecoder().decode(AnyCodable.self, from: data))?.dictionaryValue
+        } else if let text, text.utf16.count <= 100_000 {
+            (try? JSONDecoder().decode(AnyCodable.self, from: Data(text.utf8)))?.dictionaryValue
         } else {
             nil
         }

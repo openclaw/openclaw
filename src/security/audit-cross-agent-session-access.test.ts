@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectCrossAgentSessionAccessFindings } from "./audit-extra.summary.js";
 import { collectSecurityAuditFindings } from "./audit.test-support.js";
 
@@ -50,7 +51,12 @@ describe("security audit cross-agent session access", () => {
 
   it.each([
     { name: "default entries roster", cfg: { agents } },
-    { name: "list roster", cfg: { agents: { list: [{ id: "home" }, { id: "work" }] } } },
+    {
+      name: "migrated list roster",
+      cfg: createCanonicalAgentConfigFixture({
+        agents: { list: [{ id: "home" }, { id: "work" }] },
+      }).config,
+    },
     {
       name: "explicit all visibility and empty allow list",
       cfg: {

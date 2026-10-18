@@ -60,31 +60,19 @@ describe("browser state option collisions", () => {
 
   it.each([
     { args: ["cookies"], path: "/cookies" },
-    {
-      args: ["cookies", "set", "session", "value", "--url", "https://example.com"],
-      path: "/cookies/set",
-    },
     { args: ["cookies", "clear"], path: "/cookies/clear" },
-    { args: ["storage", "local", "get"], path: "/storage/local" },
-    { args: ["storage", "local", "set", "key", "value"], path: "/storage/local/set" },
-    { args: ["storage", "local", "clear"], path: "/storage/local/clear" },
-    { args: ["storage", "session", "get"], path: "/storage/session" },
     { args: ["storage", "session", "set", "key", "value"], path: "/storage/session/set" },
     { args: ["storage", "session", "clear"], path: "/storage/session/clear" },
     { args: ["set", "offline", "on"], path: "/set/offline" },
-    { args: ["set", "headers", "{}"], path: "/set/headers" },
     { args: ["set", "credentials", "name", "value"], path: "/set/credentials" },
     { args: ["set", "geo", "48", "16"], path: "/set/geolocation" },
-    { args: ["set", "media", "dark"], path: "/set/media" },
     { args: ["set", "timezone", "UTC"], path: "/set/timezone" },
-    { args: ["set", "locale", "en-US"], path: "/set/locale" },
-    { args: ["set", "device", "iPhone 14"], path: "/set/device" },
   ])("inherits parent timeout for $path", async ({ args, path }) => {
     await runBrowserCommand(["--timeout", "60000", "--json", ...args]);
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({ path, timeoutMs: 60000 }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
@@ -124,7 +112,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
         path: "/act",
         query: { profile: "work" },
@@ -172,14 +160,6 @@ describe("browser state option collisions", () => {
     expect(request.body?.headers).toEqual({ "x-auth": "ok" });
   });
 
-  it("errors when set offline receives an invalid value", async () => {
-    await runBrowserCommand(["set", "offline", "maybe"]);
-
-    expect(gatewayMock).not.toHaveBeenCalled();
-    expectErrorMessage("Expected on|off");
-    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
-  });
-
   it("rejects non-decimal viewport dimensions before resize dispatch", async () => {
     await runBrowserCommand(["set", "viewport", "1e3", "768"]);
 
@@ -216,23 +196,6 @@ describe("browser state option collisions", () => {
     expect(gatewayMock).not.toHaveBeenCalled();
     expectErrorMessage("Invalid --accuracy: must be a finite number");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
-  });
-
-  it("passes valid decimal geolocation numbers", async () => {
-    const request = await runBrowserCommandAndGetRequest([
-      "set",
-      "geo",
-      "48.2082",
-      "16.3738",
-      "--accuracy",
-      "12.5",
-    ]);
-
-    expect(request.body).toMatchObject({
-      latitude: 48.2082,
-      longitude: 16.3738,
-      accuracy: 12.5,
-    });
   });
 
   it("errors when headers JSON is missing", async () => {

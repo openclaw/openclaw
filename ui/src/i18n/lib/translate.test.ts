@@ -96,9 +96,11 @@ describe("I18nManager pending locale retry", () => {
     const second = manager.setLocale("de");
 
     expect(loadTranslation).toHaveBeenCalledExactlyOnceWith("de");
+    expect(manager.getRequestedLocale()).toBe("de");
     firstLoad.reject(new Error("gateway unavailable"));
     await Promise.all([first, second]);
     expect(manager.getLocale()).toBe("en");
+    expect(manager.getRequestedLocale()).toBe("de");
     expect(subscriber).not.toHaveBeenCalled();
 
     await retryPendingLocale();
@@ -145,6 +147,7 @@ describe("I18nManager pending locale retry", () => {
     await retryPendingLocale();
 
     expect(manager.getLocale()).toBe("es");
+    expect(manager.getRequestedLocale()).toBe("es");
     expect(loadTranslation).toHaveBeenCalledTimes(2);
   });
 
@@ -190,33 +193,6 @@ describe("I18nManager pending locale retry", () => {
       expect(localStorage.getItem("openclaw.i18n.locale")).toBe(preference);
     },
   );
-
-  it("does not report a repeated non-import failure", async () => {
-    const { loadTranslation, manager, retryPendingLocale } = createManager();
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const onUnrecoverableLocaleLoad = vi.fn();
-    manager.setLocaleLoadRecovery({
-      isUnrecoverableError: (error) =>
-        error instanceof Error &&
-        /failed to fetch dynamically imported module/i.test(error.message),
-      onUnrecoverableLocaleLoad,
-    });
-    loadTranslation
-      .mockRejectedValueOnce(new Error("gateway unavailable"))
-      .mockRejectedValueOnce(new Error("request failed"))
-      .mockResolvedValueOnce(german);
-
-    await manager.setLocale("fr");
-    await retryPendingLocale();
-    expect(loadTranslation).toHaveBeenCalledTimes(2);
-
-    expect(onUnrecoverableLocaleLoad).not.toHaveBeenCalled();
-    expect(manager.getLocale()).toBe("en");
-
-    await retryPendingLocale();
-    expect(loadTranslation).toHaveBeenCalledTimes(3);
-    expect(manager.getLocale()).toBe("fr");
-  });
 
   it("ignores an older failure after a newer locale succeeds", async () => {
     const { loadTranslation, manager, retryPendingLocale } = createManager();

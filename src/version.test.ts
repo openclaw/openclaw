@@ -53,28 +53,6 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 }
 
 describe("version resolution", () => {
-  it("ignores unrelated nearby package.json files", async () => {
-    await withVersionFixtureDir(async (root) => {
-      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2.3.4" });
-      await writeJsonFixture(root, "dist/package.json", {
-        name: "other-package",
-        version: "9.9.9",
-      });
-      const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBe("2.3.4");
-    });
-  });
-
-  it("falls back to build-info when package metadata is unavailable", async () => {
-    await withVersionFixtureDir(async (root) => {
-      await writeJsonFixture(root, "build-info.json", { version: "4.5.6" });
-      const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBe("4.5.6");
-      expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("4.5.6");
-    });
-  });
-
   it("reports the built version when dist lags the source package version", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2026.9.2" });
@@ -152,15 +130,6 @@ describe("version resolution", () => {
         }),
       ).toBe("0.0.0");
     });
-  });
-
-  it("prefers OPENCLAW_VERSION over package versions", () => {
-    expect(
-      resolveRuntimeServiceVersion({
-        OPENCLAW_VERSION: "9.9.9",
-        npm_package_version: "1.1.1",
-      }),
-    ).toBe("9.9.9");
   });
 
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {

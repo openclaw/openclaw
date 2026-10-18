@@ -1,5 +1,11 @@
 /** Public security runtime helpers for plugin-side trust boundaries. */
 
+import {
+  replaceFileAtomic as replaceFsSafeFileAtomic,
+  type ReplaceFileAtomicFileSystem,
+  type ReplaceFileAtomicOptions,
+} from "@openclaw/fs-safe/atomic";
+
 export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
@@ -63,7 +69,19 @@ export {
 } from "../infra/fs-safe.js";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export { privateFileStoreSync } from "../infra/private-file-store.js";
-export { movePathWithCopyFallback, replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+export { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
+
+// Keep the shipped, ignored adapter member source-compatible without wrapping the operation.
+export const replaceFileAtomic: (
+  options: ReplaceFileAtomicOptions & {
+    fileSystem?: {
+      promises: ReplaceFileAtomicFileSystem["promises"] & {
+        /** @deprecated Omit this member; permissions use the retained FileHandle. */
+        chmod?: typeof import("node:fs/promises").chmod;
+      };
+    };
+  },
+) => ReturnType<typeof replaceFsSafeFileAtomic> = replaceFsSafeFileAtomic;
 
 export { ensurePortAvailable } from "../infra/ports.js";
 

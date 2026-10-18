@@ -3,6 +3,30 @@ import Testing
 @testable import OpenClaw
 
 struct OpenClawLoggingTests {
+    @MainActor
+    @Test func `existing loggers follow changes to the app verbosity preference`() async {
+        await TestIsolation.withUserDefaultsValues([
+            appLogLevelKey: Logger.Level.info.rawValue,
+            debugFileLogEnabledKey: false,
+        ]) {
+            let logger = Logger(subsystem: "ai.openclaw", category: "logging-test")
+            var renderedMessages = 0
+            func message() -> Logger.Message {
+                renderedMessages += 1
+                return "synthetic debug message"
+            }
+
+            logger.debug(message())
+            #expect(renderedMessages == 0)
+            AppLogSettings.setLogLevel(.debug)
+            logger.debug(message())
+            #expect(renderedMessages == 1)
+            AppLogSettings.setLogLevel(.error)
+            logger.debug(message())
+            #expect(renderedMessages == 1)
+        }
+    }
+
     @Test(arguments: ["synthetic-private-payload", "first line\nsecond line", ""])
     func `private values are removed before sink delivery`(privateValue: String) {
         let publicValue = "synthetic-public-value"

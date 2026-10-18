@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSandboxConfigForAgent } from "./sandbox/config.js";
-import { formatSandboxToolPolicyBlockedMessage } from "./sandbox/runtime-status.js";
+import {
+  formatSandboxToolPolicyBlockedMessage,
+  resolvePreparedSandboxRuntimeStatus,
+} from "./sandbox/runtime-status.js";
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
@@ -27,13 +30,12 @@ describe("sandbox explain helpers", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: { sandbox: { tools: { allow: ["write"] } } },
           },
-        ],
+        },
       },
       tools: { sandbox: { tools: { allow: ["read"], deny: ["browser"] } } },
     };
@@ -55,15 +57,14 @@ describe("sandbox explain helpers", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               sandbox: { tools: { allow: ["group:memory", "group:fs"] } },
             },
           },
-        ],
+        },
       },
     };
 
@@ -123,6 +124,11 @@ describe("sandbox explain helpers", () => {
     const msg = formatSandboxToolPolicyBlockedMessage({
       cfg,
       sessionKey: "agent:main:mobilechat:group:g1",
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:mobilechat:group:g1",
+        preparedSessionEntry: null,
+      }),
       toolName: "browser",
       audit: true,
     });
@@ -163,6 +169,11 @@ describe("sandbox explain helpers", () => {
     const msg = formatSandboxToolPolicyBlockedMessage({
       cfg,
       sessionKey: "agent:main:mobilechat:group:g1",
+      preparedRuntimeStatus: resolvePreparedSandboxRuntimeStatus({
+        cfg,
+        sessionKey: "agent:main:mobilechat:group:g1",
+        preparedSessionEntry: null,
+      }),
       toolName: "browser",
     });
 

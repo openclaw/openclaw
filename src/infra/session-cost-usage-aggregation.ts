@@ -1,38 +1,30 @@
-import { resolveAgentDir } from "../agents/agent-scope-config.js";
+import type { SessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
 import { publishSessionCostUsageUpdated } from "./session-cost-usage-events.js";
 import { prepareUsageCostWorker, runUsageCostWorker } from "./session-cost-usage-worker-runtime.js";
-
-export function resolveUsageCostCacheDatabasePath(agentId: string): string {
-  return resolveOpenClawAgentSqlitePath({ agentId: normalizeAgentId(agentId) });
-}
-
-export function resolveUsageCostAgentDir(
-  config: OpenClawConfig | undefined,
-  agentId: string,
-): string {
-  return resolveAgentDir(config ?? {}, agentId);
-}
+import type { UsageCostPendingFile } from "./session-cost-usage-worker.types.js";
 
 export async function refreshCostUsageCacheForAgent(params: {
   config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentId: string;
   agentDir?: string;
   databasePath?: string;
   maxFiles?: number;
+  onRemaining?: (files: UsageCostPendingFile[]) => void;
   sessionsDir?: string;
   storePath?: string;
   sessionFiles?: string[];
   startMs?: number;
   rebuildRows?: SessionCostUsageRollupRow[];
+  sessionActor?: SessionActorStorageBinding;
 }): Promise<"refreshed" | "busy"> {
+  const prepared = prepareUsageCostWorker(params);
   const agentId = normalizeAgentId(params.agentId);
   try {
-    const prepared = prepareUsageCostWorker(params);
     const result = await runUsageCostWorker(prepared, {
       kind: "refresh",
       maxFiles: params.maxFiles,
@@ -49,6 +41,9 @@ export async function refreshCostUsageCacheForAgent(params: {
     }
     if (result.changed) {
       publishSessionCostUsageUpdated(agentId);
+    }
+    if (result.remainingFiles?.length) {
+      params.onRemaining?.(result.remainingFiles);
     }
     return "refreshed";
   } catch (error) {

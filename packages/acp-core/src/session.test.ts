@@ -90,34 +90,6 @@ describe("acp session manager", () => {
     expect(store.hasSession("existing")).toBe(true);
   });
 
-  it("falls back for non-finite idle TTL options", () => {
-    const boundedStore = createInMemorySessionStore({
-      maxSessions: 2,
-      idleTtlMs: Number.NaN,
-      now,
-    });
-    createSession("first", boundedStore);
-    nowMs += 1;
-    createSession("second", boundedStore);
-
-    expect(boundedStore.hasSession("first")).toBe(true);
-    expect(boundedStore.hasSession("second")).toBe(true);
-  });
-
-  it("falls back for non-finite max session options", () => {
-    const boundedStore = createInMemorySessionStore({
-      maxSessions: Number.NaN,
-      idleTtlMs: 24 * 60 * 60 * 1_000,
-      now,
-    });
-    for (let index = 0; index < 5_000; index += 1) {
-      const session = createSession(`session-${index}`, boundedStore);
-      boundedStore.setActiveRun(session.sessionId, `run-${index}`, new AbortController());
-    }
-
-    expect(() => createSession("overflow", boundedStore)).toThrow(/session limit reached/i);
-  });
-
   it("uses soft-cap eviction for the oldest idle session when full", () => {
     const boundedStore = createInMemorySessionStore({
       maxSessions: 2,

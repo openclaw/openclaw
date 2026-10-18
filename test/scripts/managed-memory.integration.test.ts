@@ -13,8 +13,9 @@ it.runIf(available)(
   "contains aggregate native allocations and joins the whole cgroup after OOM",
   async ({ signal }) => {
     let memoryScope = "";
+    // Keep the buffers reachable until the kernel ends the workload.
     const allocate =
-      "const a=[];for(let i=0;i<16;i++)a.push(Buffer.alloc(8*1024**2,1));setInterval(()=>{},1000)";
+      "const a=globalThis.allocations=[];for(let i=0;i<16;i++)a.push(Buffer.alloc(8*1024**2,1));setInterval(()=>{},1000)";
     const code = await runManagedCommand({
       bin: process.execPath,
       args: [
@@ -35,7 +36,9 @@ it.runIf(available)(
       requireProcessTreeExit: true,
       signal,
     });
-    expect(code).toBe(137);
+    // systemd can deliver SIGTERM after an OOM before the kernel's group SIGKILL.
+    // A nonbinding limit still times out; cancellation also rejects above.
+    expect([signalExitCode("SIGKILL"), signalExitCode("SIGTERM")]).toContain(code);
     const state = spawnSync("systemctl", ["--user", "show", "--property=LoadState", memoryScope], {
       encoding: "utf8",
       timeout: 5_000,

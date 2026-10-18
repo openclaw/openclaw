@@ -6,17 +6,16 @@ import {
   type SessionMetadataChange,
   type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { canonicalizeSessionEntry } from "./session-manager-persistence.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 
 export class SessionManagerMetadata extends SessionManagerEntries {
   private async appendMetadataEntry(change: SessionMetadataChange): Promise<string> {
     const publication = captureSessionMetadataPublication(this, change);
-    return await withSessionManagerWrite(this, async (admission) => {
+    return await withSessionManagerAppend(this, async (admission) => {
       this.assertTranscriptViewAvailable();
       const entry = {
         ...change,
@@ -24,14 +23,14 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         parentId: this.appendParentId,
         timestamp: new Date().toISOString(),
       };
-      if (!admission || isIncognitoSessionKey(this.persistenceTarget?.sessionKey)) {
-        // Volatile storage keeps its one native owner until its complete actor cutover.
+      if (!admission) {
         const appended = this.appendEntry(entry);
         return this.publishMetadataCommit(
           { entry: appended.entry, version: this.transcriptVersion, target: publication.target },
           publication.publish,
         );
       }
+      const assertNavigation = this.captureTranscriptNavigationAssertion();
       const canonical = canonicalizeSessionEntry(entry);
       const appendIntent =
         !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined;
@@ -39,7 +38,16 @@ export class SessionManagerMetadata extends SessionManagerEntries {
         ? resolveSessionTranscriptReadFence(this.persistenceTarget)?.entryId
         : undefined;
       const committedTarget = publication.target;
-      const committed = await this.persistWorkerRecord(canonical, appendIntent, admission);
+      const committed = await this.persistWorkerRecord(
+        canonical,
+        appendIntent,
+        admission,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        assertNavigation,
+      );
       const { result, committedVersion, viewFailure } = committed;
       const commit: SessionMetadataCommit = {
         entry: {
@@ -67,7 +75,8 @@ export class SessionManagerMetadata extends SessionManagerEntries {
               )
             : rebound;
         }
-        this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
+        assertNavigation();
+        await this.adoptWorkerCommittedEntry(canonical, committed, admittedUserId);
       } catch (cause) {
         failure = { cause };
       }

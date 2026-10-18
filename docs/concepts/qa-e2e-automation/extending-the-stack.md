@@ -40,7 +40,7 @@ source of truth for one test run and should define:
 The reusable runtime surface that backs `flow` stays generic and
 cross-cutting. For example, YAML scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through
-the Gateway `browser.request` seam without adding a special-case runner.
+the Gateway `browser.request` interface without adding a special-case runner.
 
 Scenario files should be grouped by product capability rather than source
 tree folder. Keep scenario IDs stable when files move; use `docsRefs` and
@@ -58,12 +58,37 @@ The baseline list should stay broad enough to cover:
 - repo-reading and docs-reading
 - one small build task such as Lobster Invaders
 
+### Native tool discovery proof
+
+A flow can declare a model-specific configured runtime route:
+
+```yaml
+execution:
+  kind: flow
+  liveConfiguredRuntime:
+    id: codex
+    model: openai/gpt-5.5
+```
+
+This route applies only in `live-frontier` when both `--model` and `--alt-model`
+select the declared model. The launcher prepares singleton and partitioned runs
+through the same runtime route. Other selections keep their general model route;
+explicit forced runtimes and runtime-pair cells retain their own preparation.
+The metadata does not override either model choice or product tool loading.
+
+The native discovery lane selects `openai/gpt-5.5` for both model slots. Its
+Codex catalog supports native tool search without a `code_mode_only` override.
+Provider identity alone does not establish that capability. Shared searchable
+fixtures require linked `tool_search` receipts only in Codex execution cells;
+direct OpenClaw cells still prove tool calls and results. `sessions_spawn`
+remains the always-direct control and does not require discovery receipts.
+
 ## Provider mock lanes
 
 `qa suite` has two local provider mock lanes:
 
 - `mock-openai` is the scenario-aware OpenClaw mock. It remains the default
-  deterministic mock lane for repo-backed QA and parity gates.
+  fixed-response mock lane for repo-backed QA and parity gates.
 - `aimock` starts an AIMock-backed provider server for experimental
   protocol, fixture, record/replay, and chaos coverage. It is additive and
   does not replace the `mock-openai` scenario dispatcher.
@@ -85,7 +110,7 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
+`qa-lab` owns a generic transport interface for YAML QA scenarios. `qa-channel` is
 the synthetic default. `crabline` starts separate local provider servers and
 runs OpenClaw's normal channel plugins against their provider-shaped REST and
 streaming boundaries; it does not use Crabline's fixture-level local mock
@@ -162,7 +187,7 @@ Runner plugins own the transport contract:
 The minimum adoption bar for a new channel:
 
 1. Keep `qa-lab` as the owner of the shared `qa` root.
-2. Implement the transport runner on the shared `qa-lab` host seam.
+2. Implement the transport runner on the shared `qa-lab` host interface.
 3. Keep transport-specific mechanics inside the runner plugin or channel
    harness.
 4. Mount the runner as `openclaw qa <runner>` instead of registering a
@@ -213,5 +238,5 @@ Preferred generic helpers for new scenarios:
 Compatibility aliases remain available for existing scenarios -
 `waitForQaChannelReady`, `waitForNoOutbound`, `formatConversationTranscript`,
 and `resetBus` - but new scenario authoring should use the generic names.
-Use the canonical `waitForOutboundMessage` for outbound checks instead of
+Use the shared `waitForOutboundMessage` for outbound checks instead of
 adding transport- or channel-specific outbound wait aliases.

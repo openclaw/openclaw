@@ -17,6 +17,7 @@ import {
   projectModelProviderConfig,
   resolveMergedModelProviderConfig,
 } from "../../../config/model-provider-config.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -316,17 +317,21 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
   };
 }
 
-/** Apply the same retirement decision to config selectors and cron payload selectors. */
-export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+function createRetiredModelSlotRewriter(params: ModelRefRewriteContext) {
   const rewrite = createRetiredModelRefRewriter(params);
   const rewriteAuth = createRetiredModelRefRewriter({ ...params, authProfileOnly: true });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
+  return (container: unknown, key: string, path: string, authProfileOnly = false) =>
     rewriteModelReferenceSlot({
       container: asOptionalRecord(container),
       key,
       path,
       resolve: authProfileOnly ? rewriteAuth : rewrite,
     });
+}
+
+/** Apply the same retirement decision to config selectors and cron payload selectors. */
+export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
+  const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
   for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
@@ -515,21 +520,7 @@ export function repairRetiredConfigModelRefs(
       inheritedModelPolicy: asOptionalRecord(defaults?.modelPolicy),
     });
   }
-  const rewrite = createRetiredModelRefRewriter({ path: "", resolve, changes, warnings });
-  const rewriteAuth = createRetiredModelRefRewriter({
-    path: "",
-    resolve,
-    changes,
-    warnings,
-    authProfileOnly: true,
-  });
-  const rewriteSlot = (container: unknown, key: string, path: string, authProfileOnly = false) =>
-    rewriteModelReferenceSlot({
-      container: asOptionalRecord(container),
-      key,
-      path,
-      resolve: authProfileOnly ? rewriteAuth : rewrite,
-    });
+  const rewriteSlot = createRetiredModelSlotRewriter({ path: "", resolve, changes, warnings });
   for (const capability of ["image", "audio", "video"] as const) {
     rewriteSlot(
       config.tools?.media?.[capability],
@@ -557,6 +548,9 @@ export function repairRetiredConfigModelRefs(
   rewriteVoice(discord?.voice, "channels.discord.voice");
   for (const [account, settings] of Object.entries(asOptionalRecord(discord?.accounts) ?? {})) {
     rewriteVoice(asOptionalRecord(settings)?.voice, `channels.discord.accounts.${account}.voice`);
+  }
+  if (changes.length > 0) {
+    copyConfigResolutionFactsThroughRewrite(cfg, config);
   }
   return { config: changes.length ? config : cfg, changes };
 }

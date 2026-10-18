@@ -57,11 +57,7 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
-  const suffix = resolveGatewayProfileSuffix(profile);
-  if (!suffix) {
-    return GATEWAY_SYSTEMD_SERVICE_NAME;
-  }
-  return `openclaw-gateway${suffix}`;
+  return `${GATEWAY_SYSTEMD_SERVICE_NAME}${resolveGatewayProfileSuffix(profile)}`;
 }
 
 function isAmbiguousLegacyGatewayCandidate(legacyName: string): boolean {
@@ -90,10 +86,10 @@ export function resolveGatewaySystemdServiceNameCandidates(profile?: string): st
     // Default profile: openclaw-gateway is current; bare openclaw is a known
     // legacy system-unit name (parallel to openclaw-<profile> for named agents).
     // Custom names are matched separately against their effective installation identity.
-    return canonical === "openclaw" ? [canonical] : [canonical, "openclaw"];
+    return [canonical, "openclaw"];
   }
   const legacy = `openclaw${suffix}`;
-  if (legacy === canonical || isAmbiguousLegacyGatewayCandidate(legacy)) {
+  if (isAmbiguousLegacyGatewayCandidate(legacy)) {
     return [canonical];
   }
   return [canonical, legacy];

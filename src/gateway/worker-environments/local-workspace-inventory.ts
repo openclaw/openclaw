@@ -1,8 +1,9 @@
 import { isUtf8 } from "node:buffer";
-import path from "node:path";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import { manifestNodes } from "./workspace-manifest-comparison.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 
 function decodeGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {
@@ -33,7 +34,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
   admittedPaths: string;
   baseline?: WorkerWorkspaceManifest;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<Set<string>> {
   const listed = await requireGitBuffer(params.root, ["ls-files", "--cached", "-z"], {
@@ -44,7 +45,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   // Only the host owns this index; the guest has independent Git metadata. A
   // host can deliberately admit a new path with git add, even if it is ignored.
   const admitted: unknown = JSON.parse(params.admittedPaths);
-  if (!Array.isArray(admitted) || !admitted.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(admitted)) {
     throw new Error("Invalid local workspace source admission");
   }
   const paths = new Set<string>([...admitted, ...decodeGitPaths(listed)]);
@@ -56,11 +57,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   // The inventory contract requires explicit ancestors, including directories
   // omitted by Git and empty directories already accepted from the guest.
   for (const entryPath of paths) {
-    for (
-      let parent = path.posix.dirname(entryPath);
-      parent !== ".";
-      parent = path.posix.dirname(parent)
-    ) {
+    for (const parent of workspacePathAncestors(entryPath)) {
       paths.add(parent);
     }
   }

@@ -64,7 +64,7 @@ class ChatControllerAbortTest {
       test.runCurrent()
       val owner = ChatComposerOwner("gateway-test", "research", sessionKey)
       for (id in listOf("run-first", "run-second")) {
-        assertTrue(controller.sendMessageForOwnerAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id))
+        assertTrue(controller.sendMessageAwaitAcceptance(id, "off", emptyList(), owner, idempotencyKey = id))
       }
       assertEquals(2, controller.pendingRunCount.value)
     }

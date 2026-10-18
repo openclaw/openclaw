@@ -8,7 +8,10 @@ import type {
   NodeWorkerContainerIdentity,
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
-import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import {
+  getNodeWorkerBootIdentity,
+  inspectNodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
 
 type NodeWorkerContainerOwner = { gatewayNamespace: string; launchId: string };
 
@@ -42,7 +45,11 @@ export class NodeWorkerContainerLifecycle {
     })) {
       const receipt = await this.store.get(container.launchId);
       if (receipt?.state === "pending" && receipt.gatewayNamespace === container.gatewayNamespace) {
-        const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
+        const bootId = getNodeWorkerBootIdentity();
+        const supervisorState =
+          receipt.bootId && bootId && receipt.bootId !== bootId
+            ? "dead"
+            : inspectNodeWorkerProcessIdentity(receipt.supervisor);
         if (supervisorState === "live" || supervisorState === "unknown") {
           continue;
         }

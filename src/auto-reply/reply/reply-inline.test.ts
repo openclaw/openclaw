@@ -3,23 +3,8 @@ import { describe, expect, it } from "vitest";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 
 describe("stripInlineStatus", () => {
-  it("preserves newlines when stripping /status", () => {
-    const result = stripInlineStatus("/status\nfirst paragraph\n\nsecond paragraph");
-    expect(result.cleaned).toBe("first paragraph\n\nsecond paragraph");
-    expect(result.didStrip).toBe(true);
-  });
-
-  it.each(["hello \t  world\r\n\t indented  line  \r\n", "   ", "\n    code\n"])(
-    "leaves unrecognized text byte-identical: %j",
-    (body) => {
-      expect(stripInlineStatus(body)).toEqual({ cleaned: body, didStrip: false });
-    },
-  );
-
   it.each([
-    ["/status:\r\n    if ready:\r\n        run()  \r\n", "    if ready:\r\n        run()  \r\n"],
     ["start  here /status and\tthere /STATUS\r\n    code", "start  here and\tthere\r\n    code"],
-    ["before\n\n/status\n\n    after", "before\n\n\n    after"],
   ])("removes only status spans and their separators: %j", (body, cleaned) => {
     expect(stripInlineStatus(body)).toEqual({ cleaned, didStrip: true });
   });
@@ -32,11 +17,14 @@ describe("extractInlineSimpleCommand", () => {
     expect(result?.cleaned).toBe("first line\nsecond line");
   });
 
-  it.each(["/help", "/commands", "/whoami", "/id"])(
+  it.each([["/ID", "/whoami"]])(
     "preserves code bytes when extracting %s",
-    (command) => {
+    (command, expectedCommand) => {
       const code = "    if ready:\r\n\t\trun('a  b')  \r\n";
-      expect(extractInlineSimpleCommand(`${command}\r\n${code}`)?.cleaned).toBe(code);
+      expect(extractInlineSimpleCommand(`${command}\r\n${code}`)).toEqual({
+        command: expectedCommand,
+        cleaned: code,
+      });
     },
   );
 

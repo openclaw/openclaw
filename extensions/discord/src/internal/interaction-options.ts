@@ -18,21 +18,15 @@ function findOption(
     if (matches(option)) {
       return option;
     }
-    const child = findOption(readChildOptions(option), matches);
+    const child =
+      "options" in option && Array.isArray(option.options)
+        ? findOption(option.options, matches)
+        : undefined;
     if (child) {
       return child;
     }
   }
   return undefined;
-}
-
-function readChildOptions(
-  option: APIApplicationCommandInteractionDataOption,
-): APIApplicationCommandInteractionDataOption[] | undefined {
-  if (!("options" in option) || !Array.isArray(option.options)) {
-    return undefined;
-  }
-  return option.options;
 }
 
 export class OptionsHandler {
@@ -42,27 +36,28 @@ export class OptionsHandler {
     private resolvedChannels: Record<string, APIInteractionDataResolvedChannel> | undefined,
   ) {}
 
-  getString(name: string): string | null {
+  private value(name: string) {
     const option = findOption(this.rawOptions, (entry) => entry.name === name);
-    const value = option && "value" in option ? option.value : undefined;
+    return option && "value" in option ? option.value : undefined;
+  }
+
+  getString(name: string): string | null {
+    const value = this.value(name);
     return typeof value === "string" ? value : null;
   }
 
   getNumber(name: string): number | null {
-    const option = findOption(this.rawOptions, (entry) => entry.name === name);
-    const value = option && "value" in option ? option.value : undefined;
+    const value = this.value(name);
     return typeof value === "number" ? value : null;
   }
 
   getBoolean(name: string): boolean | null {
-    const option = findOption(this.rawOptions, (entry) => entry.name === name);
-    const value = option && "value" in option ? option.value : undefined;
+    const value = this.value(name);
     return typeof value === "boolean" ? value : null;
   }
 
   async getChannel(name: string, required = false) {
-    const option = findOption(this.rawOptions, (entry) => entry.name === name);
-    const value = option && "value" in option ? option.value : undefined;
+    const value = this.value(name);
     const id = typeof value === "string" ? value : undefined;
     const resolved = id ? this.resolvedChannels?.[id] : undefined;
     if (resolved) {

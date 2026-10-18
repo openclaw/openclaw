@@ -9,17 +9,21 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 }));
 
 describe("enqueueIMessageReactionSystemEvent", () => {
-  it("matches Discord by enqueueing inbound reactions as untrusted system events", () => {
+  it.each([
+    { targetGuid: "lobster-reply-guid", target: "msg lobster-reply-guid" },
+    { targetGuid: undefined, target: 'message "private tapback quotation"' },
+  ])("enqueues reactions without logging their content ($target)", ({ targetGuid, target }) => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
     const logVerbose = vi.fn();
+    const text = `iMessage reaction added: 👎 by +15555550123 on ${target}`;
 
     const queued = enqueueIMessageReactionSystemEvent({
       decision: {
-        text: "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
+        text,
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
         route: { agentId: "main", sessionKey: "agent:main:main" },
         reaction: {
-          targetGuid: "lobster-reply-guid",
+          targetGuid,
           action: "added",
           emoji: "👎",
         },
@@ -30,17 +34,15 @@ describe("enqueueIMessageReactionSystemEvent", () => {
 
     expect(queued).toBe(true);
     expect(enqueueRoutedSystemEvent).toHaveBeenCalledWith(
-      "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
+      text,
       { agentId: "main", sessionKey: "agent:main:main" },
       {
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
       },
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "imessage: reaction system event queued session=agent:main:main target=lobster-reply-guid action=added emoji=👎",
+      `imessage: reaction system event queued session=agent:main:main target=${targetGuid ?? "unknown"} action=added emoji=👎`,
     );
-    expect(logVerbose).toHaveBeenCalledWith(
-      "imessage: reaction event enqueued: iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
-    );
+    expect(logVerbose).toHaveBeenCalledWith("imessage: reaction event enqueued");
   });
 });

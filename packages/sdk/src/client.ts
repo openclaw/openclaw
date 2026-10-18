@@ -37,10 +37,6 @@ import type {
   ToolInvokeResult,
 } from "./types.js";
 
-// High-level OpenClaw SDK client. Namespaces below translate friendly SDK calls
-// into current Gateway RPC methods and normalize event streams for consumers.
-
-/** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
   gateway?: "auto" | (string & {});
   url?: string;
@@ -68,14 +64,6 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
     throw new Error("timeoutMs must be a finite non-negative number");
   }
   return Math.floor(timeoutMs);
-}
-
-function timeoutSecondsFromMs(timeoutMs: number | undefined): number | undefined {
-  const normalized = normalizeTimeoutMs(timeoutMs);
-  if (normalized === undefined) {
-    return undefined;
-  }
-  return normalized === 0 ? 0 : Math.ceil(normalized / 1000);
 }
 
 function splitModelRef(model: string | undefined): { provider?: string; model?: string } {
@@ -109,10 +97,12 @@ function assertNoUnsupportedRunOptions(params: AgentRunParams): void {
   );
 }
 
-function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
+function buildAgentParams(
+  params: AgentRunParams,
+  timeoutMs: number | undefined,
+): Record<string, unknown> {
   assertNoUnsupportedRunOptions(params);
   const modelRef = splitModelRef(params.model);
-  const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
   return {
     message: params.input,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -123,14 +113,12 @@ function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
     ...(params.thinking ? { thinking: params.thinking } : {}),
     ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
     ...(params.attachments ? { attachments: params.attachments } : {}),
-    ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
+    ...(timeoutMs !== undefined
+      ? { timeout: timeoutMs === 0 ? 0 : Math.ceil(timeoutMs / 1000) }
+      : {}),
     ...(params.label ? { label: params.label } : {}),
     idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
-}
-
-function unsupportedGatewayApi(api: string): never {
-  throw new Error(`${api} is not supported by the current OpenClaw Gateway yet`);
 }
 
 function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
@@ -153,7 +141,6 @@ function requireToolsEffectiveSessionKey(params: ToolsEffectiveParams): ToolsEff
   return params;
 }
 
-/** Root SDK client with namespaces for agents, sessions, runs, and gateway APIs. */
 export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
@@ -256,10 +243,6 @@ export class OpenClaw {
     return result;
   }
 
-  events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
-    return this.iterateEvents(filter);
-  }
-
   runEvents(
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
@@ -291,9 +274,7 @@ export class OpenClaw {
     }
   }
 
-  private async *iterateEvents(
-    filter?: (event: OpenClawEvent) => boolean,
-  ): AsyncIterable<OpenClawEvent> {
+  async *events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
     await this.connect();
     this.assertOpen();
     for await (const event of this.replay.events.stream(filter)) {
@@ -330,15 +311,8 @@ export class OpenClaw {
       return this.eventPumpReady;
     }
     let markReady = () => {};
-    let ready = false;
     this.eventPumpReady = new Promise<void>((resolve) => {
-      markReady = () => {
-        if (ready) {
-          return;
-        }
-        ready = true;
-        resolve();
-      };
+      markReady = resolve;
     });
     this.eventPumpPromise = (async () => {
       let iterator: AsyncIterator<GatewayEvent> | undefined;
@@ -384,7 +358,6 @@ export class OpenClaw {
   }
 }
 
-/** Agent-scoped helper for runs and identity lookups. */
 export class Agent {
   constructor(
     private readonly client: OpenClaw,
@@ -405,7 +378,6 @@ export class Agent {
   }
 }
 
-/** Run handle for streaming events, waiting, and cancellation. */
 export class Run {
   constructor(
     private readonly client: OpenClaw,
@@ -451,7 +423,6 @@ export class Run {
   }
 }
 
-/** Session handle for sending messages and session-scoped mutations. */
 export class Session {
   constructor(
     private readonly client: OpenClaw,
@@ -499,7 +470,6 @@ export class Session {
   }
 }
 
-/** Agent management namespace. */
 export class AgentsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -524,7 +494,6 @@ export class AgentsNamespace {
   }
 }
 
-/** Session management namespace. */
 export class SessionsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -557,14 +526,12 @@ export class SessionsNamespace {
   }
 }
 
-/** Run creation and lifecycle namespace. */
 export class RunsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
   async create(params: RunCreateParams): Promise<Run> {
     const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
-    const normalizedParams = timeoutMs !== undefined ? { ...params, timeoutMs } : params;
-    const raw = await this.client.request("agent", buildAgentParams(normalizedParams), {
+    const raw = await this.client.request("agent", buildAgentParams(params, timeoutMs), {
       expectFinal: false,
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
@@ -608,7 +575,6 @@ class RpcNamespace {
   }
 }
 
-/** Model catalog and auth status namespace. */
 export class ModelsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "models");
@@ -623,7 +589,6 @@ export class ModelsNamespace extends RpcNamespace {
   }
 }
 
-/** Tool catalog, effective tool, and direct invocation namespace. */
 export class ToolsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "tools");
@@ -650,7 +615,6 @@ export class ToolsNamespace extends RpcNamespace {
   }
 }
 
-/** Run/session artifact listing and download namespace. */
 export class ArtifactsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "artifacts");
@@ -675,7 +639,6 @@ export class ArtifactsNamespace extends RpcNamespace {
   }
 }
 
-/** Approval request listing and response namespace. */
 export class ApprovalsNamespace {
   constructor(private readonly client: OpenClaw) {}
 
@@ -691,7 +654,6 @@ export class ApprovalsNamespace {
   }
 }
 
-/** Environment discovery namespace. */
 export class EnvironmentsNamespace extends RpcNamespace {
   constructor(client: OpenClaw) {
     super(client, "environments");
@@ -715,6 +677,6 @@ export class EnvironmentsNamespace extends RpcNamespace {
 
   async delete(environmentId: string): Promise<unknown> {
     void environmentId;
-    return unsupportedGatewayApi("oc.environments.delete");
+    throw new Error("oc.environments.delete is not supported by the current OpenClaw Gateway yet");
   }
 }

@@ -18,7 +18,9 @@ import {
   installControlUiRpcDiagnostics,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiPaneRuntimeTestAdapterScript } from "../test-helpers/control-ui-pane-runtime.test-support.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -104,7 +106,7 @@ export function tooltipTitleText(item: Locator) {
 
 type HeldModuleContext = {
   closing: boolean;
-  pages: Map<Page, Array<{ release: () => void; installed: ReturnType<Page["route"]> }>>;
+  pages: Map<Page, Array<{ close: () => Promise<void>; installed: ReturnType<Page["route"]> }>>;
 };
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
@@ -122,29 +124,70 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   if (held.closing) {
     throw new Error("Cannot hold a module after browser context cleanup begins");
   }
-  let release!: () => void;
-  let requested!: (url: string) => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const request = new Promise<string>((resolve) => {
-    requested = resolve;
-  });
+  const gate = createDeferredCore();
+  const request = createDeferredCore<string>();
+  // Cleanup can cancel an unused hold; callers still receive the original rejection.
+  void request.promise.catch(() => {});
+  const release = () => gate.resolve();
+  const callbacks = new Set<Promise<void>>();
   let requests = 0;
-  const installed = page.route(module, async (route) => {
-    requests += 1;
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    requested(route.request().url());
-    await gate;
-    await route.fulfill({ response });
+  const installed = page.route(module, (route) => {
+    if (held.closing) {
+      return route.fallback();
+    }
+    const callback = (async () => {
+      const requestNumber = ++requests;
+      const closingAtStart = held.closing;
+      let phase = "fetch";
+      try {
+        const response = await route.fetch();
+        expect(response.status()).toBe(200);
+        request.resolve(route.request().url());
+        phase = "held";
+        await gate.promise;
+        phase = "fulfill";
+        await route.fulfill({ response });
+      } catch (error) {
+        request.reject(error);
+        try {
+          writeSync(
+            2,
+            `[control-ui-e2e] held response failed: ${JSON.stringify({
+              path: new URL(route.request().url()).pathname,
+              resourceType: route.request().resourceType(),
+              requestNumber,
+              totalRequests: requests,
+              phase,
+              closingAtStart,
+              closing: held.closing,
+              pageClosed: page.isClosed(),
+            })}\n`,
+          );
+        } catch {
+          // Preserve the route failure if diagnostics cannot be written.
+        }
+        throw error;
+      }
+    })();
+    callbacks.add(callback);
+    const completed = () => callbacks.delete(callback);
+    void callback.then(completed, completed);
+    return callback;
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
-  registrations.push({ release, installed });
+  registrations.push({
+    close: () => {
+      release();
+      request.reject(new Error("Browser context cleanup canceled the held module request"));
+      // unrouteAll(wait) can auto-continue a sibling before its held fetch completes.
+      return settleControlUiCleanup([...callbacks]);
+    },
+    installed,
+  });
   held.pages.set(page, registrations);
   await installed;
-  return { request, release, requests: () => requests };
+  return { request: request.promise, release, requests: () => requests };
 }
 
 class ControlUiE2eAcquisitionClosedError extends Error {}
@@ -303,10 +346,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             }
           },
           async () => {
-            for (const registration of registrations) {
-              registration.release();
-            }
-            // Release all gates before joining active page/context callbacks.
+            // Release every gate before joining callbacks, then remove interception.
+            await settleControlUiCleanup(registrations.map(({ close }) => close()));
             await settleControlUiCleanup(registrations.map(({ installed }) => installed));
           },
           () =>
@@ -371,12 +412,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       const context = await currentBrowser.newContext(contextOptions);
       openBrowserContexts.set(context, owner);
       contextDiagnostics.set(context, { test });
+      await context.addInitScript({ content: createControlUiPaneRuntimeTestAdapterScript() });
       if (stopping || owner?.signal.aborted) {
         await closeBrowserContext(context);
         throw new ControlUiE2eAcquisitionClosedError(
           "Control UI E2E context arrived after teardown began",
         );
       }
+      context.on("page", installControlUiRpcDiagnostics);
       context.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
       return context;
     });
@@ -514,21 +557,26 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
               return startControlUiE2eServer();
             });
+          const launchBrowser = () =>
+            chromium.launch({
+              ...options.browserLaunchOptions,
+              // Full-tile CPU rasterization: GPU raster left paint-history-dependent edge pixels.
+              args: [
+                "--disable-partial-raster",
+                "--disable-gpu-rasterization",
+                ...(options.browserLaunchOptions?.args ?? []),
+              ],
+              executablePath: chromiumExecutablePath,
+            });
           setupPromise = Promise.resolve().then(async () => {
             if (options.startServerBeforeBrowser) {
               server = await startServer();
               if (stopping) {
                 return;
               }
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
             } else {
-              browser = await chromium.launch({
-                ...options.browserLaunchOptions,
-                executablePath: chromiumExecutablePath,
-              });
+              browser = await launchBrowser();
               if (stopping) {
                 return;
               }
@@ -606,7 +654,9 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           async () => {
             const page = await context.newPage();
             fixture = { context, page };
-            installControlUiRpcDiagnostics(page);
+            // A CDP session attached after a test's own session clears that session's
+            // emulation overrides (such as safe-area insets) on the next navigation.
+            await installControlUiE2eRendererStallProbe(page);
             try {
               return await run(fixture);
             } catch (error) {

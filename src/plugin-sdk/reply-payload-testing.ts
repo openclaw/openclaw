@@ -1,6 +1,3 @@
-/**
- * Test SDK subpath for attaching metadata to reply payload fixtures.
- */
 export { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 
 export { buildReplyPayloads } from "../auto-reply/reply/agent-runner-payloads.js";

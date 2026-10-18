@@ -1,4 +1,3 @@
-// Normalizes model input config into provider and model references.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeGooglePreviewModelId,
@@ -31,6 +30,23 @@ export function resolveAgentModelFallbackValues(model?: AgentModelInput): string
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
+}
+
+/** An explicit primary starts its own chain; an omitted primary inherits unless fallbacks are set. */
+export function resolveSelectedModelFallbacksOverride(
+  raw: AgentModelConfig | undefined,
+): string[] | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  if (typeof raw === "string") {
+    return resolvePrimaryStringValue(raw) ? [] : undefined;
+  }
+  // An explicitly provided empty array disables inherited fallbacks.
+  if (!Object.hasOwn(raw, "fallbacks")) {
+    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
+  }
+  return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
 
 /** Returns a positive finite tool timeout rounded down to whole milliseconds. */

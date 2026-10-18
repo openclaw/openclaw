@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as sessionMeta from "../acp/runtime/session-meta.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.pending-inputs.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
 import { encodePngRgb } from "../media/png-encode.js";
@@ -20,7 +19,7 @@ import {
   reach,
   type Response,
 } from "./server.agent-runtime-authority-proof.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { agentCommandMock } from "./test-helpers.js";
 
 async function inboundMediaFiles(): Promise<string[]> {
@@ -46,7 +45,7 @@ describe("agent RPC metadata-read authority", () => {
       const image = encodePngRgb(randomBytes(1024 * 1024 * 3), 1024, 1024);
       expect(image.byteLength).toBeGreaterThan(ATTACHMENT_OFFLOAD_THRESHOLD_BYTES);
       expect(image.byteLength).toBeLessThan(MAX_IMAGE_BYTES);
-      const beforeEntry = loadSessionEntry(f.sessionKey, { agentId: "main" }).entry;
+      const beforeEntry = (await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry;
       const beforeMedia = await inboundMediaFiles();
       const entered =
         createDeferred<Awaited<ReturnType<typeof sessionMeta.readAcpSessionEntryAsync>>>();
@@ -113,7 +112,6 @@ describe("agent RPC metadata-read authority", () => {
             cfg: f.context.getRuntimeConfig(),
             request: { message: params.message, idempotencyKey: f.runId },
             runId: f.runId,
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
             agentDedupeKeys: [`agent:${f.runId}`],
             suppressVisibleSessionEffects: false,
             context: f.context,
@@ -147,10 +145,10 @@ describe("agent RPC metadata-read authority", () => {
           expect.soft(saved).toEqual([]);
           expect.soft(await inboundMediaFiles()).toEqual(beforeMedia);
           expect
-            .soft(loadSessionEntry(f.sessionKey, { agentId: "main" }).entry)
+            .soft((await loadSessionEntryAsync(f.sessionKey, { agentId: "main" })).entry)
             .toEqual(beforeEntry);
           expect.soft(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
-          expect.soft(listSessionPendingInputs(f.scope).total).toBe(0);
+          expect.soft((await listSessionPendingInputs(f.scope)).total).toBe(0);
           expect.soft(execution.observer).not.toHaveBeenCalled();
           expect.soft(agentCommandMock).not.toHaveBeenCalled();
           expect.soft(f.context.chatAbortControllers.has(f.runId)).toBe(false);
@@ -172,7 +170,7 @@ describe("agent RPC metadata-read authority", () => {
           expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
           expect.soft(writeObserver).not.toHaveBeenCalled();
           expect.soft(sessionAccessor.loadTranscriptEventsSync(f.scope)).toEqual(f.before);
-          expect.soft(listSessionPendingInputs(f.scope).total).toBe(0);
+          expect.soft((await listSessionPendingInputs(f.scope)).total).toBe(0);
         }
       } finally {
         release.resolve();

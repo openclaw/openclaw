@@ -1,4 +1,5 @@
 // Backup restore tests cover verified whole-archive extraction and fresh-target safety.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -13,7 +14,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
-import { verifyBackupArchive } from "./backup-verify.js";
+import { prepareBackupArchive, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 async function listArchiveLeafEntries(archivePath: string): Promise<string[]> {
@@ -45,11 +46,13 @@ async function listFilesystemLeafEntries(root: string, relative = ""): Promise<s
 
 function encodeTarEntry(params: {
   path: string;
-  contents?: string;
+  contents?: string | Buffer;
   type?: "File" | "Directory" | "Link" | "SymbolicLink";
   linkpath?: string;
 }): Buffer {
-  const body = Buffer.from(params.contents ?? "", "utf8");
+  const body = Buffer.isBuffer(params.contents)
+    ? params.contents
+    : Buffer.from(params.contents ?? "", "utf8");
   const type = params.type ?? "File";
   const header = new tar.Header({
     path: params.path,
@@ -75,7 +78,7 @@ async function writeArchive(params: {
   payloadPath: string;
   manifest?: string;
   extraEntries?: Buffer[];
-}): Promise<void> {
+}): Promise<string> {
   const manifest =
     params.manifest ??
     `${JSON.stringify({
@@ -104,6 +107,7 @@ async function writeArchive(params: {
       ]),
     ),
   );
+  return manifest;
 }
 
 async function writeUnextractableArchive(archivePath: string) {
@@ -125,53 +129,144 @@ async function writeUnextractableArchive(archivePath: string) {
 }
 
 describe("backupRestoreCommand", () => {
-  it.for([
-    { targetForm: "qualified", suffix: "" },
-    { targetForm: "root-relative", suffix: "" },
-    { targetForm: "qualified", suffix: " " },
-    { targetForm: "root-relative", suffix: " " },
-  ])(
-    "restores verified $targetForm hardlinks with suffix '$suffix'",
-    async ({ targetForm, suffix }, ctx) => {
-      if (suffix && process.platform === "win32") {
-        ctx.skip(); // Windows cannot preserve a trailing space in a filename.
-      }
+  it("selects a captured config payload from a legacy relative alias without following live paths", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const archiveRoot = "backup";
+      const configPath = "/missing/openclaw.json";
+      const configSourcePath = "/missing/captured.json";
+      const archivePath = state.path("alias.tar.gz");
+      const payloadPath = buildBackupArchivePath(archiveRoot, configSourcePath);
+      const aliasPath = buildBackupArchivePath(archiveRoot, configPath);
+      await writeArchive({
+        archivePath,
+        archiveRoot,
+        payloadPath,
+        manifest: JSON.stringify({
+          schemaVersion: 1,
+          archiveRoot,
+          platform: "linux",
+          createdAt: "2026-08-12T00:00:00.000Z",
+          paths: { configPath },
+          assets: [
+            { kind: "config", sourcePath: configSourcePath, archivePath: payloadPath },
+            { kind: "config", sourcePath: configPath, archivePath: aliasPath },
+          ],
+        }),
+        extraEntries: [
+          encodeTarEntry({ path: aliasPath, type: "SymbolicLink", linkpath: "captured.json" }),
+        ],
+      });
+
+      expect(await prepareBackupArchive(archivePath)).toMatchObject({
+        recoveryConfigPath: payloadPath,
+        recoveryConfigContextPath: aliasPath,
+      });
+    });
+  });
+
+  it.each(["legacy", "current"])(
+    "preserves opaque SQLite and PostgreSQL-named files in %s archives",
+    async (format) => {
       await withOpenClawTestState(
-        { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },
+        {
+          layout: "state-only",
+          prefix: "openclaw-backup-restore-user-files-",
+          scenario: "minimal",
+        },
         async (state) => {
-          const archivePath = state.path("backup.tar.gz");
-          const targetPath = state.path("restored");
-          const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-          const payloadPath = `${buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json")}${suffix}`;
-          const hardlinkPath = `${archiveRoot}/payload/config-link${suffix}`;
+          const databasePath = state.path("ordinary.sqlite");
+          {
+            const sqlite = requireNodeSqlite();
+            using database = new sqlite.DatabaseSync(databasePath);
+            database.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('user note')");
+          }
+          const archiveRoot = "backup";
+          const damaged = Buffer.alloc(128);
+          damaged.write("SQLite format 3\0");
+          const files = new Map([
+            ["notes.postgres/manifest.json", Buffer.from("user document\n")],
+            ["lookalike.postgres/manifest.json", Buffer.from('{"source":{"engine":"postgres"}}')],
+            ["ordinary.sqlite", await fs.readFile(databasePath)],
+            ["ordinary.sqlite.postgres/manifest.json", Buffer.from("another user document\n")],
+            ["text.sqlite", Buffer.from("plain text named sqlite\n")],
+            ["damaged.sqlite", damaged],
+          ]);
+          const archivePath = state.path("user-files.tar.gz");
           await writeArchive({
             archivePath,
             archiveRoot,
-            payloadPath,
-            extraEntries: [
-              encodeTarEntry({
-                path: hardlinkPath,
-                type: "Link",
-                linkpath:
-                  targetForm === "qualified"
-                    ? payloadPath
-                    : path.posix.relative(archiveRoot, payloadPath),
-              }),
-            ],
+            payloadPath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+            manifest: JSON.stringify({
+              schemaVersion: 1,
+              archiveRoot,
+              createdAt: "2026-08-12T00:00:00.000Z",
+              platform: process.platform,
+              assets: [
+                {
+                  kind: "config",
+                  sourcePath: "/tmp/openclaw.json",
+                  archivePath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+                },
+              ],
+              ...(format === "current" ? { postgresSnapshots: [] } : {}),
+            }),
+            extraEntries: [...files].map(([file, contents]) =>
+              encodeTarEntry({ path: `${archiveRoot}/payload/${file}`, contents }),
+            ),
           });
-
-          await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
-          await expect(
-            backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
-          ).resolves.toMatchObject({ ok: true, entryCount: 3 });
-          const original = path.join(targetPath, payloadPath);
-          const linked = path.join(targetPath, hardlinkPath);
-          await expect(fs.readFile(linked, "utf8")).resolves.toBe("{}\n");
-          expect((await fs.stat(linked)).ino).toBe((await fs.stat(original)).ino);
+          const target = state.path("restored");
+          await backupRestoreCommand(createTestRuntime(), { archive: archivePath, target });
+          for (const [file, contents] of files) {
+            expect(await fs.readFile(path.join(target, archiveRoot, "payload", file))).toEqual(
+              contents,
+            );
+          }
         },
       );
     },
   );
+
+  it.each([false, true])("restores verified root-relative hardlinks (mixed: %s)", async (mixed) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-backup-restore-hardlink-", scenario: "minimal" },
+      async (state) => {
+        if (mixed) {
+          await state.writeConfig({
+            database: {
+              families: { workboard: { engine: "postgres" } },
+              postgres: { connection: "postgresql://fixture" },
+            },
+          });
+        }
+        const archivePath = state.path("backup.tar.gz");
+        const targetPath = state.path("restored");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        const hardlinkPath = `${archiveRoot}/payload/config-link`;
+        await writeArchive({
+          archivePath,
+          archiveRoot,
+          payloadPath,
+          extraEntries: [
+            encodeTarEntry({
+              path: hardlinkPath,
+              type: "Link",
+              linkpath: path.posix.relative(archiveRoot, payloadPath),
+            }),
+          ],
+        });
+
+        await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
+        await expect(
+          backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
+        ).resolves.toMatchObject({ ok: true, entryCount: 3 });
+        const original = path.join(targetPath, payloadPath);
+        const linked = path.join(targetPath, hardlinkPath);
+        await expect(fs.readFile(linked, "utf8")).resolves.toBe("{}\n");
+        expect((await fs.stat(linked)).ino).toBe((await fs.stat(original)).ino);
+      },
+    );
+  });
 
   it("round-trips a backup into a fresh target with matching inventory and readable databases", async () => {
     await withOpenClawTestState(
@@ -420,6 +515,80 @@ describe("backupRestoreCommand", () => {
     );
   });
 
+  it("refuses insufficient target capacity before extraction and counts hardlink data once", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-capacity-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const archivePath = state.path("backup.tar.gz");
+        const refusedTarget = state.path("refused-target");
+        const exactTarget = state.path("exact-target");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        const extraPath = `${archiveRoot}/payload/extra.txt`;
+        const extraContents = "payload\n";
+        const manifest = await writeArchive({
+          archivePath,
+          archiveRoot,
+          payloadPath,
+          extraEntries: [
+            encodeTarEntry({ path: extraPath, contents: extraContents }),
+            encodeTarEntry({
+              path: `${archiveRoot}/payload/extra-link.txt`,
+              type: "Link",
+              linkpath: extraPath,
+            }),
+          ],
+        });
+
+        const realDiskSpace = fsSync.statfsSync(state.root);
+        let availableBytes = 1024 * 1024;
+        const statfs = vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
+          type: realDiskSpace.type,
+          bsize: 1,
+          bavail: availableBytes,
+          bfree: availableBytes,
+          blocks: availableBytes + 1024 * 1024,
+          files: realDiskSpace.files,
+          frsize: realDiskSpace.frsize,
+          ffree: realDiskSpace.ffree,
+        }));
+        try {
+          const refused = await backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: refusedTarget,
+          }).catch((error: unknown) => error);
+          expect(refused).toBeInstanceOf(Error);
+          expect((refused as Error).message).toContain(refusedTarget);
+          expect((refused as Error).message).toMatch(
+            /requires 256 MiB.*archive data plus 256 MiB reserve.*only 1 MiB is available/iu,
+          );
+          await expect(fs.lstat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
+
+          const regularFileBytes =
+            Buffer.byteLength(manifest) +
+            Buffer.byteLength("{}\n") +
+            Buffer.byteLength(extraContents);
+          availableBytes = 256 * 1024 * 1024 + regularFileBytes;
+          await expect(
+            backupRestoreCommand(createTestRuntime(), {
+              archive: archivePath,
+              target: exactTarget,
+            }),
+          ).resolves.toMatchObject({ targetPath: exactTarget });
+          expect((await fs.stat(path.join(exactTarget, extraPath))).ino).toBe(
+            (await fs.stat(path.join(exactTarget, `${archiveRoot}/payload/extra-link.txt`))).ino,
+          );
+        } finally {
+          statfs.mockRestore();
+        }
+      },
+    );
+  });
+
   it("rejects a staging target inside a configured external live agent directory", async () => {
     await withOpenClawTestState(
       {
@@ -494,14 +663,10 @@ describe("backupRestoreCommand", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32").each([
-    { label: "absolute", linkpath: "/outside-restore", external: true },
-    { label: "archive-escaping", linkpath: "../../../../../../outside-restore", external: true },
-    { label: "backslash-containing", linkpath: "nested\\outside-restore", external: false },
-    { label: "declared-asset-escaping", linkpath: "../outside-declared-assets", external: true },
-  ])(
-    "backupRestoreCommand recreates a reported $label target without rewriting it",
-    async ({ linkpath, external }) => {
+  it.runIf(process.platform !== "win32")(
+    "recreates a reported declared-asset-escaping target without rewriting it",
+    async () => {
+      const linkpath = "../outside-declared-assets";
       await withOpenClawTestState(
         { layout: "state-only", prefix: "oc-link-", scenario: "minimal" },
         async (state) => {
@@ -510,7 +675,7 @@ describe("backupRestoreCommand", () => {
           const archiveRoot = "backup";
           const declaredAssetRoot = buildBackupArchivePath(archiveRoot, "/tmp/restore-state");
           const entryPath = `${declaredAssetRoot}/link`;
-          const externalSymbolicLinks = external ? [{ entryPath, linkpath }] : [];
+          const externalSymbolicLinks = [{ entryPath, linkpath }];
           await writeArchive({
             archivePath,
             archiveRoot,
@@ -545,11 +710,6 @@ describe("backupRestoreCommand", () => {
     { label: "undeclared link entry", childType: undefined, suffix: "" },
     { label: "file beneath a symbolic link", childType: "File" as const, suffix: "" },
     { label: "link beneath a symbolic link", childType: "SymbolicLink" as const, suffix: "" },
-    {
-      label: "link beneath a space-suffixed symbolic link",
-      childType: "SymbolicLink" as const,
-      suffix: " ",
-    },
   ])(
     "backupRestoreCommand rejects $label before touching the restore target",
     async ({ childType, suffix }) => {

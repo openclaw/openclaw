@@ -66,13 +66,6 @@ function mutateBeforeFileRead(target: string, mutate: () => Promise<void>, befor
   return mutation;
 }
 
-async function captureReadFailure(operation: () => Promise<unknown>): Promise<unknown> {
-  return operation().then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-}
-
 describe("skills library file admission", () => {
   it("keeps the 256-file boundary including empty supporting files", async () => {
     const directory = tempDirs.make("skills-library-count-");
@@ -112,61 +105,53 @@ describe("skills library file admission", () => {
     ]);
   });
 
-  it("rejects a skill file that grows beyond 1 MiB after metadata capture", async () => {
-    const directory = tempDirs.make("skills-library-growth-");
-    const file = path.join(directory, "SKILL.md");
-    await fs.writeFile(file, "skill");
-    const mutation = mutateBeforeFileRead(file, () => fs.writeFile(file, Buffer.alloc(MIB + 1)));
-
-    const error = await captureReadFailure(() => readLibraryInput(file));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|limit/iu) });
-  });
-
   it.each([
-    { name: "grows beyond 8 MiB", bytes: 8 * MIB + 1 },
-    { name: "becomes empty", bytes: 0 },
-  ])("rejects a ZIP that $name before starting an upload", async ({ bytes }) => {
-    const directory = tempDirs.make("skills-library-zip-");
-    const file = path.join(directory, "skill.zip");
-    await fs.writeFile(file, "zip");
-    const mutation = mutateBeforeFileRead(file, () => fs.writeFile(file, Buffer.alloc(bytes)));
-
-    const error = await captureReadFailure(() => uploadLibraryZip(file, "skill", {}));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|between|empty/iu) });
-    expect(call).not.toHaveBeenCalled();
-  });
-
-  it("counts bytes actually read toward the 8 MiB bundle limit", async () => {
-    const directory = tempDirs.make("skills-library-total-");
-    const grown = path.join(directory, "00-grown.bin");
-    await fs.writeFile(grown, "x");
-    await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
-    for (let index = 1; index <= 7; index++) {
-      await fs.writeFile(path.join(directory, `0${index}.bin`), Buffer.alloc(MIB));
+    { kind: "skill", change: "grows beyond 1 MiB", bytes: MIB + 1, error: /exceeds|limit/iu },
+    {
+      kind: "zip",
+      change: "grows beyond 8 MiB",
+      bytes: 8 * MIB + 1,
+      error: /exceeds|between|empty/iu,
+    },
+    { kind: "zip", change: "becomes empty", bytes: 0, error: /exceeds|between|empty/iu },
+    { kind: "bundle", change: "grows beyond 8 MiB total", bytes: MIB, error: /exceeds|limit/iu },
+    { kind: "skill", change: "changes inode", bytes: undefined, error: /identity|changed/iu },
+  ])("rejects $kind input that $change after metadata capture", async ({ kind, bytes, error }) => {
+    const directory = tempDirs.make("skills-library-admission-");
+    const file = path.join(
+      directory,
+      kind === "zip" ? "skill.zip" : kind === "bundle" ? "00-grown.bin" : "SKILL.md",
+    );
+    await fs.writeFile(
+      file,
+      kind === "zip" ? "zip" : kind === "bundle" ? "x" : bytes === undefined ? "original" : "skill",
+    );
+    if (kind === "bundle") {
+      await fs.writeFile(path.join(directory, "SKILL.md"), "skill");
+      for (let index = 1; index <= 7; index++) {
+        await fs.writeFile(path.join(directory, `0${index}.bin`), Buffer.alloc(MIB));
+      }
     }
-    const mutation = mutateBeforeFileRead(grown, () => fs.writeFile(grown, Buffer.alloc(MIB)));
-
-    const error = await captureReadFailure(() => readLibraryInput(directory));
-
-    expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/exceeds|limit/iu) });
-  });
-
-  it("rejects an input replaced by another inode after preview", async () => {
-    const directory = tempDirs.make("skills-library-replaced-");
-    const file = path.join(directory, "SKILL.md");
     const replacement = path.join(directory, "replacement.md");
-    await fs.writeFile(file, "original");
-    await fs.writeFile(replacement, "replacement");
-    const mutation = mutateBeforeFileRead(file, () => fs.rename(replacement, file), true);
-
-    const error = await captureReadFailure(() => readLibraryInput(file));
-
+    if (bytes === undefined) {
+      await fs.writeFile(replacement, "replacement");
+    }
+    const mutation = mutateBeforeFileRead(
+      file,
+      () =>
+        bytes === undefined
+          ? fs.rename(replacement, file)
+          : fs.writeFile(file, Buffer.alloc(bytes)),
+      bytes === undefined,
+    );
+    const result =
+      kind === "zip"
+        ? uploadLibraryZip(file, "skill", {})
+        : readLibraryInput(kind === "bundle" ? directory : file);
+    await expect(result).rejects.toMatchObject({ message: expect.stringMatching(error) });
     expect(mutation).toHaveBeenCalledTimes(1);
-    expect(error).toMatchObject({ message: expect.stringMatching(/identity|changed/iu) });
+    if (kind === "zip") {
+      expect(call).not.toHaveBeenCalled();
+    }
   });
 });

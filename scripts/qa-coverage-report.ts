@@ -1,8 +1,7 @@
-// Qa Coverage Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 
 type Options = Parameters<
-  typeof import("../extensions/qa-lab/src/cli.runtime.ts").runQaCoverageReportCommand
+  typeof import("../extensions/qa-lab/reporting-api.ts").runQaCoverageReportCommand
 >[0];
 
 function parseArgs(args: string[]): Options {
@@ -41,7 +40,7 @@ Options:
 
 try {
   const opts = parseArgs(process.argv.slice(2));
-  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
+  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/reporting-api.ts");
   await runQaCoverageReportCommand(opts);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

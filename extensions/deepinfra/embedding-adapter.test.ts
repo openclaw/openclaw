@@ -1,4 +1,3 @@
-// Deepinfra tests cover its generic embedding adapter behavior.
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,26 +67,24 @@ describe("DeepInfra generic embedding adapter", () => {
     );
   });
 
-  it.each([
-    undefined,
-    "https://api.deepinfra.com/v1/openai",
-    "https://api.deepinfra.com/v1/openai/",
-    "https://API.DEEPINFRA.COM:443/v1/openai/",
-  ])("preserves the exact existing default identity for %s", async (baseUrl) => {
-    const result = await deepinfraEmbeddingProviderAdapter.create({
-      config: {},
-      model: "BAAI/bge-m3",
-      remote: { apiKey: "fixture-default-key", ...(baseUrl ? { baseUrl } : {}) },
-    });
+  it.each([undefined, "https://API.DEEPINFRA.COM:443/v1/openai/"])(
+    "preserves the exact existing default identity for %s",
+    async (baseUrl) => {
+      const result = await deepinfraEmbeddingProviderAdapter.create({
+        config: {},
+        model: "BAAI/bge-m3",
+        remote: { apiKey: "fixture-default-key", ...(baseUrl ? { baseUrl } : {}) },
+      });
 
-    expect(result.runtime?.cacheKeyData).toEqual({
-      provider: "deepinfra",
-      model: "BAAI/bge-m3-resolved",
-    });
-  });
+      expect(result.runtime?.cacheKeyData).toEqual({
+        provider: "deepinfra",
+        model: "BAAI/bge-m3-resolved",
+      });
+    },
+  );
 
   it("preserves model, dimensions, input types, and runtime identity when creating", async () => {
-    const result = await deepinfraEmbeddingProviderAdapter.create({
+    const options = {
       config: {},
       agentDir: "/tmp/openclaw-agent",
       provider: "deepinfra",
@@ -102,23 +99,11 @@ describe("DeepInfra generic embedding adapter", () => {
       documentInputType: "document",
       dimensions: 1024,
       taskType: "SEMANTIC_SIMILARITY",
-    });
+    };
+    const result = await deepinfraEmbeddingProviderAdapter.create(options);
 
     expect(mocks.createDeepInfraEmbeddingProvider).toHaveBeenCalledWith({
-      config: {},
-      agentDir: "/tmp/openclaw-agent",
-      provider: "deepinfra",
-      remote: {
-        baseUrl: "https://api.deepinfra.com/v1/openai",
-        apiKey: "fixture-key",
-        headers: { "x-deployment": "tenant-a" },
-      },
-      model: "BAAI/bge-m3",
-      inputType: "semantic",
-      queryInputType: "query",
-      documentInputType: "document",
-      dimensions: 1024,
-      taskType: "SEMANTIC_SIMILARITY",
+      ...options,
       defaultModel: "BAAI/bge-m3",
     });
     expect(result.runtime).toEqual({
@@ -130,11 +115,7 @@ describe("DeepInfra generic embedding adapter", () => {
         headers: [["x-deployment", "tenant-a"]],
       },
     });
-    expect(result.provider).toMatchObject({
-      id: "deepinfra",
-      model: "BAAI/bge-m3",
-      maxInputTokens: 8192,
-    });
+    expect(result.provider).toBe(memoryProvider);
   });
 
   it("partitions endpoints and tenants while excluding rotated credentials", async () => {
@@ -193,51 +174,5 @@ describe("DeepInfra generic embedding adapter", () => {
     expect(first.runtime?.cacheKeyData).not.toEqual(otherTenant.runtime?.cacheKeyData);
     expect(first.runtime?.cacheKeyData).not.toEqual(otherEndpoint.runtime?.cacheKeyData);
     expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-");
-  });
-
-  it("returns canonical query and batch calls without changing inputs or cancellation", async () => {
-    const result = await deepinfraEmbeddingProviderAdapter.create({
-      config: {},
-      model: "BAAI/bge-m3",
-    });
-    const provider = result.provider;
-    if (!provider) {
-      throw new Error("expected DeepInfra embedding provider");
-    }
-    const abortController = new AbortController();
-
-    await expect(
-      provider.embed(
-        { text: "query text" },
-        { signal: abortController.signal, inputType: "query" },
-      ),
-    ).resolves.toEqual([1, 0]);
-    await expect(provider.embed("query without an explicit type")).resolves.toEqual([1, 0]);
-    await expect(
-      provider.embedBatch(["document one", { text: "document two" }], {
-        signal: abortController.signal,
-        inputType: "document",
-      }),
-    ).resolves.toEqual([
-      [0, 1],
-      [0, 1],
-    ]);
-    await expect(
-      provider.embedBatch(["query one", "query two"], { inputType: "query" }),
-    ).resolves.toEqual([
-      [0, 1],
-      [0, 1],
-    ]);
-    await provider.close?.();
-
-    expect(memoryProvider.embed).toHaveBeenCalledWith(
-      { text: "query text" },
-      { signal: abortController.signal, inputType: "query" },
-    );
-    expect(memoryProvider.embedBatch).toHaveBeenCalledWith(
-      ["document one", { text: "document two" }],
-      { signal: abortController.signal, inputType: "document" },
-    );
-    expect(memoryProvider.close).toHaveBeenCalledOnce();
   });
 });

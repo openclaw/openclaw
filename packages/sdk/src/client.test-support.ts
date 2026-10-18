@@ -16,7 +16,6 @@ export type RequestCall = {
 type FakeResponseValue = null | boolean | number | string | Record<string, unknown> | unknown[];
 type FakeResponseHandler = (
   params: unknown,
-  options: GatewayRequestOptions | undefined,
   transport: FakeTransport,
 ) => Promise<FakeResponseValue> | FakeResponseValue;
 type FakeResponse = FakeResponseValue | FakeResponseHandler;
@@ -35,7 +34,7 @@ export class FakeTransport implements OpenClawTransport {
     this.calls.push({ method, params, options });
     const response = this.responses[method];
     if (typeof response === "function") {
-      return (await response(params, options, this)) as T;
+      return (await response(params, this)) as T;
     }
     return response as T;
   }
@@ -105,7 +104,7 @@ export function createRunEventFixture(
   events: readonly GatewayEvent[],
 ) {
   return createClientFixture({
-    agent: (_params, _options, transport) => {
+    agent: (_params, transport) => {
       for (const event of events) {
         transport.emit(event);
       }

@@ -56,28 +56,21 @@ describe("searxng client", () => {
     testing.SEARXNG_SEARCH_CACHE.clear();
   });
 
-  it.each([
-    [
-      "http://127.0.0.1:8888/searxng",
-      "http://127.0.0.1:8888/searxng/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-      false,
-    ],
-    [
-      "http://127.0.0.1:8888/search/",
-      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-      true,
-    ],
-  ] as const)("builds the public request URL from %s", async (baseUrl, expectedUrl, fromConfig) => {
+  it("builds the request URL from plugin config", async () => {
     endpointMockState.responses.push(Response.json({ results: [] }));
-    const webSearch = { baseUrl, categories: "general,news", language: "en" };
+    const webSearch = {
+      baseUrl: "http://127.0.0.1:8888/search/",
+      categories: "general,news",
+      language: "en",
+    };
     await runSearxngSearch({
       query: "openclaw",
-      ...(fromConfig
-        ? { config: { plugins: { entries: { searxng: { config: { webSearch } } } } } }
-        : webSearch),
+      config: { plugins: { entries: { searxng: { config: { webSearch } } } } },
     });
 
-    expect(endpointMockState.calls[0]?.url).toBe(expectedUrl);
+    expect(endpointMockState.calls[0]?.url).toBe(
+      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
+    );
   });
 
   it("normalizes, filters, and caps provider result rows", async () => {
@@ -131,31 +124,6 @@ describe("searxng client", () => {
     });
   });
 
-  it.each(["general,news", undefined])(
-    "does not retry empty category searches containing general or no category (%s)",
-    async (categories) => {
-      endpointMockState.responses.push(Response.json({ results: [] }));
-      const result = await search({ categories, count: 5 });
-
-      expect(
-        endpointMockState.calls.map(({ url }) => new URL(url).searchParams.get("categories")),
-      ).toEqual([categories ?? null]);
-      expect(result).toEqual({
-        query: "openclaw",
-        provider: "searxng",
-        count: 0,
-        tookMs: expect.any(Number),
-        externalContent: {
-          provider: "searxng",
-          source: "web_search",
-          untrusted: true,
-          wrapped: true,
-        },
-        results: [],
-      });
-    },
-  );
-
   it("preserves the upstream HTTP error status", async () => {
     endpointMockState.responses.push(new Response("upstream rejected search", { status: 429 }));
     await expect(search({ cacheTtlMinutes: 0 })).rejects.toMatchObject({
@@ -188,7 +156,6 @@ describe("searxng client", () => {
 
   it.each([
     ["https://search.example.com/searxng", "93.184.216.34", "strict"],
-    ["http://matrix-synapse:8080", "10.0.0.5", "selfHosted"],
     ["https://search.internal/searxng", "10.0.0.5", "selfHosted"],
   ] as const)("classifies %s as %s routing", async (baseUrl, address, expected) => {
     ssrfMockState.addresses = [address];

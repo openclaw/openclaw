@@ -47,11 +47,8 @@ export async function stageGatewayWorkspaceMedia(params: {
     return params.payload;
   }
   const stagedAttachments = params.payload.attachments?.map((attachment, index) => {
-    const stagedAttachment = { ...attachment, path: stagedMediaUrls[index] };
-    delete stagedAttachment.url;
-    delete stagedAttachment.mediaUrl;
-    delete stagedAttachment.filePath;
-    return stagedAttachment;
+    const { url: _url, mediaUrl: _mediaUrl, filePath: _filePath, ...metadata } = attachment;
+    return { ...metadata, path: stagedMediaUrls[index] };
   });
   return {
     ...params.payload,

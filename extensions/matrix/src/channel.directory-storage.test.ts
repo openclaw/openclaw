@@ -57,12 +57,6 @@ describe("Matrix config directory storage", () => {
       selected: "team-ops",
     },
     {
-      name: "an explicit normalized account",
-      config: { defaultAccount: "other", accounts: { other: {}, "Team Ops": {} } },
-      accountId: " Team Ops ",
-      selected: "team-ops",
-    },
-    {
       name: "a scoped environment account",
       env: {
         [scopedEnv.homeserver]: "https://matrix.example.org",

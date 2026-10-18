@@ -46,9 +46,9 @@ it.each(["retargeted", "empty", "cancel-during-idle", "cancel-during-write"] as 
       sessionKey: "agent:main:replacement",
     };
     await upsertSessionEntryCore(replacement, { sessionId: replacement.sessionId, updatedAt: 1 });
-    const manager = guardSessionManager(SessionManager.open(target, dir));
+    const manager = guardSessionManager(await SessionManager.openAsync(target, dir));
     if (scenario !== "empty") {
-      manager.appendMessage(
+      await manager.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: "pending-call", name: "read", arguments: {} }],
           stopReason: "toolUse",

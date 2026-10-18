@@ -23,7 +23,7 @@ export function registerLocalProvidersCommand<T>(
   parent: Command,
   description: string,
   collect: (cfg: OpenClawConfig, agentId: string) => T | Promise<T>,
-  format: (value: T) => string,
+  format?: (value: T) => string,
 ): void {
   parent
     .command("providers")
@@ -32,10 +32,10 @@ export function registerLocalProvidersCommand<T>(
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, format, async () => {
-        const { getRuntimeConfig } = await import("../../config/config.js");
+        const { captureRuntimeConfigAsyncReader } = await import("../../config/config.js");
         const { resolveCapabilityProviderAgentId, resolveCapabilityAgentOption } =
           await import("./shared.js");
-        const cfg = getRuntimeConfig();
+        const cfg = await captureRuntimeConfigAsyncReader()();
         const agentId = resolveCapabilityProviderAgentId(
           cfg,
           resolveCapabilityAgentOption(command, opts.agent),

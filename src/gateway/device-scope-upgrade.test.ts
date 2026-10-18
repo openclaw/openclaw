@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as devicePairing from "../infra/device-pairing.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 
 const pairing = vi.hoisted(() => ({ pending: true }));
@@ -14,7 +19,8 @@ describe("scope upgrade observations", () => {
   it("cancels one observer without losing the shared upgrade result", async () => {
     vi.useFakeTimers();
     pairing.pending = true;
-    const coordinator = new ScopeUpgradeCoordinator();
+    const scheduler = createTestGatewayScheduler();
+    const coordinator = new ScopeUpgradeCoordinator(scheduler);
     const observer = new AsyncWorkScope();
     const owner = { deviceId: "device", publicKey: "public-key" };
     coordinator.register({
@@ -56,5 +62,86 @@ describe("scope upgrade observations", () => {
       await observer.drain();
     }
     expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
   });
+
+  it("retires queued observations at the scheduler fence before received work closes", async () => {
+    vi.useFakeTimers();
+    pairing.pending = true;
+    const scheduler = createTestGatewayScheduler();
+    const coordinator = new ScopeUpgradeCoordinator(scheduler);
+    const observer = new AsyncWorkScope();
+    const owner = { deviceId: "device", publicKey: "public-key" };
+    const pendingRead = vi.spyOn(devicePairing, "getPendingDevicePairing");
+    coordinator.register({
+      requestId: "upgrade",
+      expiresAtMs: Date.now() + 60_000,
+      requestedScopes: ["operator.write"],
+      owner,
+    });
+    const observation = observer
+      .run(() => coordinator.wait("upgrade", owner))
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pendingRead).toHaveBeenCalledTimes(1);
+      coordinator.notify("upgrade", "rejected");
+      scheduler.beginClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(observer.signal.aborted).toBe(false);
+      expect(pendingRead).toHaveBeenCalledTimes(1);
+      await expect(observation).resolves.toEqual({
+        error: expect.objectContaining({ name: "AbortError" }),
+      });
+    } finally {
+      observer.beginClose();
+      await coordinator.close();
+      await observation;
+      await observer.drain();
+      await scheduler.stop();
+      pendingRead.mockRestore();
+    }
+    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
+
+  it.each(["pending", "terminal"] as const)(
+    "expires retained %s results once after a late Gateway wake",
+    async (state) => {
+      const time = createGatewaySchedulerClock(1_000);
+      const scheduler = createTestGatewayScheduler(time.clock);
+      const coordinator = new ScopeUpgradeCoordinator(scheduler);
+      const owner = { deviceId: "device", publicKey: "public-key" };
+      pairing.pending = state === "pending";
+      coordinator.register({
+        requestId: "upgrade",
+        expiresAtMs: 61_000,
+        requestedScopes: ["operator.write"],
+        owner,
+      });
+      try {
+        if (state === "terminal") {
+          expect(await coordinator.wait("upgrade", owner)).toEqual({
+            status: "rejected",
+            requestId: "upgrade",
+          });
+          await time.advanceTo(15_999);
+          expect(await coordinator.wait("upgrade", owner)).toEqual({
+            status: "rejected",
+            requestId: "upgrade",
+          });
+        }
+        time.setTime(state === "pending" ? 90_000 : 30_000);
+        await time.wake();
+        expect(await coordinator.wait("upgrade", owner)).toBeNull();
+        expect(scheduler.nextWakeAtMs).toBeNull();
+      } finally {
+        await coordinator.close();
+        await scheduler.stop();
+      }
+    },
+  );
 });

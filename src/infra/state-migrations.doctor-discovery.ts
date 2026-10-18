@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   listLegacyRegistryWorktreesForMigration,
   listRegistryWorktreesForMigration,
@@ -10,12 +11,17 @@ import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hasErrnoCode } from "./errno.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import {
   prepareAgentDatabaseMigrationDiscovery,
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "./state-migrations.media-persistence-targets.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+
+export function resolveConcreteBindingAccountId(value: unknown): string | undefined {
+  const accountId = normalizeOptionalString(value);
+  return accountId && accountId !== "*" ? accountId : undefined;
+}
 
 export async function prepareDoctorAgentDatabaseDiscovery(
   cfg: OpenClawConfig,
@@ -46,7 +52,7 @@ export async function detectManagedWorktreeStateMigration(params: {
 }): Promise<LegacyStateDetection["worktrees"]> {
   const rawRoot = path.join(params.stateDir, "worktrees");
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  const databaseExists = migrationFileExists(resolveOpenClawStateSqlitePath(stateEnv));
+  const databaseExists = safeStatSync(resolveOpenClawStateSqlitePath(stateEnv))?.isFile() === true;
   const legacyIds =
     params.doctorOnlyStateMigrations === true && databaseExists
       ? listLegacyRegistryWorktreesForMigration(stateEnv, {

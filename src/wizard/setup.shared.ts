@@ -1,19 +1,22 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import fs from "node:fs";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { assertBaseSnapshotStillCurrent } from "../config/io.write-safety.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import {
   transformConfigWithPendingPluginInstalls,
   stripPendingPluginInstallRecords,
 } from "../plugins/install-record-commit.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../secrets/ref-contract.js";
 import {
   captureSetupInferenceFileUndo,
   type SetupInferenceConfigTarget,
@@ -75,7 +78,9 @@ export function formatQuickstartGatewaySummary(
       auth:
         defaults.authMode === "token"
           ? t("wizard.setup.quickstartAuthTokenDefault")
-          : t("common.password"),
+          : defaults.authMode === "password"
+            ? t("common.password")
+            : t("wizard.setup.quickstartAuthKept"),
     }),
     t("wizard.setup.quickstartTailscaleExposure", {
       exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
@@ -122,7 +127,6 @@ export type WizardConfigWriteOptions = {
   writeOptions?: ConfigWriteOptions;
   /** Runtime follow-up intent for the Gateway config watcher. */
   afterWrite?: ConfigWriteAfterWrite;
-  onPreparedCommit?: (snapshot: ConfigFileSnapshot, config: OpenClawConfig) => void;
 };
 
 /**
@@ -166,7 +170,7 @@ export async function writeWizardConfigFile(
         : {}),
       ...(opts.baseSnapshot ? { baseSnapshot: opts.baseSnapshot } : {}),
     },
-    transform: (current, context) => {
+    transform: (current) => {
       // SAFETY: Both sides of the wizard delta are typed configs.
       const nextConfig = opts.mergeBase
         ? (applyMergePatch(current, createMergePatch(opts.mergeBase, config)) as OpenClawConfig)
@@ -174,7 +178,6 @@ export async function writeWizardConfigFile(
       for (const path of explicitNullPaths) {
         setConfigValueAtPath(nextConfig, path, null);
       }
-      opts.onPreparedCommit?.(context.snapshot, nextConfig);
       return { nextConfig };
     },
   });
@@ -188,18 +191,17 @@ export function createWizardInferenceConfigTarget(
     options: SetupInferenceConfigWriteOptions,
     baseSnapshot?: ConfigFileSnapshot,
   ) => {
-    const result = await commit(config, {
+    const { snapshot, nextConfig } = await commit(config, {
       baseSnapshot,
       writeOptions: options.writeOptions,
-      onPreparedCommit: (snapshot, next) =>
-        options.captureUndo(
-          captureSetupInferenceFileUndo(
-            { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
-            stripPendingPluginInstallRecords(next),
-          ),
-        ),
     });
-    return result.nextConfig;
+    options.captureUndo(
+      captureSetupInferenceFileUndo(
+        { ...snapshot, sourceConfig: stripPendingPluginInstallRecords(snapshot.sourceConfig) },
+        nextConfig,
+      ),
+    );
+    return nextConfig;
   };
   return {
     write,
@@ -215,6 +217,25 @@ export function createWizardInferenceConfigTarget(
 
 export async function readSetupConfigFileSnapshot() {
   return await createConfigIO({ pluginValidation: "skip" }).readConfigFileSnapshot();
+}
+
+export async function readSetupConfigAuthority(env?: NodeJS.ProcessEnv) {
+  const io = createConfigIO({ env, pluginValidation: "skip", observe: false });
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+  if (snapshot.readError || (snapshot.exists && snapshot.raw === null)) {
+    throw new ConfigMutationConflictError("Setup config could not be read; rerun setup.");
+  }
+  const includeGraph = {
+    hashes: writeOptions.includeFileHashesForWrite ?? {},
+    targets: writeOptions.includeFileTargetsForWrite ?? {},
+  };
+  return {
+    snapshot,
+    assertCurrent: () => {
+      writeOptions.assertConfigPathForWrite?.();
+      assertBaseSnapshotStillCurrent(snapshot, io.configPath, fs, includeGraph);
+    },
+  };
 }
 
 export async function readValidSetupConfigFile(): Promise<OpenClawConfig> {
@@ -257,13 +278,13 @@ function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
   if (config.wizard?.securityAcknowledgedAt) {
     return config;
   }
-  return inheritLegacyDefaultAgentId(config, {
+  return {
     ...config,
     wizard: {
       ...config.wizard,
       securityAcknowledgedAt: new Date().toISOString(),
     },
-  });
+  };
 }
 
 /** Ask once during interactive setup; automation never creates telemetry consent. */
@@ -286,14 +307,14 @@ export async function requestTelemetryConsent(params: {
     initialValue: false,
   });
 
-  return inheritLegacyDefaultAgentId(params.config, {
+  return {
     ...params.config,
     telemetry: {
       ...params.config.telemetry,
       enabled,
       consentedAt: new Date().toISOString(),
     },
-  });
+  };
 }
 
 /** Derive quickstart gateway defaults, preserving any existing gateway settings. */
@@ -320,9 +341,13 @@ export function resolveQuickstartGatewayDefaults(
       ? bindRaw
       : "loopback";
 
-  let authMode: GatewayAuthChoice = "token";
-  if (baseConfig.gateway?.auth?.mode === "token" || baseConfig.gateway?.auth?.mode === "password") {
-    authMode = baseConfig.gateway.auth.mode;
+  // Preserve proxy-owned auth instead of inferring a shared-secret mode from
+  // its local password. `none` retains the existing credential inference;
+  // explicit CLI choices still win below.
+  let authMode: GatewayAuthMode = "token";
+  const storedAuthMode = baseConfig.gateway?.auth?.mode;
+  if (storedAuthMode !== undefined && storedAuthMode !== "none") {
+    authMode = storedAuthMode;
   } else if (baseConfig.gateway?.auth?.token) {
     authMode = "token";
   } else if (baseConfig.gateway?.auth?.password) {
@@ -351,13 +376,7 @@ export function resolveQuickstartGatewayDefaults(
     tailscaleMode: overrides.tailscale ?? tailscaleMode,
     token:
       overrides.gatewayTokenRefEnv !== undefined
-        ? {
-            source: "env",
-            provider: resolveDefaultSecretProviderAlias(baseConfig, "env", {
-              preferFirstProviderForSource: true,
-            }),
-            id: overrides.gatewayTokenRefEnv.trim(),
-          }
+        ? createGatewayEnvSecretRef(baseConfig, overrides.gatewayTokenRefEnv.trim())
         : (overrides.gatewayToken ?? baseConfig.gateway?.auth?.token),
     password: overrides.gatewayPassword ?? baseConfig.gateway?.auth?.password,
     customBindHost: baseConfig.gateway?.customBindHost,

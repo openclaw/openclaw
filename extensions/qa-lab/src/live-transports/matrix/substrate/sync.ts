@@ -5,7 +5,7 @@ import {
   type MatrixQaObservedEvent,
   type MatrixQaRoomEvent,
 } from "./events.js";
-import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { requestMatrixJson } from "./request.js";
 
 type MatrixQaSyncResponse = {
   next_batch?: string;
@@ -35,7 +35,6 @@ export type MatrixQaRoomEventWaitResult =
 type MatrixQaSyncParams = {
   accessToken?: string;
   baseUrl: string;
-  fetchImpl?: MatrixQaFetchLike;
 };
 
 export type MatrixQaRoomObserver = {
@@ -64,12 +63,10 @@ type MatrixQaRoomObserverState = {
 };
 
 export async function primeMatrixQaRoom(params: MatrixQaSyncParams) {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const response = await requestMatrixJson<MatrixQaSyncResponse>({
     accessToken: params.accessToken,
     baseUrl: params.baseUrl,
     endpoint: "/_matrix/client/v3/sync",
-    fetchImpl,
     method: "GET",
     query: { timeout: 0 },
   });
@@ -83,7 +80,6 @@ async function pollMatrixQaRoomObserver(
     timeoutMs: number;
   },
 ) {
-  const fetchImpl = params.fetchImpl ?? fetch;
   if (params.roomObserver.pollPromise) {
     await params.roomObserver.pollPromise;
     return;
@@ -97,7 +93,6 @@ async function pollMatrixQaRoomObserver(
         accessToken: params.accessToken,
         baseUrl: params.baseUrl,
         endpoint: "/_matrix/client/v3/sync",
-        fetchImpl,
         method: "GET",
         query: {
           ...(params.roomObserver.since ? { since: params.roomObserver.since } : {}),

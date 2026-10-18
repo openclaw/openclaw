@@ -46,7 +46,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       },
       remote: { cdpUrl: "http://10.0.0.42:9222" },
     },
-    // headless: false,
+    // headless: true, // default; set false for a visible managed browser
     // noSandbox: false,
     // extraArgs: [],
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -113,7 +113,13 @@ For the full key index and the other top-level config domains, see [Configuratio
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
-- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Managed browsers are headless by default. Explicit global or per-profile
+  `headless: false` keeps headed mode; externally owned browsers are unchanged.
+- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary → installed Playwright browser cache.
+  Cache discovery selects full Chromium only. On Linux and macOS, use an explicit
+  per-profile `executablePath` for headless shell and keep it in a separate profile;
+  switching an existing full-Chromium profile to shell can discard localStorage.
+  Managed shell launches are unsupported on Windows.
 - `browser.executablePath` and `browser.profiles.<name>.executablePath` both
   accept `~` and `~/...` for your OS home directory before Chromium launch.
   Per-profile `userDataDir` on `existing-session` profiles is also tilde-expanded.
@@ -158,7 +164,7 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
   the theme default applies. `prefs.accent` also accepts `"theme"` to explicitly
   select the Control UI theme palette without inheriting `seamColor`; `talk.config`
   omits its hex-only accent in that case.
-- `prefs`: cross-device operator preferences. This is the canonical home so agents can
+- `prefs`: cross-device operator preferences. This is the shared home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An
   explicitly read-only connection keeps edits in that browser without attempting
@@ -260,11 +266,13 @@ checks. Existing configuration and node pairing remain unchanged on update;
 enabling the Desktop panel does not automatically enable CUA.
 
 If desktop teardown fails, the Gateway retains the session's cleanup owner and
-reports the failure in its logs. A new observation retries cleanup before
-starting a replacement. For SSH-backed worker desktops, temporary connection
-files remain until the transport has closed; a late process exit triggers
-another cleanup attempt. Check the reported process or filesystem error before
-retrying an observation that cannot finish cleanup.
+reports the failure in its logs. New observations return that failure without
+retrying cleanup or accumulating replacement owners. Lifecycle cleanup, such as
+turning Host Desktop off in Labs, retries the retained owner; a replacement can
+start only after cleanup succeeds. For SSH-backed worker desktops, temporary
+connection files remain until the transport has closed; a late process exit
+triggers another cleanup attempt. Check the reported process or filesystem error
+before retrying cleanup.
 
 Without managed mode, configure third-party servers to listen on loopback when
 they support it. On Linux, use loopback-only TigerVNC or `x11vnc`; GNOME Remote

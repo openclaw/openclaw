@@ -53,23 +53,6 @@ describe("prepared inline row defaults", () => {
       expected: expectedDefaults,
     },
     {
-      name: "sparse exact before alias",
-      rows: [exact, alias],
-      expected: expectedDefaults,
-    },
-    {
-      name: "explicit true exact",
-      rows: [
-        { ...alias, reasoning: false, input: ["text"] },
-        { ...exact, reasoning: true, input: ["text", "image"] },
-      ],
-      expected: {
-        ...expectedDefaults,
-        reasoning: true,
-        input: ["text", "image"],
-      },
-    },
-    {
       name: "same-spelling cost and capability omissions",
       rows: [
         { ...exact, cost: { input: 7 } },

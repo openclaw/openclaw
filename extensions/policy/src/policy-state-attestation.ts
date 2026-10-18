@@ -3,7 +3,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyAttestation, PolicyEvidence } from "./policy-state-types.js";
 
 export function policyDocumentHash(policy: unknown): string {
-  return sha256(stableJson(policy));
+  return `sha256:${createHash("sha256").update(stableJson(policy)).digest("hex")}`;
 }
 
 export function createPolicyAttestation(input: {
@@ -38,10 +38,6 @@ export function createPolicyAttestation(input: {
       findingsHash,
     }),
   };
-}
-
-function sha256(value: string): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 function stableJson(value: unknown): string {

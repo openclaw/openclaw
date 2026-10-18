@@ -1,37 +1,25 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
-/**
- * Device pairing and token-management protocol schemas.
- *
- * These payloads cross the gateway approval boundary, so request ids and device
- * ids stay explicit and feature handlers own the authorization checks.
- */
-/** Lists pending and approved device pairing records. */
+// Feature handlers own authorization; schemas keep request and device identities explicit.
 export const DevicePairListParamsSchema = closedObject({});
 
-/** Approves a pending pairing request by request id. */
 export const DevicePairApproveParamsSchema = closedObject({ requestId: NonEmptyString });
 
-/** Rejects a pending pairing request by request id. */
 export const DevicePairRejectParamsSchema = closedObject({ requestId: NonEmptyString });
 
-/** Removes an approved or remembered device by device id. */
 export const DevicePairRemoveParamsSchema = closedObject({ deviceId: NonEmptyString });
 
-/** Operator-assigned label for a paired device (max 64 chars after protocol bound). */
 const DevicePairLabelString = Type.String({ minLength: 1, maxLength: 64 });
 
-/** Renames a paired device while preserving its stable device id. */
 export const DevicePairRenameParamsSchema = closedObject({
   deviceId: NonEmptyString,
   label: DevicePairLabelString,
 });
 
-/** Rotates or issues a device token for a specific role/scope grant. */
 export const DeviceTokenRotateParamsSchema = closedObject({
   deviceId: NonEmptyString,
   role: NonEmptyString,
@@ -75,24 +63,19 @@ export const DeviceTokenRotateResultSchema = Type.Object(
   },
 );
 
-/** Revokes one role-bound device token grant. */
 export const DeviceTokenRevokeParamsSchema = closedObject({
   deviceId: NonEmptyString,
   role: NonEmptyString,
 });
 
-/** Requests an approval-bound operator scope upgrade for the calling device. */
 export const ScopeUpgradeRequestSchema = closedObject({
   scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
 });
 
-/** Identifies the pending scope upgrade observed by the calling device. */
 export const ScopeUpgradeWaitSchema = closedObject({ requestId: NonEmptyString });
 
-/** Registers a pending scope upgrade without exposing device credentials. */
 export const ScopeUpgradeRegistrationSchema = closedObject({ requestId: NonEmptyString });
 
-/** Returns an approved scope upgrade with the freshly rotated credential. */
 export const ScopeUpgradeApprovedSchema = closedObject({
   status: Type.Literal("approved"),
   requestId: NonEmptyString,
@@ -100,26 +83,22 @@ export const ScopeUpgradeApprovedSchema = closedObject({
   scopes: Type.Array(NonEmptyString, { minItems: 1, maxItems: 8, uniqueItems: true }),
 });
 
-/** Reports that an administrator rejected the pending scope upgrade. */
 export const ScopeUpgradeRejectedSchema = closedObject({
   status: Type.Literal("rejected"),
   requestId: NonEmptyString,
 });
 
-/** Reports that the pending scope upgrade expired before approval. */
 export const ScopeUpgradeExpiredSchema = closedObject({
   status: Type.Literal("expired"),
   requestId: NonEmptyString,
 });
 
-/** Returns the terminal scope-upgrade state to the identity-bound waiter. */
 export const ScopeUpgradeResultSchema = Type.Union([
   ScopeUpgradeApprovedSchema,
   ScopeUpgradeRejectedSchema,
   ScopeUpgradeExpiredSchema,
 ]);
 
-/** Event emitted when a client opens or refreshes a pairing request. */
 export const DevicePairRequestedEventSchema = closedObject({
   requestId: NonEmptyString,
   deviceId: NonEmptyString,
@@ -142,7 +121,6 @@ export const DevicePairRequestedEventSchema = closedObject({
 /** Opaque non-secret setup correlation id; never derived from the bearer setup code. */
 const SetupIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 
-/** Event emitted after a pairing request is approved, rejected, or otherwise resolved. */
 export const DevicePairResolvedEventSchema = closedObject({
   requestId: NonEmptyString,
   deviceId: NonEmptyString,
@@ -159,7 +137,7 @@ export const DevicePairSetupCompletedEventSchema = closedObject({
   setupId: SetupIdSchema,
   deviceId: NonEmptyString,
   deviceName: Type.Optional(NonEmptyString),
-  access: Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+  access: stringLiteralUnion(["full", "limited", "node"]),
   ts: Type.Integer({ minimum: 0 }),
 });
 
@@ -220,20 +198,18 @@ export const DevicePairSetupCodeResultSchema = closedObject({
   setupId: Type.Optional(SetupIdSchema),
   setupCode: NonEmptyString,
   joinUrl: Type.Optional(NonEmptyString),
+  command: Type.Optional(NonEmptyString),
+  serviceCommand: Type.Optional(NonEmptyString),
+  installedCommand: Type.Optional(NonEmptyString),
+  versionNote: Type.Optional(NonEmptyString),
   qrDataUrl: Type.Optional(SetupCodeQrDataUrlSchema),
   gatewayUrl: NonEmptyString,
   gatewayUrls: Type.Optional(
     Type.Array(NonEmptyString, { minItems: 2, maxItems: 8, uniqueItems: true }),
   ),
-  auth: Type.Union([
-    Type.Literal("token"),
-    Type.Literal("password"),
-    Type.Literal("trusted-proxy"),
-  ]),
+  auth: stringLiteralUnion(["token", "password", "trusted-proxy"]),
   urlSource: NonEmptyString,
-  access: Type.Optional(
-    Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
-  ),
+  access: Type.Optional(stringLiteralUnion(["full", "limited", "node"])),
   accessDowngraded: Type.Optional(Type.Boolean()),
   expiresAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });

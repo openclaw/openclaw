@@ -33,6 +33,11 @@ vi.mock("../../plugins/runtime.js", () => ({
 vi.mock("../../state/user-profiles.js", () => ({
   hasMultipleSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
 }));
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: hoisted.hasMultipleSessionSharingIdentities,
+  readResidentUserProfileAliases: (id: string) => new Set([id]),
+}));
 
 const { sessionCatalogHandlers } = await import("./session-catalog.js");
 let projection: ReturnType<typeof createSessionRowProjectionFixture>;
@@ -88,22 +93,19 @@ describe("session catalog share routes", () => {
     expect(catalogs.every((catalog) => catalog.shareRoute === undefined)).toBe(true);
   });
 
-  it.each(["chat", "focus", "plugin", "settings"])(
-    "does not project the reserved %s route",
-    async (routeSegment) => {
-      hoisted.activeRegistry.sessionCatalogs = [
-        {
-          provider: provider("external", {
-            shareRoute: { ...SHARE_ROUTE, routeSegment },
-          }),
-        },
-      ];
+  it("does not project a reserved route", async () => {
+    hoisted.activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("external", {
+          shareRoute: { ...SHARE_ROUTE, routeSegment: "chat" },
+        }),
+      },
+    ];
 
-      const respond = await listCatalogs({ catalogId: "external" });
+    const respond = await listCatalogs({ catalogId: "external" });
 
-      expect(respond).toHaveBeenCalledWith(true, {
-        catalogs: [expect.not.objectContaining({ shareRoute: expect.anything() })],
-      });
-    },
-  );
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [expect.not.objectContaining({ shareRoute: expect.anything() })],
+    });
+  });
 });

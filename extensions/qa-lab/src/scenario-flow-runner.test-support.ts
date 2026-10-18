@@ -200,7 +200,6 @@ export const telegramRichObservationCases = [
   "unmatched-after-reset",
   "duplicate-run-message",
   "lost-literal-ancestor",
-  "emoji-degraded",
   "first-content-failed",
   "send-error",
 ] as const;
@@ -233,11 +232,6 @@ export async function assertTelegramRichObservationFlow(
   };
   const list = { "@type": "pageBlockList", items: [{ blocks: [paragraph(styled)] }] };
   const math = { "@type": "richTextMathematicalExpression", expression: "x" };
-  const emoji = {
-    "@type": "richTextCustomEmoji",
-    custom_emoji_id: "4929292553544531969",
-    alternative_text: "👋",
-  };
   const annotation = (wrapper: (text: unknown) => unknown) =>
     paragraph({
       "@type": "richTexts",
@@ -262,8 +256,6 @@ export async function assertTelegramRichObservationFlow(
     { "@type": "pageBlockBlockQuote", blocks: [paragraph(styled)] },
     paragraph(url(math)),
     paragraph(wrap("richTextSpoiler", math)),
-    paragraph(url(emoji)),
-    paragraph(wrap("richTextSpoiler", emoji)),
     annotation(url),
     annotation((text) => wrap("richTextBold", text)),
     paragraph({
@@ -313,15 +305,13 @@ export async function assertTelegramRichObservationFlow(
         blocks: [
           kind === "message" && id === flattenedIndex + 1
             ? paragraph(styled)
-            : testCase === "reactivated-literal" && id === 10
+            : testCase === "reactivated-literal" && id === 8
               ? paragraph(wrap("richTextBold", plain("literal")))
-              : testCase === "lost-literal-ancestor" && id === 11
+              : testCase === "lost-literal-ancestor" && id === 9
                 ? literalScope(wrap("richTextSuperscript", wrap("richTextBold", plain("x"))))
-                : testCase === "emoji-degraded" && id === 6
-                  ? paragraph(url(plain("👋")))
-                  : testCase === "first-content-failed" && id === 1 && kind === "message"
-                    ? paragraph(plain("Download"))
-                    : block,
+                : testCase === "first-content-failed" && id === 1 && kind === "message"
+                  ? paragraph(plain("Download"))
+                  : block,
           paragraph(plain(marker)),
           ...(testCase === "oversized-tree" && id === 1 && kind === "message"
             ? [paragraph(plain("x".repeat(20_000)))]
@@ -373,8 +363,39 @@ export async function assertTelegramRichObservationFlow(
           providerMode: "mock-openai",
           cfg: { channels: { telegram: { accounts: { sut: { richMessages: true } } } } },
           gateway: {
-            call: async (method: string, args: { message: string }) => {
+            call: async (
+              method: string,
+              args: {
+                message?: string;
+                action?: string;
+                conversationReadOrigin?: string;
+                params?: { messageId?: number; content?: string };
+              },
+            ) => {
+              if (method === "message.action") {
+                assert.equal(args.action, "edit");
+                assert.equal(args.conversationReadOrigin, "direct-operator");
+                assert.equal(args.params?.messageId, 1);
+                edits += 1;
+                const firstMarker = [...markers][0];
+                assert.ok(firstMarker !== undefined);
+                const marker = readMarker(args.params?.content);
+                deliver("edit", () => {
+                  observed[0] = observation(
+                    testCase === "wrong-edit-id" ? Number(args.params?.messageId) + 40 : 1,
+                    list,
+                    testCase === "wrong-edit-kind" ? "message" : "edit",
+                    testCase === "wrong-edit-marker"
+                      ? marker + "-wrong"
+                      : testCase === "stale-edit"
+                        ? firstMarker
+                        : marker,
+                  );
+                });
+                return { ok: true };
+              }
               assert.equal(method, "send");
+              assert.ok(args.message);
               // Telegram extracts Markdown images before dispatching to its renderer.
               const [planned] = createOutboundPayloadPlan([{ text: args.message }], {
                 extractMarkdownImages: true,
@@ -449,27 +470,6 @@ export async function assertTelegramRichObservationFlow(
             await joined;
           }
         },
-        runQaCli: async (_env: unknown, args: string[]) => {
-          assert.deepEqual(args.slice(0, 2), ["message", "edit"]);
-          const id = Number(args[args.indexOf("--message-id") + 1]);
-          assert.equal(id, 1);
-          edits += 1;
-          const firstMarker = [...markers][0];
-          assert.ok(firstMarker !== undefined);
-          const marker = readMarker(args[args.indexOf("--message") + 1]);
-          deliver("edit", () => {
-            observed[0] = observation(
-              testCase === "wrong-edit-id" ? id + 40 : id,
-              list,
-              testCase === "wrong-edit-kind" ? "message" : "edit",
-              testCase === "wrong-edit-marker"
-                ? marker + "-wrong"
-                : testCase === "stale-edit"
-                  ? firstMarker
-                  : marker,
-            );
-          });
-        },
         runAgentPrompt: () => {
           throw new Error("direct delivery must not invoke a model");
         },
@@ -483,7 +483,6 @@ export async function assertTelegramRichObservationFlow(
           : testCase === "missing-content-type" ||
               testCase === "reactivated-literal" ||
               testCase === "lost-literal-ancestor" ||
-              testCase === "emoji-degraded" ||
               testCase === "first-content-failed" ||
               flattenedIndex >= 0
             ? /Native rich composition failed/
@@ -494,9 +493,9 @@ export async function assertTelegramRichObservationFlow(
     } else {
       const result = await pending;
       assert.equal(result.status, "pass");
-      assert.equal(sends, 11);
+      assert.equal(sends, 9);
       assert.equal(edits, 1);
-      assert.equal(observed.length, testCase === "unmatched-after-reset" ? 12 : 11);
+      assert.equal(observed.length, testCase === "unmatched-after-reset" ? 10 : 9);
       assert.equal(observed[0]?.kind, "edit");
     }
     const exported = await fs.readFile(
@@ -504,12 +503,12 @@ export async function assertTelegramRichObservationFlow(
       "utf8",
     );
     const evidence = JSON.parse(exported);
-    if (testCase === "emoji-degraded" || testCase === "first-content-failed") {
-      assert.equal(sends, 11, "content failure must not skip independent sends");
+    if (testCase === "first-content-failed") {
+      assert.equal(sends, 9, "content failure must not skip independent sends");
       assert.equal(edits, 1, "content failure must not skip the original-message edit");
       assert.equal(evidence.edit.verified, true);
-      assert.equal(evidence.cases.length, 10);
-      const failedLabel = testCase === "emoji-degraded" ? "message-6" : "message-1";
+      assert.equal(evidence.cases.length, 8);
+      const failedLabel = "message-1";
       assert.deepEqual(
         evidence.failures.map((failure: { label: string }) => failure.label),
         [failedLabel],
@@ -518,7 +517,7 @@ export async function assertTelegramRichObservationFlow(
         evidence.cases.some((proof: { label: string }) => proof.label === failedLabel),
         false,
       );
-      assert.equal(evidence.cases.at(-1).label, "message-11");
+      assert.equal(evidence.cases.at(-1).label, "message-9");
       assert.deepEqual(
         {
           contentType: evidence.failures[0].contentType,
@@ -530,10 +529,7 @@ export async function assertTelegramRichObservationFlow(
           contentType: "messageRichMessage",
           full: true,
           matchesPattern: false,
-          block:
-            testCase === "emoji-degraded"
-              ? paragraph(url(plain("👋")))
-              : paragraph(plain("Download")),
+          block: paragraph(plain("Download")),
         },
       );
       assert.equal(
@@ -544,12 +540,7 @@ export async function assertTelegramRichObservationFlow(
     }
     const contentFailure =
       flattenedIndex >= 0 ||
-      [
-        "reactivated-literal",
-        "lost-literal-ancestor",
-        "emoji-degraded",
-        "first-content-failed",
-      ].includes(testCase);
+      ["reactivated-literal", "lost-literal-ancestor", "first-content-failed"].includes(testCase);
     assert.equal(evidence.edit.verified, !rejects || contentFailure);
     if (testCase === "send-error") {
       assert.equal(sends, 1);
@@ -583,7 +574,7 @@ export async function assertTelegramRichObservationFlow(
       );
     }
     if (!rejects) {
-      assert.equal(evidence.cases.length, 11);
+      assert.equal(evidence.cases.length, 9);
       assert.ok(
         evidence.cases.every(
           (proof: { accountMessageIdsDiffer: boolean }) => proof.accountMessageIdsDiffer,

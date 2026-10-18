@@ -17,10 +17,7 @@ export function isGatewayMethodAdvertised(
   method: string,
 ): boolean | null {
   const methods = host.hello?.features?.methods;
-  if (!Array.isArray(methods)) {
-    return null;
-  }
-  return methods.includes(method);
+  return Array.isArray(methods) ? methods.includes(method) : null;
 }
 
 export function isGatewayCapabilityAdvertised(
@@ -32,10 +29,7 @@ export function isGatewayCapabilityAdvertised(
   capability: string,
 ): boolean | null {
   const capabilities = host.hello?.features?.capabilities;
-  if (!Array.isArray(capabilities)) {
-    return null;
-  }
-  return capabilities.includes(capability);
+  return Array.isArray(capabilities) ? capabilities.includes(capability) : null;
 }
 
 /** Combines the active connection, advertised method catalog, and operator scopes. */
@@ -48,13 +42,23 @@ export function canCallGatewayMethod(
   if (!snapshot?.client || snapshot.phase !== "connected") {
     return false;
   }
+  return canPresentGatewayMethod(snapshot, method, requiredScope, options);
+}
+
+/** Last-known advertisement and scopes for presentation only, never dispatch admission. */
+export function canPresentGatewayMethod(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options: { requireAdvertisement?: boolean } = {},
+): boolean {
   if (
     options.requireAdvertisement !== false &&
-    isGatewayMethodAdvertised(snapshot, method) !== true
+    (!snapshot || isGatewayMethodAdvertised(snapshot, method) !== true)
   ) {
     return false;
   }
-  const auth = snapshot.hello?.auth;
+  const auth = snapshot?.hello?.auth;
   if (!auth || !Array.isArray(auth.scopes)) {
     return false;
   }

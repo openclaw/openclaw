@@ -12,7 +12,7 @@ import {
   relayBytesFromBase64Url,
   requireRelayCrypto,
 } from "./relay-auth-v2-crypto.js";
-import { parseStrictJsonObject } from "./strict-json.js";
+import { hasExactKeys, parseStrictJsonObject } from "./strict-json.js";
 
 export const EXTENSION_RELAY_V2_PROTOCOL = "openclaw-extension-relay.v2";
 
@@ -39,15 +39,6 @@ const CHALLENGE_KEYS = [
   "serverProof",
 ];
 const OK_KEYS = ["type", "v", "sessionId", "acceptProof"];
-
-function hasExactKeys(value, expected) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const actual = Object.keys(value).toSorted((a, b) => a.localeCompare(b));
-  const wanted = [...expected].toSorted((a, b) => a.localeCompare(b));
-  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
-}
 
 /** Parse an authentication frame without allowing JSON duplicate-key shadowing. */
 export function parseRelayAuthJson(raw) {

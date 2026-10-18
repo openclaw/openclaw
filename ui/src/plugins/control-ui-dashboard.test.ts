@@ -4,16 +4,13 @@ import type { BoardGetParams, BoardWidget } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiViewContext } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  acquireBoardProviderForSession,
-  type BoardProvider,
-  type BoardProviderLease,
-} from "../lib/board/provider.ts";
+import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "./control-ui-dashboard.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-dashboard.tsx";
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;
@@ -76,17 +73,17 @@ async function mountDashboard(
   element.canGrant = capabilities.canGrant ?? false;
   container.append(element);
   mounted.push(element);
-  // The provider is acquired in updated(), after the first DOM render.
-  // Await the real lifecycle so a loaded runner cannot observe the toggle early.
+  // Settle the custom-element property bridge before observing rendered controls.
   await element.updateComplete;
   expect(element.querySelector(".plugin-session-dashboard__toggle")).not.toBeNull();
   return element;
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const element of mounted.splice(0)) {
     element.remove();
   }
+  await Promise.resolve();
 });
 
 describe("Plugin session dashboard", () => {
@@ -277,7 +274,7 @@ describe("Plugin session dashboard", () => {
   ])(
     "shares $session.sessionKey gateway state without leaking dashboard capabilities in $order order",
     async ({ order, session }) => {
-      const { client, request, removeListener } = createClient();
+      const { client, request, removeListener } = createClient([widget()]);
       let chat: BoardProviderLease | undefined;
       let dashboard: DashboardElement | undefined;
 
@@ -298,28 +295,25 @@ describe("Plugin session dashboard", () => {
 
         await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
         expect(request).toHaveBeenCalledWith("board.get", session);
-        const dashboardProvider = Reflect.get(dashboard, "provider") as BoardProvider;
-
-        expect(chat.provider).not.toBe(dashboardProvider);
-        expect(chat.provider.snapshot$).toBe(dashboardProvider.snapshot$);
+        await vi.waitFor(() =>
+          expect(dashboard?.querySelector("openclaw-board-view")).not.toBeNull(),
+        );
+        const board = dashboard.querySelector("openclaw-board-view")!;
         expect(chat.provider).toMatchObject({
           canPinWidgets: true,
           canPinMcpApps: true,
           canMutate: true,
           canGrant: true,
         });
-        expect(dashboardProvider).toMatchObject({
-          canPinWidgets: false,
-          canPinMcpApps: false,
-          canMutate: true,
-          canGrant: false,
-        });
+        expect(board.canMutate).toBe(true);
+        expect(board.canGrant).toBe(false);
 
         dashboard.canMutate = false;
         await dashboard.updateComplete;
+        await board.updateComplete;
 
-        expect(Reflect.get(dashboard, "provider")).toBe(dashboardProvider);
-        expect(dashboardProvider.canMutate).toBe(false);
+        expect(dashboard.querySelector("openclaw-board-view")).toBe(board);
+        expect(board.canMutate).toBe(false);
         expect(chat.provider.canMutate).toBe(true);
         expect(chat.provider.canPinWidgets).toBe(true);
         expect(chat.provider.canPinMcpApps).toBe(true);
@@ -327,6 +321,7 @@ describe("Plugin session dashboard", () => {
         expect(request).toHaveBeenCalledOnce();
 
         dashboard.remove();
+        await dashboard.updateComplete;
         expect(removeListener).not.toHaveBeenCalled();
         chat.release();
         expect(removeListener).toHaveBeenCalledOnce();
@@ -360,25 +355,6 @@ describe("Plugin session dashboard", () => {
     expect(board.active).toBe(true);
   });
 
-  it("keeps an empty dashboard compact until the operator expands its hint", async () => {
-    const { client, request } = createClient();
-    const element = await mountDashboard({ sessionKey: "agent:main:workboard-empty" }, client);
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
-    await vi.waitFor(() =>
-      expect(element.textContent).toContain("This session has no dashboard widgets yet."),
-    );
-    expect(
-      element.querySelector(".plugin-session-dashboard__toggle")?.getAttribute("aria-expanded"),
-    ).toBe("false");
-
-    element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")?.click();
-    await element.updateComplete;
-    expect(element.querySelector(".plugin-session-dashboard__body")?.textContent).toContain(
-      "This session has no dashboard widgets yet.",
-    );
-  });
-
   it("reacts when the embedded board selects another tab", async () => {
     const tabs = [
       { tabId: "main", title: "Main", position: 0, chatDock: "right" },
@@ -394,20 +370,108 @@ describe("Plugin session dashboard", () => {
     );
     const { client } = createClient(widgets, tabs);
     const element = await mountDashboard({ sessionKey: "agent:main:workboard-tabs" }, client);
-    await vi.waitFor(() => expect(element.querySelector("wa-tab-group")).not.toBeNull());
-
-    element
-      .querySelector("wa-tab-group")
-      ?.dispatchEvent(
-        new CustomEvent("wa-tab-show", { bubbles: true, detail: { name: "research" } }),
-      );
+    await vi.waitFor(() =>
+      expect(element.querySelector('[role="tab"][data-board-tab-id="research"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('[role="tab"][data-board-tab-id="research"]')!.click();
 
     await vi.waitFor(() =>
       expect(
-        element.querySelector('[data-board-tab-id="research"]')?.getAttribute("active"),
-      ).not.toBeNull(),
+        element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
+      ).toBe("true"),
     );
-    expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("active")).toBeNull();
+    expect(element.querySelector('[data-board-tab-id="main"]')?.getAttribute("aria-selected")).toBe(
+      "false",
+    );
+    expect(
+      element
+        .querySelector('[data-widget-name="research-status"]')
+        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
+    ).toBe(false);
+    expect(
+      element
+        .querySelector('[data-widget-name="main-status"]')
+        ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden,
+    ).toBe(true);
+  });
+
+  it("retains local choices across refreshes and initializes each replacement after its snapshot", async () => {
+    const sessionKey = "agent:main:dashboard-local-choices";
+    const empty = (targetSessionKey: string) => ({
+      sessionKey: targetSessionKey,
+      revision: 1,
+      tabs: [],
+      widgets: [],
+    });
+    const pending = createDeferred<ReturnType<typeof empty>>();
+    const nextPending = createDeferred<ReturnType<typeof empty>>();
+    let snapshot = {
+      sessionKey,
+      revision: 1,
+      tabs: [
+        { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+        { tabId: "research", title: "Research", position: 1, chatDock: "right" },
+      ],
+      widgets: [widget(), widget({ name: "research", tabId: "research" })],
+    };
+    let listener: GatewayEventListener | undefined;
+    const request = vi.fn(async (_method: string, target?: BoardGetParams) =>
+      target?.sessionKey === `${sessionKey}-pending`
+        ? pending.promise
+        : target?.sessionKey === `${sessionKey}-next`
+          ? nextPending.promise
+          : snapshot,
+    );
+    // SAFETY: This fixture implements the board transport methods exercised by the dashboard.
+    const client = {
+      request,
+      addEventListener(next: GatewayEventListener) {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as unknown as GatewayBrowserClient;
+    const element = await mountDashboard({ sessionKey }, client);
+    const toggle = () =>
+      element.querySelector<HTMLButtonElement>(".plugin-session-dashboard__toggle")!;
+    await vi.waitFor(() =>
+      expect(element.querySelector('[data-board-tab-id="research"]')).not.toBeNull(),
+    );
+    element.querySelector<HTMLButtonElement>('[data-board-tab-id="research"]')!.click();
+    toggle().click();
+    await element.updateComplete;
+
+    snapshot = { ...snapshot, revision: 2 };
+    listener?.({ type: "event", event: "board.changed", payload: { sessionKey, revision: 2 } });
+    await vi.waitFor(() =>
+      expect(element.querySelector("openclaw-board-view")?.snapshot?.revision).toBe(2),
+    );
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(
+      element.querySelector('[data-board-tab-id="research"]')?.getAttribute("aria-selected"),
+    ).toBe("true");
+
+    element.session = null;
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).toBeNull();
+    element.session = { sessionKey: `${sessionKey}-pending` };
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    toggle().click();
+    pending.resolve(empty(`${sessionKey}-pending`));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(element.querySelector("openclaw-board-view")).toBeNull();
+
+    element.session = { sessionKey: `${sessionKey}-next` };
+    await element.updateComplete;
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    nextPending.resolve(empty(`${sessionKey}-next`));
+    await vi.waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
+    expect(element.querySelector(".plugin-session-dashboard__collapsed-empty")).not.toBeNull();
   });
 
   it("releases its provider through detached updates and reacquires only after reconnect", async () => {

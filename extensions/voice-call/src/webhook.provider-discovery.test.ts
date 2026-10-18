@@ -6,6 +6,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRealtimeTranscriptionProvider } from "openclaw/plugin-sdk/realtime-transcription";
 import { useAutoCleanupTempDirTracker, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,11 +19,10 @@ afterEach(resetPluginRuntimeStateForTest);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("VoiceCallWebhookServer transcription provider discovery", () => {
-  it.each(
-    ["configured-stt", "configured-stt-alias"].flatMap((configKey) =>
-      [undefined, configKey].map((configuredProviderId) => ({ configKey, configuredProviderId })),
-    ),
-  )(
+  it.each([
+    { configKey: "configured-stt", configuredProviderId: undefined },
+    { configKey: "configured-stt-alias", configuredProviderId: "configured-stt-alias" },
+  ])(
     "initializes streaming from $configKey config with explicit selection $configuredProviderId",
     async ({ configuredProviderId, configKey }) => {
       const root = tempDirs.make("voice-call-provider-discovery-");
@@ -93,6 +93,7 @@ describe("VoiceCallWebhookServer transcription provider discovery", () => {
             [configKey]: { ready: true },
           };
           const server = new VoiceCallWebhookServer(
+            createTestPluginServiceScheduler(),
             config,
             new CallManager(config, path.join(root, "calls")),
             new MockProvider(),

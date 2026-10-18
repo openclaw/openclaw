@@ -2,13 +2,14 @@
  * Tests delivery queue runtime ordering and retry behavior.
  */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
+import { drainPendingDeliveries } from "./delivery-queue-runtime.js";
 
 const mocks = vi.hoisted(() => ({
   coreDrainPendingDeliveries: vi.fn(async () => {}),
@@ -28,19 +29,11 @@ vi.mock("../infra/outbound/deliver-runtime.js", () => {
   };
 });
 
-type DeliveryQueueRuntimeModule = typeof import("./delivery-queue-runtime.js");
-
-let drainPendingDeliveries: DeliveryQueueRuntimeModule["drainPendingDeliveries"];
-
 const log = {
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
 };
-
-beforeAll(async () => {
-  ({ drainPendingDeliveries } = await import("./delivery-queue-runtime.js"));
-});
 
 beforeEach(() => {
   resetGatewayWorkAdmission();

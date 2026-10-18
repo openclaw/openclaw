@@ -34,10 +34,9 @@ type ModelConsumer = { path: string; value: string; agentId?: string; consumer?:
 
 function collectModelConsumers(cfg: OpenClawConfig): ModelConsumer[] {
   const agents = listAgentEntries(cfg);
-  const refs = collectConfiguredModelRefs(cfg).filter(
+  const consumers: ModelConsumer[] = collectConfiguredModelRefs(cfg).filter(
     ({ path, value }) => !path.startsWith("agents.") && !path.endsWith(`.models.${value}`),
   );
-  const consumers: ModelConsumer[] = refs;
   const heartbeatAgents = new Map(
     resolveHeartbeatAgents(cfg).map((entry) => [entry.agentId, entry.heartbeat]),
   );
@@ -197,13 +196,11 @@ export function collectModelBillingRouteMigrationWarnings(params: {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
+  const authStores: AuthStores = new Map();
   const options = {
     env: params.env ?? process.env,
     metadataSnapshot: params.metadataSnapshot,
-    authStores: new Map<
-      string | undefined,
-      ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>
-    >(),
+    authStores,
   };
   const before = collectBillingRoutes({ ...options, cfg: params.before });
   const after = collectBillingRoutes({ ...options, cfg: params.after });

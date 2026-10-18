@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { validateProviderSettings } from "../config/provider-settings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { validateCloudWorkerProfileSettings } from "../config/zod-schema.cloud-workers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
@@ -44,7 +44,9 @@ export async function maintainConfiguredWorkerProviders(params: {
       return [];
     }
     const settings = configuredSettings(config, providerId);
-    if (settings.some(([, value]) => validateCloudWorkerProfileSettings(value) !== undefined)) {
+    if (
+      settings.some(([, value]) => validateProviderSettings(value, "Worker profile") !== undefined)
+    ) {
       params.warn(
         `Worker provider maintenance skipped invalid settings (${providerId.slice(0, 128)})`,
       );
@@ -72,7 +74,7 @@ export async function maintainConfiguredWorkerProviders(params: {
         try {
           assertCurrent();
           await maintain.call(provider, {
-            // SAFETY: validateCloudWorkerProfileSettings checked every setting as bounded finite JSON before cloning.
+            // SAFETY: validateProviderSettings checked every setting as bounded finite JSON before cloning.
             profiles: structuredClone(snapshot.map(([, value]) => value)) as WorkerProfile[],
             signal: params.signal,
             assertCurrent,

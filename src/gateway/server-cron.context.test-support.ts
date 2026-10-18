@@ -6,9 +6,10 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { refreshCronScheduler } from "../cron/service/scheduler-actor.js";
 import type { CronServiceState } from "../cron/service/state.js";
-import { armTimer } from "../cron/service/timer.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -22,6 +23,8 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -65,6 +68,58 @@ export function registerGatewayCronContextTests({
   requestHeartbeatAndWaitMock,
 }: GatewayCronContextTestHarness) {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
+  it.each(["main", "agent:ops:cron:job-1:run:one"])(
+    "keeps a targeted global wake on its selected agent's stored route (%s)",
+    async (sessionKey) => {
+      await withOpenClawTestState({ label: "cron-global-delivery-owner" }, async (state) => {
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, ops: {} },
+          },
+          session: { scope: "global" },
+          cron: { enabled: false, triggers: { enabled: false } },
+        } satisfies OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg);
+        const routes = {
+          main: { channel: "telegram", to: "telegram:main", accountId: "main", threadId: "11" },
+          ops: { channel: "telegram", to: "telegram:ops", accountId: "ops", threadId: "22" },
+        };
+        loadConfigMock.mockReturnValue(cfg);
+        for (const [agentId, context] of Object.entries(routes)) {
+          await replaceSessionEntry(
+            { agentId, sessionKey: "global", env: state.env },
+            {
+              sessionId: `${agentId}-global`,
+              updatedAt: 1,
+              delivery: normalizeSessionDeliveryState({ context }),
+            },
+          );
+        }
+        const service = createCronService(cfg);
+        try {
+          const enqueue = vi.spyOn(getCronState(service).deps, "enqueueSystemEvent");
+          expect(
+            await service.cron.wake({
+              mode: "next-heartbeat",
+              text: "wake ops",
+              agentId: "ops",
+              sessionKey,
+            }),
+          ).toEqual({ ok: true });
+          expect(enqueue).toHaveBeenCalledWith("wake ops", {
+            agentId: "ops",
+            sessionKey,
+            deliveryContext: routes.ops,
+          });
+        } finally {
+          await service.cron.stopAndDrain?.();
+        }
+      });
+    },
+  );
+
   it("owns timer execution and settlement after its creator context closes", async () => {
     const broker = await createBroker();
     vi.useFakeTimers();
@@ -142,7 +197,7 @@ export function registerGatewayCronContextTests({
                   isWebchatConnect: () => false,
                 } as never,
                 () => {
-                  armTimer(cronState);
+                  refreshCronScheduler(cronState);
                   return {
                     run: AsyncLocalStorage.snapshot(),
                     assertCurrent: captureGatewayToolCallerAssertion(),
@@ -283,7 +338,7 @@ export function registerGatewayCronContextTests({
     }
   });
 
-  it("keeps an RPC-inherited gateway context instead of the scheduler resolver", async () => {
+  it("replaces an RPC-inherited gateway context with the scheduler owner after activation", async () => {
     const cfg = createCronConfig("server-cron-rpc-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const rpcContext = { terminalSessions: { rpc: true } } as never;
@@ -295,6 +350,7 @@ export function registerGatewayCronContextTests({
     let observed: unknown = "never-ran";
     let callerActive = true;
     let assertCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
+    let assertInitiatingCaller: ((method?: string) => void) | undefined;
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
       assertCaller = captureGatewayToolCallerAssertion();
@@ -314,18 +370,21 @@ export function registerGatewayCronContextTests({
           operationalRunInstance: { runId: "manual-run", instanceId: "manual-instance" },
           receiptAuthority: () => callerActive,
         },
-        () =>
-          withPluginRuntimeGatewayRequestScope(
+        () => {
+          assertInitiatingCaller = captureGatewayToolCallerAssertion();
+          return withPluginRuntimeGatewayRequestScope(
             { context: rpcContext, isWebchatConnect: () => false } as never,
             () => state.cron.run(job.id, "force"),
-          ),
+          );
+        },
       );
 
-      expect(observed).toBe(rpcContext);
-      expect(assertCaller).toBeTypeOf("function");
-      expect(() => assertCaller?.("chat.history")).not.toThrow();
+      expect(observed).toBe(schedulerContext);
+      expect(assertCaller).toBeUndefined();
+      expect(assertInitiatingCaller).toBeTypeOf("function");
+      expect(() => assertInitiatingCaller?.("chat.history")).not.toThrow();
       callerActive = false;
-      expect(() => assertCaller?.("chat.history")).toThrow(
+      expect(() => assertInitiatingCaller?.("chat.history")).toThrow(
         "agent tool caller authority is no longer active",
       );
     } finally {

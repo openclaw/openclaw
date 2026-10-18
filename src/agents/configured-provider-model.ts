@@ -33,6 +33,21 @@ export function hasExactConfiguredProviderModel(params: ConfiguredProviderModelP
   );
 }
 
+export function hasExactConfiguredProviderModelRef(
+  cfg: OpenClawConfig | undefined,
+  modelRef: string,
+): boolean {
+  const slash = modelRef.indexOf("/");
+  return (
+    slash > 0 &&
+    hasExactConfiguredProviderModel({
+      cfg,
+      provider: modelRef.slice(0, slash),
+      model: modelRef.slice(slash + 1),
+    })
+  );
+}
+
 /** Authored API routes and exact model rows own their IDs before runtime aliases. */
 export function allowsPluginModelNormalization(params: ConfiguredProviderModelParams): boolean {
   const provider = findConfiguredModelProvider(params.cfg, params.provider);

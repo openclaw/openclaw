@@ -25,20 +25,15 @@ interface ResolvedCopilotAuth {
   agentId: string;
 }
 
-export function createCopilotByokAuth(input: {
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  copilotHome?: string;
-  authProfileId?: string;
-  authProfileVersion?: string;
-  env?: NodeJS.ProcessEnv;
-  homeDir?: () => string;
-}): ResolvedCopilotAuth {
+export function createCopilotByokAuth(
+  input: Pick<
+    ResolveCopilotAuthInput,
+    "agentId" | "agentDir" | "copilotHome" | "authProfileId" | "env" | "homeDir"
+  > & { authProfileVersion?: string },
+): ResolvedCopilotAuth {
   const base = resolveCopilotAuth({
     agentId: input.agentId,
     agentDir: input.agentDir,
-    workspaceDir: input.workspaceDir,
     copilotHome: input.copilotHome,
     env: input.env,
     homeDir: input.homeDir,
@@ -55,7 +50,6 @@ export function createCopilotByokAuth(input: {
 interface ResolveCopilotAuthInput {
   agentId?: string;
   agentDir?: string;
-  workspaceDir?: string;
   copilotHome?: string;
   auth?: {
     gitHubToken?: string;
@@ -177,7 +171,7 @@ function resolveCopilotHome(args: {
 function safeHomeDir(homeDir: () => string): string {
   try {
     const value = homeDir();
-    if (typeof value === "string" && value.length > 0) {
+    if (value.length > 0) {
       return value;
     }
   } catch {

@@ -98,18 +98,12 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
     return false;
   }
   const payload = params.entry.payload;
-  const payloadRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
+  const payloadRunId = normalizeOptionalString(payload.runId);
   if (payloadRunId && payloadRunId !== params.runId) {
     return false;
   }
-  const payloadSessionKey =
-    typeof payload.sessionKey === "string" && payload.sessionKey.trim()
-      ? payload.sessionKey.trim()
-      : undefined;
-  const payloadAgentId =
-    typeof payload.agentId === "string" && payload.agentId.trim()
-      ? payload.agentId.trim()
-      : undefined;
+  const payloadSessionKey = normalizeOptionalString(payload.sessionKey);
+  const payloadAgentId = normalizeOptionalString(payload.agentId);
   if (params.agentId && payloadAgentId !== params.agentId) {
     return false;
   }
@@ -133,13 +127,7 @@ export function setGatewayDedupeEntries(params: {
   session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   for (const key of params.keys) {
-    setGatewayDedupeEntry({
-      dedupe: params.dedupe,
-      key,
-      entry: params.entry,
-      startNewAttempt: params.startNewAttempt,
-      session: params.session,
-    });
+    setGatewayDedupeEntry({ ...params, key });
   }
 }
 
@@ -170,9 +158,7 @@ export function setAbortedAgentDedupeEntries(params: {
   session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   setGatewayDedupeEntries({
-    dedupe: params.dedupe,
-    keys: params.keys,
-    session: params.session,
+    ...params,
     entry: {
       ts: Date.now(),
       ok: true,

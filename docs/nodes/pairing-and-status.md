@@ -19,10 +19,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground `openclaw node run` command. For an app node paused for manual pairing,
-restart node mode or the app. This reconnect creates a separate command-surface
-request. Back on the Gateway:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates a separate command-surface request. Back on the Gateway:
 
 ```bash
 openclaw nodes pending
@@ -30,6 +29,11 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once. For an app node paused for manual pairing,
+restart node mode or the app.
 
 The two request IDs are distinct. Use `openclaw devices reject <deviceRequestId>`
 to reject device admission instead of approving it. An initial unapproved surface
@@ -58,7 +62,7 @@ Pending command-surface requests do not expire merely with time; they follow the
   [Active computer presence](/nodes/presence) for setup, privacy, timing, and
   troubleshooting.
 - The device pairing record is the durable approved-role contract. Token rotation stays inside that contract; it cannot upgrade a paired node into a role that pairing approval never granted.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its canonical paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) manages the node's approved command/capability surface on its paired-device record. Device pairing owns both transport authentication and the durable node surface; there is no separate node pairing store.
 - `openclaw nodes remove --node <id|name|ip>` revokes the device's `node` role in the paired-device store and disconnects that device's node-role sessions: a mixed-role device keeps its row and only loses the `node` role, while a node-only device row is deleted. `operator.pairing` may remove non-operator node rows on other devices; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 - Approval scope follows the pending request's declared commands:
   - commandless request: `operator.pairing`

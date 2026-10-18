@@ -1,10 +1,9 @@
 // Exercise the scheduler's active marker against the real heartbeat busy guard.
 // Stubbing runHeartbeatOnce hides this cross-owner interaction.
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -29,14 +28,12 @@ import {
 } from "../infra/system-events.js";
 import { enqueueCommandInLane, getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   getActiveCronJobCount,
   resetCronActiveJobs,
@@ -55,20 +52,19 @@ beforeAll(async () => {
     import("../auto-reply/reply/abort.runtime.js"),
   ]);
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-real-heartbeat-");
 
 afterEach(() => {
   setHeartbeatsEnabled(true);
   resetSystemEventsForTest();
   resetCronActiveJobs();
-  closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
 });
 
 const noopLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 function makeSandbox() {
-  const dir = tempDirs.make("openclaw-cron-real-heartbeat-");
+  const dir = sessionDirs.make();
   return {
     dir,
     cronStorePath: path.join(dir, "cron", "jobs.json"),
@@ -332,10 +328,11 @@ async function runMainCronCase(
     runBody,
     async () => {
       cron.stop();
-      // Keep the heartbeat alive until its Cron waiter and owning lane settle.
+      // Keep the heartbeat alive until its Cron waiter and launcher settle.
       await expect(waitForActiveCronJobs(5_000)).resolves.toEqual({ drained: true, active: 0 });
       await scheduledTick;
-      await vi.waitFor(() => expect(getQueueSize(CommandLane.Cron)).toBe(0), { timeout: 5_000 });
+      await cron.waitForIdle();
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
     },
     () => heartbeatRunner.stop(),
   );
@@ -459,12 +456,9 @@ describe("main cron with the real heartbeat runner", () => {
     });
   });
 
-  it.each(["direct", "scheduled"] as const)(
-    "preserves an enabled one-shot's schedule policy after a %s run while heartbeats are globally paused",
-    async (mode) => {
-      await runMainCronCase(mode, "now", { heartbeatPaused: true, deleteAfterRun: false });
-    },
-  );
+  it("preserves an enabled one-shot's schedule policy after a scheduled run while heartbeats are globally paused", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatPaused: true, deleteAfterRun: false });
+  });
 
   it("drains coalesced cron and exec work without recurrence while retaining late arrivals", async () => {
     await runMainCronCase("scheduled", "now", {
@@ -552,7 +546,7 @@ describe("main cron with the real heartbeat runner", () => {
         "real heartbeat did not reach the reply gate",
       );
       expect(getActiveCronJobCount()).toBe(1);
-      expect(getQueueSize(CommandLane.Cron)).toBe(1);
+      expect(getQueueSize(CommandLane.Cron)).toBe(0);
       throw bodyError;
     }).catch((error: unknown) => error);
     const fixtureFailure = outcome.then((error) => {

@@ -1,4 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { resolveChannelConfigActivationFacts } from "./channel-config-activation.js";
 import { serializeConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -9,16 +11,31 @@ function projectionConfig({
   diagnostics: _diagnostics,
   update: _update,
   telemetry: _telemetry,
+  plugins: _plugins,
+  channels,
   ui,
   gateway,
+  talk,
   ...config
 }: OpenClawConfig) {
   const { prefs: _prefs, ...uiConfig } = ui ?? {};
   const { auth, ...gatewayConfig } = gateway ?? {};
   const { identityScopes: _identityScopes, ...authConfig } = auth ?? {};
-  // Everything else remains significant, including plugin policy, sharing, models,
-  // session policy, roster and physical store selection.
-  return { ...config, ui: uiConfig, gateway: { ...gatewayConfig, auth: authConfig } };
+  const { realtime, ...talkConfig } = talk ?? {};
+  const { model: _realtimeModel, ...realtimeConfig } = realtime ?? {};
+  // Plugin-derived rows follow completed catalog publications, not config reloads.
+  // Channel transport settings do not affect resident rows. Keep their catalog
+  // inputs, including activation that can admit bundled plugin capabilities.
+  return {
+    ...config,
+    channels: {
+      activation: resolveChannelConfigActivationFacts({ channels }),
+      models: collectConfiguredModelRefs({ channels }),
+    },
+    ui: uiConfig,
+    gateway: { ...gatewayConfig, auth: authConfig },
+    talk: { ...talkConfig, realtime: realtimeConfig },
+  };
 }
 
 function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
@@ -36,7 +53,6 @@ function withoutAgentIdentities(config: ReturnType<typeof projectionConfig>) {
         Object.fromEntries(
           Object.entries(agents.entries).map(([id, entry]) => [id, withoutIdentity(entry)]),
         ),
-      list: agents.list?.map(withoutIdentity),
     },
   };
 }
@@ -65,4 +81,33 @@ export function runtimeSessionChangeScope(
   return isDeepStrictEqual(withoutAgentIdentities(before), withoutAgentIdentities(after))
     ? "config-profiles"
     : "config";
+}
+
+export function runtimeSessionPublicationChangeScope(params: {
+  previousRuntimeConfig: OpenClawConfig | null;
+  runtimeConfig: OpenClawConfig;
+  previousSourceConfig: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  runtimeUnchanged: boolean;
+  sourceUnchanged: boolean;
+  previousEditedInPlace: boolean;
+}): ReturnType<typeof runtimeSessionChangeScope> {
+  if (params.previousEditedInPlace) {
+    return "config";
+  }
+  const runtimeScope = params.runtimeUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(params.previousRuntimeConfig, params.runtimeConfig);
+  const sourceScope = params.sourceUnchanged
+    ? "config-presentation"
+    : runtimeSessionChangeScope(
+        params.previousSourceConfig ?? params.previousRuntimeConfig,
+        params.sourceConfig ?? params.runtimeConfig,
+      );
+  if (runtimeScope === "config" || sourceScope === "config") {
+    return "config";
+  }
+  return runtimeScope === "config-profiles" || sourceScope === "config-profiles"
+    ? "config-profiles"
+    : "config-presentation";
 }

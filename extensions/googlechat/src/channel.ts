@@ -13,7 +13,7 @@ import {
   googleChatApprovalCapability,
   shouldSuppressLocalGoogleChatExecApprovalPrompt,
 } from "./approval-native.js";
-import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
+import { googlechatSetupPlugin, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
 import {
   googlechatDirectoryAdapter,
   googlechatGroupsAdapter,
@@ -45,9 +45,8 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 
 export const googlechatPlugin = createChatChannelPlugin({
   base: {
-    ...createGoogleChatPluginBase({
-      configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
-    }),
+    ...googlechatSetupPlugin,
+    configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
     approvalCapability: googleChatApprovalCapability,
     secrets: {
       secretTargetRegistryEntries,
@@ -81,7 +80,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     message: googlechatMessageAdapter,
     resolver: {
       resolveTargets: async ({ inputs, kind }) => {
-        const resolved = inputs.map((input) => {
+        return inputs.map((input) => {
           const normalized = normalizeGoogleChatTarget(input);
           if (!normalized) {
             return { input, resolved: false, note: "empty target" };
@@ -98,7 +97,6 @@ export const googlechatPlugin = createChatChannelPlugin({
             note: "use spaces/{space} or users/{user}",
           };
         });
-        return resolved;
       },
     },
     actions: googlechatMessageActions,
@@ -176,13 +174,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     ...googlechatOutboundAdapter,
     base: {
       ...googlechatOutboundAdapter.base,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
-        shouldSuppressLocalGoogleChatExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-          hint,
-        }),
+      shouldSuppressLocalPayloadPrompt: shouldSuppressLocalGoogleChatExecApprovalPrompt,
     },
   },
 });

@@ -18,12 +18,9 @@ import type {
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   const runtime = createPluginRuntimeMock({
     agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
+        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
       },
     },
     channel: {
@@ -74,9 +71,10 @@ function configureDiscussionStore(runtime: PluginRuntime): void {
     stores.set(options.namespace, created);
     return created;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
-  runtime.state.openKeyedStore = <T>(
-    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
-  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
+  runtime.state.openKeyedStoreV2 = <T>(
+    options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+    authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
 }
 
 export function createInboundMessage(
@@ -91,14 +89,7 @@ export function createInboundMessage(
     body: "/fast on",
     body_format: "markdown",
     created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
+    author: createInboundAuthor(),
     ...overrides,
   };
 }

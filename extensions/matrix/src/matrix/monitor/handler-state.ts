@@ -1,8 +1,4 @@
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { CoreConfig } from "../../types.js";
@@ -10,6 +6,7 @@ import {
   resolveMatrixAccountAllowlistConfig,
   resolveMatrixAccountConfig,
 } from "../account-config.js";
+import { setBoundedMap } from "./bounded-cache.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -25,16 +22,9 @@ export function createMatrixHandlerState(config: {
   runtime: RuntimeEnv;
   allowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
-  resolveLiveUserAllowlist: typeof resolveMatrixMonitorLiveUserAllowlist;
 }) {
-  const {
-    core,
-    accountId,
-    runtime,
-    allowFromResolvedEntries,
-    groupAllowFromResolvedEntries,
-    resolveLiveUserAllowlist,
-  } = config;
+  const { core, accountId, runtime, allowFromResolvedEntries, groupAllowFromResolvedEntries } =
+    config;
 
   let cachedStoreAllowFrom: {
     value: string[];
@@ -59,7 +49,7 @@ export function createMatrixHandlerState(config: {
     if (cached?.signature === signature) {
       return cached.entries;
     }
-    const entries = await resolveLiveUserAllowlist({
+    const entries = await resolveMatrixMonitorLiveUserAllowlist({
       cfg: paramsValue.cfg,
       accountId,
       entries: paramsValue.entries,
@@ -94,10 +84,7 @@ export function createMatrixHandlerState(config: {
   };
   const readStoreAllowFrom = async (): Promise<string[]> => {
     const now = Date.now();
-    if (
-      cachedStoreAllowFrom &&
-      isFutureDateTimestampMs(cachedStoreAllowFrom.expiresAtMs, { nowMs: now })
-    ) {
+    if (cachedStoreAllowFrom && cachedStoreAllowFrom.expiresAtMs > now) {
       return cachedStoreAllowFrom.value;
     }
     cachedStoreAllowFrom = null;
@@ -108,30 +95,17 @@ export function createMatrixHandlerState(config: {
         accountId,
       })
       .catch(() => []);
-    const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
-      nowMs: now,
-    });
-    cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
+    cachedStoreAllowFrom = { value, expiresAtMs: now + ALLOW_FROM_STORE_CACHE_TTL_MS };
     return value;
   };
 
   const shouldSendPairingReply = (senderId: string, created: boolean): boolean => {
     const now = Date.now();
-    if (created) {
-      pairingReplySentAtMsBySender.set(senderId, now);
-      return true;
-    }
     const lastSentAtMs = pairingReplySentAtMsBySender.get(senderId);
-    if (typeof lastSentAtMs === "number" && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
+    if (!created && lastSentAtMs !== undefined && now - lastSentAtMs < PAIRING_REPLY_COOLDOWN_MS) {
       return false;
     }
-    pairingReplySentAtMsBySender.set(senderId, now);
-    if (pairingReplySentAtMsBySender.size > MAX_TRACKED_PAIRING_REPLY_SENDERS) {
-      const oldestSender = pairingReplySentAtMsBySender.keys().next().value;
-      if (typeof oldestSender === "string") {
-        pairingReplySentAtMsBySender.delete(oldestSender);
-      }
-    }
+    setBoundedMap(pairingReplySentAtMsBySender, senderId, now, MAX_TRACKED_PAIRING_REPLY_SENDERS);
     return true;
   };
 

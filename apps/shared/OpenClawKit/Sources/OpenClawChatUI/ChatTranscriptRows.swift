@@ -4,6 +4,8 @@ enum ChatTranscriptRow: Hashable, Identifiable {
     enum SystemNoticeKind: Hashable {
         case restartRecovery
         case gatewayRestarted
+        case injectedContext
+        case backgroundTask
         case generic
     }
 
@@ -19,6 +21,10 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                 String(localized: "System · restart recovery")
             case .gatewayRestarted:
                 String(localized: "System · gateway restarted")
+            case .injectedContext:
+                String(localized: "System · injected context")
+            case .backgroundTask:
+                String(localized: "System · background task")
             case .generic:
                 String(localized: "System")
             }
@@ -26,6 +32,11 @@ enum ChatTranscriptRow: Hashable, Identifiable {
 
         var systemImage: String {
             "cpu"
+        }
+
+        /// Bulky harness payloads (continuation summaries, task output) open on demand, as in the Control UI.
+        var collapsesBody: Bool {
+            self.kind == .injectedContext || self.kind == .backgroundTask
         }
     }
 
@@ -89,6 +100,15 @@ enum ChatTranscriptRow: Hashable, Identifiable {
         }
     }
 
+    var timestamp: Double? {
+        switch self {
+        case let .message(message): message.timestamp
+        case let .systemNotice(notice): notice.timestamp
+        case let .historyDivider(divider): divider.timestamp
+        case .completedWork: nil
+        }
+    }
+
     var startsTurn: Bool {
         switch self {
         case let .message(message):
@@ -137,6 +157,12 @@ enum ChatTranscriptRow: Hashable, Identifiable {
                         """)
             case "restart-sentinel":
                 kind = .gatewayRestarted
+                body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+            case "cli_harness_context":
+                kind = .injectedContext
+                body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
+            case "claude_cli_task_notification":
+                kind = .backgroundTask
                 body = Self.strippingSystemPrefix(from: ChatMessageVisibleText.visibleText(in: message))
             default:
                 kind = .generic
@@ -188,7 +214,7 @@ extension ChatTranscriptRow {
             if Self(message)?.startsTurn == true || message.historyMarker != nil {
                 callIndexes.removeAll(keepingCapacity: true)
             }
-            guard ["toolresult", "tool_result"].contains(message.role.lowercased()),
+            guard message.isToolResult,
                   let toolCallId = message.toolCallId,
                   let index = callIndexes[toolCallId],
                   (message.workRunID != nil && message.workRunID == result[index].workRunID) ||
@@ -213,14 +239,8 @@ extension ChatTranscriptRow {
                 OpenClawChatMessageContent(
                     type: "tool_result",
                     text: toolText,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
                     id: toolCallId,
                     name: message.toolName,
-                    arguments: nil,
                     details: message.details,
                     isError: message.isError))
 

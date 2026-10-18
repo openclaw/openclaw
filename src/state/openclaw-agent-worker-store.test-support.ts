@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { threadId } from "node:worker_threads";
+import { BroadcastChannel, threadId } from "node:worker_threads";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import {
   assertTransactionUsable,
@@ -12,8 +12,11 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 
+const PREPARATION_CLEANUP_GUARD_MS = 5_000;
+
 export type AgentWorkerFixtureOperations = {
-  inspect: { input: undefined; output: number };
+  inspect: { input: undefined | "wal_autocheckpoint"; output: number };
+  failWorker: { input: "crash" | "exit"; output: never };
   append: {
     input: {
       value: string;
@@ -29,6 +32,7 @@ export type AgentWorkerFixtureOperations = {
 export function bindSqliteWorkerBackend(
   connectionInput:
     | {
+        receiptBroadcastName?: string;
         openMarker?: string;
         cleanupAdmission?: boolean;
         closeFailure?: string;
@@ -48,6 +52,16 @@ export function bindSqliteWorkerBackend(
 ): SqliteWorkerPreparedBackend<AgentWorkerFixtureOperations> {
   const { database: db } = context;
   const preparation = connectionInput?.preparation;
+  const receipts = connectionInput?.receiptBroadcastName
+    ? new BroadcastChannel(connectionInput.receiptBroadcastName)
+    : undefined;
+  receipts?.unref();
+  const enter = (marker: string, text: string) => {
+    writeFileSync(marker, text);
+    // Enqueue before native waits block this thread; the marker also precedes any result.
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node BroadcastChannel has no targetOrigin.
+    receipts?.postMessage({ source: marker, line: "entered" });
+  };
   let codeLoaded = false;
   let preparedValue: string | undefined;
   if (connectionInput?.openMarker) {
@@ -55,7 +69,7 @@ export function bindSqliteWorkerBackend(
   }
   const pause = (marker: string | undefined, milliseconds: number) => {
     if (marker) {
-      writeFileSync(marker, "entered");
+      enter(marker, "entered");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
     }
   };
@@ -67,12 +81,26 @@ export function bindSqliteWorkerBackend(
       if (commandType !== "append") {
         throw new Error("Fixture loader requires the nested command type");
       }
-      writeFileSync(preparation.codeMarker, "loading");
-      return waitForFile(preparation.codeGate, 5000).then(() => {
+      enter(preparation.codeMarker, "loading");
+      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
+      return waitForFile(
+        preparation.codeGate,
+        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
+      ).then(() => {
         codeLoaded = true;
       });
     },
     prepare(command) {
+      if (command.type === "failWorker") {
+        return new Promise<never>(() => {
+          setImmediate(() => {
+            if (command.input === "exit") {
+              process.exit(17);
+            }
+            throw new Error("Fixture worker crashed");
+          });
+        });
+      }
       if (!preparation) {
         return undefined;
       }
@@ -82,13 +110,23 @@ export function bindSqliteWorkerBackend(
       if (command.type !== "append") {
         throw new Error("Fixture preparation requires an append command");
       }
-      writeFileSync(preparation.commandMarker, "preparing");
-      return waitForFile(preparation.commandGate, 5000).then(() => {
+      enter(preparation.commandMarker, "preparing");
+      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
+      return waitForFile(
+        preparation.commandGate,
+        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
+      ).then(() => {
         preparedValue = command.input.value;
       });
     },
     execute(command) {
+      if (command.type === "failWorker") {
+        throw new Error("Fixture failure must terminate the worker during preparation");
+      }
       if (command.type === "inspect") {
+        if (command.input === "wal_autocheckpoint") {
+          return Number(db.prepare("PRAGMA wal_autocheckpoint").get()?.wal_autocheckpoint);
+        }
         const count = db.prepare("SELECT COUNT(*) AS count FROM worker_proof").get()?.count;
         if (typeof count !== "number") {
           throw new Error("Fixture count is unavailable");
@@ -128,6 +166,7 @@ export function bindSqliteWorkerBackend(
       }
     },
     close() {
+      receipts?.close();
       if (connectionInput?.cleanupAdmission) {
         requestSqliteWorkerOperationAdmission({
           stage: "prepare",

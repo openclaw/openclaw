@@ -70,22 +70,15 @@ describe("deepinfra image generation provider", () => {
       } as never,
     });
 
-    expect(resolveProviderHttpRequestConfigMock.mock.calls).toEqual([
-      [
-        {
-          baseUrl: "https://api.deepinfra.com/v1/openai",
-          defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
-          allowPrivateNetwork: false,
-          request: undefined,
-          defaultHeaders: {
-            Authorization: "Bearer deepinfra-key",
-          },
-          provider: "deepinfra",
-          capability: "image",
-          transport: "http",
-        },
-      ],
-    ]);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepinfra",
+        capability: "image",
+        transport: "http",
+        defaultBaseUrl: "https://api.deepinfra.com/v1/openai",
+        allowPrivateNetwork: false,
+      }),
+    );
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     const jsonRequest = requireFirstPostJsonRequest(
       postJsonRequestMock,

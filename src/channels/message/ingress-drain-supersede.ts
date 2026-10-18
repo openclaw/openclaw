@@ -1,4 +1,8 @@
-import { activeClaimKey, type ActiveHandlerState } from "./ingress-drain-state.js";
+import {
+  activeClaimKey,
+  isPreAdoptionState,
+  type ActiveHandlerState,
+} from "./ingress-drain-state.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export type IngressSupersedeDecision = boolean | (() => boolean);
@@ -19,16 +23,6 @@ type SupersedeActiveStatesParams<TPayload, TMetadata> = {
   formatError: (error: unknown) => string;
   log: (message: string) => void;
 };
-
-function isPreAdoptionState<TPayload, TMetadata>(
-  state: ActiveHandlerState<TPayload, TMetadata>,
-): boolean {
-  return (
-    (state.phase === "dispatching" || state.phase === "deferred") &&
-    !state.guillotined &&
-    !state.superseded
-  );
-}
 
 /** Supersede every accepted pre-adoption claim on one lane, including released deferrals. */
 export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(

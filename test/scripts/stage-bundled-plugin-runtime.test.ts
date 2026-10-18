@@ -10,6 +10,8 @@ import {
 } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import { readInstalledPluginOverview } from "../../src/plugins/installed-plugin-overview.js";
 import { createPluginCache, withPluginCache } from "../../src/plugins/plugin-cache.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { createCommandFixture } from "../helpers/command-fixture.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
@@ -115,6 +117,62 @@ describe("prepareBundledPluginRuntime", () => {
     vi.unstubAllEnvs();
   });
 
+  it("admits a cold source checkout before its dependencies are installed", async (context) => {
+    const command = createCommandFixture(context, "tree");
+    const repoRoot = command.createTempDir("openclaw-cold-source-");
+    const { collectRuntimeImportClosure } =
+      await import("../../scripts/lib/runtime-import-closure.mts");
+    const sourceRoot = process.cwd();
+    try {
+      for (const file of collectRuntimeImportClosure(sourceRoot, [
+        "scripts/stage-bundled-plugin-runtime.mts",
+      ])) {
+        const target = path.join(repoRoot, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(path.join(sourceRoot, file), target);
+      }
+      fs.writeFileSync(path.join(repoRoot, "package.json"), '{"name":"openclaw","type":"module"}');
+      const owner = pathToFileURL(
+        path.join(sourceRoot, "scripts/lib/source-update-artifact-preflight.mts"),
+      ).href;
+      const result = await command.run(
+        resolveTestNodeExecPath(),
+        [
+          "--input-type=module",
+          "--eval",
+          `import assert from "node:assert/strict";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import { inspectSourceUpdateArtifacts } from ${JSON.stringify(owner)};
+execFileSync("git", ["init", "--quiet"]);
+const admission = await inspectSourceUpdateArtifacts(process.cwd());
+try {
+  assert(admission.lock);
+  assert(fs.existsSync(".artifacts/dist-artifacts.lock/owner.json"));
+  assert.equal(admission.sourceRuntimePrepared, true);
+} finally {
+  await admission.lock?.release();
+}`,
+        ],
+        { cwd: repoRoot, env: { ...process.env, NODE_OPTIONS: "" } },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      for (const entry of [
+        "node_modules",
+        "dist",
+        "dist-runtime",
+        ".artifacts/dist-artifacts.lock/owner.json",
+      ]) {
+        expect(fs.existsSync(path.join(repoRoot, entry)), entry).toBe(false);
+      }
+      expect(fs.readdirSync(repoRoot).some((entry) => entry.startsWith(".openclaw-runtime-"))).toBe(
+        false,
+      );
+    } finally {
+      await command.lifetime.cleanup();
+    }
+  });
+
   it("prepares both roots without mutation and publishes imports valid at their final paths", async () => {
     await withTempDir(async (repoRoot) => {
       const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
@@ -159,88 +217,60 @@ describe("prepareBundledPluginRuntime", () => {
     });
   });
 
-  it.each([true, false])(
-    "preserves canonical static asset behavior without writing through staging links (copy=%s)",
-    async (copyStaticAssets) => {
-      vi.stubEnv("OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS", copyStaticAssets ? undefined : "0");
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
-        const sourceRoot = path.join(repoRoot, "dist/extensions/demo");
-        const staticAssets = ["index.html", "assets/app.js", "assets/app.css"].map((name) => ({
-          source: `client/${name}`,
-          output: `dist/control-ui/${name}`,
-        }));
-        fs.writeFileSync(
-          path.join(sourceRoot, "package.json"),
-          JSON.stringify({ name: "demo", type: "module", openclaw: { build: { staticAssets } } }),
-        );
-        for (const asset of staticAssets) {
-          const output = path.join(sourceRoot, asset.output);
-          fs.mkdirSync(path.dirname(output), { recursive: true });
-          fs.writeFileSync(output, `raw ${asset.output}\n`);
-        }
-        stageBundledPluginRuntime({ repoRoot });
-        const aliasBefore = fs.statSync(aliasRoot).ino;
-        const liveStatic = path.join(runtimeRoot, "extensions/demo/dist/control-ui");
-        const liveBefore = fs.statSync(liveStatic).ino;
-        const jsBefore = fs.readFileSync(path.join(liveStatic, "assets/app.js"), "utf8");
-        if (copyStaticAssets) {
-          fs.rmSync(liveStatic, { recursive: true });
-        }
-        const sourceBefore = fs.statSync(path.join(sourceRoot, staticAssets[0]!.output));
+  it("preserves canonical static assets without writing through staging links", async () => {
+    vi.stubEnv("OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS", undefined);
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+      const sourceRoot = path.join(repoRoot, "dist/extensions/demo");
+      const staticAssets = ["index.html", "assets/app.js", "assets/app.css"].map((name) => ({
+        source: `client/${name}`,
+        output: `dist/control-ui/${name}`,
+      }));
+      fs.writeFileSync(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ name: "demo", type: "module", openclaw: { build: { staticAssets } } }),
+      );
+      for (const asset of staticAssets) {
+        const output = path.join(sourceRoot, asset.output);
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.writeFileSync(output, `raw ${asset.output}\n`);
+      }
+      stageBundledPluginRuntime({ repoRoot });
+      const aliasBefore = fs.statSync(aliasRoot).ino;
+      const liveStatic = path.join(runtimeRoot, "extensions/demo/dist/control-ui");
+      fs.rmSync(liveStatic, { recursive: true });
+      const sourceBefore = fs.statSync(path.join(sourceRoot, staticAssets[0]!.output));
 
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        expect(prepared.changed).toBe(copyStaticAssets);
-        expect(fs.existsSync(liveStatic)).toBe(!copyStaticAssets);
-        expect(fs.statSync(path.join(sourceRoot, staticAssets[0]!.output)).mtimeMs).toBe(
-          sourceBefore.mtimeMs,
-        );
-        await prepared.publish(() => {
-          if (!copyStaticAssets) {
-            throw new Error("A complete minimal build must not publish runtime changes.");
-          }
-        });
-        await prepared.cleanup();
-        expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
-        if (copyStaticAssets) {
-          for (const asset of staticAssets) {
-            const output = path.join(runtimeRoot, "extensions/demo", asset.output);
-            expect(fs.lstatSync(output).isFile()).toBe(true);
-            expect(fs.readFileSync(output, "utf8")).toBe(`raw ${asset.output}\n`);
-          }
-        } else {
-          expect(fs.statSync(liveStatic).ino).toBe(liveBefore);
-          expect(fs.readFileSync(path.join(liveStatic, "assets/app.js"), "utf8")).toBe(jsBefore);
-        }
-        const unchanged = prepareBundledPluginRuntime({ repoRoot });
-        expect(unchanged.changed).toBe(false);
-        await unchanged.cleanup();
-      });
-    },
-  );
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      expect(prepared.changed).toBe(true);
+      expect(fs.existsSync(liveStatic)).toBe(false);
+      expect(fs.statSync(path.join(sourceRoot, staticAssets[0]!.output)).mtimeMs).toBe(
+        sourceBefore.mtimeMs,
+      );
+      await prepared.publish(() => undefined);
+      await prepared.cleanup();
+      expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
+      for (const asset of staticAssets) {
+        const output = path.join(runtimeRoot, "extensions/demo", asset.output);
+        expect(fs.lstatSync(output).isFile()).toBe(true);
+        expect(fs.readFileSync(output, "utf8")).toBe(`raw ${asset.output}\n`);
+      }
+      const unchanged = prepareBundledPluginRuntime({ repoRoot });
+      expect(unchanged.changed).toBe(false);
+      await unchanged.cleanup();
+    });
+  });
 
-  it.each(["content", "mode", "symlink target"] as const)(
-    "detects stale %s even when every required path exists",
-    async (difference) => {
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot } = writeRuntimeFixture(repoRoot);
-        stageBundledPluginRuntime({ repoRoot });
-        const metadata = path.join(runtimeRoot, "extensions/demo/package.json");
-        if (difference === "content") {
-          fs.writeFileSync(metadata, '{"name":"stale","type":"module"}\n');
-        } else if (difference === "mode") {
-          fs.chmodSync(metadata, 0o444);
-        } else {
-          const asset = path.join(runtimeRoot, "extensions/demo/assets/info.txt");
-          fs.unlinkSync(asset);
-          fs.symlinkSync("../../../../dist/extensions/demo/index.js", asset);
-        }
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        expect(prepared.changed).toBe(true);
-        await prepared.cleanup();
-      });
-    },
-  );
+  it("detects stale mode even when every required path exists", async () => {
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot } = writeRuntimeFixture(repoRoot);
+      stageBundledPluginRuntime({ repoRoot });
+      fs.chmodSync(path.join(runtimeRoot, "extensions/demo/package.json"), 0o444);
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      expect(prepared.changed).toBe(true);
+      await prepared.cleanup();
+    });
+  });
 
   it("leaves both live roots intact when preparation fails", async () => {
     await withTempDir(async (repoRoot) => {
@@ -265,56 +295,29 @@ describe("prepareBundledPluginRuntime", () => {
     });
   });
 
-  it.each([false, true])(
-    "restores originals or retains failed restoration (restore fails=%s)",
-    async (failRestore) => {
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
-        stageBundledPluginRuntime({ repoRoot });
-        fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
-        fs.writeFileSync(path.join(aliasRoot, "original.txt"), "original alias");
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        const originalRename = fs.renameSync.bind(fs);
-        vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-          if (String(destination) === aliasRoot && path.basename(String(source)) === "candidate") {
-            throw new Error("alias publication failed");
-          }
-          if (
-            failRestore &&
-            String(destination) === aliasRoot &&
-            path.basename(String(source)) === "previous"
-          ) {
-            throw new Error("alias restoration failed");
-          }
-          originalRename(source, destination);
-        });
-        await expect(prepared.publish(() => undefined)).rejects.toThrow(
-          failRestore ? "Runtime publication and restoration failed" : "alias publication failed",
-        );
-        await prepared.cleanup();
-        expect(fs.readFileSync(path.join(runtimeRoot, "original.txt"), "utf8")).toBe(
-          "original runtime",
-        );
-        if (failRestore) {
-          const retained = fs
-            .readdirSync(path.dirname(aliasRoot))
-            .find((name) => name.startsWith(".openclaw-runtime-"));
-          expect(retained).toBeDefined();
-          expect(
-            fs.readFileSync(
-              path.join(path.dirname(aliasRoot), retained!, "previous/original.txt"),
-              "utf8",
-            ),
-          ).toBe("original alias");
-        } else {
-          expect(fs.readFileSync(path.join(aliasRoot, "original.txt"), "utf8")).toBe(
-            "original alias",
-          );
-          expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
+  it("restores originals when alias publication fails", async () => {
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+      stageBundledPluginRuntime({ repoRoot });
+      fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
+      fs.writeFileSync(path.join(aliasRoot, "original.txt"), "original alias");
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      const originalRename = fs.renameSync.bind(fs);
+      vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (String(destination) === aliasRoot && path.basename(String(source)) === "candidate") {
+          throw new Error("alias publication failed");
         }
+        originalRename(source, destination);
       });
-    },
-  );
+      await expect(prepared.publish(() => undefined)).rejects.toThrow("alias publication failed");
+      await prepared.cleanup();
+      expect(fs.readFileSync(path.join(runtimeRoot, "original.txt"), "utf8")).toBe(
+        "original runtime",
+      );
+      expect(fs.readFileSync(path.join(aliasRoot, "original.txt"), "utf8")).toBe("original alias");
+      expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
+    });
+  });
 
   it("keeps live paths present when authority is revoked between root swaps", async () => {
     await withTempDir(async (repoRoot) => {

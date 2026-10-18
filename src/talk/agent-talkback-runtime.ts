@@ -10,19 +10,16 @@ import type { RuntimeLogger } from "../plugins/runtime/types-core.js";
 const MAX_PENDING_QUESTIONS = 32;
 const MAX_PENDING_QUESTION_CHARS = 32 * 1024;
 
-/** Text produced by a delegated voice consult. */
 export type RealtimeVoiceAgentTalkbackResult = {
   text: string;
 };
 
-/** Minimal queue API owned by a realtime voice session. */
 export type RealtimeVoiceAgentTalkbackQueue = {
   close(): void;
   enqueue(question: string, metadata?: unknown): void;
   isIdle(): boolean;
 };
 
-/** Runtime dependencies and policy knobs for the talkback queue. */
 export type RealtimeVoiceAgentTalkbackQueueParams = {
   /** Delay used to merge nearby transcript fragments into one consult. */
   debounceMs: number;
@@ -47,7 +44,6 @@ type PendingQuestion = {
   metadata?: unknown;
 };
 
-/** Create a serial consult queue for realtime transcript talkback. */
 export function createRealtimeVoiceAgentTalkbackQueue(
   params: RealtimeVoiceAgentTalkbackQueueParams,
 ): RealtimeVoiceAgentTalkbackQueue {
@@ -62,9 +58,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   const shouldStop = () => closed || params.isStopped();
 
   const clearDebounceTimer = () => {
-    if (!debounceTimer) {
-      return;
-    }
     clearTimeout(debounceTimer);
     debounceTimer = undefined;
   };
@@ -115,25 +108,15 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   };
 
   const run = async (pending: PendingQuestion): Promise<void> => {
-    const trimmed = pending.question.trim();
-    if (!trimmed || shouldStop()) {
+    if (shouldStop()) {
       return;
     }
     if (active) {
-      // Preserve order while avoiding concurrent consults; compatible metadata
-      // fragments are merged by appendPendingQuestion above.
-      appendPendingQuestion({
-        question: trimmed,
-        metadata: pending.metadata,
-      });
+      appendPendingQuestion(pending);
       return;
     }
-
     active = true;
-    let nextQuestion: PendingQuestion | undefined = {
-      question: trimmed,
-      metadata: pending.metadata,
-    };
+    let nextQuestion: PendingQuestion | undefined = pending;
     let consultStartedAt: number | undefined;
     try {
       while (nextQuestion) {
@@ -179,7 +162,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       } else {
         const queuedQuestion = shiftPendingQuestion();
         if (queuedQuestion) {
-          // Continue draining any questions queued while the active consult ran.
           void run(queuedQuestion);
         }
       }
@@ -195,7 +177,6 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       closed = true;
       clearDebounceTimer();
       clearPendingQuestions();
-      // Abort only the active consult; pending work has already been dropped.
       activeAbortController?.abort();
     },
     enqueue: (question, metadata) => {

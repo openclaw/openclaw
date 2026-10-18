@@ -15,6 +15,7 @@ sidebarTitle: "macOS and Gateway relay"
 - Phase notifications are best-effort: a failed update does not start the local Gateway or restart its tunnel. Starting Talk retains normal connection recovery.
 - On a short pause (silence window), the current transcript is sent.
 - Replies are written to WebChat (same as typing).
+- Talk observes an accepted agent run until the Gateway reports completion, then speaks that run's complete reply. A slow local model does not expire a separate app-side response window. Stop still prevents late playback.
 - **Interrupt on speech** (default on): if the user talks while the assistant is speaking, playback stops and the interruption timestamp is noted for the next prompt.
 
 ## Realtime Talk over the Gateway relay (macOS)
@@ -62,6 +63,11 @@ Talk and Voice Wake controls are unavailable.
 On Apple clients, relay playback stays active until the device finishes the queued audio, not
 until an estimated duration expires. Playback acknowledgments follow that completion.
 Turn-based providers retain device-route microphone echo suppression and local speech interruption.
+On iPhone, when a session starts on the built-in speaker or receiver, the microphone and relay
+playback share one audio engine with voice processing, so echo cancellation keeps the microphone
+open on the speaker as well and local speech interruption works there. Sessions that start on a
+headset keep separate engines without voice processing. If voice processing is unavailable, the
+built-in speaker falls back to suppressing microphone input during playback.
 Continuous providers such as GPT Live keep microphone input open during playback and own speech
 interruptions themselves. Apple clients use the selected provider's `talk.catalog` capability;
 if catalog access is unavailable, they leave speech interruption to the provider.

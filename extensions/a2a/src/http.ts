@@ -2,6 +2,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { boundedJsonUtf8Bytes } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -12,6 +13,7 @@ import {
   runDetachedWebhookWork,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { dispatchA2aInbound } from "./inbound.js";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
@@ -37,13 +39,10 @@ type A2aRpcResponse =
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; result: unknown }
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; error: { code: number; message: string } };
 
-type A2aInboundDispatch = {
-  taskId: string;
-  contextId: string;
-  messageId: string;
-  peerName: string;
-  text: string;
-};
+type A2aInboundDispatch = Pick<
+  Parameters<typeof dispatchA2aInbound>[0],
+  "taskId" | "contextId" | "messageId" | "peerName" | "text"
+>;
 
 type A2aHttpHandlerParams = {
   config: OpenClawConfig;
@@ -52,17 +51,6 @@ type A2aHttpHandlerParams = {
   taskStore: A2aTaskStore;
   dispatchInbound: (message: A2aInboundDispatch) => Promise<void>;
 };
-
-function writeJsonResponse(response: ServerResponse, statusCode: number, value: unknown): void {
-  writeJsonBody(response, statusCode, JSON.stringify(value));
-}
-
-function writeJsonBody(response: ServerResponse, statusCode: number, body: string): void {
-  response.statusCode = statusCode;
-  response.setHeader("content-type", "application/json; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.end(body);
-}
 
 function createRpcError(id: A2aRpcIdentifier, code: number, message: string): A2aRpcResponse {
   return { jsonrpc: "2.0", id, error: { code, message } };
@@ -74,7 +62,7 @@ function writeRpcResponse(
 ): void {
   const measured = boundedJsonUtf8Bytes(value, MAX_RESPONSE_BODY_BYTES);
   if (measured.complete) {
-    writeJsonBody(response, 200, JSON.stringify(value));
+    writeJsonResponse(response, 200, value);
     return;
   }
   const errorMessage = "A2A response exceeds the 1 MiB limit";
@@ -225,21 +213,42 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
         if (!text) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
-        const contextId = message.contextId ?? `ctx-${randomUUID()}`;
-        const task = params.taskStore.create(contextId, peerName);
-        params.taskStore.start(task.id);
-        // Reserved synchronously while this request is still admitted: a
-        // returnImmediately dispatch outlives the response, and an inherited
-        // released root makes the agent turn fail as gateway-draining.
-        void runDetachedWebhookWork(async () => {
-          await params.dispatchInbound({
-            taskId: task.id,
-            contextId,
-            messageId: message.messageId ?? randomUUID(),
-            peerName,
-            text,
-          });
-        }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        if (message.taskId !== undefined) {
+          const referencedTask = params.taskStore.get(message.taskId, peerName);
+          if (!referencedTask) {
+            throw new A2aProtocolError(-32001, "Task not found");
+          }
+          if (message.contextId !== undefined && message.contextId !== referencedTask.contextId) {
+            throw new A2aProtocolError(
+              -32602,
+              "Message contextId does not match the referenced task",
+            );
+          }
+          // A context-only follow-up starts new work; a task reference must never
+          // silently allocate a replacement for an active or terminal task.
+          throw new A2aProtocolError(
+            -32004,
+            "Task continuation is not supported; omit taskId and reuse contextId to start a new task",
+          );
+        }
+        const messageId = message.messageId ?? randomUUID();
+        const task = params.taskStore.create(
+          message.contextId ?? `ctx-${randomUUID()}`,
+          peerName,
+          messageId,
+        );
+        if (params.taskStore.start(task.id)) {
+          // Reserve detached work before the HTTP request releases its admission root.
+          void runDetachedWebhookWork(async () => {
+            await params.dispatchInbound({
+              taskId: task.id,
+              contextId: task.contextId,
+              messageId,
+              peerName,
+              text,
+            });
+          }).catch((error: unknown) => params.taskStore.fail(task.id, error));
+        }
 
         if (send.data.configuration?.returnImmediately) {
           result = { task: params.taskStore.get(task.id, peerName) ?? task };

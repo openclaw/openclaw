@@ -1,4 +1,3 @@
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { parseMattermostQuestionContext } from "../normalize.js";
 import {
@@ -6,17 +5,12 @@ import {
   type MattermostInteractionResponse,
 } from "./interactions.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import {
-  buildMattermostButtonInteractionMessageSid,
-  resolveMattermostInteractionReplyRootId,
-} from "./monitor-context.js";
+import { buildMattermostButtonInteractionMessageSid } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
+import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
-import type { ReplyPayload } from "./runtime-api.js";
 import { registerPluginHttpRoute } from "./runtime-api.js";
-import { sendMessageMattermost } from "./send.js";
 
 type MattermostInteractionDispatch = NonNullable<
   Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
@@ -185,7 +179,7 @@ export function registerMattermostInteractions(params: {
         if (!eventPlan) {
           return;
         }
-        const { channelDisplay, channelId, kind, route, thread, to } = eventPlan;
+        const { channelDisplay, kind } = eventPlan;
         const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
         const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
@@ -199,52 +193,11 @@ export function registerMattermostInteractions(params: {
           WasMentioned: true,
           CommandAuthorized: false,
         });
-        const { replyOptions, replyPipeline, tableMode, textLimit } = eventPlan.createReplyPlan();
-        await core.channel.inbound.dispatch({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-          route: {
-            agentId: route.agentId,
-            dmScope: route.dmScope,
-            sessionKey: thread.sessionKey,
-          },
+        await dispatchMattermostInteractionReply(monitor, eventPlan, {
           ctxPayload,
-          delivery: {
-            observeMessageSent: true,
-            deliver: async (payload: ReplyPayload) => {
-              const result = await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                channelId,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostInteractionReplyRootId({
-                  kind,
-                  threadRootId: thread.effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                  interactionMessageSid,
-                  sourcePostId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-              });
-              if (result.visibleReplySent) {
-                runtime.log?.(`delivered button-click reply to ${to}`);
-              }
-              return result;
-            },
-            onError: (err, info) => {
-              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
-            },
-          },
-          replyPipeline,
-          dispatcherOptions: {
-            humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-          },
-          replyOptions,
+          interactionMessageSid,
+          sourcePostId,
+          kind: "button-click",
         });
       },
       log: (message) => runtime.log?.(message),

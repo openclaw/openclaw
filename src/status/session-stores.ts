@@ -1,16 +1,20 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 
 export const STATUS_RECENT_SESSION_LIMIT = 10;
 const SESSION_STORE_READ_SLICE_MS = 8;
-type SessionStoreSummary = ReturnType<typeof readSessionStoreSummaryReadOnly>;
+type SessionStoreSummary = Awaited<ReturnType<SessionHistoryWorkerDatabase["readStoreSummary"]>>;
 export type StatusSessionStores = Awaited<
   ReturnType<
     typeof readStatusSessionStores<
@@ -73,51 +77,127 @@ export function createStatusSessionStoreReader(
   recentLimit: number,
   options: {
     projection?: SessionRowProjection;
-    readSummary?: typeof readSessionStoreSummaryReadOnly;
     recoverReadError?: (error: unknown) => SessionStoreSummary;
   } = {},
 ) {
-  const readSummary = options.readSummary ?? readSessionStoreSummaryReadOnly;
-  const stores = new Map<string, SessionStoreSummary>();
+  const env = captureSessionTranscriptStorageEnvironment(process.env);
+  const stores = new Map<string, SessionStoreSummary & { path: string }>();
   let sliceStartedAt = performance.now();
   return {
     stores,
     async read(storePath: string, agentId?: string) {
-      const path = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
-      if (agentId && readAgentDatabaseAdmissionRefusal(agentId)) {
-        return { path, count: 0, recent: [] };
-      }
-      let store = stores.get(path);
-      if (!store) {
+      const projection = options.projection;
+      if (projection) {
+        if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+          return { path: storePath, count: 0, recent: [] };
+        }
         try {
-          const projection = options.projection;
-          if (projection) {
-            do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
+          do {
+            await projection.prepareSelection();
+          } while (projection.needsSelectionPreparation());
+          const state = projection.state;
+          const admitted = state.scope({ agentId }).paths;
+          const paths = state
+            .physicalStorePaths(storePath, agentId)
+            .filter((path) => admitted.has(path));
+          const selected = paths.map((path) => {
+            let store = stores.get(path);
+            if (!store) {
+              let snapshot: SessionStoreSummary;
+              try {
+                snapshot = summarizeProjectionRows(projection, path, agentIds, recentLimit);
+              } catch (error) {
+                if (!options.recoverReadError) {
+                  throw error;
+                }
+                snapshot = options.recoverReadError(error);
+              }
+              store = { ...snapshot, path };
+            }
+            return store;
+          });
+          const summaries = selected.map((store) => (agentId ? store.byAgent.get(agentId) : store));
+          let recent = summaries.flatMap((summary) => summary?.recent ?? []);
+          if (selected.length > 1) {
+            recent.sort(
+              (left, right) =>
+                (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0) ||
+                (left.sessionKey < right.sessionKey
+                  ? -1
+                  : left.sessionKey > right.sessionKey
+                    ? 1
+                    : 0),
+            );
+            recent = recent.slice(0, recentLimit);
           }
-          store = options.projection
-            ? summarizeProjectionRows(options.projection, path, agentIds, recentLimit)
-            : readSummary(
-                { ...(agentId ? { agentId } : {}), storePath },
-                { agentIds, recentLimit },
-              );
+          const summary = {
+            path: paths.length === 1 ? paths[0]! : storePath,
+            count: summaries.reduce((count, store) => count + (store?.count ?? 0), 0),
+            recent,
+          };
+          if (performance.now() - sliceStartedAt >= SESSION_STORE_READ_SLICE_MS) {
+            await yieldToEventLoop();
+            sliceStartedAt = performance.now();
+          }
+          if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+            return { path: summary.path, count: 0, recent: [] };
+          }
+          for (const store of selected) {
+            stores.set(store.path, store);
+          }
+          return summary;
         } catch (error) {
           if (!options.recoverReadError) {
             throw error;
           }
-          store = options.recoverReadError(error);
-        }
-        stores.set(path, store);
-        // Transactions finish before yielding. Cheap reads share a slice so competing
-        // background work cannot add a full event-loop turn to every physical store.
-        if (performance.now() - sliceStartedAt >= SESSION_STORE_READ_SLICE_MS) {
-          await yieldToEventLoop();
-          sliceStartedAt = performance.now();
+          const recovered = options.recoverReadError(error);
+          const summary = agentId ? recovered.byAgent.get(agentId) : recovered;
+          return { path: storePath, count: summary?.count ?? 0, recent: summary?.recent ?? [] };
         }
       }
-      const summary = agentId ? store.byAgent.get(agentId) : store;
-      return { path, count: summary?.count ?? 0, recent: summary?.recent ?? [] };
+      return withSessionStoreReaderInWorker(
+        { storePath, agentId, env },
+        async ({ reader, database, selectedStore, continuation, assertCurrent }) => {
+          const path = selectedStore.path;
+          if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+            return { path, count: 0, recent: [] };
+          }
+          let store = stores.get(database.path);
+          if (!store) {
+            let summary: SessionStoreSummary;
+            try {
+              summary = await reader.readStoreSummary({
+                env: database.env,
+                agentIds,
+                recentLimit,
+                continuation,
+              });
+            } catch (error) {
+              if (
+                error instanceof AgentDatabaseAdmissionError &&
+                agentId === error.refusal.agentId &&
+                readAgentDatabaseAdmissionRefusal(agentId, { env })
+              ) {
+                assertCurrent();
+                return { path, count: 0, recent: [] };
+              }
+              if (!options.recoverReadError) {
+                throw error;
+              }
+              summary = options.recoverReadError(error);
+            }
+            assertCurrent();
+            if (agentId && readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+              return { path, count: 0, recent: [] };
+            }
+            store = { ...summary, path };
+            stores.set(database.path, store);
+          }
+          const summary = agentId ? store.byAgent.get(agentId) : store;
+          return { path, count: summary?.count ?? 0, recent: summary?.recent ?? [] };
+        },
+        { backing: true, dataOnly: true, logical: {} },
+      );
     },
   };
 }
@@ -145,7 +225,7 @@ export async function readStatusSessionStores<Agent extends { id: string; name?:
     });
   }
   return {
-    paths: [...reader.stores.keys()],
+    paths: [...reader.stores.values()].map((store) => store.path),
     count: [...reader.stores.values()].reduce((count, store) => count + store.count, 0),
     recent: [...reader.stores.values()].flatMap((store) => store.recent),
     byAgent,

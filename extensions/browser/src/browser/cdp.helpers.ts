@@ -1,9 +1,3 @@
-/**
- * Chrome DevTools Protocol URL, fetch, and socket helpers.
- *
- * Handles CDP URL normalization, SSRF-guarded HTTP discovery, credential
- * redaction/headers, and request/response correlation over WebSocket.
- */
 import { createHash } from "node:crypto";
 import { redactCdpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -36,18 +30,9 @@ export { openCdpWebSocket, withCdpSocket } from "./cdp-websocket.js";
 export type { CdpSendFn } from "./cdp-websocket.js";
 export { redactCdpUrl };
 
-/**
- * Returns true when the URL uses a WebSocket protocol (ws: or wss:).
- * Used to distinguish direct-WebSocket CDP endpoints
- * from HTTP(S) endpoints that require /json/version discovery.
- */
 export function isWebSocketUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "ws:" || parsed.protocol === "wss:";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(url);
+  return parsed?.protocol === "ws:" || parsed?.protocol === "wss:";
 }
 
 /**
@@ -63,17 +48,29 @@ export function isWebSocketUrl(url: string): boolean {
  * Chrome will reject with HTTP 400.
  */
 export function isDirectCdpWebSocketEndpoint(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
-      /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
-        parsed.pathname,
-      )
-    );
-  } catch {
-    return false;
+  const parsed = URL.parse(url);
+  return (
+    (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(parsed.pathname)
+  );
+}
+
+export async function resolveCdpWebSocketDiscovery(
+  cdpUrl: string,
+  readWebSocketUrl: (discoveryUrl: string) => Promise<string | undefined>,
+): Promise<{ url: string; discovered: boolean } | null> {
+  if (isDirectCdpWebSocketEndpoint(cdpUrl)) {
+    return { url: cdpUrl, discovered: false };
   }
+  const discoveryUrl = isWebSocketUrl(cdpUrl)
+    ? normalizeCdpHttpBaseForJsonEndpoints(cdpUrl)
+    : cdpUrl;
+  const advertisedUrl = await readWebSocketUrl(discoveryUrl);
+  if (advertisedUrl) {
+    return { url: normalizeCdpWsUrl(advertisedUrl, discoveryUrl), discovered: true };
+  }
+  // Bare WebSocket endpoints can be directly usable without HTTP discovery.
+  return isWebSocketUrl(cdpUrl) ? { url: cdpUrl, discovered: false } : null;
 }
 
 /** Restrict a trusted CDP endpoint to its configured control-plane host. */
@@ -95,7 +92,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
-type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
+export type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);
@@ -157,7 +154,6 @@ export function redactCdpErrorText(text: string): string {
   return redactToolPayloadText(redactedUrls);
 }
 
-/** Append a JSON endpoint path to a CDP HTTP base URL. */
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -166,7 +162,6 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   return url.toString();
 }
 
-/** Normalize a reported CDP WebSocket URL against the configured CDP base URL. */
 export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   const ws = new URL(wsUrl);
   const cdp = new URL(cdpUrl);
@@ -202,8 +197,8 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 
 /** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
-  try {
-    const url = new URL(cdpUrl);
+  const url = URL.parse(cdpUrl);
+  if (url) {
     if (url.protocol === "ws:") {
       url.protocol = "http:";
     } else if (url.protocol === "wss:") {
@@ -212,15 +207,14 @@ export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
     url.pathname = url.pathname.replace(/\/devtools\/browser\/.*$/, "");
     url.pathname = url.pathname.replace(/\/cdp$/, "");
     return url.toString().replace(/\/$/, "");
-  } catch {
-    // Best-effort fallback for non-URL-ish inputs.
-    return cdpUrl
-      .replace(/^ws:/, "http:")
-      .replace(/^wss:/, "https:")
-      .replace(/\/devtools\/browser\/.*$/, "")
-      .replace(/\/cdp$/, "")
-      .replace(/\/$/, "");
   }
+  // Best-effort fallback for non-URL-ish inputs.
+  return cdpUrl
+    .replace(/^ws:/, "http:")
+    .replace(/^wss:/, "https:")
+    .replace(/\/devtools\/browser\/.*$/, "")
+    .replace(/\/cdp$/, "")
+    .replace(/\/$/, "");
 }
 
 function fingerprintCdpIdentity(value: string): string {
@@ -558,7 +552,6 @@ export async function fetchCdpChecked(
   }
 }
 
-/** Probe that a CDP endpoint responds with an OK HTTP status. */
 export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,

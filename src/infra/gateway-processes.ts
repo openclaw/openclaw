@@ -1,4 +1,3 @@
-// Inspects local gateway processes for status and diagnostics.
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { readGatewayLockProcessCmdline } from "./gateway-lock-process.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
@@ -49,7 +48,6 @@ export function signalVerifiedGatewayPidSync(
   }
 }
 
-/** Find listener PIDs on `port` and keep only verified gateway processes. */
 export function findVerifiedGatewayListenerPidsOnPortSync(
   port: number,
   context: { env?: NodeJS.ProcessEnv } = {},
@@ -64,7 +62,6 @@ export function findVerifiedGatewayListenerPidsOnPortSync(
     .filter((pid) => inspectGatewayProcess(pid, { ...context, port }).kind === "openclaw");
 }
 
-/** Format gateway PIDs for human-facing diagnostics. */
 export function formatGatewayPidList(pids: number[]): string {
   return pids.join(", ");
 }

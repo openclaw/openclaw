@@ -1,5 +1,5 @@
-// Shared row mutations for synchronous session signals and the shared-state worker.
-import type { DatabaseSync } from "node:sqlite";
+// Connection-bound signal mutations execute in the shared-state worker.
+
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
@@ -8,9 +8,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { publishSqliteDatabaseAdmission } from "../infra/sqlite-database-admission.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -23,8 +24,11 @@ import {
   type SessionStateActorType,
   type SessionStateEventKind,
 } from "./session-state-event-kinds.js";
+import type { SessionStateEventRecord } from "./session-state-events.types.js";
+import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 import {
-  rowToSessionUpstreamLink,
+  emptyWatchedSessionUpstreamLinksAdmission,
+  readSessionUpstreamLinkInDatabase,
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
@@ -49,19 +53,6 @@ type SessionStateDatabase = Pick<
 >;
 type SessionStateEventsTable = OpenClawStateKyselyDatabase["session_state_events"];
 export type SessionStateEventRow = Selectable<SessionStateEventsTable>;
-export type SessionStateEventRecord = {
-  sequence: number;
-  sessionKey: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionStateEventKind;
-  actorType: SessionStateActorType;
-  actorId?: string;
-  runId?: string;
-  occurredAt: number;
-  summary: string;
-  payload?: Record<string, unknown>;
-};
 
 export function rowToSessionStateEvent(row: SessionStateEventRow): SessionStateEventRecord {
   const payload = row.payload_json ? safeParseJsonRecord(row.payload_json) : undefined;
@@ -86,8 +77,8 @@ type SessionWatchCursorRow = Selectable<OpenClawStateKyselyDatabase["session_wat
 
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const SESSION_STATE_MAX_ROWS = 50_000;
-const watcherSchemas = new WeakSet<DatabaseSync>();
-function ensureWatcherStoreColumn(db: DatabaseSync) {
+const watcherSchemas = new WeakSet<EngineConnection>();
+function ensureWatcherStoreColumn(db: EngineConnection) {
   if (watcherSchemas.has(db)) {
     return;
   }
@@ -95,50 +86,35 @@ function ensureWatcherStoreColumn(db: DatabaseSync) {
   deferSqlitePostCommitPublication(db, () => watcherSchemas.add(db));
 }
 
-// Bare keys (session.scope="global") are store-local per agent, but cursors, the
-// system-event queue, and heartbeat wakes are keyed by session key alone. A notice
-// for one agent's child could be drained and acknowledged by another agent's global
-// turn — a cross-A2A metadata leak plus a lost notification. Until watcher identity
-// is agent-scoped end-to-end, such watchers get durable events and changesSince but
-// no notices.
-export function isNotifiableWatcherKey(watcherSessionKey: string): boolean {
-  return parseAgentSessionKey(watcherSessionKey) != null;
-}
-
-export function getSessionStateKysely(db: DatabaseSync) {
+export function getSessionStateKysely(db: EngineConnection) {
   return getNodeSqliteKysely<SessionStateDatabase>(db);
 }
 
 export function hasSessionStateWatchersInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   targetSessionKey: string,
 ): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getSessionStateKysely(db)
-        .selectFrom("session_watch_cursors")
-        .select("watcher_session_key")
-        .where("target_session_key", "=", targetSessionKey)
-        .limit(1),
-    ) !== undefined
+  return executeSqliteQuerySync(
+    db,
+    getSessionStateKysely(db)
+      .selectFrom("session_watch_cursors")
+      .select("watcher_session_key")
+      .where("target_session_key", "=", targetSessionKey),
+  ).rows.some((row) =>
+    isSessionStateWatchAddress({
+      watcherSessionKey: row.watcher_session_key,
+      targetSessionKey,
+    }),
   );
 }
 
 /** A queued upstream observation must still describe the exact source it inspected. */
 export function isSessionStateUpstreamCurrentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   expected: SessionUpstreamLink,
 ): boolean {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
-      .selectFrom("session_upstream_links")
-      .selectAll()
-      .where("session_key", "=", expected.sessionKey)
-      .where("agent_id", "=", expected.agentId),
-  );
-  return row !== undefined && isDeepStrictEqual(rowToSessionUpstreamLink(row), expected);
+  const current = readSessionUpstreamLinkInDatabase(db, expected.sessionKey, expected.agentId);
+  return current !== undefined && isDeepStrictEqual(current, expected);
 }
 
 export function normalizeOptionalSqliteNumber(
@@ -167,10 +143,13 @@ function bindSessionStateEvent(
 }
 
 export function readCursor(
-  db: DatabaseSync,
+  db: EngineConnection,
   watcherSessionKey: string,
   targetSessionKey: string,
 ): SessionWatchCursorRow | undefined {
+  if (!isSessionStateWatchAddress({ watcherSessionKey, targetSessionKey })) {
+    return undefined;
+  }
   return executeSqliteQueryTakeFirstSync(
     db,
     getSessionStateKysely(db)
@@ -182,7 +161,7 @@ export function readCursor(
 }
 
 function readMaterialCursors(
-  db: DatabaseSync,
+  db: EngineConnection,
   watcherSessionKeys: readonly string[],
   targetSessionKey: string,
 ): Map<string, SessionWatchCursorRow> | undefined {
@@ -212,7 +191,7 @@ export function isAmbientGroupWatchCursor(row: SessionWatchCursorRow | undefined
 }
 
 export function upsertSeedCursor(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   watcherSessionKey: string;
   watcherStorePath?: string;
   targetSessionKey: string;
@@ -220,36 +199,36 @@ export function upsertSeedCursor(params: {
   now: number;
   provenance?: SessionWatchCursorProvenance;
 }): void {
+  if (!isSessionStateWatchAddress(params)) {
+    return;
+  }
   ensureWatcherStoreColumn(params.db);
+  const cursor = {
+    watcher_store_path: params.watcherStorePath ?? null,
+    last_seen_sequence: params.sequence,
+    notified_sequence: params.sequence,
+    material_sequence: params.sequence,
+    provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
+    updated_at: params.now,
+  };
   executeSqliteQuerySync(
     params.db,
     getSessionStateKysely(params.db)
       .insertInto("session_watch_cursors")
       .values({
         watcher_session_key: params.watcherSessionKey,
-        watcher_store_path: params.watcherStorePath ?? null,
         target_session_key: params.targetSessionKey,
-        last_seen_sequence: params.sequence,
-        notified_sequence: params.sequence,
-        material_sequence: params.sequence,
-        provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
-        updated_at: params.now,
+        ...cursor,
       })
       .onConflict((conflict) =>
-        conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet({
-          watcher_store_path: params.watcherStorePath ?? null,
-          provenance: params.provenance ?? SESSION_WATCH_PROVENANCE_EXPLICIT,
-          last_seen_sequence: params.sequence,
-          notified_sequence: params.sequence,
-          material_sequence: params.sequence,
-          updated_at: params.now,
-        }),
+        conflict.columns(["watcher_session_key", "target_session_key"]).doUpdateSet(cursor),
       ),
   );
+  publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
 }
 
 function updateMaterialCursor(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   current: SessionWatchCursorRow | undefined;
   watcherSessionKey: string;
   watcherStorePath?: string;
@@ -294,6 +273,7 @@ function updateMaterialCursor(params: {
         }),
       ),
   );
+  publishSqliteDatabaseAdmission(params.db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
   return {
     lastSeenSequence: lastSeen,
     queueOnly: isAmbientGroupWatchCursor(current),
@@ -315,20 +295,21 @@ function clampSessionStateOccurredAt(value: number | undefined, now: number): nu
 
 /** The caller owns one synchronous transaction for the event, head, and cursors. */
 export function recordSessionStateEventInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: SessionStateEventInput,
   now: number,
 ): { row?: SessionStateEventRow; notices: SessionStateNotice[] } {
   const occurredAt = clampSessionStateOccurredAt(input.occurredAt, now);
   const notices: SessionStateNotice[] = [];
-  const insert = executeSqliteQuerySync(
+  const insert = executeSqliteQueryTakeFirstSync(
     db,
     getSessionStateKysely(db)
       .insertInto("session_state_events")
       .values(bindSessionStateEvent(input, occurredAt))
-      .onConflict((conflict) => conflict.column("dedupe_key").doNothing()),
+      .onConflict((conflict) => conflict.column("dedupe_key").doNothing())
+      .returningAll(),
   );
-  const insertedSequence = insert.insertId ? Number(insert.insertId) : undefined;
+  const insertedSequence = insert?.sequence;
   if (insertedSequence === undefined) {
     if (!input.dedupeKey) {
       return { notices };
@@ -378,7 +359,13 @@ export function recordSessionStateEventInDatabase(
     : [];
   const watcherSessionKeys = [
     ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
-  ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
+  ].filter((watcherSessionKey) =>
+    isSessionStateWatchAddress({
+      watcherSessionKey,
+      targetSessionKey: input.sessionKey,
+      targetAgentId: input.agentId,
+    }),
+  );
   const cursors =
     NOTIFY_BY_KIND[input.kind] && watcherSessionKeys.length > 1
       ? readMaterialCursors(
@@ -422,18 +409,11 @@ export function recordSessionStateEventInDatabase(
     });
   }
 
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getSessionStateKysely(db)
-      .selectFrom("session_state_events")
-      .selectAll()
-      .where("sequence", "=", insertedSequence),
-  );
-  return { row, notices };
+  return { row: insert, notices };
 }
 
 /** The caller owns the transaction and schedules retention after notice publication. */
-export function pruneSessionStateEventsInDatabase(db: DatabaseSync, now: number): void {
+export function pruneSessionStateEventsInDatabase(db: EngineConnection, now: number): void {
   const kysely = getSessionStateKysely(db);
   // Stamp per-session pruned watermarks BEFORE deleting: historyGap can only be
   // answered from what pruning actually removed for that session, never inferred

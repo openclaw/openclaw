@@ -1,12 +1,56 @@
 import type fs from "node:fs";
 import { hasErrnoCode } from "../infra/errno.js";
+import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
+import { ConfigMutationConflictError } from "./mutation-conflict.js";
 
 export type ConfigRecoveryEffect<T> = {
   sync: () => T;
-  async: (health: ReturnType<typeof captureConfigHealthStateStore>) => T | Promise<T>;
+  async: (
+    health: ReturnType<typeof captureConfigHealthStateStore>,
+    appendAudit: ReturnType<typeof captureConfigAuditAppender>,
+  ) => T | Promise<T>;
 };
+
+export async function commitConfigRecoveryFile(params: {
+  health: ReturnType<typeof captureConfigHealthStateStore>;
+  beforeCommit?: () => void;
+  write: (assertCurrent: () => void) => Promise<unknown>;
+}): Promise<void> {
+  await params.write(() => {
+    params.beforeCommit?.();
+    params.health.assertCurrent();
+  });
+}
+
+/** Recheck original external bytes at mutation, not process-local observation order. */
+export function createConfigRecoverySourceGuard(
+  deps: Pick<NormalizedConfigIoDeps, "fs">,
+  sources: ReadonlyArray<readonly [pathname: string, raw: string, stat: fs.Stats | null]>,
+  requireIdentity = false,
+): () => void {
+  return () => {
+    for (const [pathname, expectedRaw, expectedStat] of sources) {
+      const actualRaw = createConfigBackupReadEffect(deps, pathname).sync();
+      const actualStat = createConfigRecoveryStatEffect(deps, pathname, requireIdentity).sync();
+      if (
+        actualRaw !== expectedRaw ||
+        (requireIdentity && (!actualStat || !expectedStat)) ||
+        (actualStat &&
+          expectedStat &&
+          (actualStat.dev !== expectedStat.dev ||
+            actualStat.ino !== expectedStat.ino ||
+            actualStat.mtimeMs !== expectedStat.mtimeMs ||
+            actualStat.size !== expectedStat.size))
+      ) {
+        throw new ConfigMutationConflictError("config recovery source changed since preparation", {
+          retryable: false,
+        });
+      }
+    }
+  };
+}
 
 export function createConfigRecoveryStatEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,

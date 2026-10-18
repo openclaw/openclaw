@@ -1,4 +1,3 @@
-import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig as ClawdbotConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -100,10 +99,8 @@ export async function handleFeishuCommentEvent(
         senderId: turn.senderId,
         senderIdLine: `Your Feishu user id: ${turn.senderId}`,
         meta: { name: turn.senderId },
-        onCreated: ({ code }) => {
-          log(
-            `feishu[${account.accountId}]: comment pairing request sender=${turn.senderId} code=${code}`,
-          );
+        onCreated: () => {
+          log(`feishu[${account.accountId}]: comment pairing request sender=${turn.senderId}`);
         },
         sendPairingReply: async (text) => {
           await deliverCommentThreadText(client, {
@@ -143,15 +140,14 @@ export async function handleFeishuCommentEvent(
     }
     effectiveCfg = currentCfg;
   }
-  let route = core.channel.routing.resolveAgentRoute({
-    cfg: effectiveCfg,
-    channel: "feishu",
-    accountId: account.accountId,
-    peer: {
-      kind: "direct",
-      id: turn.senderId,
-    },
-  });
+  const resolveRoute = (cfg: ClawdbotConfig) =>
+    core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: account.accountId,
+      peer: { kind: "direct", id: turn.senderId },
+    });
+  let route = resolveRoute(effectiveCfg);
   if (route.matchedBy === "default") {
     const dynamicResult = await maybeCreateDynamicAgent({
       cfg: effectiveCfg,
@@ -177,15 +173,7 @@ export async function handleFeishuCommentEvent(
         return;
       }
       effectiveCfg = dynamicResult.updatedCfg;
-      route = core.channel.routing.resolveAgentRoute({
-        cfg: dynamicResult.updatedCfg,
-        channel: "feishu",
-        accountId: account.accountId,
-        peer: {
-          kind: "direct",
-          id: turn.senderId,
-        },
-      });
+      route = resolveRoute(dynamicResult.updatedCfg);
       if (dynamicResult.created) {
         log(
           `feishu[${account.accountId}]: dynamic agent created for comment flow, route=${route.sessionKey}`,
@@ -257,11 +245,7 @@ export async function handleFeishuCommentEvent(
   );
 
   try {
-    log(
-      `feishu[${account.accountId}]: dispatching drive comment to agent ` +
-        `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
-    );
-    const turnResult = await core.channel.inbound.run({
+    await core.channel.inbound.run({
       channel: "feishu",
       accountId: route.accountId,
       raw: turn,
@@ -295,12 +279,6 @@ export async function handleFeishuCommentEvent(
         }),
       },
     });
-    const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-    const counts = resolveInboundReplyDispatchCounts(dispatchResult);
-    log(
-      `feishu[${account.accountId}]: drive comment dispatch complete ` +
-        `(replies=${counts.final}, session=${commentSessionKey})`,
-    );
   } finally {
     void cleanupTypingReaction();
   }

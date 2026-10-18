@@ -60,7 +60,14 @@ internal suspend fun exportChatWidgetImage(
   title: String?,
   destination: ChatWidgetExportDestination,
 ) {
-  val bitmap = captureChatWidgetBitmap(webView)
+  val bitmap =
+    withContext(Dispatchers.Main.immediate) {
+      require(webView.width > 0 && webView.height > 0) { "widget has no rendered size" }
+      captureChatWidgetWithPixelCopy(webView) ?: createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888).also {
+        it.eraseColor(Color.TRANSPARENT)
+        webView.draw(Canvas(it))
+      }
+    }
   try {
     val fileName = widgetExportFileName(title)
     when (destination) {
@@ -71,12 +78,6 @@ internal suspend fun exportChatWidgetImage(
     bitmap.recycle()
   }
 }
-
-private suspend fun captureChatWidgetBitmap(webView: WebView): Bitmap =
-  withContext(Dispatchers.Main.immediate) {
-    require(webView.width > 0 && webView.height > 0) { "widget has no rendered size" }
-    captureChatWidgetWithPixelCopy(webView) ?: drawChatWidgetBitmap(webView)
-  }
 
 @Suppress("DEPRECATION")
 private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
@@ -116,11 +117,7 @@ private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
           sourceRect,
           bitmap,
           { status ->
-            if (continuation.isActive) {
-              continuation.resume(status) { bitmap.recycle() }
-            } else {
-              bitmap.recycle()
-            }
+            continuation.resume(status) { bitmap.recycle() }
           },
           Handler(Looper.getMainLooper()),
         )
@@ -133,12 +130,6 @@ private suspend fun captureChatWidgetWithPixelCopy(webView: WebView): Bitmap? {
   bitmap.recycle()
   return null
 }
-
-private fun drawChatWidgetBitmap(webView: WebView): Bitmap =
-  createBitmap(webView.width, webView.height, Bitmap.Config.ARGB_8888).also { bitmap ->
-    bitmap.eraseColor(Color.TRANSPARENT)
-    webView.draw(Canvas(bitmap))
-  }
 
 private suspend fun copyChatWidgetImage(
   context: Context,

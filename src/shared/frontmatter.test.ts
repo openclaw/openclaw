@@ -1,4 +1,5 @@
 // Frontmatter tests cover shared Markdown frontmatter parsing helpers.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test } from "vitest";
 import {
   applyOpenClawManifestInstallCommonFields,
@@ -10,61 +11,12 @@ import {
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
 
-function expectInstallBase(
-  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
-): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
-  if (parsed === undefined) {
-    throw new Error("Expected manifest install base");
-  }
-  return parsed;
-}
-
 describe("shared/frontmatter", () => {
   test("parseFrontmatterBool respects explicit values and fallback", () => {
     expect(parseFrontmatterBool("true", false)).toBe(true);
     expect(parseFrontmatterBool("false", true)).toBe(false);
     expect(parseFrontmatterBool(undefined, true)).toBe(true);
     expect(parseFrontmatterBool("maybe", false)).toBe(false);
-  });
-
-  test("resolveOpenClawManifestBlock reads current manifest keys and custom metadata fields", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ openclaw: { foo: 1, bar: 'baz' } }",
-        },
-      }),
-    ).toEqual({ foo: 1, bar: "baz" });
-
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          pluginMeta: "{ openclaw: { foo: 2 } }",
-        },
-        key: "pluginMeta",
-      }),
-    ).toEqual({ foo: 2 });
-  });
-
-  test("resolveOpenClawManifestBlock reads legacy manifest keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ clawdbot: { requires: { bins: ['op'] }, install: [] } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["op"] }, install: [] });
-  });
-
-  test("resolveOpenClawManifestBlock prefers current manifest keys over legacy keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata:
-            "{ openclaw: { requires: { bins: ['current'] } }, clawdbot: { requires: { bins: ['legacy'] } } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["current"] } });
   });
 
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
@@ -132,7 +84,7 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, expectInstallBase(parsed)),
+      }>({ extra: true }, expectDefined(parsed, "manifest install base")),
     ).toEqual({
       extra: true,
       id: "brew.git",

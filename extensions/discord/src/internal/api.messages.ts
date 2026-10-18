@@ -5,7 +5,6 @@ import {
   type APIThreadMember,
 } from "discord-api-types/v10";
 import type { RequestData } from "./rest-body.js";
-import type { RequestQuery } from "./rest-scheduler.js";
 import type { RequestClient } from "./rest.js";
 
 export function normalizeDiscordMessageId(messageId: string): string {
@@ -20,32 +19,21 @@ export async function getChannel(rest: RequestClient, channelId: string): Promis
   return (await rest.get(Routes.channel(channelId))) as APIChannel;
 }
 
+export async function createChannelMessage(
+  rest: RequestClient,
+  channelId: string,
+  data: RequestData,
+): Promise<APIMessage> {
+  // SAFETY: Discord's Create Message endpoint returns APIMessage on success.
+  return (await rest.post(Routes.channelMessages(channelId), data)) as APIMessage;
+}
+
 export async function getThreadMember(
   rest: RequestClient,
   threadId: string,
   userId: string,
 ): Promise<APIThreadMember> {
   return (await rest.get(Routes.threadMembers(threadId, userId))) as APIThreadMember;
-}
-
-export async function editChannel(
-  rest: RequestClient,
-  channelId: string,
-  data: RequestData,
-): Promise<APIChannel> {
-  return (await rest.patch(Routes.channel(channelId), data)) as APIChannel;
-}
-
-export async function deleteChannel(rest: RequestClient, channelId: string): Promise<void> {
-  await rest.delete(Routes.channel(channelId));
-}
-
-export async function listChannelMessages(
-  rest: RequestClient,
-  channelId: string,
-  query?: RequestQuery,
-): Promise<APIMessage[]> {
-  return (await rest.get(Routes.channelMessages(channelId), query)) as APIMessage[];
 }
 
 export async function getChannelMessage(
@@ -56,14 +44,6 @@ export async function getChannelMessage(
   return (await rest.get(
     Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)),
   )) as APIMessage;
-}
-
-export async function createChannelMessage<T extends object = APIMessage>(
-  rest: RequestClient,
-  channelId: string,
-  data: RequestData,
-): Promise<T> {
-  return (await rest.post(Routes.channelMessages(channelId), data)) as T;
 }
 
 export async function editChannelMessage(
@@ -78,40 +58,15 @@ export async function editChannelMessage(
   )) as APIMessage;
 }
 
-export async function deleteChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.delete(Routes.channelMessage(channelId, normalizeDiscordMessageId(messageId)));
+function messageMutation(method: "put" | "delete", route: "channelMessage" | "channelPin") {
+  return async (rest: RequestClient, channelId: string, messageId: string): Promise<void> => {
+    await rest[method](Routes[route](channelId, normalizeDiscordMessageId(messageId)));
+  };
 }
 
-export async function pinChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.put(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
-}
-
-export async function unpinChannelMessage(
-  rest: RequestClient,
-  channelId: string,
-  messageId: string,
-): Promise<void> {
-  await rest.delete(Routes.channelPin(channelId, normalizeDiscordMessageId(messageId)));
-}
-
-export async function listChannelPins(
-  rest: RequestClient,
-  channelId: string,
-): Promise<APIMessage[]> {
-  return (await rest.get(Routes.channelPins(channelId))) as APIMessage[];
-}
-
-export async function sendChannelTyping(rest: RequestClient, channelId: string): Promise<void> {
-  await rest.post(Routes.channelTyping(channelId));
-}
+export const deleteChannelMessage = messageMutation("delete", "channelMessage");
+export const pinChannelMessage = messageMutation("put", "channelPin");
+export const unpinChannelMessage = messageMutation("delete", "channelPin");
 
 export async function createThread<T extends object = APIChannel>(
   rest: RequestClient,
@@ -124,20 +79,4 @@ export async function createThread<T extends object = APIChannel>(
       ? Routes.threads(channelId)
       : Routes.threads(channelId, normalizeDiscordMessageId(messageId));
   return (await rest.post(route, data)) as T;
-}
-
-export async function listChannelArchivedThreads(
-  rest: RequestClient,
-  channelId: string,
-  query?: RequestQuery,
-): Promise<unknown> {
-  return await rest.get(Routes.channelThreads(channelId, "public"), query);
-}
-
-export async function searchGuildMessages(
-  rest: RequestClient,
-  guildId: string,
-  params: URLSearchParams,
-): Promise<unknown> {
-  return await rest.get(`/guilds/${guildId}/messages/search?${params.toString()}`);
 }

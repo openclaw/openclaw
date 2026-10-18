@@ -1,26 +1,25 @@
-/** Shared plan construction for plugin-owned SecretRef setup commands. */
 import { isValidAgentId } from "@openclaw/normalization-core/agent-id";
 import type { PluginIntegrationSecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
+import { isValidSecretProviderAlias } from "./ref-contract.js";
 import { resolveSecretPlanTargetByPathCore } from "./target-registry-query.js";
 
-type PluginSecretRefProviderMapping = {
+export type PluginSecretRefProviderMapping = {
   providerId: string;
   secretId: string;
 };
 
-type PluginSecretRefConfigTargetMapping = {
+export type PluginSecretRefConfigTargetMapping = {
   path: string;
   agentId?: string;
   secretId: string;
 };
 
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const MODEL_PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 export function assertValidPluginSecretProviderAlias(value: string): void {
-  if (!SECRET_PROVIDER_ALIAS_PATTERN.test(value)) {
+  if (!isValidSecretProviderAlias(value)) {
     throw new Error(
       `Invalid provider alias "${value}". Use lowercase letters, numbers, underscores, or hyphens.`,
     );

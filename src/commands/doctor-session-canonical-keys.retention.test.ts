@@ -2,89 +2,58 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  loadExactSessionEntryReadOnly,
-  loadTranscriptEvents,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
-import { insertLegacySession } from "./doctor-session-canonical-keys.test-support.js";
+import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.test-support.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 describe("doctor canonical session-key retention repair", () => {
   it("copies only a cross-store winner and archives its stale same-store duplicate", async () => {
     await withStateDirEnv("openclaw-doctor-canonical-cross-store-", async ({ stateDir }) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-      const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
-      const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
-        session: { mainKey: "shared", store: storeTemplate },
-      } as OpenClawConfig;
+      const { scope, insert, load, transcript, database, repair } = createCanonicalRepairFixture(
+        stateDir,
+        "shared",
+        ["main", "ops"],
+      );
 
       replaceSessionEntrySync(
-        {
-          agentId: "main",
-          env,
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        },
+        { ...scope(), sessionKey: "agent:main:shared" },
         {
           previousSessionId: "destination-only-previous",
           sessionId: "retained-destination",
           updatedAt: 5,
         },
       );
-      const destinationDatabase = openOpenClawAgentDatabase({
-        agentId: "main",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
-      });
+      const destinationDatabase = database();
       destinationDatabase.db
         .prepare(
           "INSERT INTO session_windows (session_id, session_key, reason, session_scope, created_at, updated_at) VALUES ('destination-only-previous', 'agent:main:shared', 'recovery', 'conversation', 4, 4)",
         )
         .run();
-      destinationDatabase.db
-        .prepare(
-          "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES ('destination-only-previous', 0, ?, 4)",
-        )
-        .run(
-          JSON.stringify({
-            id: "destination-only-message",
-            message: { content: "destination-only history", role: "user" },
-            parentId: null,
-            type: "message",
-          }),
-        );
+      createTranscriptEventInserter(
+        destinationDatabase.db,
+        "destination-only-previous",
+      )({
+        seq: 0,
+        eventJson: JSON.stringify({
+          id: "destination-only-message",
+          message: { content: "destination-only history", role: "user" },
+          parentId: null,
+          type: "message",
+        }),
+        createdAt: 4,
+      });
 
-      insertLegacySession({
-        agentId: "ops",
-        entry: {
-          previousSessionId: "destination-only-previous",
-          sessionId: "winner",
-          updatedAt: 20,
-        },
-        env,
-        eventText: "winner history",
-        sessionKey: "agent:main:shared ",
-        storePath: opsStore,
-      });
-      const sourceDatabase = openOpenClawAgentDatabase({
-        agentId: "ops",
-        env,
-        path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
-      });
+      insert(
+        "agent:main:shared ",
+        { previousSessionId: "destination-only-previous", sessionId: "winner", updatedAt: 20 },
+        "winner history",
+        "ops",
+      );
+      const sourceDatabase = database("ops");
       for (const [label, sourceSessionKey] of [
         ["winner", "agent:main:shared "],
         ["loser", "agent:main:shared"],
@@ -100,16 +69,9 @@ describe("doctor canonical session-key retention repair", () => {
           )
           .run(`${label}-operation`, `${label}-conversation`, sourceSessionKey, `${label}-hash`);
       }
-      insertLegacySession({
-        agentId: "ops",
-        entry: { sessionId: "loser", updatedAt: 10 },
-        env,
-        eventText: "loser history",
-        sessionKey: "agent:main:shared",
-        storePath: opsStore,
-      });
+      insert("agent:main:shared", { sessionId: "loser", updatedAt: 10 }, "loser history", "ops");
 
-      const report = await repairCanonicalSessionKeys({ apply: true, cfg, env });
+      const report = await repair();
 
       expect(report).toMatchObject({
         foundGroups: 1,
@@ -117,65 +79,16 @@ describe("doctor canonical session-key retention repair", () => {
         repairedGroups: 1,
         scannedStores: 2,
       });
-      expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "main",
-          env,
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        })?.entry.sessionId,
-      ).toBe("winner");
-      expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "ops",
-          env,
-          sessionKey: "agent:main:shared ",
-          storePath: opsStore,
-        }),
-      ).toBeUndefined();
-      expect(
-        loadExactSessionEntryReadOnly({
-          agentId: "ops",
-          env,
-          sessionKey: "agent:main:shared",
-          storePath: opsStore,
-        }),
-      ).toBeUndefined();
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "winner",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "winner history" }),
-        }),
-      ]);
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "loser",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([]);
-      await expect(
-        loadTranscriptEvents({
-          agentId: "main",
-          env,
-          sessionId: "destination-only-previous",
-          sessionKey: "agent:main:shared",
-          storePath: mainStore,
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({ content: "destination-only history" }),
-        }),
-      ]);
+      expect(load("agent:main:shared", "main")?.entry.sessionId).toBe("winner");
+      expect(load("agent:main:shared ", "ops")).toBeUndefined();
+      expect(load("agent:main:shared", "ops")).toBeUndefined();
+      await transcript("agent:main:shared", "winner", "winner history");
+      await transcript("agent:main:shared", "loser");
+      await transcript(
+        "agent:main:shared",
+        "destination-only-previous",
+        "destination-only history",
+      );
       expect(
         destinationDatabase.db
           .prepare(
@@ -212,26 +125,12 @@ describe("doctor canonical session-key retention repair", () => {
     await withStateDirEnv(
       "openclaw-doctor-canonical-cross-store-delivery-",
       async ({ stateDir }) => {
-        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const storeTemplate = path.join(stateDir, "agents", "{agentId}", "sessions.json");
-        const mainStore = resolveSessionStorePathCore(storeTemplate, { agentId: "main", env });
-        const opsStore = resolveSessionStorePathCore(storeTemplate, { agentId: "ops", env });
-        const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
-          session: { mainKey: "work", store: storeTemplate },
-        } as OpenClawConfig;
-        insertLegacySession({
-          agentId: "ops",
-          entry: { sessionId: "winner", updatedAt: 20 },
-          env,
-          sessionKey: "agent:main:work ",
-          storePath: opsStore,
-        });
-        const sourceDatabase = openOpenClawAgentDatabase({
-          agentId: "ops",
-          env,
-          path: resolveSqliteTargetFromSessionStorePath(opsStore, { agentId: "ops", env }).path,
-        });
+        const { insert, database, expectRepair } = createCanonicalRepairFixture(stateDir, "work", [
+          "main",
+          "ops",
+        ]);
+        insert("agent:main:work ", { sessionId: "winner", updatedAt: 20 }, undefined, "ops");
+        const sourceDatabase = database("ops");
         sourceDatabase.db
           .prepare(
             "INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, metadata_json, created_at, updated_at) VALUES ('winner-conversation', 'webchat', 'default', 'direct', 'winner', 'winner', '{}', 10, 10)",
@@ -259,15 +158,8 @@ describe("doctor canonical session-key retention repair", () => {
           )
           .run();
 
-        expect(await repairCanonicalSessionKeys({ apply: true, cfg, env })).toMatchObject({
-          foundGroups: 1,
-          repairedGroups: 1,
-        });
-        const destinationDatabase = openOpenClawAgentDatabase({
-          agentId: "main",
-          env,
-          path: resolveSqliteTargetFromSessionStorePath(mainStore, { agentId: "main", env }).path,
-        });
+        await expectRepair({ foundGroups: 1, repairedGroups: 1 });
+        const destinationDatabase = database();
         expect(
           destinationDatabase.db
             .prepare(

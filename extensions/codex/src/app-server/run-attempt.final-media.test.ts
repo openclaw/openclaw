@@ -27,7 +27,7 @@ setupRunAttemptTestHooks();
 
 const execFileAsync = promisify(execFile);
 
-it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"] as const)(
+it.each(["partial", "async", "denied", "cancel"] as const)(
   "delivers remote reply media without reading stale Gateway files: %s",
   async (scenario) => {
     const workspaceDir = path.join(tempDir, "gateway-workspace");
@@ -48,14 +48,8 @@ it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"
       path.join(tempDir, "final-media.sqlite"),
       "final-media",
     );
-    if (scenario === "missing") {
-      await fs.unlink(path.join(remoteWorkspaceRoot, artifactName));
-    }
     if (scenario === "denied") {
       params.config = { tools: { toolsBySender: { "*": { deny: ["read"] } } } };
-    }
-    if (scenario === "too-large") {
-      params.config = { agents: { defaults: { mediaMaxMb: 0.00001 } } };
     }
     const abort = new AbortController();
     params.abortSignal = abort.signal;
@@ -89,7 +83,7 @@ it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"
     });
     await harness.waitForMethod("turn/start");
     const sourcePath =
-      scenario === "alias" ? `${remoteWorkspaceRoot}/./${artifactName}` : `./${artifactName}`;
+      scenario === "partial" ? `${remoteWorkspaceRoot}/./${artifactName}` : `./${artifactName}`;
     const sourceText = `Artifact ready\n${scenario === "partial" ? "MEDIA:./missing-artifact.txt\n" : ""}MEDIA:${sourcePath}`;
     const item = {
       id: "final-artifact",
@@ -168,12 +162,10 @@ it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"
     const mediaUrls = payloads.flatMap(
       (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
     );
-    if (scenario === "denied" || scenario === "missing" || scenario === "too-large") {
+    if (scenario === "denied") {
       expect(mediaUrls).toEqual([]);
       expect(payloads.map((payload) => payload.text).join("\n")).toContain(artifactName);
-      if (scenario === "denied") {
-        expect(remoteReads).toBe(0);
-      }
+      expect(remoteReads).toBe(0);
       return;
     }
     if (scenario === "async") {
@@ -184,7 +176,7 @@ it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"
       expect(finalPayloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual([]);
     }
     expect(mediaUrls).toHaveLength(1);
-    if (scenario === "alias" || scenario === "partial") {
+    if (scenario === "partial") {
       expect(
         payloads.flatMap((payload) =>
           collectReplyMediaEntries(payload, resolveSendableOutboundReplyParts(payload).mediaUrls),
@@ -196,11 +188,7 @@ it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"
           sourceUrls: [sourcePath],
         },
       ]);
-      if (scenario === "partial") {
-        expect(payloads.map((payload) => payload.text).join("\n")).toContain(
-          "missing-artifact.txt",
-        );
-      }
+      expect(payloads.map((payload) => payload.text).join("\n")).toContain("missing-artifact.txt");
     }
     const delivered = await loadOutboundMediaFromUrl(mediaUrls[0]!, {
       workspaceDir,

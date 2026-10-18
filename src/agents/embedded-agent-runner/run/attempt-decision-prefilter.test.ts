@@ -1,0 +1,200 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaults-base.js";
+import type {
+  DecisionEvaluation,
+  evaluateDecisionV2InRegistry,
+} from "../../../decisions/runtime.js";
+import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
+import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
+
+const mocks = vi.hoisted(() => ({ evaluate: vi.fn<typeof evaluateDecisionV2InRegistry>() }));
+// mock-isolation: Test prefilter policy independently of registry/model preparation; runtime-v2 covers the real host.
+vi.mock("../../../decisions/runtime.js", () => ({
+  evaluateDecisionV2Operation: async (
+    ...args: Parameters<typeof evaluateDecisionV2InRegistry>
+  ) => ({
+    outcome: await mocks.evaluate(...args),
+  }),
+  completeDecisionEvaluation: (evaluation: DecisionEvaluation) => evaluation.outcome,
+}));
+vi.mock("../../../plugins/runtime/gateway-request-scope.js", () => ({
+  getPluginRegistryForContext: () => null,
+}));
+const config: OpenClawConfig = {
+  agents: {
+    defaults: AgentDefaultsBaseSchema.parse({
+      experimental: { decisionAssistance: true },
+      decisionModel: "fixture/model",
+    }),
+  },
+};
+const answer = (): Extract<DecisionOutcomeV2, { status: "ok" }> => ({
+  status: "ok",
+  provenance: { providerId: "fixture", rubricVersion: "9", runtimeGeneration: "test" },
+  result: {
+    model: "model",
+    answers: {
+      missing_request_context: { type: "boolean", probabilityTrue: 0.1 },
+      next_response_needs_tools: { type: "boolean", probabilityTrue: 0.1 },
+    },
+  },
+});
+function params() {
+  return {
+    config,
+    agentId: "main",
+    supportsTurnScopedToolRestrictions: true,
+    assertActive: vi.fn(),
+    userMessage: "Hello",
+    messages: [],
+    signal: new AbortController().signal,
+  };
+}
+beforeEach(() => {
+  mocks.evaluate.mockReset().mockResolvedValue(answer());
+});
+afterEach(clearRuntimeConfigSnapshot);
+
+describe("Decision prefilter policy", () => {
+  it("forwards one atomic Boolean batch, labeled hook fields, owner and 500ms budget", async () => {
+    setRuntimeConfigSnapshot({});
+    const promptBuildFields = {
+      systemPrompt: "  replacement system  ",
+      prependContext: "prefix\ncontext",
+      appendContext: "suffix ",
+      prependSystemContext: " system prefix ",
+      appendSystemContext: "system suffix\n",
+    };
+    const messages = Array.from({ length: 3 }, (_, index) => [
+      { role: "user" as const, content: String(index), timestamp: index },
+      makeAssistantMessageFixture({
+        content: [{ type: "text", text: String(index) }],
+        stopReason: "stop",
+      }),
+    ]).flat();
+    const input = { ...params(), promptBuildFields, messages };
+    expect(await evaluateAttemptDecisionToolPrefilter(input)).toMatchObject({
+      shouldPruneTools: true,
+    });
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+    const [batch, options, registry, selectedConfig] = mocks.evaluate.mock.calls[0]!;
+    expect(batch.state).toEqual({
+      type: "json",
+      value: {
+        recentConversation: [
+          { user: "1", assistant: "1" },
+          { user: "2", assistant: "2" },
+        ],
+        latestRequest: "Hello",
+        beforePromptBuild: promptBuildFields,
+        omittedContext: { olderConversation: true, toolPayloads: false },
+      },
+    });
+    expect(Object.keys(batch.questions)).toEqual([
+      "missing_request_context",
+      "next_response_needs_tools",
+    ]);
+    expect(options).toEqual({
+      agentId: "main",
+      purpose: "tool-prefilter.semantic-gate",
+      priority: "optional",
+      rubricVersion: "9",
+      timeoutMs: 500,
+      signal: input.signal,
+    });
+    expect(registry).toBeNull();
+    expect(selectedConfig).toBe(config);
+    for (const question of Object.values(batch.questions)) {
+      expect(question.type).toBe("boolean");
+      for (const field of ["latestRequest", "recentConversation", "beforePromptBuild"]) {
+        expect(question.instructions).toContain(field);
+      }
+    }
+  });
+
+  it.each([
+    ["projection overflow", "x".repeat(6_001), "", "context-too-large"],
+    ["astral exact", "🙂".repeat(3_000), "🙂".repeat(1_000), undefined],
+    ["astral overflow", "🙂".repeat(3_000), "🙂".repeat(1_001), "prompt-build-context-too-large"],
+    ["JSON expansion", "x".repeat(6_000), String.fromCharCode(34).repeat(2_000), undefined],
+  ] as const)(
+    "bounds UTF-16 text, not JSON encoding: %s",
+    async (_label, userMessage, hooks, reason) => {
+      const promptBuildFields = {
+        prependContext: hooks.slice(0, 1_000),
+        appendSystemContext: hooks.slice(1_000),
+      };
+      const outcome = await evaluateAttemptDecisionToolPrefilter({
+        ...params(),
+        userMessage,
+        promptBuildFields,
+      });
+      expect(outcome.shouldPruneTools).toBe(reason === undefined);
+      if (reason) {
+        expect(outcome.reason).toBe(reason);
+        expect(mocks.evaluate).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.evaluate.mock.calls[0]?.[0].state).toMatchObject({
+          type: "json",
+          value: { latestRequest: userMessage, beforePromptBuild: promptBuildFields },
+        });
+      }
+    },
+  );
+
+  it.each(["missing_request_context", "next_response_needs_tools"])(
+    "requires a strong Boolean no for %s",
+    async (id) => {
+      const cases: [DecisionAnswerV2 | undefined, boolean][] = [
+        [undefined, false],
+        [{ type: "choice", choice: "no", probabilities: { no: 1 }, confidence: 1 }, false],
+        [{ type: "boolean", probabilityTrue: 0.349 }, true],
+        [{ type: "boolean", probabilityTrue: 0.35 }, false],
+        [{ type: "boolean", probabilityTrue: 0.9 }, false],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: false }, true],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: true }, false],
+        [{ type: "boolean", probabilityTrue: 0.1, answer: null }, false],
+        [{ type: "boolean", answer: false }, false],
+        [{ type: "error", code: "provider-error" }, false],
+      ];
+      for (const [value, shouldPruneTools] of cases) {
+        const outcome = answer();
+        const answers = { ...outcome.result.answers };
+        if (value) {
+          answers[id] = value;
+        } else {
+          delete answers[id];
+        }
+        mocks.evaluate.mockResolvedValue({ ...outcome, result: { ...outcome.result, answers } });
+        expect((await evaluateAttemptDecisionToolPrefilter(params())).shouldPruneTools).toBe(
+          shouldPruneTools,
+        );
+      }
+    },
+  );
+  it.each(["transport"] as const)("retains tools without retry on %s", async (reason) => {
+    mocks.evaluate.mockResolvedValue({ status: "unavailable", reason });
+    expect(await evaluateAttemptDecisionToolPrefilter(params())).toMatchObject({
+      shouldPruneTools: false,
+    });
+    expect(mocks.evaluate).toHaveBeenCalledOnce();
+  });
+  it.each(["", "Use decision_evaluate on Hello"])("does not classify %j", async (userMessage) => {
+    expect(await evaluateAttemptDecisionToolPrefilter({ ...params(), userMessage })).toMatchObject({
+      shouldPruneTools: false,
+    });
+    expect(mocks.evaluate).not.toHaveBeenCalled();
+  });
+  it("propagates unexpected contract errors", async () => {
+    mocks.evaluate.mockRejectedValue(new Error("contract failure"));
+    await expect(evaluateAttemptDecisionToolPrefilter(params())).rejects.toThrow(
+      "contract failure",
+    );
+  });
+});

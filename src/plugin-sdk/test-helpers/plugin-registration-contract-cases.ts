@@ -77,6 +77,10 @@ export const pluginRegistrationContractCases = {
     pluginId: "groq",
     mediaUnderstandingProviderIds: ["groq"],
   },
+  kie: {
+    pluginId: "kie",
+    videoGenerationProviderIds: ["kie"],
+  },
   lmstudio: {
     pluginId: "lmstudio",
     providerIds: ["lmstudio"],
@@ -112,6 +116,10 @@ export const pluginRegistrationContractCases = {
       groupLabel: "Moonshot AI (Kimi)",
       groupHint: "Kimi Code membership · https://www.kimi.com/membership/pricing",
     },
+  },
+  novita: {
+    pluginId: "novita",
+    videoGenerationProviderIds: ["novita"],
   },
   nvidia: {
     pluginId: "nvidia",
@@ -231,5 +239,6 @@ export const pluginRegistrationContractCases = {
   zai: {
     pluginId: "zai",
     mediaUnderstandingProviderIds: ["zai"],
+    videoGenerationProviderIds: ["zai"],
   },
 } satisfies Record<string, PluginRegistrationContractParams>;

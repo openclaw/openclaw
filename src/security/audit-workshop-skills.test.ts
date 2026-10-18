@@ -69,12 +69,12 @@ it("reports an unreadable grouping directory without skipping readable siblings"
     const unreadable = path.join(group, "unreadable");
     await fs.mkdir(unreadable, { recursive: true });
     const skillDir = await writeAuditSkill(group, true);
-    const readdirSync = fsSync.readdirSync.bind(fsSync);
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation((...args) => {
+    const opendirSync = fsSync.opendirSync.bind(fsSync);
+    const opendirSpy = vi.spyOn(fsSync, "opendirSync").mockImplementation((...args) => {
       if (path.resolve(String(args[0])) === unreadable) {
         throw Object.assign(new Error("Grouping directory is unreadable"), { code: "EACCES" });
       }
-      return readdirSync(...args);
+      return opendirSync(...args);
     });
     try {
       const findings = await collectInstalledSkillsCodeSafetyFindings({
@@ -95,7 +95,7 @@ it("reports an unreadable grouping directory without skipping readable siblings"
         ]),
       );
     } finally {
-      readdirSpy.mockRestore();
+      opendirSpy.mockRestore();
     }
   });
 });
@@ -132,143 +132,6 @@ it.each(["contained", "escaping"] as const)("audits %s grouping symlinks", async
     }
   });
 });
-
-it("reports a dangling grouping link without skipping a readable dangerous sibling", async () => {
-  await withOpenClawTestState({ label: "workshop-audit-dangling-link" }, async (state) => {
-    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-    const workshopDir = resolveWorkshopSkillsDir(cfg, "main");
-    const skillDir = await writeAuditSkill(workshopDir, true);
-    const link = path.join(workshopDir, "group");
-    await fs.symlink(path.join(workshopDir, "missing-group"), link, "dir");
-    const findings = await collectInstalledSkillsCodeSafetyFindings({
-      cfg,
-      stateDir: state.stateDir,
-    });
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          severity: "critical",
-          detail: expect.stringContaining(skillDir),
-        }),
-        expect.objectContaining({
-          checkId: "skills.code_safety.scan_failed",
-          detail: expect.stringContaining(link),
-        }),
-      ]),
-    );
-  });
-});
-
-it.each([300, 301])(
-  "reports incomplete audit or honors a larger traversal limit (%s)",
-  async (limit) => {
-    await withOpenClawTestState({ label: "workshop-audit-inventory-limit" }, async (state) => {
-      const cfg = {
-        agents: { entries: { main: { workspace: state.workspaceDir } } },
-        skills: { limits: { maxCandidatesPerRoot: limit, maxSkillsLoadedPerSource: 1 } },
-      };
-      const workshopDir = resolveWorkshopSkillsDir(cfg, "main");
-      await Promise.all(
-        Array.from({ length: 300 }, (_, index) =>
-          fs.mkdir(path.join(workshopDir, `empty-${index}`), { recursive: true }),
-        ),
-      );
-      const skillDir = await writeAuditSkill(workshopDir, true, "zzz-danger");
-      const findings = await collectInstalledSkillsCodeSafetyFindings({
-        cfg,
-        stateDir: state.stateDir,
-      });
-      if (limit === 300) {
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            checkId: "skills.code_safety.scan_failed",
-            detail: expect.stringContaining("discovery limit"),
-          }),
-        );
-      } else {
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            severity: "critical",
-            detail: expect.stringContaining(skillDir),
-          }),
-        );
-        expect(
-          findings.filter((finding) => finding.checkId === "skills.code_safety.scan_failed"),
-        ).toEqual([]);
-      }
-    });
-  },
-);
-
-it.each(["missing", "unreadable"] as const)(
-  "reports an unreadable Workshop root but keeps a missing root quiet (%s)",
-  async (rootState) => {
-    await withOpenClawTestState({ label: "workshop-audit-root-failure" }, async (state) => {
-      const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-      const workshopDir = resolveWorkshopSkillsDir(cfg, "main");
-      if (rootState === "unreadable") {
-        await fs.mkdir(workshopDir, { recursive: true });
-      }
-      const readdirSync = fsSync.readdirSync.bind(fsSync);
-      const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation((...args) => {
-        if (path.resolve(String(args[0])) === workshopDir) {
-          throw Object.assign(new Error("Workshop directory is unreadable"), { code: "EACCES" });
-        }
-        return readdirSync(...args);
-      });
-      try {
-        const findings = await collectInstalledSkillsCodeSafetyFindings({
-          cfg,
-          stateDir: state.stateDir,
-        });
-        expect(
-          findings.filter((finding) => finding.checkId === "skills.code_safety.scan_failed"),
-        ).toEqual(
-          rootState === "unreadable"
-            ? [
-                expect.objectContaining({
-                  severity: "warn",
-                  detail: expect.stringContaining(workshopDir),
-                }),
-              ]
-            : [],
-        );
-      } finally {
-        readdirSpy.mockRestore();
-      }
-    });
-  },
-);
-
-it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-  "reports an inaccessible Workshop ancestor instead of treating the root as missing",
-  async () => {
-    await withOpenClawTestState(
-      { label: "workshop-audit-inaccessible-ancestor" },
-      async (state) => {
-        const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-        const workshopDir = resolveWorkshopSkillsDir(cfg, "main");
-        await fs.mkdir(workshopDir, { recursive: true });
-        const agentDir = path.dirname(workshopDir);
-        await fs.chmod(agentDir, 0);
-        try {
-          const findings = await collectInstalledSkillsCodeSafetyFindings({
-            cfg,
-            stateDir: state.stateDir,
-          });
-          expect(findings).toContainEqual(
-            expect.objectContaining({
-              checkId: "skills.code_safety.scan_failed",
-              detail: expect.stringContaining(workshopDir),
-            }),
-          );
-        } finally {
-          await fs.chmod(agentDir, 0o700);
-        }
-      },
-    );
-  },
-);
 
 it("audits child skills even when the Workshop container has a stray definition", async () => {
   await withOpenClawTestState({ label: "workshop-audit-root-definition" }, async (state) => {

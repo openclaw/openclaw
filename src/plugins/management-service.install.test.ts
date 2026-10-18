@@ -3,6 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { pluginLifecycleError } from "../gateway/server-methods/plugins-lifecycle-error.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as bundledSources from "./bundled-sources.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { PluginInstallConfigError } from "./install-config.js";
 import {
@@ -24,10 +26,14 @@ const mocks = vi.hoisted(() => ({
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
-  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
-    config,
-    warnings: [],
-  })),
+  slotSelection: vi.fn((config: unknown) => config),
+}));
+
+// A beta package version forces the beta update channel, so pin a stable host to keep
+// the default stable-channel expectations independent of the checkout's release train.
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.7",
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -107,8 +113,12 @@ const emptyArtifactAcknowledgment = {
   ),
 };
 
-function mockClawHubInstall(pluginId: string, packageName: string) {
-  mocks.clawhubInstall.mockResolvedValue({
+function mockClawHubInstall(
+  pluginId: string,
+  packageName: string,
+  clawhubUrl = "https://clawhub.ai",
+) {
+  const result = {
     ok: true,
     pluginId,
     targetDir: `/tmp/extensions/${pluginId}`,
@@ -116,11 +126,13 @@ function mockClawHubInstall(pluginId: string, packageName: string) {
     packageName,
     clawhub: {
       source: "clawhub",
-      clawhubUrl: "https://clawhub.ai",
+      clawhubUrl,
       clawhubPackage: packageName,
       clawhubFamily: "code-plugin",
     },
-  });
+  };
+  mocks.clawhubInstall.mockResolvedValue(result);
+  return result;
 }
 
 describe("managed plugin installation", () => {
@@ -140,15 +152,19 @@ describe("managed plugin installation", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.slotSelection.mockImplementation((config) => config);
     mocks.installRecords.mockResolvedValue({});
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.persistInstall.mockResolvedValue({});
     mockHostedOfficialCatalog([]);
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   it("refuses managed installs in Nix mode before config or artifact work", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.npmInstall.mockResolvedValue({ ok: false, error: "artifact installer reached" });
     mocks.clawhubInstall.mockResolvedValue({ ok: false, error: "artifact installer reached" });
     await expect(
@@ -163,23 +179,40 @@ describe("managed plugin installation", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
-  it("pins curated ClawHub installs to the expected runtime id", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
+  it.each([
+    { label: "empty supplied env", env: {} },
+    {
+      label: "explicit public registry before the legacy alias",
+      env: {
+        OPENCLAW_CLAWHUB_URL: " https://clawhub.ai/ ",
+        CLAWHUB_URL: "https://mirror.example.test",
+      },
+    },
+  ])("pins public ClawHub identity despite ambient custom env ($label)", async ({ env }) => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://ambient.example.test");
+    vi.stubEnv("CLAWHUB_URL", "https://ambient-legacy.example.test");
     mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
     mockClawHubInstall("impostor", "@openclaw/diffs");
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "impostor", origin: "global" }),
+    );
 
     await expect(
       installManagedPlugin({
         request: {
           source: "clawhub",
           packageName: "@openclaw/diffs",
+          version: "2026.6.11",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
         },
-        env: {},
+        env,
       }),
     ).rejects.toThrow("expected diffs, got impostor");
+    expect(mocks.officialCatalog).toHaveBeenCalledOnce();
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.objectContaining({
         spec: "clawhub:@openclaw/diffs@2026.6.11",
+        baseUrl: "https://clawhub.ai",
         expectedPluginId: "diffs",
         expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
       }),
@@ -187,95 +220,86 @@ describe("managed plugin installation", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
-  it("does not apply public feed integrity to a custom ClawHub registry", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
-    mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
-    mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
-    );
-
-    await installManagedPlugin({
-      request: {
-        source: "clawhub",
-        packageName: "@openclaw/diffs",
-        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+  it.each([
+    {
+      label: "primary URL before the legacy alias",
+      env: {
+        OPENCLAW_CLAWHUB_URL: " https://mirror.example.test/ ",
+        CLAWHUB_URL: "https://clawhub.ai",
       },
-      env: { OPENCLAW_CLAWHUB_URL: "https://mirror.example.test" },
-    });
-
-    expect(mocks.officialCatalog).not.toHaveBeenCalled();
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs",
-        expectedPluginId: "diffs",
-      }),
-    );
-    expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.not.objectContaining({ expectedIntegrity: expect.anything() }),
-    );
-  });
-
-  it.each([false, true])(
-    "uses npm first and ClawHub only when npm is absent (%s)",
-    async (absent) => {
-      mocks.readConfig.mockResolvedValue(configSnapshot());
-      mockHostedOfficialCatalog([
-        {
-          name: "@openclaw/diffs",
-          openclaw: {
-            plugin: { id: "diffs" },
-            install: {
-              npmSpec: "@openclaw/diffs",
-              clawhubSpec: "clawhub:@openclaw/diffs",
-              defaultChoice: "clawhub",
-              expectedIntegrity: "sha512-npmpin",
-            },
-          },
-        },
-      ]);
-      mocks.npmInstall.mockResolvedValue(
-        absent
-          ? { ok: false, code: "npm_package_not_found", error: "package absent" }
-          : { ok: true, pluginId: "diffs", targetDir: "/tmp/npm/diffs", extensions: ["index.js"] },
-      );
-      mockClawHubInstall("diffs", "@openclaw/diffs");
-      mocks.persistInstall.mockResolvedValue({});
+      channel: "beta",
+      constrained: false,
+    },
+    {
+      label: "legacy alias",
+      env: { CLAWHUB_URL: "https://mirror.example.test" },
+      channel: "extended-stable",
+      constrained: false,
+    },
+    {
+      label: "blank primary URL with explicit caller constraints",
+      env: { OPENCLAW_CLAWHUB_URL: " ", CLAWHUB_URL: "https://mirror.example.test" },
+      channel: "beta",
+      constrained: true,
+    },
+  ] as const)(
+    "keeps custom registry authority despite ambient public env ($label)",
+    async ({ env, channel, constrained }) => {
+      vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://clawhub.ai");
+      vi.stubEnv("CLAWHUB_URL", "https://clawhub.ai");
+      mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel } }));
+      mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+      mockClawHubInstall("custom-diffs", "@openclaw/diffs", "https://mirror.example.test");
       mocks.metadata.mockReturnValue(
-        metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+        metadataSnapshot({ enabled: true, id: "custom-diffs", name: "Diffs", origin: "global" }),
       );
+      const constraints = constrained
+        ? {
+            version: "1.2.3",
+            expectedPluginId: "custom-diffs",
+            expectedIntegrity: `sha256-${Buffer.from("b".repeat(64), "hex").toString("base64")}`,
+          }
+        : undefined;
+      const spec = constrained ? "clawhub:@openclaw/diffs@1.2.3" : "clawhub:@openclaw/diffs";
 
-      await installManagedPlugin({
+      const result = await installManagedPlugin({
         request: {
-          source: "official",
-          pluginId: "diffs",
+          source: "clawhub",
+          packageName: "@openclaw/diffs",
+          ...constraints,
           acknowledgeCapabilities: emptyArtifactAcknowledgment,
         },
-        env: {},
+        env,
       });
 
-      expect(mocks.npmInstall).toHaveBeenCalledTimes(1);
-      expect(mocks.npmInstall).toHaveBeenCalledWith(
-        expect.objectContaining({ expectedIntegrity: "sha512-npmpin" }),
+      expect(mocks.officialCatalog).not.toHaveBeenCalled();
+      expect(mocks.clawhubInstall).toHaveBeenCalledOnce();
+      expect(mocks.clawhubInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: "https://mirror.example.test", spec }),
       );
-      expect(mocks.clawhubInstall).toHaveBeenCalledTimes(absent ? 1 : 0);
-      if (absent) {
-        expect(mocks.clawhubInstall.mock.calls[0]?.[0].expectedIntegrity).toBeUndefined();
-      }
+      const installedRequest = expectDefined(
+        mocks.clawhubInstall.mock.calls[0]?.[0],
+        "ClawHub installer request",
+      );
+      expect(installedRequest.expectedPluginId).toBe(constraints?.expectedPluginId);
+      expect(installedRequest.expectedIntegrity).toBe(constraints?.expectedIntegrity);
+      expect(mocks.persistInstall).toHaveBeenCalledOnce();
       expect(mocks.persistInstall).toHaveBeenCalledWith(
         expect.objectContaining({
-          install: expect.objectContaining({ source: absent ? "clawhub" : "npm" }),
+          pluginId: "custom-diffs",
+          install: expect.objectContaining({
+            source: "clawhub",
+            spec,
+            clawhubUrl: "https://mirror.example.test",
+          }),
         }),
       );
+      expect(result.plugin.id).toBe("custom-diffs");
     },
   );
 
-  it.each([
-    { code: "security_scan_blocked", error: "untrusted package" },
-    { error: "integrity mismatch" },
-  ])("never falls back after npm refusal ($error)", async (failure) => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
+  it("never falls back after npm security refusal", async () => {
+    const failure = { code: "security_scan_blocked", error: "untrusted package" };
     mockHostedOfficialCatalog([
       {
         name: "@openclaw/diffs",
@@ -295,7 +319,7 @@ describe("managed plugin installation", () => {
       message: failure.error,
       details: {
         pluginInstallRejected: true,
-        ...(failure.code ? { pluginInstallCode: failure.code } : {}),
+        pluginInstallCode: failure.code,
         pluginInstallSource: { source: "npm" },
       },
     });
@@ -342,53 +366,269 @@ describe("managed plugin installation", () => {
     },
   );
 
-  it("keeps each hosted source's exact version and integrity on fallback", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mockHostedOfficialCatalog([
-      {
-        ...hostedFeedDiffsEntry,
-        install: {
-          candidates: [
-            ...hostedFeedDiffsEntry.install.candidates,
+  it.each(["npm", "clawhub"] as const)(
+    "retains canonical official recovery with a hosted %s primary and no bundled copy",
+    async (source) => {
+      vi.spyOn(bundledSources, "findBundledPluginSource").mockReturnValue(undefined);
+      const packageName = "@openclaw/brave-plugin";
+      const config = { tools: { web: { search: { provider: "brave" } } } };
+      const prepared = configSnapshot(config);
+      mocks.readConfig.mockResolvedValue({
+        ...prepared,
+        snapshot: {
+          ...prepared.snapshot,
+          valid: false,
+          exists: true,
+          parsed: config,
+          config,
+          issues: [
             {
-              sourceRef: "public-npm",
-              package: "@openclaw/diffs",
-              version: "2026.6.11",
-              integrity: "sha512-test",
+              path: "tools.web.search.provider",
+              message:
+                'web_search provider is not available: brave (install or enable plugin "brave")',
             },
           ],
+          legacyIssues: [],
         },
-      },
-    ]);
-    mocks.npmInstall.mockResolvedValue({
-      ok: false,
-      code: "npm_package_not_found",
-      error: "package absent",
-    });
-    mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
+      });
+      // The hosted feed supplies artifacts; Brave's local descriptor owns recovery permission.
+      mockHostedOfficialCatalog([
+        {
+          id: packageName,
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          install: {
+            candidates: [{ sourceRef: `public-${source}`, package: packageName }],
+          },
+        },
+      ]);
+      if (source === "clawhub") {
+        mockClawHubInstall("brave", packageName);
+      } else {
+        mocks.npmInstall.mockResolvedValue({
+          ok: true,
+          pluginId: "brave",
+          targetDir: "/tmp/extensions/brave",
+          extensions: ["index.js"],
+          packageName,
+        });
+      }
+      mocks.persistInstall.mockResolvedValue(config);
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "brave", origin: "global" }),
+      );
+
+      const result = await installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "brave",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        env: {},
+      });
+
+      expect(source === "npm" ? mocks.npmInstall : mocks.clawhubInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ expectedPluginId: "brave" }),
+      );
+      expect(source === "npm" ? mocks.clawhubInstall : mocks.npmInstall).not.toHaveBeenCalled();
+      expect(mocks.persistInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "brave",
+          snapshot: expect.objectContaining({ config }),
+          install: expect.objectContaining({ source }),
+        }),
+      );
+      expect(result.plugin.id).toBe("brave");
+    },
+  );
+
+  it.each(["https://clawhub.ai", "https://mirror.example.test"])(
+    "keeps each hosted source's exact version and integrity on fallback through %s",
+    async (clawhubUrl) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.9.7");
+      mockHostedOfficialCatalog([
+        {
+          ...hostedFeedDiffsEntry,
+          install: {
+            candidates: [
+              ...hostedFeedDiffsEntry.install.candidates,
+              {
+                sourceRef: "public-npm",
+                package: "@openclaw/diffs",
+                version: "2026.6.11",
+                integrity: "sha512-test",
+              },
+            ],
+          },
+        },
+      ]);
+      mocks.npmInstall.mockResolvedValue({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "package absent",
+      });
+      mockClawHubInstall("diffs", "@openclaw/diffs", clawhubUrl);
+      mocks.clawhubInstall.mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "unpublished cohort",
+      });
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "diffs", origin: "global" }),
+      );
+      await installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "diffs",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        env: { OPENCLAW_CLAWHUB_URL: clawhubUrl },
+      });
+      expect(mocks.npmInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: "@openclaw/diffs@2026.6.11",
+          expectedIntegrity: "sha512-test",
+        }),
+      );
+      const attempts = mocks.clawhubInstall.mock.calls.map(([request]) => ({
+        baseUrl: request.baseUrl,
+        spec: request.spec,
+        expectedPluginId: request.expectedPluginId,
+        expectedIntegrity: request.expectedIntegrity,
+      }));
+      expect(attempts).toEqual([
+        {
+          baseUrl: clawhubUrl,
+          spec: "clawhub:@openclaw/diffs@2026.9.7",
+          expectedPluginId: "diffs",
+          expectedIntegrity: undefined,
+        },
+        {
+          baseUrl: clawhubUrl,
+          spec: "clawhub:@openclaw/diffs@2026.6.11",
+          expectedPluginId: "diffs",
+          expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
+        },
+      ]);
+      expect(mocks.persistInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          install: expect.objectContaining({
+            spec: "clawhub:@openclaw/diffs",
+            clawhubUrl,
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(["available", "missing", "incompatible-fallback", "catalog-cohort", "dev"] as const)(
+    "resolves official install defaults: %s",
+    async (release) => {
+      vi.stubEnv(
+        "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+        release === "catalog-cohort" ? "2026.9.9" : "2026.9.7",
+      );
+      if (release === "dev") {
+        mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel: "dev" } }));
+      }
+      const packageName = "@openclaw/perplexity-plugin";
+      const catalogSpec = `clawhub:${packageName}@2026.9.9`;
+      const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+      mockHostedOfficialCatalog([
+        {
+          id: packageName,
+          state: "available",
+          publisher: { id: "openclaw", trust: "official" },
+          openclaw: { plugin: { id: "perplexity" } },
+          install: {
+            candidates: [
+              { sourceRef: "public-clawhub", package: packageName, version: "2026.9.9", integrity },
+            ],
+          },
+        },
+      ]);
+      const installed = mockClawHubInstall("perplexity", packageName);
+      const refusal = {
+        ok: false,
+        code: "incompatible_plugin_api",
+        error: "requires plugin API >=2026.9.9; choose an explicit compatible plugin version",
+      };
+      mocks.clawhubInstall.mockImplementation(({ spec }: { spec: string }) =>
+        spec.endsWith("@2026.9.7") && release !== "available"
+          ? { ok: false, code: "version_not_found", error: "unpublished" }
+          : spec === catalogSpec && (release === "available" || release === "incompatible-fallback")
+            ? refusal
+            : installed,
+      );
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({ enabled: true, id: "perplexity", origin: "global" }),
+      );
+      const warn = vi.fn();
+      const install = installManagedPlugin({
+        request: {
+          source: "official",
+          pluginId: "perplexity",
+          acknowledgeCapabilities: emptyArtifactAcknowledgment,
+        },
+        logger: { warn },
+        env: {},
+      });
+      if (release === "incompatible-fallback") {
+        await expect(install).rejects.toThrow(refusal.error);
+        expect(mocks.persistInstall).not.toHaveBeenCalled();
+      } else {
+        await install;
+        expect(mocks.persistInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            install: expect.objectContaining({ spec: `clawhub:${packageName}` }),
+          }),
+        );
+      }
+      const attempts = mocks.clawhubInstall.mock.calls.map(([request]) => ({
+        spec: request.spec,
+        expectedIntegrity: request.expectedIntegrity,
+      }));
+      const cohort = { spec: `clawhub:${packageName}@2026.9.7`, expectedIntegrity: undefined };
+      const catalog = { spec: catalogSpec, expectedIntegrity: integrity };
+      expect(attempts).toEqual(
+        release === "available"
+          ? [cohort]
+          : release === "catalog-cohort" || release === "dev"
+            ? [catalog]
+            : [cohort, catalog],
+      );
+      if (release === "missing" || release === "incompatible-fallback") {
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(
+            `No ${cohort.spec} release is published; installing ${catalogSpec} instead.`,
+          ),
+        );
+      } else {
+        expect(warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { version: "2026.9.7" },
+    { version: "beta" },
+    { version: "latest", expectedIntegrity: `sha256-${"b".repeat(64)}` },
+  ])("preserves an explicit ClawHub selector or digest: %j", async (selector) => {
+    mockClawHubInstall("perplexity", "@openclaw/perplexity-plugin");
     mocks.metadata.mockReturnValue(
-      metadataSnapshot({ enabled: true, id: "diffs", origin: "global" }),
+      metadataSnapshot({ enabled: true, id: "perplexity", origin: "global" }),
     );
     await installManagedPlugin({
       request: {
-        source: "official",
-        pluginId: "diffs",
+        source: "clawhub",
+        packageName: "@openclaw/perplexity-plugin",
+        ...selector,
         acknowledgeCapabilities: emptyArtifactAcknowledgment,
       },
       env: {},
     });
-    expect(mocks.npmInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/diffs@2026.6.11",
-        expectedIntegrity: "sha512-test",
-      }),
-    );
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs@2026.6.11",
-        expectedIntegrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
-      }),
+      expect.objectContaining({ spec: `clawhub:@openclaw/perplexity-plugin@${selector.version}` }),
     );
   });
 
@@ -412,7 +652,6 @@ describe("managed plugin installation", () => {
       },
     ]);
     mockClawHubInstall("bluebubbles", "@openclaw/bluebubbles");
-    mocks.persistInstall.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
@@ -448,7 +687,6 @@ describe("managed plugin installation", () => {
   });
 
   it("keeps the runtime-id pin when a declared id equals the package name", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
     // An unscoped package can legitimately declare its package name as the runtime id.
     mockHostedOfficialCatalog([
       {
@@ -474,8 +712,8 @@ describe("managed plugin installation", () => {
   });
 
   it("approves every install-policy warning in an acknowledged Gateway install", async () => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
     mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    const installed = mockClawHubInstall("diffs", "@openclaw/diffs");
     mocks.clawhubInstall.mockImplementation(async (params: unknown) => {
       const callback = expectDefined(
         (
@@ -490,37 +728,14 @@ describe("managed plugin installation", () => {
         ).onInstallPolicyWarning,
         "install policy acknowledgement callback",
       );
-      await expect(
-        callback({
-          targetName: "diffs",
-          targetType: "plugin",
-          requestMode: "install",
-          reason: "Review package metadata",
-        }),
-      ).resolves.toEqual({ status: "approved" });
-      await expect(
-        callback({
-          targetName: "diffs",
-          targetType: "plugin",
-          requestMode: "install",
-          reason: "Review installed dependencies",
-        }),
-      ).resolves.toEqual({ status: "approved" });
-      return {
-        ok: true,
-        pluginId: "diffs",
-        targetDir: "/tmp/extensions/diffs",
-        extensions: ["index.js"],
-        packageName: "@openclaw/diffs",
-        clawhub: {
-          source: "clawhub",
-          clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "@openclaw/diffs",
-          clawhubFamily: "code-plugin",
-        },
-      };
+      for (const reason of ["Review package metadata", "Review installed dependencies"]) {
+        await expect(
+          callback({ targetName: "diffs", targetType: "plugin", requestMode: "install", reason }),
+        ).resolves.toEqual({ status: "approved" });
+      }
+      return installed;
     });
-    mocks.persistInstall.mockResolvedValue({});
+
     mocks.metadata.mockReturnValue(
       metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
     );
@@ -537,13 +752,13 @@ describe("managed plugin installation", () => {
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
-    let releasePersist: ((config: Record<string, unknown>) => void) | undefined;
-    const heldPersist = new Promise<Record<string, unknown>>((resolve) => {
-      releasePersist = resolve;
-    });
-    mocks.readConfig.mockResolvedValue(configSnapshot());
+    const heldPersist = createDeferredCore<Record<string, unknown>>();
+    const persistEntered = createDeferredCore();
     mockClawHubInstall("demo", "community/demo");
-    mocks.persistInstall.mockReturnValueOnce(heldPersist);
+    mocks.persistInstall.mockImplementationOnce(() => {
+      persistEntered.resolve();
+      return heldPersist.promise;
+    });
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
@@ -559,40 +774,21 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
-    const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
-    await Promise.resolve();
+    let enable: ReturnType<typeof setManagedPluginEnabled> | undefined;
+    try {
+      await Promise.race([persistEntered.promise, install]);
+      expect(mocks.persistInstall).toHaveBeenCalledTimes(1);
+      enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+      await Promise.resolve();
 
-    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
-    releasePersist?.({});
-    await install;
-    await enable;
-    expect(mocks.readConfig).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    ["clawhub_risk_acknowledgement_required", "invalid-request"],
-    ["clawhub_security_unavailable", "unavailable"],
-  ] as const)("classifies ClawHub failure %s", async (code, expectedKind) => {
-    mocks.readConfig.mockResolvedValue(configSnapshot());
-    mocks.clawhubInstall.mockResolvedValue({
-      ok: false,
-      error: "ClawHub install failed",
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
-
-    await expect(
-      installManagedPlugin({
-        request: { source: "clawhub", packageName: "community/plugin" },
-        env: {},
-      }),
-    ).rejects.toMatchObject({
-      kind: expectedKind,
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
+      expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+      heldPersist.resolve({});
+      await install;
+      await enable;
+      expect(mocks.readConfig).toHaveBeenCalledTimes(2);
+    } finally {
+      heldPersist.resolve({});
+      await Promise.allSettled(enable ? [install, enable] : [install]);
+    }
   });
 });

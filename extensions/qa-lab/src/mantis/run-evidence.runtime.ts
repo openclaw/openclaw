@@ -1,4 +1,3 @@
-// Qa Lab plugin module renders Mantis comparison evidence.
 import path from "node:path";
 import type { LaneResult } from "./run-artifacts.runtime.js";
 
@@ -10,7 +9,6 @@ export type MantisScenarioConfig = {
   candidateLabel: string;
   candidateScreenshotAlt: string;
   defaultBaselineRef: string;
-  id: string;
   title: string;
 };
 
@@ -84,13 +82,7 @@ function relativeArtifactPath(outputDir: string, artifactPath: string | undefine
   return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
 }
 
-export function buildEvidenceManifest(params: {
-  baseline: LaneResult;
-  candidate: LaneResult;
-  comparison: MantisComparison;
-  outputDir: string;
-  scenarioConfig: MantisScenarioConfig;
-}) {
+export function buildEvidenceManifest(params: Parameters<typeof renderReport>[0]) {
   const artifacts: {
     alt?: string;
     kind: string;

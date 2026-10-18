@@ -45,7 +45,7 @@ extension OpenClawChatViewModel {
         return ChatSessionNavigation.primaryKey(agentID: agentID, mainKey: mainKey)
     }
 
-    func refreshAgents() async {
+    public func refreshAgents() async {
         guard !self.isTransportDetached else { return }
         self.hasRequestedAgents = true
         self.agentCatalogGeneration &+= 1

@@ -35,13 +35,21 @@ Choose your OpenAI authentication method based on the access you need:
 | OpenClaw `image_generate`                              | Not supported by this credential                          | Requires an OpenClaw Codex OAuth profile and account access | Images API, subject to project access                      |
 | Audio transcription                                    | Not supported by this credential                          | Subscription transcription route, subject to account access | Audio API, subject to project access                       |
 | Realtime voice                                         | Not supported by this credential                          | Selected browser and GPT-Live relay routes                  | Supported routes, subject to project access                |
-| Memory embeddings and text-to-speech                   | Requires a separate compatible credential                 | Requires a separate compatible credential                   | Supported APIs, subject to project access                  |
+| Memory embeddings                                      | Requires a separate compatible credential                 | Supported when the account grants embedding access          | Supported API, subject to project access                   |
+| Text-to-speech                                         | Requires a separate compatible credential                 | Requires a separate compatible credential                   | Supported API, subject to project access                   |
 | Monitoring and analytics                               | Shared ChatGPT Usage page; no per-app OpenClaw metrics    | Codex usage and quota reporting                             | Platform project usage and billing                         |
 | Permission control                                     | App-specific OAuth grants and workspace policy            | Codex product permissions and workspace policy              | API-key and project permissions                            |
 | Default model endpoint                                 | `https://api.openai.com/v1/responses`                     | `https://chatgpt.com/backend-api/codex/responses`           | `https://api.openai.com/v1/responses` for Responses models |
 
 Credential refresh above refers to OpenClaw-stored profiles. Codex owns a
 separate native user-home login and its refresh.
+
+OpenClaw refreshes SIWC credentials on use within five minutes of expiry. For
+JWT access tokens, it caps the stored expiry at the `exp` claim so delayed responses do
+not extend its lifetime. If an OpenClaw runtime turn receives `token_expired`,
+it refreshes the selected SIWC profile and retries the same model once before
+using normal fallback. A failed refresh or an unauthorized retry keeps the
+existing fallback behavior.
 
 OpenClaw does not set per-app SIWC limits or show per-app usage. If ChatGPT
 offers app-specific controls for your account, manage them there. The Usage

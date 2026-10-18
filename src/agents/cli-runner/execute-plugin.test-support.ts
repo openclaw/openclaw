@@ -80,7 +80,9 @@ export function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
-    onOutstandingWorkChange?: (active: boolean) => void;
+    onOutstandingWorkChange?: NonNullable<
+      Parameters<typeof executePluginOwnedProcess>[0]["onOutstandingWorkChange"]
+    >;
     activeToolCount?: () => number;
     getActiveLoopbackAskUserDeadline?: () => number | undefined;
     onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;

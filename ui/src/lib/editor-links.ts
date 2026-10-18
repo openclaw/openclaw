@@ -11,7 +11,7 @@ export const EDITOR_LABELS: Record<EditorId, string> = {
   zed: "Zed",
 };
 
-function editorOpenUrl(editor: EditorId, absPath: string, line?: number | null): string {
+export function openEditor(editor: EditorId, absPath: string, line?: number | null) {
   const normalizedPath = absPath.replaceAll("\\", "/");
   const urlPath = normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`;
   const encodedPath = urlPath
@@ -20,10 +20,6 @@ function editorOpenUrl(editor: EditorId, absPath: string, line?: number | null):
       index === 1 && /^[a-z]:$/i.test(segment) ? segment : encodeURIComponent(segment),
     )
     .join("/");
-  return `${editor}://file${encodedPath}${line ? `:${line}` : ""}`;
-}
-
-export function openEditor(editor: EditorId, path: string, line?: number | null) {
   // Typed editor IDs plus encoded paths make this custom-scheme handoff safe.
-  return window.open(editorOpenUrl(editor, path, line));
+  return window.open(`${editor}://file${encodedPath}${line ? `:${line}` : ""}`);
 }

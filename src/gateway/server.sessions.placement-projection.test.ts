@@ -4,7 +4,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import type { EnvironmentSummary } from "../../packages/gateway-protocol/src/index.js";
 import { i18n } from "../../ui/src/i18n/index.ts";
 import { projectDevicePlacements } from "../../ui/src/pages/new-session/device-placement.ts";
-import { readDraftEnvironments } from "../../ui/src/pages/new-session/discovery.ts";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
@@ -16,6 +15,7 @@ import {
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry, type NodeSessionConnectParams } from "./node-registry.js";
+import { createSessionPlacementFactsReader } from "./server-methods/sessions-read-cache.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import {
   disposeSessionReadContexts,
@@ -30,7 +30,7 @@ import {
   getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
-import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.types.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
 import { placementTurnOwner } from "./worker-environments/placement-record.js";
 import {
@@ -41,6 +41,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./worker-environments/placement-test-fixtures.js";
+import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -54,17 +55,17 @@ test.each([
   {
     state: "pending-approval",
     disabledReason:
-      "Ask an administrator to approve the pending runtime.repository.v1 request, or pick another device.",
+      "paired-device command runtime.repository.v1 is awaiting pairing approval for node node-host; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>",
   },
   {
     state: "unauthorized",
     disabledReason:
-      "Authorize runtime.repository.v1 in the Gateway node command policy, or pick another device.",
+      "paired-device command runtime.repository.v1 is blocked by Gateway policy for node node-host; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry",
   },
   {
     state: "undeclared",
     disabledReason:
-      "Make runtime.repository.v1 available on this device, then reconnect, or pick another device.",
+      "paired-device command runtime.repository.v1 is not advertised by node node-host; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
   },
 ] as const)(
   "sessions.list carries automatic runtime requirements through the recovery picker: $state",
@@ -161,9 +162,9 @@ test.each([
       expect(
         catalog.payload?.environments.find((environment) => environment.id === "node:node-host")
           ?.requiredNodeCommand,
-      ).toEqual({ command, state });
+      ).toEqual({ command, state, ...(disabledReason ? { message: disabledReason } : {}) });
       const devices = projectDevicePlacements(
-        readDraftEnvironments(catalog.payload?.environments),
+        catalog.payload?.environments ?? [],
         runtime?.devicePlacement,
       );
       const device = devices.find((option) => option.deviceId === "node-host");
@@ -229,7 +230,22 @@ function placementContext(
       getMany: () => new Map([[placement.sessionId, placement]]),
     },
     workerEnvironmentService: {
-      get: () => environment,
+      get: (): WorkerEnvironmentServiceRecord | undefined =>
+        environment
+          ? {
+              environmentId: placement.environmentId ?? "env-placement",
+              leaseId: null,
+              sharedHost: null,
+              createdAtMs: 100,
+              idleSinceAtMs: null,
+              destroyRequestedAtMs: null,
+              attachedSessionIds: [],
+              desktopAvailable: false,
+              desktopApps: [],
+              tunnelStatus: "stopped",
+              ...environment,
+            }
+          : undefined,
       readMachineShape: () => undefined,
       machineShapeVersion: () => 0,
       inventoryVersion: () => 0,
@@ -366,36 +382,6 @@ test("sessions.describe preserves pre-epoch identity while starting", async () =
   });
 });
 
-test("sessions.list projects durable placement move progress", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const move = placementMove(placement, "workspace reconciliation is waiting");
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-    () => new Map([[placement.sessionId, placement]]),
-  );
-  const getPlacementMoves = vi.fn<NonNullable<WorkerSessionPlacementReader["getPlacementMoves"]>>(
-    () => new Map([[move.sessionId, move]]),
-  );
-
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    { context: { workerSessionPlacementService: { getMany, getPlacementMoves } } },
-  );
-
-  expect(result.ok).toBe(true);
-  const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
-  expect(main?.placementMove).toEqual({
-    target: { kind: "gateway" },
-    error: "workspace reconciliation is waiting",
-    updatedAtMs: 340,
-  });
-  expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(
-    getPlacementMoves.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
-  ).toEqual(["sess-main", "sess-other"]);
-});
-
 test.each([
   { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
   {
@@ -445,19 +431,22 @@ test.each([
             state: "destroyed",
           },
     );
+    const projection = await createSessionRowProjection({
+      cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
+      context,
+      placementFactsReader: createSessionPlacementFactsReader(
+        context.workerSessionPlacementService,
+        context.workerEnvironmentService.get,
+        new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
+      ),
+    });
+    trackSessionReadProjection(projection);
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
-        context: {
-          ...context,
-          workerSessionPlacementService: {
-            ...context.workerSessionPlacementService,
-            getPlacementMoves: () =>
-              new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
-          },
-        },
+        context: bindSessionRowProjection(context, () => projection),
       },
     );
 
@@ -517,12 +506,10 @@ test.each([
     });
     const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = await advancePlacementFixtureToActive(
-      placements,
-      database,
-      identity,
+    const active = await advancePlacementFixtureToActive(placements, database, {
+      ...identity,
       executionMode,
-    );
+    });
     const journalOwner = {
       sessionId: identity.sessionId,
       environmentId: active.environmentId,
@@ -536,10 +523,10 @@ test.each([
         claimId: "retained-claim",
         runId: "retained-run",
       });
-      placements.markWorkspaceResultPending(claim);
+      await placements.markWorkspaceResultPending(claim);
     } else {
       const basePack = Buffer.from("retained workspace rollback");
-      placements.beginWorkspaceReconciliation(journalOwner, {
+      await placements.beginWorkspaceReconciliation(journalOwner, {
         version: 1,
         temporaryNonce: "a".repeat(32),
         baseManifestRef: active.workspaceBaseManifestRef,
@@ -554,19 +541,19 @@ test.each([
     if (recovery === "unstaged result") {
       seedFailedPlacementWithRetainedResult(database, identity.sessionId);
     } else {
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "previous worker failure",
@@ -610,11 +597,11 @@ test.each([
     expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
 
     if (recovery === "unstaged result") {
-      const pending = placements.listPendingWorkspaceResults(identity.sessionId);
+      const pending = await placements.listPendingWorkspaceResultsAsync(identity.sessionId);
       expect(pending).toHaveLength(1);
-      placements.abandonWorkspaceResult(pending[0]!);
+      await placements.abandonWorkspaceResult(pending[0]!);
     } else {
-      placements.abortWorkspaceReconciliation(journalOwner, { force: true });
+      await placements.abortWorkspaceReconciliation(journalOwner, { force: true });
     }
     const ready = await describe();
     expect(ready.ok).toBe(true);

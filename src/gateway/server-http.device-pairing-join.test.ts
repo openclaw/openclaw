@@ -1,5 +1,6 @@
 // Real Gateway lifecycle proof for admin mint -> public single-use join exchange.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -82,6 +83,24 @@ describe("Gateway device join route", () => {
     expect(await readJson(response)).toEqual({ error: "not_found" });
   });
 
+  it("mints by RPC and redeems by HTTP without caller-thread join-code SQL", async () => {
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      const setup = await mintJoinUrl();
+      const response = await fetch(setup.joinUrl);
+      expect(response.status).toBe(200);
+      expect(await readJson(response)).toEqual(decodePairingSetupCode(setup.setupCode));
+      const joinCodeSql = [...prepare.mock.calls, ...exec.mock.calls].filter(([sql]) =>
+        /\bdevice_pairing_join_codes\b/u.test(sql),
+      );
+      expect(joinCodeSql).toEqual([]);
+    } finally {
+      prepare.mockRestore();
+      exec.mockRestore();
+    }
+  });
+
   it("routes advertised context paths when the shortcode begins with j", async () => {
     const setup = await mintJoinUrl("/public-gateway");
     const originalShortcode = shortcodeFromUrl(setup.joinUrl);
@@ -156,7 +175,7 @@ describe("Gateway device join route", () => {
     expect(escalated?.pendingNodeSurface?.commands).toEqual(["system.run", "system.which"]);
   });
 
-  it("burns once, expires opaquely, and rate-limits misses on the real HTTP server", async () => {
+  it("burns once and malformed payloads, expires opaquely, and serializes concurrent misses", async () => {
     const expired = await mintJoinUrl();
     const expiredShortcode = shortcodeFromUrl(expired.joinUrl);
     runOpenClawStateWriteTransaction(({ db }) => {
@@ -174,27 +193,65 @@ describe("Gateway device join route", () => {
     const opaqueNotFound = await readJson(expiredResponse);
     expect(opaqueNotFound).toEqual({ error: "not_found" });
 
-    const live = await mintJoinUrl("/public-gateway");
-    const shortcode = shortcodeFromUrl(live.joinUrl);
-    expect(Buffer.from(shortcode, "base64url").byteLength).toBeGreaterThanOrEqual(16);
+    for (const payloadJson of ["{malformed", null]) {
+      const live = await mintJoinUrl("/public-gateway");
+      const shortcode = shortcodeFromUrl(live.joinUrl);
+      expect(Buffer.from(shortcode, "base64url").byteLength).toBeGreaterThanOrEqual(16);
 
-    const first = await fetch(live.joinUrl);
-    expect(first.status).toBe(200);
-    expect(first.headers.get("content-type")).toContain("application/json");
-    expect(first.headers.get("cache-control")).toBe("no-store");
-    expect(await readJson(first)).toEqual(decodePairingSetupCode(live.setupCode));
+      const first = await fetch(live.joinUrl);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("content-type")).toContain("application/json");
+      expect(first.headers.get("cache-control")).toBe("no-store");
+      expect(await readJson(first)).toEqual(decodePairingSetupCode(live.setupCode));
 
-    const used = await fetch(live.joinUrl);
-    expect(used.status).toBe(404);
-    expect(await readJson(used)).toEqual(opaqueNotFound);
+      const malformed = await mintJoinUrl();
+      const malformedShortcode = shortcodeFromUrl(malformed.joinUrl);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
+            .updateTable("device_pairing_join_codes")
+            .set({ payload_json: payloadJson })
+            .where("shortcode", "=", malformedShortcode),
+        );
+      });
+      const malformedResponse = await fetch(malformed.joinUrl);
+      expect(malformedResponse.status).toBe(404);
+      expect(await readJson(malformedResponse)).toEqual(opaqueNotFound);
+      const malformedRows = runOpenClawStateWriteTransaction(({ db }) =>
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "device_pairing_join_codes">>(db)
+            .selectFrom("device_pairing_join_codes")
+            .select("shortcode")
+            .where("shortcode", "=", malformedShortcode),
+        ),
+      );
+      expect(malformedRows.rows).toEqual([]);
+    }
+
+    const raced = await mintJoinUrl();
+    const racedResponses = await Promise.all([fetch(raced.joinUrl), fetch(raced.joinUrl)]);
+    expect(racedResponses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+      200, 404,
+    ]);
+    for (const response of racedResponses) {
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await readJson(response)).toEqual(
+        response.status === 200 ? decodePairingSetupCode(raced.setupCode) : opaqueNotFound,
+      );
+    }
 
     const unknownUrl = `http://127.0.0.1:${harness.port}/j/${"z".repeat(22)}`;
-    const unknown = await fetch(unknownUrl);
-    expect(unknown.status).toBe(404);
-    expect(await readJson(unknown)).toEqual(opaqueNotFound);
-
-    const limited = await fetch(unknownUrl);
-    expect(limited.status).toBe(429);
-    expect(await readJson(limited)).toEqual({ error: "rate_limited" });
+    const misses = await Promise.all(Array.from({ length: 3 }, () => fetch(unknownUrl)));
+    expect(misses.map((response) => response.status).toSorted((a, b) => a - b)).toEqual([
+      404, 429, 429,
+    ]);
+    for (const response of misses) {
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(await readJson(response)).toEqual(
+        response.status === 404 ? opaqueNotFound : { error: "rate_limited" },
+      );
+    }
   });
 });

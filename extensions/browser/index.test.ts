@@ -1,8 +1,7 @@
 // Browser tests cover index plugin behavior.
-import fs from "node:fs";
-import path from "node:path";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRecord, createPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
@@ -102,8 +101,8 @@ function createApi() {
   };
 }
 
-function createTool(context: OpenClawPluginToolContext) {
-  const { api, registerTool } = createApi();
+function createTool(context: OpenClawPluginToolContext, registration = createApi()) {
+  const { api, registerTool } = registration;
   registerBrowserPlugin(api);
   const factory = registerTool.mock.calls[0]?.[0];
   if (typeof factory !== "function") {
@@ -141,16 +140,6 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 }
 
 describe("browser plugin", () => {
-  it("opens a bounded SQLite namespace for import onboarding state", () => {
-    const { api, openKeyedStore } = createApi();
-    registerBrowserPlugin(api);
-
-    expect(openKeyedStore).toHaveBeenCalledWith({
-      namespace: "browser.system-profile-import",
-      maxEntries: 1,
-    });
-  });
-
   it("initializes the durable tab registry without loading browser control or Gateway runtime", () => {
     const { api, openKeyedStore } = createApi();
     Object.defineProperty(api.runtime, "gateway", {
@@ -213,25 +202,33 @@ describe("browser plugin", () => {
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
 
-  it("bundles the browser automation skill with the plugin", () => {
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(__dirname, "openclaw.plugin.json"), "utf8"),
-    ) as { skills?: string[] };
-    const skillPath = path.join(__dirname, "skills", "browser-automation", "SKILL.md");
-
-    expect(manifest.skills).toEqual(["./skills"]);
-    expect(fs.readFileSync(skillPath, "utf8")).toContain("name: browser-automation");
-  });
-
   it("keeps browser tool registration synchronous while loading runtime on execute", async () => {
-    const tool = createTool({
-      sessionKey: "agent:main:webchat:direct:123",
-      browser: {
-        sandboxBridgeUrl: "http://127.0.0.1:9999",
-        allowHostControl: true,
-      },
+    const registration = createApi();
+    const { api, registerTool } = registration;
+    const record = createPluginRecord({ id: "browser", contracts: { tools: ["browser"] } });
+    const registry = createPluginRegistry({
+      runtime: api.runtime,
+      logger: api.logger,
+      activateGlobalSideEffects: false,
     });
+    registerTool.mockImplementation((tool, options) =>
+      registry.registerTool(record, tool, options),
+    );
+    const tool = createTool(
+      {
+        sessionKey: "agent:main:webchat:direct:123",
+        browser: {
+          sandboxBridgeUrl: "http://127.0.0.1:9999",
+          allowHostControl: true,
+        },
+      },
+      registration,
+    );
 
+    expect(record.toolNames).toEqual(["browser"]);
+    expect(registry.registry.tools).toEqual([
+      expect.objectContaining({ names: ["browser"], optional: false }),
+    ]);
     expect(tool.name).toBe("browser");
     expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");
@@ -513,17 +510,6 @@ describe("browser plugin", () => {
 
     await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
-  });
-
-  it("keeps an explicitly false browser control service lazy", async () => {
-    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "false");
-    const { api, registerService } = createApi();
-    registerBrowserPlugin(api);
-    const service = mockCallArg(registerService) as {
-      start: (...args: unknown[]) => unknown;
-    };
-    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
-    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
   });
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {

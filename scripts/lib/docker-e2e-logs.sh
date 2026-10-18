@@ -35,6 +35,18 @@ docker_e2e_read_positive_int_env() {
   docker_e2e_normalize_positive_int_value "$name" "$value"
 }
 
+docker_e2e_restore_signal_traps() {
+  local signal
+  for signal in INT TERM HUP; do
+    if [ -n "$1" ]; then
+      eval "$1"
+    else
+      trap - "$signal"
+    fi
+    shift
+  done
+}
+
 run_logged() {
   docker_e2e_run_logged 0 "$@"
 }
@@ -119,23 +131,6 @@ run_logged_print_heartbeat() {
     done
     kill -KILL "$command_pid" 2>/dev/null || true
   }
-  restore_heartbeat_traps() {
-    if [ -n "$previous_int_trap" ]; then
-      eval "$previous_int_trap"
-    else
-      trap - INT
-    fi
-    if [ -n "$previous_term_trap" ]; then
-      eval "$previous_term_trap"
-    else
-      trap - TERM
-    fi
-    if [ -n "$previous_hup_trap" ]; then
-      eval "$previous_hup_trap"
-    else
-      trap - HUP
-    fi
-  }
   cleanup_heartbeat_command() {
     local cleanup_status="${1:-$?}"
     if [ "$cleanup_done" = "1" ]; then
@@ -151,7 +146,7 @@ run_logged_print_heartbeat() {
       docker_e2e_print_log "$log_file" || true
     fi
     rm -f "$log_file"
-    restore_heartbeat_traps
+    docker_e2e_restore_signal_traps "$previous_int_trap" "$previous_term_trap" "$previous_hup_trap"
     if [ "$cleanup_status" -ge 128 ]; then
       exit "$cleanup_status"
     fi

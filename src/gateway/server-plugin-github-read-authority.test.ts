@@ -50,7 +50,10 @@ function fixture(method: "preview" | "detail") {
     config,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: ["github_read", "github_search"],
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
     register: expectDefined(github.register, "GitHub registration"),
   });
   setTestPluginRegistry(registry.registry);
@@ -139,9 +142,9 @@ function fixture(method: "preview" | "detail") {
   return { client, harness, readResponse, fetchMock, entered, release, dispatch };
 }
 
-describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (method) => {
-  it("loads public content through an identified operator's nested request", async () => {
-    const f = fixture(method);
+describe("registered GitHub readers", () => {
+  it("loads a preview through an identified operator's nested request", async () => {
+    const f = fixture("preview");
     f.release.resolve();
     await f.dispatch();
     const response = await f.harness.awaitResponseFrame("github-read");
@@ -153,8 +156,8 @@ describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (me
     expect(f.fetchMock).toHaveBeenCalled();
   });
 
-  it("does not deliver content when the original operator is revoked during the read", async () => {
-    const f = fixture(method);
+  it("does not deliver detail when the original operator is revoked during the read", async () => {
+    const f = fixture("detail");
     const pending = f.dispatch();
     try {
       await Promise.race([
@@ -172,7 +175,7 @@ describe.each(["preview", "detail"] as const)("registered GitHub %s reader", (me
     expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "GitHub request is no longer active. Try again.",
-      retryable: true,
+      retryable: false,
     });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),

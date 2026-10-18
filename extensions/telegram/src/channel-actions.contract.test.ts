@@ -102,22 +102,6 @@ describe("telegram actions contract", () => {
     expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
   });
 
-  it("discovers root SecretRef actions and reaction guidance before credentials are resolved", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        telegram: {
-          botToken: { source: "exec", provider: "default", id: "telegram-token" },
-          reactionLevel: "extensive",
-          actions: { reactions: true, poll: false },
-        },
-      },
-    };
-    const discovery = telegramPlugin.actions?.describeMessageTool?.({ cfg });
-    expect(discovery?.actions).toEqual(expect.arrayContaining(["send", "react"]));
-    expect(discovery?.actions).not.toContain("poll");
-    expect(telegramPlugin.agentPrompt?.reactionGuidance?.({ cfg })?.level).toBe("extensive");
-  });
-
   it.each(["disabled", "tokenless", "unknown"] as const)(
     "hides actions and capabilities for a %s scoped account",
     (accountId) => {

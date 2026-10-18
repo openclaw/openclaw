@@ -78,16 +78,22 @@ export async function withWorktreeGitConfig<T>(
     guard.beforeRun?.();
   };
   check();
+  const configOptions: Parameters<typeof runGit>[2] = { ...guard, operation: "worktree.config" };
   const common = path.resolve(
     cwd,
-    normalizeGitPathForFilesystem(await requireGit(cwd, ["rev-parse", "--git-common-dir"], guard)),
+    normalizeGitPathForFilesystem(
+      await requireGit(cwd, ["rev-parse", "--git-common-dir"], configOptions),
+    ),
   );
-  const head = await requireGit(cwd, ["rev-parse", "--verify", "HEAD^{commit}"], guard);
-  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(head)) {
+  const format = await requireGit(cwd, ["rev-parse", "--show-object-format"], configOptions);
+  if (format !== "sha1" && format !== "sha256") {
     throw new Error("Unsupported Git object format");
   }
-  const format = head.length === 64 ? "sha256" : "sha1";
-  const storage = await runGit(cwd, ["config", "--local", "--get", "extensions.refStorage"], guard);
+  const storage = await runGit(
+    cwd,
+    ["config", "--local", "--get", "extensions.refStorage"],
+    configOptions,
+  );
   if (storage.code !== 0 && storage.code !== 1) {
     throw commandError("git config refStorage", storage);
   }
@@ -102,9 +108,9 @@ export async function withWorktreeGitConfig<T>(
       "--includes",
       "--null",
       "--get-regexp",
-      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile|autocrlf|eol)$",
+      "^core\\.(symlinks|ignorecase|precomposeunicode|excludesfile|autocrlf|eol|sparsecheckout|sparsecheckoutcone)$",
     ],
-    guard,
+    configOptions,
   );
   if (settings.code !== 0 && settings.code !== 1) {
     throw commandError("git config layout", settings);
@@ -161,14 +167,14 @@ export async function withWorktreeGitConfig<T>(
     // Windows cannot represent executable bits; POSIX content checks remain strict.
     await fs.writeFile(
       path.join(directory, "config"),
-      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\nsymlinks=${process.platform !== "win32"}\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
+      `[core]\nrepositoryformatversion=${format === "sha256" || refStorage === "reftable" ? 1 : 0}\nbare=false\nfilemode=${process.platform !== "win32"}\nsymlinks=${process.platform !== "win32"}\n[gc]\nauto=0\n[maintenance]\nauto=false\n[extensions]\n${format === "sha256" ? "objectFormat=sha256\n" : ""}${refStorage === "reftable" ? "refStorage=reftable\n" : ""}`,
     );
     // Preserve filesystem/ignore behavior, never program drivers or relaxed path protections.
     for (const [key, value] of layout) {
       await requireGit(
         cwd,
         ["config", "--file", path.join(directory, "config"), key, value],
-        guard,
+        configOptions,
       );
     }
     const optionsFor = async <Options extends GitConfigOptions>(
@@ -178,6 +184,7 @@ export async function withWorktreeGitConfig<T>(
       assertActive();
       const guarded = {
         ...options,
+        refMutationDirectory: common,
         beforeRun: () => {
           assertActive();
           options.beforeRun?.();

@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import net from "node:net";
+import { floorPositiveFiniteNumber as normalizedTimeout } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
@@ -8,6 +9,13 @@ import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-pol
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const requireUndici = createRequire(import.meta.url);
 let undiciModule: typeof import("undici") | undefined;
+
+// Streaming defaults must not extend TCP/TLS setup; explicit request budgets still can.
+export let globalUndiciStreamTimeoutMs: number | undefined;
+
+export function setGlobalUndiciStreamTimeoutMs(timeoutMs: number | undefined): void {
+  globalUndiciStreamTimeoutMs = timeoutMs;
+}
 
 type UndiciAgentOptions = ConstructorParameters<typeof import("undici").Agent>[0];
 type UndiciProxyAgentOptions = ConstructorParameters<typeof import("undici").ProxyAgent>[0];
@@ -109,12 +117,6 @@ function createUndiciOriginDispatcher(
     : createUndiciPool(origin, options);
 }
 
-function normalizedTimeout(timeoutMs?: number): number | undefined {
-  return timeoutMs !== undefined && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
-    : undefined;
-}
-
 export function buildHttp1AgentOptions(
   options: UndiciAgentOptions = {},
   timeoutMs?: number,
@@ -132,7 +134,8 @@ export function buildHttp1AgentOptions(
             ...options.connect,
             ...(timeout !== undefined ? { timeout } : {}),
           },
-    ...(timeout !== undefined ? { bodyTimeout: timeout, headersTimeout: timeout } : {}),
+    bodyTimeout: timeout ?? options.bodyTimeout ?? globalUndiciStreamTimeoutMs,
+    headersTimeout: timeout ?? options.headersTimeout ?? globalUndiciStreamTimeoutMs,
   };
 }
 

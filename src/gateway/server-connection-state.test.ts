@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,6 +24,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 type ConnectionIdReads = { count: number };
@@ -62,8 +64,54 @@ function makeClient(
 }
 
 describe("gateway connection state", () => {
+  it("retires tool recipients across reconnects without retiring their active runs", () => {
+    const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "tool-recipient-retirement",
+      cfg: {},
+    });
+    onTestFinished(() => state.mentionInbox.dispose());
+    const context = createGatewayRequestContext(makeContextParams(state));
+    const live = makeClient("live", { count: 0 }).client;
+    state.clients.add(live);
+    state.chatRunState.getOrCreate("active").buffer = "unfinished response";
+    context.registerToolEventRecipient("active", live.connId);
+
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const client = makeClient(`reconnect-${cycle}`, { count: 0 }).client;
+      const connection = new AbortController();
+      client.connectionSignal = connection.signal;
+      state.clients.add(client);
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("recipient-only", client.connId);
+      expect(state.toolEventRecipients.get("active")?.has(client.connId)).toBe(true);
+
+      connection.abort();
+      if (cycle % 2 === 0) {
+        state.clients.delete(client);
+      }
+      context.unsubscribeAllSessionEvents(client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("recipient-only")).toBe(false);
+
+      // Accepted turns can start after the requesting transport has disconnected.
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("late-start", client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("late-start")).toBe(false);
+      state.clients.delete(client);
+    }
+
+    state.clients.delete(live);
+    context.unsubscribeAllSessionEvents(live.connId);
+    expect(state.toolEventRecipients.get("active")).toBeUndefined();
+    expect(state.chatRunState.runs.get("active")?.buffer).toBe("unfinished response");
+    state.chatRunState.clearRun("active");
+    expect(state.chatRunState.runs.size).toBe(0);
+  });
+
   it("uses committed policy for projected and plain session events through tentative activation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reader = ensureProfileForEmail("event-policy-reader@example.test");
       const other = ensureProfileForEmail("event-policy-other@example.test");
       const config = (others: "none" | "view"): OpenClawConfig => ({
@@ -150,12 +198,9 @@ describe("gateway connection state", () => {
                 scope,
               );
             }
-            const frames = peer.send.mock.calls.map(([frame]): unknown => {
-              if (typeof frame !== "string") {
-                throw new Error("expected a serialized Gateway event");
-              }
-              return JSON.parse(frame);
-            });
+            const frames = peer.send.mock.calls.map(([frame]): unknown =>
+              JSON.parse(String(frame)),
+            );
             expect.soft(frames, stage).toEqual(
               visibleKeys.flatMap((sessionKey) => [
                 expect.objectContaining({
@@ -190,24 +235,98 @@ describe("gateway connection state", () => {
           await projection.ensureMaterialized();
           committedConfig = relaxed;
           publish("committed relaxation without a projection mark", [ownKey, foreignKey]);
+
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: ownKey },
+            { parentSessionKey: foreignKey },
+          );
+          const later = makeClient("later-policy-reader", { count: 0 });
+          later.client.connect = { ...peer.client.connect };
+          later.client.authenticatedUserProfile = peer.client.authenticatedUserProfile;
+          prepareGatewayRecipientProfile(later.client);
+          state.clients.add(later.client);
+          peer.send.mockClear();
+          peer.send.mockImplementationOnce(() => {
+            committedConfig = restricted;
+          });
+          await projection.withPreparedExactRows(
+            () => [{ key: ownKey, agentId: "main" }],
+            (read) => {
+              state.broadcast(
+                "sessions.changed",
+                { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                {
+                  sessionKeys: [ownKey],
+                  agentId: "main",
+                  prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                },
+              );
+            },
+            { includeAncestors: true },
+          );
+          expect(peer.send).toHaveBeenCalledOnce();
+          expect(later.send).toHaveBeenCalledOnce();
+          expect(JSON.parse(peer.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [{ key: foreignKey }],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).toMatchObject({
+            session: { key: ownKey },
+            ancestorSessions: [],
+          });
+          expect(JSON.parse(later.send.mock.lastCall![0]).payload).not.toHaveProperty(
+            "ancestorSessionRefs",
+          );
+          const replacement = await createSessionRowProjection({
+            cfg: runtimeConfig,
+            getPolicyConfig: () => committedConfig,
+          });
+          let detachReplacement: (() => void) | undefined;
+          try {
+            await replacement.ensureMaterialized();
+            peer.send.mockClear();
+            later.send.mockClear();
+            await projection.withPreparedExactRows(
+              () => [{ key: ownKey, agentId: "main" }],
+              (read) => {
+                detachReplacement = state.attachSessionRowProjection(replacement);
+                state.broadcast(
+                  "sessions.changed",
+                  { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+                  {
+                    sessionKeys: [ownKey],
+                    agentId: "main",
+                    prepareSessionProjection: prepareSessionEventProjection(projection, read),
+                  },
+                );
+              },
+              { includeAncestors: true },
+            );
+            expect(peer.send).not.toHaveBeenCalled();
+            expect(later.send).not.toHaveBeenCalled();
+            state.broadcast(
+              "sessions.changed",
+              { sessionKey: ownKey, agentId: "main", reason: "metadata" },
+              { sessionKeys: [ownKey], agentId: "main" },
+            );
+            expect(peer.send).toHaveBeenCalledOnce();
+            expect(later.send).toHaveBeenCalledOnce();
+          } finally {
+            detachReplacement?.();
+            replacement.dispose();
+          }
         } finally {
           detach();
           projection.dispose();
         }
       } finally {
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });
 
   it("advertises online people only through live operator connections", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const state = createGatewayConnectionState({
-        scheduler: createTestGatewayScheduler(),
-        bootId: "online-recipients",
-        cfg: { agents: { entries: { main: {} } } },
-      });
-      onTestFinished(() => state.mentionInbox.dispose());
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const reads = { count: 0 };
       const requester = makeClient("requester", reads);
       const recipient = makeClient("recipient", reads);
@@ -228,6 +347,16 @@ describe("gateway connection state", () => {
           hasAvatar: false,
           updatedAt: 1,
         };
+      }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "online-recipients",
+        cfg: { agents: { entries: { main: {} } } },
+      });
+      onTestFinished(() => state.mentionInbox.dispose());
+      for (const peer of [requester, recipient]) {
+        prepareGatewayRecipientProfile(peer.client);
         state.clients.add(peer.client);
       }
       const recipientOnline = async () => {
@@ -260,7 +389,9 @@ describe("gateway connection state", () => {
   });
 
   it("broadcasts to 50 members from committed facts while rows are dirty and revokes immediately without SQL", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:broadcast-members" };
       await upsertSessionEntryCore(scope, {
         sessionId: "broadcast-members",
@@ -275,11 +406,11 @@ describe("gateway connection state", () => {
           broadcastDuringPublication?.();
         }
       });
-      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const state = createGatewayConnectionState({
         scheduler: createTestGatewayScheduler(),
         bootId: "members",
-        cfg: {},
+        cfg,
       });
       const detach = state.attachSessionRowProjection(projection);
       const peers = Array.from({ length: 50 }, (_, index) => {
@@ -393,13 +524,13 @@ describe("gateway connection state", () => {
         stopPublication();
         detach();
         projection.dispose();
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });
 
   it("serves current presence through broadcasts, RPCs, and hello without SQL while display rows are dirty", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const reader = ensureProfileForEmail("presence-reader@example.test");
@@ -476,7 +607,6 @@ describe("gateway connection state", () => {
               ]);
               expect(peer.send).toHaveBeenCalledOnce();
               const frame = peer.send.mock.calls[0]?.[0];
-              expect(typeof frame).toBe("string");
               expect(JSON.parse(String(frame))).toMatchObject({
                 event: "presence",
                 payload: { presence: expected },
@@ -535,7 +665,7 @@ describe("gateway connection state", () => {
         upsertPresence(presenceKey, { watchedSessions: undefined });
         detach();
         projection.dispose();
-        state.mentionInbox.dispose();
+        await state.mentionInbox.dispose();
       }
     });
   });

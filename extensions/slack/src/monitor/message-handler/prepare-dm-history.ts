@@ -51,11 +51,12 @@ export async function resolveSlackDmHistoryContext(params: {
     });
 
     const messages = (response.messages ?? [])
-      .filter((message) => {
+      .flatMap((message) => {
         if (params.currentMessageTs && message.ts === params.currentMessageTs) {
-          return false;
+          return [];
         }
-        return Boolean(normalizeOptionalString(message.text));
+        const body = normalizeOptionalString(message.text);
+        return body ? [{ message, body }] : [];
       })
       .slice(0, maxMessages)
       .toReversed();
@@ -80,11 +81,7 @@ export async function resolveSlackDmHistoryContext(params: {
 
     const entries: SlackDmHistoryEntry[] = [];
     const formatted: string[] = [];
-    for (const message of messages) {
-      const body = normalizeOptionalString(message.text);
-      if (!body) {
-        continue;
-      }
+    for (const { message, body } of messages) {
       const isCurrentBot =
         (params.ctx.botUserId && message.user === params.ctx.botUserId) ||
         (params.ctx.botId && message.bot_id === params.ctx.botId);
@@ -110,8 +107,8 @@ export async function resolveSlackDmHistoryContext(params: {
     }
 
     return {
-      body: formatted.length > 0 ? formatted.join("\n\n") : undefined,
-      inboundHistory: entries.length > 0 ? entries : undefined,
+      body: formatted.join("\n\n"),
+      inboundHistory: entries,
     };
   } catch (err) {
     logVerbose(

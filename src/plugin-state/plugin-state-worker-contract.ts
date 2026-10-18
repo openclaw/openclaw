@@ -1,27 +1,38 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type {
+  PluginStateOperationInput,
+  PluginStateOperationResult,
+} from "./plugin-state-operation-contract.js";
 import type {
   PluginStateComparisonLimits,
   PluginStatePreparedComparison,
-} from "./plugin-state-store.comparison.js";
+} from "./plugin-state-store.comparison.worker.js";
 import type { PluginStateSequencedJournalParams } from "./plugin-state-store.journal.js";
-import type { PluginStateMoveEntriesParams } from "./plugin-state-store.mutations.js";
-import type { PluginStateKeyRangeParams } from "./plugin-state-store.reads.js";
+import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
+import type { PluginStateMoveEntriesParams } from "./plugin-state-store.moves.worker.js";
 import type { PluginStateRegisterEntryParams } from "./plugin-state-store.retention.js";
 import type {
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRangeParams,
   PluginStateObservation,
   PluginStateStoreErrorCode,
   PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 import type { PluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import type { RuntimeHealthClearSelection } from "./runtime-health-records.js";
 
 type Namespace = { pluginId: string; namespace: string };
 type Key = Namespace & { key: string };
 type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs">;
 
 export type PluginStateWorkerRequests = {
+  "pluginState.executeOperation": {
+    input: PluginStateOperationInput;
+    output: PluginStateOperationResult;
+  };
   "pluginState.appendJournal": {
     input: PluginStateSequencedJournalParams;
     output: number;
@@ -36,7 +47,7 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.observe": {
     input: Key;
-    output: PluginStateObservation<unknown>;
+    output: PluginStateObservation<unknown> & { row?: PluginStateReadRow };
   };
   "pluginState.compareUpdate": {
     input: PluginStatePreparedComparison & PluginStateComparisonLimits & { operation: "update" };
@@ -47,6 +58,13 @@ export type PluginStateWorkerRequests = {
     output: PluginStateCompareResult<unknown>;
   };
   "pluginState.register": { input: Register; output: void };
+  "pluginState.replaceEntry": { input: Register; output: void };
+  "pluginState.replace": {
+    input: Omit<Register, "key" | "valueJson" | "ttlMs"> & {
+      entries: readonly Pick<Register, "key" | "valueJson" | "ttlMs">[];
+    };
+    output: void;
+  };
   "pluginState.registerIfAbsent": {
     input: Register;
     output: boolean;
@@ -68,17 +86,58 @@ export type PluginStateWorkerRequests = {
   };
   "pluginState.count": { input: Namespace; output: number };
   "pluginState.clear": { input: Namespace; output: void };
-  "pluginState.sweep": { input: undefined; output: number };
+  "pluginState.clearRuntimeHealth": {
+    input: Namespace & { processId: number; selection: RuntimeHealthClearSelection };
+    output: void;
+  };
 };
 
 export type PluginStateWorkerOperations = {
   [Request in keyof PluginStateWorkerRequests]: {
-    input: PluginStateWorkerRequests[Request]["input"];
+    input: PluginStateWorkerRequests[Request]["input"] extends undefined
+      ? undefined
+      : PluginStateWorkerRequests[Request]["input"] & {
+          sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
+        };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
 };
 
+type PluginStateReadType =
+  | "pluginState.lookup"
+  | "pluginState.lookupMany"
+  | "pluginState.entries"
+  | "pluginState.entriesInKeyRange"
+  | "pluginState.count";
+
+export type PluginStateWriteOperations = Omit<PluginStateWorkerOperations, PluginStateReadType>;
+
+export type PluginStateReadCommand = SqliteWorkerCommand<
+  Pick<PluginStateWorkerOperations, PluginStateReadType>
+>;
+export type PluginStateReadResult = {
+  type: PluginStateReadType;
+  result: PluginStateWorkerOperations[PluginStateReadType]["output"];
+};
+
+export function isPluginStateReadCommand(command: {
+  type: PropertyKey;
+}): command is PluginStateReadCommand {
+  return (
+    command.type === "pluginState.lookup" ||
+    command.type === "pluginState.lookupMany" ||
+    command.type === "pluginState.entries" ||
+    command.type === "pluginState.entriesInKeyRange" ||
+    command.type === "pluginState.count"
+  );
+}
+
 export const pluginStateWorkerOperations = {
+  "pluginState.executeOperation": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to execute plugin state operation.",
+  },
   "pluginState.appendJournal": {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
@@ -113,6 +172,16 @@ export const pluginStateWorkerOperations = {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to register plugin state entry.",
+  },
+  "pluginState.replace": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state namespace.",
+  },
+  "pluginState.replaceEntry": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state entry.",
   },
   "pluginState.registerIfAbsent": {
     operation: "register",
@@ -159,10 +228,10 @@ export const pluginStateWorkerOperations = {
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear plugin state namespace.",
   },
-  "pluginState.sweep": {
-    operation: "sweep",
+  "pluginState.clearRuntimeHealth": {
+    operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
-    message: "Failed to sweep expired plugin state entries.",
+    message: "Failed to clear runtime health records.",
   },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,
@@ -177,6 +246,8 @@ export const pluginStateWorkerOperations = {
 export function isPluginStateWorkerCommand(command: {
   type: string;
   input: unknown;
-}): command is SqliteWorkerCommand<PluginStateWorkerOperations> {
-  return Object.hasOwn(pluginStateWorkerOperations, command.type);
+}): command is SqliteWorkerCommand<PluginStateWriteOperations> {
+  return (
+    !isPluginStateReadCommand(command) && Object.hasOwn(pluginStateWorkerOperations, command.type)
+  );
 }

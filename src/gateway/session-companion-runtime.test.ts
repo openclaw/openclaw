@@ -1,5 +1,4 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +13,7 @@ import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-r
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
@@ -92,7 +92,9 @@ describe("Side chat with a published Gateway runtime", () => {
         scheduler: createTestGatewayScheduler(),
         getConfig: () => cfg,
         contextReader: defaultSessionCompanionContextReader,
-        sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+        sessionObserver: {
+          getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }),
+        },
       });
       const observedTools: string[][] = [];
       const observedModels: Array<{
@@ -175,10 +177,12 @@ describe("Side chat with a published Gateway runtime", () => {
         await waitForSessionTranscriptProjection(selected);
         const retained = selectedManager.getPersistedEntries();
         // Admission must use committed Gateway policy, not the caller's stale config.
-        await refreshPreparedModelRuntimeSnapshots(
-          { ...cfg, messages: { responsePrefix: "committed" } },
-          { gatewayLifecycle: true, catalogMode: "static" },
-        );
+        const committedConfig = { ...cfg, messages: { responsePrefix: "committed" } };
+        setRuntimeConfigSnapshot(committedConfig);
+        await refreshPreparedModelRuntimeSnapshots(committedConfig, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
         // Keep source-module preparation outside the RPC deadline and hydration barrier.
         await import("../agents/embedded-agent-runner/run.js");
         let connected = true;
@@ -283,65 +287,18 @@ describe("Side chat with a published Gateway runtime", () => {
         const deniedAuthority = operatorAuthority([]);
         const syncOpen = SessionManager.open.bind(SessionManager);
         const asyncOpen = SessionManager.openAsync.bind(SessionManager);
-        const nativeExec: unknown = Object.getOwnPropertyDescriptor(
-          DatabaseSync.prototype,
-          "exec",
-        )?.value;
-        if (typeof nativeExec !== "function") {
-          throw new Error("Expected the native SQLite exec method");
-        }
-        let nextHydrationProbe = 0;
-        const observeHydrationSql = (target: Parameters<typeof SessionManager.open>[0]) => {
-          const execCalls: Array<{
-            database: string | null | undefined;
-            stack: string | undefined;
-          }> = [];
-          const sql = observeMainThreadSql();
-          const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-          exec.mockImplementation(function (this: DatabaseSync, statement) {
-            let database: string | null | undefined;
-            try {
-              database = this.location();
-            } catch {
-              // Diagnostic lookup must not replace the native operation's error.
-              database = undefined;
-            }
-            const stackTraceLimit = Error.stackTraceLimit;
-            let stack: string | undefined;
-            try {
-              // Coordinator callers can sit beyond the default ten stack frames.
-              Error.stackTraceLimit = Math.max(stackTraceLimit, 32);
-              stack = new Error("Observed SQLite exec").stack;
-            } finally {
-              Error.stackTraceLimit = stackTraceLimit;
-            }
-            execCalls.push({ database, stack });
-            Reflect.apply(nativeExec, this, [statement]);
-          });
-          return {
-            ...sql,
-            diagnostics: {
-              probe: ++nextHydrationProbe,
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              storePath: target.storePath,
-              execCalls,
-            },
-          };
-        };
         let hydrationCount = 0;
         const hydrationFailures: unknown[] = [];
-        const recordHydration = (sql: ReturnType<typeof observeHydrationSql>) => {
+        const recordHydration = (sql: ReturnType<typeof observeMainThreadSql>) => {
           hydrationCount++;
           try {
             sql.expectIdle();
           } catch (error) {
-            console.error("Side chat hydration SQL diagnostics", JSON.stringify(sql.diagnostics));
             hydrationFailures.push(error);
           }
         };
         const syncProbe = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
-          const sql = observeHydrationSql(args[0]);
+          const sql = observeMainThreadSql();
           try {
             const result = syncOpen(...args);
             recordHydration(sql);
@@ -353,7 +310,7 @@ describe("Side chat with a published Gateway runtime", () => {
         const asyncProbe = vi
           .spyOn(SessionManager, "openAsync")
           .mockImplementation(async (...args) => {
-            const sql = observeHydrationSql(args[0]);
+            const sql = observeMainThreadSql();
             try {
               const result = await asyncOpen(...args);
               recordHydration(sql);

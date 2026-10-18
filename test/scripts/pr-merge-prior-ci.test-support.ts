@@ -1,4 +1,28 @@
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
+
+type MergeFixture = ReturnType<ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"]>;
+const digest = (contents: string | Buffer) => createHash("sha256").update(contents).digest("hex");
+const rawDelta = (f: MergeFixture, from: string) =>
+  f.git(["diff", "--raw", "--abbrev=40", "--no-renames", "-z", from, f.head, "--"]);
+function writePendingGates(f: MergeFixture) {
+  writeFileSync(
+    join(f.worktree, ".local/gates.env"),
+    `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+  );
+}
+const qualification = (reason: string) => ({ reason, evidence: ["qualification"] });
+
 export function createPriorCiFixtureState(head: string) {
+  const annotation = (start_line: number, message: string) => ({
+    annotation_level: "failure",
+    title: "",
+    message,
+    path: ".github",
+    start_line,
+  });
   return {
     enabled: false,
     head,
@@ -17,7 +41,16 @@ export function createPriorCiFixtureState(head: string) {
           run_id: number;
           head_sha: string;
           check_run_url?: string;
-          steps?: Array<{ number: number; name: string; status: string; conclusion: string }>;
+          started_at?: string;
+          completed_at?: string;
+          steps?: Array<{
+            number: number;
+            name: string;
+            status: string;
+            conclusion: string;
+            started_at?: string;
+            completed_at?: string;
+          }>;
         }>
       | undefined,
     event: "workflow_dispatch",
@@ -31,16 +64,44 @@ export function createPriorCiFixtureState(head: string) {
     requireThreads: false,
     resolved: true,
     membership: "admin",
+    rulesetBypass: undefined as string | undefined,
+    rulesetReads: 0,
+    revokeRulesetAfterRead: false,
+    revokeAdminOnMainFetch: false,
+    unsupportedNoLazy: false,
+    localOnlyFailureOid: "",
+    localOnlyFailureStderr: "",
+    localOnlyQueryFault: "",
+    adminRevokedDuringMainFetch: false,
     evidencePath: "",
     mutateEvidence: false,
     otherCheck: "",
     security: {
       enabled: false,
       fault: "",
+      sourceSha: "",
       combinedState: "failure",
       approval: false,
       role: "admin",
       statusReads: 0,
+    },
+    deadline: {
+      check: {
+        id: 601,
+        name: "owner-tests",
+        head_sha: head,
+        status: "completed",
+        conclusion: "cancelled",
+        started_at: "2026-09-20T00:00:00Z",
+        completed_at: "2026-09-20T01:00:20Z",
+        app: { id: 15368, slug: "github-actions" },
+        check_suite: { id: 10 },
+        output: { annotations_count: 2 },
+      },
+      annotations: [
+        annotation(1, "The job has exceeded the maximum execution time of 1h0m0s"),
+        annotation(18, "The operation was canceled."),
+      ],
     },
   };
 }
@@ -68,10 +129,12 @@ const securityResponse=()=>{
   const endpoint=args.find(arg=>arg.startsWith("repos/fixture/repo/"));
   if(!endpoint) return false;
   const config=s.priorCi.security;
-  const source=main();
+  const source=config.sourceSha||main();
   const publisher={id:901,run_attempt:config.fault==="new-publisher-attempt"?2:1,status:"completed",conclusion:"success",
     head_sha:source,head_branch:"main",head_repository:{id:s.repoAuthority.id},repository:{id:s.repoAuthority.id,full_name:s.repo.nameWithOwner},
-    event:"workflow_run",path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
+    event:config.fault==="automation-dispatch"?"workflow_dispatch":"workflow_run",
+    actor:{id:41898282,login:"github-actions[bot]",type:"Bot"},
+    path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
     config.statusReads++;save();
@@ -94,7 +157,7 @@ const securityResponse=()=>{
     const sha=createHash("sha1").update("blob "+bytes.length+"\0").update(bytes).digest("hex");
     reply({type:"file",path,sha:config.fault==="changed-publisher-source"?"0".repeat(40):sha});
   } else if(endpoint.startsWith("repos/fixture/repo/compare/")) {
-    reply({base_commit:{sha:source},merge_base_commit:{sha:config.fault==="untrusted-publisher-source"?"0".repeat(40):source},status:"identical"});
+    reply({base_commit:{sha:source},merge_base_commit:{sha:config.fault==="untrusted-publisher-source"?"0".repeat(40):source},status:endpoint.includes("..."+source+"?")?"identical":"ahead"});
   } else if(endpoint==="repos/fixture/repo/pulls/152415") {
     reply({number:152415,base:{ref:"main",repo:{full_name:s.repo.nameWithOwner}},state:"closed",merged:true,merged_at:"2026-09-01T00:00:00Z",merge_commit_sha:source});
   } else if(endpoint.includes("/collaborators/")) {
@@ -105,3 +168,151 @@ const securityResponse=()=>{
   return true;
 };
 `;
+
+export function ciWorkflowTree(f: MergeFixture, treeish: string, workflow: string) {
+  let oid = f.git(["hash-object", "-w", "--stdin"], workflow);
+  for (const [directory, name, kind] of [
+    [":.github/workflows", "ci.yml", "100644 blob"],
+    [":.github", "workflows", "040000 tree"],
+    ["", ".github", "040000 tree"],
+  ]) {
+    const entries = f
+      .git(["ls-tree", `${treeish}${directory}`])
+      .split("\n")
+      .filter((entry) => !entry.endsWith(`\t${name}`));
+    oid = f.git(["mktree"], [...entries, `${kind} ${oid}\t${name}`, ""].join("\n"));
+  }
+  return oid;
+}
+
+export function createPriorCiCandidateFactory(
+  fixture: ReturnType<typeof createMergeOutcomeFixtureHarness>["fixture"],
+) {
+  function candidate(existing?: ReturnType<typeof fixture>) {
+    const f = existing ?? fixture(undefined, [["first change\n"], ["resolved conflict\n"]]);
+    const state = f.state();
+    const path = join(f.root, "admin.json");
+    state.priorCi.enabled = true;
+    state.priorCi.evidencePath = path;
+    state.repoAuthority.owner = { login: "fixture", type: "Organization" };
+    state.restPolicy = "rules";
+    state.requiredCheckName = "openclaw/ci-gate";
+    state.restContexts = ["openclaw/ci-gate", "Security Review"];
+    state.gates = "pending";
+    state.pr.mergeStateStatus = "BEHIND";
+    f.save(state);
+    writePendingGates(f);
+    // The fixture git helper trims output; this raw form terminates with NUL, so
+    // no bytes belonging to the delta are removed.
+    const evidence = {
+      version: 1,
+      changeKind: "conflict-resolution",
+      repository: "fixture/repo",
+      pr: 123,
+      head: f.head,
+      priorHead: state.priorCi.head,
+      runId: 501,
+      runAttempt: 2,
+      deltaSha256: digest(rawDelta(f, state.priorCi.head)),
+      reason: "Operator approved the resolved conflict",
+      contracts: ["owner output"],
+      checks: [{ command: "owner test", result: "passed", evidence: "Resolved owner output" }],
+    };
+    writeFileSync(path, JSON.stringify(evidence));
+    return { ...f, path, evidence };
+  }
+
+  function preExistingCandidate(workflow?: string, existing?: ReturnType<typeof fixture>) {
+    const f = candidate(existing);
+    let main = f.base;
+    if (workflow) {
+      main = f.commit(ciWorkflowTree(f, f.base, workflow), [f.base]);
+      f.git(["push", "-q", "origin", `${main}:refs/heads/main`]);
+      f.prepare(f.head, main);
+      writePendingGates(f);
+    }
+    const state = f.state();
+    state.gates = "fail";
+    state.pr.mergeStateStatus = "BLOCKED";
+    state.priorCi.runHead = f.head;
+    state.priorCi.event = "pull_request";
+    state.priorCi.runConclusion = "cancelled";
+    state.priorCi.security.enabled = true;
+    state.priorCi.security.sourceSha = main;
+    state.priorCi.jobs = (
+      [
+        ["owner-tests", "failure"],
+        ["openclaw/ci-gate", "failure"],
+        ["pr-fail-fast", "success"],
+        ["cancelled-sibling", "cancelled"],
+        ["security-fast", "success"],
+      ] as const
+    ).map(([name, conclusion], index) => ({
+      id: 601 + index,
+      name,
+      conclusion,
+      status: "completed",
+      run_id: 501,
+      head_sha: f.head,
+      steps: [],
+    }));
+    state.priorCi.jobs[1]!.check_run_url = "https://api.github.com/repos/fixture/repo/check-runs/1";
+    // Retained receipts still use the retired workflow's cancellation step.
+    state.priorCi.jobs[2]!.steps = [
+      {
+        number: 2,
+        name: "Cancel remaining PR work after a failure",
+        status: "completed",
+        conclusion: "success",
+      },
+    ];
+    f.save(state);
+    const artifact = join(f.root, "qualification.txt");
+    writeFileSync(artifact, "Inspected unchanged input, baseline failure, and cancellation.\n");
+    const evidence = {
+      ...f.evidence,
+      changeKind: "pre-existing-failure",
+      priorHead: main,
+      testedMerge: f.commit(f.git(["merge-tree", "--write-tree", main, f.head]), [main, f.head]),
+      deltaSha256: digest(rawDelta(f, main)),
+      artifacts: [
+        { name: "qualification", path: artifact, sha256: digest(readFileSync(artifact)) },
+      ],
+      checkout: qualification("Inspected exact preflight checkout"),
+      failures: [
+        {
+          jobId: 601,
+          ...qualification("Independent failure predates PR"),
+          cases: ["sibling assertion"],
+          sourcePaths: ["sibling.txt"],
+        },
+      ],
+      aggregate: {
+        jobId: 602,
+        causedBy: [601],
+        ...qualification("Aggregate reports admitted root"),
+      },
+      cancellation: {
+        jobId: 603,
+        step: 2,
+        jobIds: [604],
+        causedBy: [601],
+        ...qualification("Fail-fast step cancelled sibling"),
+      },
+    };
+    writeFileSync(f.path, JSON.stringify(evidence));
+    const reviewPath = join(f.worktree, ".local/review.json");
+    const review = JSON.parse(readFileSync(reviewPath, "utf8"));
+    review.tests.result = "fail";
+    review.tests.preExistingCi = {
+      head: f.head,
+      runId: 501,
+      runAttempt: 2,
+      reason: "Qualified baseline failure; cancelled siblings remain unrun",
+    };
+    writeFileSync(reviewPath, JSON.stringify(review));
+    return { ...f, base: main, evidence, artifact };
+  }
+
+  return { candidate, preExistingCandidate };
+}

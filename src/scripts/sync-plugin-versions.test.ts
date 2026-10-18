@@ -91,12 +91,13 @@ describe("syncPluginVersions", () => {
     ["2026.9.5", ">=2026.9.5-rc.1", ">=2026.9.5"],
     ["2026.9.5", ">=2026.9.6-rc.1", ">=2026.9.6-rc.1"],
     ["2026.9.5", ">=2026.9.5.beta.1", ">=2026.9.5.beta.1"],
-  ])("syncs release %s API floor %s to %s", (version, current, expected) => {
+  ])("syncs release %s API and peer floors %s to %s", (version, current, expected) => {
     const rootDir = tempDirs.make("openclaw-sync-plugin-api-floor-");
     const packagePath = path.join(rootDir, "extensions/example/package.json");
     const pkg = {
       name: "@openclaw/example",
       version,
+      peerDependencies: { openclaw: current },
       openclaw: { compat: { pluginApi: current } },
     };
     writeJson(path.join(rootDir, "package.json"), { name: "openclaw", version });
@@ -108,6 +109,7 @@ describe("syncPluginVersions", () => {
     expect(syncPluginVersions(rootDir).updated).toEqual(updated);
     expect(JSON.parse(fs.readFileSync(packagePath, "utf8"))).toEqual({
       ...pkg,
+      peerDependencies: { openclaw: expected },
       openclaw: { compat: { pluginApi: expected } },
     });
   });

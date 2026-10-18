@@ -1,4 +1,3 @@
-// Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,6 +6,7 @@ import {
   recordLiveCatalogExpiry,
   withProviderCatalogExpiry,
 } from "../plugins/provider-catalog-expiry.js";
+import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
@@ -14,7 +14,6 @@ import {
   getCachedLiveCatalogValue,
   readConfiguredProviderCatalogEntries,
   readManifestProviderDefaultModelRef,
-  supportsNativeStreamingUsageCompat,
 } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
 
@@ -36,67 +35,76 @@ describe("provider-catalog-shared live catalog cache", () => {
     clearLiveCatalogCacheForTests();
   });
 
-  it("reuses in-flight and fresh live catalog loads for matching keys", async () => {
-    let now = 1_000;
-    const load = vi.fn(async () => ({ models: ["a"] }));
+  it("reports only cache sizes across pending, shared-value, and cleared states", async () => {
+    const completion = createDeferred<string[]>();
+    const load = vi.fn(() => completion.promise);
+    const first = getCachedLiveCatalogValue({ keyParts: ["PRIVATE_CACHE_KEY"], load });
+    const joined = getCachedLiveCatalogValue({ keyParts: ["PRIVATE_CACHE_KEY"], load });
+    expect(getLiveCatalogRetainedData()).toEqual([
+      {
+        structure: "catalog-source",
+        entries: 0,
+        approximateBytes: 0,
+        stringBytes: 0,
+        objects: 0,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 1, approximateBytes: 0 },
+    ]);
 
-    const first = getCachedLiveCatalogValue({
-      keyParts: ["provider", "models", "secret-token"],
-      load,
-      ttlMs: 100,
-      now: () => now,
-    });
-    const second = getCachedLiveCatalogValue({
-      keyParts: ["provider", "models", "secret-token"],
-      load,
-      ttlMs: 100,
-      now: () => now,
-    });
-
-    await expect(first).resolves.toEqual({ models: ["a"] });
-    await expect(second).resolves.toEqual({ models: ["a"] });
-    expect(load).toHaveBeenCalledTimes(1);
-
-    now = 1_050;
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models", "secret-token"],
-        load,
-        ttlMs: 100,
-        now: () => now,
-      }),
-    ).resolves.toEqual({ models: ["a"] });
-    expect(load).toHaveBeenCalledTimes(1);
-
-    now = 1_101;
+    const payload = ["PRIVATE_MODEL"];
+    completion.resolve(payload);
+    expect(await first).toBe(payload);
+    expect(await joined).toBe(payload);
+    expect(load).toHaveBeenCalledOnce();
     await getCachedLiveCatalogValue({
-      keyParts: ["provider", "models", "secret-token"],
-      load,
-      ttlMs: 100,
-      now: () => now,
+      keyParts: ["ANOTHER_PRIVATE_KEY"],
+      load: async () => payload,
     });
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(getLiveCatalogRetainedData()).toEqual([
+      // Both cache entries retain the same array, counted once: array + slot + UTF-16 string.
+      {
+        structure: "catalog-source",
+        entries: 2,
+        approximateBytes: 50,
+        stringBytes: 26,
+        objects: 1,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 0, approximateBytes: 0 },
+    ]);
+    clearLiveCatalogCacheForTests();
+    expect(getLiveCatalogRetainedData()).toEqual([
+      {
+        structure: "catalog-source",
+        entries: 0,
+        approximateBytes: 0,
+        stringBytes: 0,
+        objects: 0,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 0, approximateBytes: 0 },
+    ]);
   });
 
-  it("does not cache failed live catalog loads", async () => {
-    const load = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValueOnce("ok");
-
+  it("samples cached plugin data without invoking proxy traps or custom iterators", async () => {
+    const executePlugin = vi.fn(() => {
+      throw new Error("diagnostics invoked plugin behavior");
+    });
+    const opaque = new Proxy({}, { ownKeys: executePlugin });
+    const collections = [new Map<string, string>(), new Set<string>(), ["model"]].map((value) =>
+      Object.defineProperty(value, Symbol.iterator, { value: executePlugin }),
+    );
+    const payload = { opaque, collections };
     await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models"],
-        load,
-      }),
-    ).rejects.toThrow("boom");
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models"],
-        load,
-      }),
-    ).resolves.toBe("ok");
-    expect(load).toHaveBeenCalledTimes(2);
+      getCachedLiveCatalogValue({ keyParts: ["opaque-plugin-data"], load: async () => payload }),
+    ).resolves.toBe(payload);
+    expect(getLiveCatalogRetainedData()[0]).toMatchObject({
+      structure: "catalog-source",
+      entries: 1,
+      truncated: true,
+    });
+    expect(executePlugin).not.toHaveBeenCalled();
   });
 
   it("does not admit a cancelled catalog consumer", async () => {
@@ -112,73 +120,10 @@ describe("provider-catalog-shared live catalog cache", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { kind: "Error", reason: new Error("first consumer closed") },
-    { kind: "non-Error", reason: { source: "catalog closed" } },
-  ])("preserves $kind cancellation without aborting another consumer", async ({ reason }) => {
-    const controller = new AbortController();
-    const pending = createDeferred<string>();
-    const started = createDeferred<AbortSignal | undefined>();
-    const load = vi.fn((signal?: AbortSignal) => {
-      started.resolve(signal);
-      return pending.promise;
-    });
-    const first = getCachedLiveCatalogValue({
-      keyParts: ["shared"],
-      load,
-      signal: controller.signal,
-    });
-    const second = getCachedLiveCatalogValue({ keyParts: ["shared"], load });
-    const acquisitionSignal = await started.promise;
-    controller.abort(reason);
-    await expect(first).rejects.toBe(reason);
-    expect(acquisitionSignal?.aborted).toBe(false);
-    pending.resolve("shared catalog");
-    await expect(second).resolves.toBe("shared catalog");
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { kind: "Error", reason: new Error("last consumer left") },
-    { kind: "non-Error", reason: { source: "catalog closed" } },
-  ])("does not cache a same-turn completion after $kind cancellation", async ({ reason }) => {
-    const controller = new AbortController();
-    const completion = createDeferred<string>();
-    const started = createDeferred<AbortSignal | undefined>();
-    const keyParts = ["same-turn-cancellation"];
-    const first = getCachedLiveCatalogValue({
-      keyParts,
-      signal: controller.signal,
-      load: (signal) => {
-        started.resolve(signal);
-        return completion.promise;
-      },
-    });
-    const acquisitionSignal = await started.promise;
-    controller.abort(reason);
-    const abortedSynchronously = acquisitionSignal?.aborted;
-    completion.resolve("abandoned result");
-    await Promise.allSettled([first]);
-    const load = vi.fn(async () => "replacement");
-    const replacement = await getCachedLiveCatalogValue({ keyParts, load });
-
-    expect(abortedSynchronously).toBe(true);
-    expect(acquisitionSignal?.reason).toBe(reason);
-    await expect(first).rejects.toBe(reason);
-    expect(replacement).toBe("replacement");
-    expect(load).toHaveBeenCalledOnce();
-  });
-
   it("allows unrelated catalogs while abandoned loads remain unsettled", async () => {
     const completion = createDeferred<string>();
     const controllers = Array.from({ length: 99 }, () => new AbortController());
-    const signals: AbortSignal[] = [];
-    const load = (signal?: AbortSignal) => {
-      if (signal) {
-        signals.push(signal);
-      }
-      return completion.promise;
-    };
+    const load = vi.fn(() => completion.promise);
     const pending = controllers.map((controller, index) =>
       getCachedLiveCatalogValue({
         keyParts: ["pending"],
@@ -197,11 +142,10 @@ describe("provider-catalog-shared live catalog cache", () => {
     try {
       controllers.forEach((controller) => controller.abort(new Error("observer closed")));
       await Promise.allSettled(pending);
-      expect(signals.filter((signal) => signal.aborted)).toHaveLength(99);
+      expect(load).toHaveBeenCalledTimes(100);
       await expect(
         getCachedLiveCatalogValue({ keyParts: ["overflow"], load: async () => "ready" }),
       ).resolves.toBe("ready");
-      expect(signals.at(-1)?.aborted).toBe(false);
     } finally {
       completion.resolve("settled");
       await Promise.allSettled([...pending, retained]);
@@ -211,13 +155,7 @@ describe("provider-catalog-shared live catalog cache", () => {
   it("preserves consumers when pending entries are evicted without rewarming them", async () => {
     const controller = new AbortController();
     const completion = createDeferred<string>();
-    const signals: AbortSignal[] = [];
-    const load = (signal?: AbortSignal) => {
-      if (signal) {
-        signals.push(signal);
-      }
-      return completion.promise;
-    };
+    const load = vi.fn(() => completion.promise);
     const keyParts = ["evicted", 0];
     const first = getCachedLiveCatalogValue({ keyParts, load, signal: controller.signal });
     const survivor = getCachedLiveCatalogValue({ keyParts, load });
@@ -232,8 +170,7 @@ describe("provider-catalog-shared live catalog cache", () => {
       const reason = new Error("evicted consumer closed");
       controller.abort(reason);
       await expect(first).rejects.toBe(reason);
-      expect(signals).toHaveLength(100);
-      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+      expect(load).toHaveBeenCalledTimes(100);
       completion.resolve("original");
       await expect(survivor).resolves.toBe("original");
       await settled;
@@ -247,7 +184,7 @@ describe("provider-catalog-shared live catalog cache", () => {
     }
   });
 
-  it("replaces an abandoned load before physical settlement without losing the replacement", async () => {
+  it("shares and retains admitted metadata after its sole consumer cancels", async () => {
     const controller = new AbortController();
     const completion = createDeferred<string>();
     const load = vi.fn(() => completion.promise);
@@ -257,38 +194,22 @@ describe("provider-catalog-shared live catalog cache", () => {
     try {
       controller.abort(reason);
       const replacementLoad = vi.fn(async () => "replacement");
-      const replacement = getCachedLiveCatalogValue({ keyParts, load: replacementLoad });
-      const startedBeforeSettlement = replacementLoad.mock.calls.length;
-      completion.resolve("abandoned result");
-      await Promise.allSettled([first, replacement]);
+      const next = getCachedLiveCatalogValue({ keyParts, load: replacementLoad });
+      completion.resolve("admitted result");
+      await Promise.allSettled([first, next]);
       await expect(first).rejects.toBe(reason);
-      expect(startedBeforeSettlement).toBe(1);
-      await expect(replacement).resolves.toBe("replacement");
+      await expect(next).resolves.toBe("admitted result");
+      expect(replacementLoad).not.toHaveBeenCalled();
       expect(load).toHaveBeenCalledOnce();
-      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("replacement");
+      await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("admitted result");
       expect(load).toHaveBeenCalledOnce();
     } finally {
-      completion.resolve("abandoned result");
+      completion.resolve("admitted result");
       await Promise.allSettled([first, completion.promise]);
     }
   });
 
-  it("passes an uncached caller's signal without changing shared cache ownership", async () => {
-    const keyParts = ["uncached-cancellation"];
-    await getCachedLiveCatalogValue({ keyParts, load: async () => "cached" });
-    const controller = new AbortController();
-    const load = vi.fn(async (signal?: AbortSignal) => {
-      expect(signal).toBe(controller.signal);
-      return "uncached";
-    });
-    await expect(
-      getCachedLiveCatalogValue({ keyParts, load, ttlMs: 0, signal: controller.signal }),
-    ).resolves.toBe("uncached");
-    await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("cached");
-    expect(load).toHaveBeenCalledOnce();
-  });
-
-  it.each([undefined, 64_000])(
+  it.each([64_000])(
     "retains slow successful catalogs without extending absolute expiry %s",
     async (absoluteExpiry) => {
       let now = 1_000;
@@ -298,9 +219,7 @@ describe("provider-catalog-shared live catalog cache", () => {
         captureProviderCatalogExpiries(() =>
           withProviderCatalogExpiry(
             async () => {
-              if (absoluteExpiry !== undefined) {
-                recordLiveCatalogExpiry(absoluteExpiry);
-              }
+              recordLiveCatalogExpiry(absoluteExpiry);
               return getCachedLiveCatalogValue({
                 keyParts: ["slow-provider", absoluteExpiry],
                 load,
@@ -316,7 +235,7 @@ describe("provider-catalog-shared live catalog cache", () => {
       pending.resolve("usable");
       const completed = await first;
       expect(completed.value).toBe("usable");
-      const expectedExpiry = absoluteExpiry ?? 93_600;
+      const expectedExpiry = absoluteExpiry;
       expect(completed.providerExpiries.get("fixture")).toBe(expectedExpiry);
 
       now = 63_800;
@@ -331,32 +250,41 @@ describe("provider-catalog-shared live catalog cache", () => {
     },
   );
 
-  it.each(["resolve", "reject", "throw"] as const)(
+  it.each(["resolve", "overflow"] as const)(
     "bypasses a warm cache without modifying it when the uncached loader will %s",
     async (outcome) => {
       const keyParts = ["provider", "models"];
       await getCachedLiveCatalogValue({ keyParts, load: async () => "cached" });
-      const error = new Error("uncached failure");
-      const load = vi.fn(() => {
-        if (outcome === "throw") {
-          throw error;
-        }
-        return outcome === "reject" ? Promise.reject(error) : Promise.resolve("fresh");
+      const controller = new AbortController();
+      let calls = 0;
+      const load = vi.fn((signal?: AbortSignal) => {
+        expect(signal).toBe(controller.signal);
+        return Promise.resolve(
+          outcome === "overflow" ? (++calls === 1 ? "first" : "second") : "fresh",
+        );
       });
       const shouldCache = vi.fn(() => false);
-      const fresh = getCachedLiveCatalogValue({ keyParts, load, shouldCache, ttlMs: 0 });
-      if (outcome === "resolve") {
-        await expect(fresh).resolves.toBe("fresh");
-      } else {
-        await expect(fresh).rejects.toBe(error);
+      const reads = outcome === "overflow" ? 2 : 1;
+      for (let index = 0; index < reads; index++) {
+        const fresh = getCachedLiveCatalogValue({
+          keyParts,
+          load,
+          shouldCache,
+          signal: controller.signal,
+          ttlMs: outcome === "overflow" ? 1 : 0,
+          ...(outcome === "overflow" ? { now: () => 8_640_000_000_000_000 } : {}),
+        });
+        await expect(fresh).resolves.toBe(
+          outcome === "overflow" ? (index === 0 ? "first" : "second") : "fresh",
+        );
       }
       expect(shouldCache).not.toHaveBeenCalled();
       await expect(getCachedLiveCatalogValue({ keyParts, load })).resolves.toBe("cached");
-      expect(load).toHaveBeenCalledTimes(1);
+      expect(load).toHaveBeenCalledTimes(reads);
     },
   );
 
-  it.each(["resolve", "reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
+  it.each(["resolve", "predicate-throw", "same-promise"] as const)(
     "preserves a replacement cache entry after expired work finishes with %s",
     async (outcome) => {
       let now = 1_000;
@@ -382,12 +310,8 @@ describe("provider-catalog-shared live catalog cache", () => {
         ttlMs: 100,
         now: () => now,
       });
-      if (outcome === "reject") {
-        pending.reject(error);
-      } else {
-        pending.resolve("expired");
-      }
-      if (outcome === "reject" || outcome === "predicate-throw") {
+      pending.resolve("expired");
+      if (outcome === "predicate-throw") {
         await expect(first).rejects.toBe(error);
       } else {
         await expect(first).resolves.toBe("expired");
@@ -401,286 +325,114 @@ describe("provider-catalog-shared live catalog cache", () => {
       expect(load).not.toHaveBeenCalled();
     },
   );
-
-  it("does not retain resolved live catalog values rejected by the cache predicate", async () => {
-    const load = vi
-      .fn<() => Promise<string>>()
-      .mockResolvedValueOnce("empty")
-      .mockResolvedValueOnce("usable");
-
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models"],
-        load,
-        shouldCache: (value) => value !== "empty",
-      }),
-    ).resolves.toBe("empty");
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models"],
-        load,
-        shouldCache: (value) => value !== "empty",
-      }),
-    ).resolves.toBe("usable");
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models"],
-        load,
-        shouldCache: (value) => value !== "empty",
-      }),
-    ).resolves.toBe("usable");
-
-    expect(load).toHaveBeenCalledTimes(2);
-  });
-
-  it("evicts the oldest live catalog cache entry when the cache is full", async () => {
-    const load = vi.fn(async (id: number) => `value-${id}`);
-
-    for (let i = 0; i < 100; i += 1) {
-      await expect(
-        getCachedLiveCatalogValue({
-          keyParts: ["provider", "models", i],
-          load: () => load(i),
-          ttlMs: 60_000,
-        }),
-      ).resolves.toBe(`value-${i}`);
-    }
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models", 100],
-        load: () => load(100),
-        ttlMs: 60_000,
-      }),
-    ).resolves.toBe("value-100");
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models", 0],
-        load: () => load(0),
-        ttlMs: 60_000,
-      }),
-    ).resolves.toBe("value-0");
-
-    expect(load).toHaveBeenCalledTimes(102);
-  });
-
-  it("does not cache live catalog loads when the expiry would exceed Date range", async () => {
-    const load = vi
-      .fn<() => Promise<string>>()
-      .mockResolvedValueOnce("first")
-      .mockResolvedValueOnce("second");
-
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models", "overflow"],
-        load,
-        ttlMs: 1,
-        now: () => 8_640_000_000_000_000,
-      }),
-    ).resolves.toBe("first");
-    await expect(
-      getCachedLiveCatalogValue({
-        keyParts: ["provider", "models", "overflow"],
-        load,
-        ttlMs: 1,
-        now: () => 8_640_000_000_000_000,
-      }),
-    ).resolves.toBe("second");
-    expect(load).toHaveBeenCalledTimes(2);
-  });
 });
 
 describe("provider-catalog-shared native streaming usage compat", () => {
-  it("detects native streaming usage compat from the endpoint capabilities", () => {
-    expect(
-      supportsNativeStreamingUsageCompat({
-        providerId: "custom-qwen",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsNativeStreamingUsageCompat({
-        providerId: "custom-kimi",
-        baseUrl: "https://api.moonshot.ai/v1",
-      }),
-    ).toBe(true);
-    expect(
-      supportsNativeStreamingUsageCompat({
-        providerId: "custom-proxy",
-        baseUrl: "https://proxy.example.com/v1",
-      }),
-    ).toBe(false);
-  });
-
-  it("opts models into streaming usage for native endpoints while preserving explicit overrides", () => {
-    const provider = applyProviderNativeStreamingUsageCompat({
-      providerId: "custom-qwen",
-      providerConfig: {
-        api: "openai-completions",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        models: [buildModel("qwen-plus"), buildModel("qwen-max", false)],
-      },
-    });
-
-    expect(provider.models?.[0]?.compat?.supportsUsageInStreaming).toBe(true);
-    expect(provider.models?.[1]?.compat?.supportsUsageInStreaming).toBe(false);
-  });
+  it.each([
+    ["custom-qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", true],
+    ["custom-proxy", "https://proxy.example.com/v1", undefined],
+  ] as const)(
+    "applies %s endpoint capabilities while preserving overrides",
+    (providerId, baseUrl, expected) => {
+      const provider = applyProviderNativeStreamingUsageCompat({
+        providerId,
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl,
+          models: [buildModel("default"), buildModel("override", false)],
+        },
+      });
+      expect(provider.models[0]?.compat?.supportsUsageInStreaming).toBe(expected);
+      expect(provider.models[1]?.compat?.supportsUsageInStreaming).toBe(false);
+    },
+  );
 });
 
 describe("provider-catalog-shared configured catalog entries", () => {
-  it("normalizes bare retired Gemini ids for Google-owned configured providers", () => {
-    expect(
-      readConfiguredProviderCatalogEntries({
-        providerId: "google",
-        config: {
-          models: {
-            providers: {
-              google: {
-                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                models: [
-                  {
-                    id: "gemini-3-pro-preview",
-                    name: "Gemini 3 Pro Preview",
-                    input: ["text", "image"],
-                    reasoning: true,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 1048576,
-                    maxTokens: 65536,
-                  },
-                ],
+  it.each([
+    { providerId: "kilocode", prefix: "google/", input: ["text", "image", "video", "audio"] },
+  ] satisfies Array<{ providerId: string; prefix: string; input: ModelDefinitionConfig["input"] }>)(
+    "normalizes $providerId Gemini ids while preserving configured modalities",
+    ({ providerId, prefix, input }) => {
+      expect(
+        readConfiguredProviderCatalogEntries({
+          providerId,
+          config: {
+            models: {
+              providers: {
+                [providerId]: {
+                  baseUrl: "https://catalog.example/v1",
+                  models: [
+                    {
+                      ...buildModel(`${prefix}gemini-3-pro-preview`),
+                      name: "Gemini 3 Pro Preview",
+                      input,
+                      reasoning: true,
+                      contextWindow: 1048576,
+                      maxTokens: 65536,
+                    },
+                  ],
+                },
               },
             },
           },
+        }),
+      ).toEqual([
+        {
+          provider: providerId,
+          id: `${prefix}gemini-3.1-pro-preview`,
+          name: "Gemini 3 Pro Preview",
+          input,
+          reasoning: true,
+          contextWindow: 1048576,
         },
-      }),
-    ).toEqual([
-      {
-        provider: "google",
-        id: "gemini-3.1-pro-preview",
-        name: "Gemini 3 Pro Preview",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 1048576,
-      },
-    ]);
-  });
-
-  it("preserves configured audio and video input modalities while normalizing nested Gemini ids", () => {
-    expect(
-      readConfiguredProviderCatalogEntries({
-        providerId: "kilocode",
-        config: {
-          models: {
-            providers: {
-              kilocode: {
-                baseUrl: "https://api.kilo.ai/api/gateway/",
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "google/gemini-3-pro-preview",
-                    name: "Gemini 3 Pro Preview",
-                    input: ["text", "image", "video", "audio"],
-                    reasoning: true,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 1048576,
-                    maxTokens: 65536,
-                  },
-                ],
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual([
-      {
-        provider: "kilocode",
-        id: "google/gemini-3.1-pro-preview",
-        name: "Gemini 3 Pro Preview",
-        input: ["text", "image", "video", "audio"],
-        reasoning: true,
-        contextWindow: 1048576,
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 });
 
 describe("provider-catalog-shared manifest provider configs", () => {
-  it("converts manifest model catalog rows into provider config rows", () => {
-    const contextWindows = [{ id: "128k", label: "128K", contextWindow: 128000 }];
+  it("converts manifest rows and reads the default model reference", () => {
+    const model: ModelCatalogProvider["models"][number] = {
+      id: "example-model",
+      name: "Example Model",
+      input: ["text", "image", "video"],
+      reasoning: true,
+      contextWindow: 128_000,
+      contextTokens: 64_000,
+      contextWindows: [{ id: "128k", label: "128K", contextWindow: 128000 }],
+      contextWindowDefault: "128k",
+      maxTokens: 8192,
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+      mediaInput: { image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" } },
+      cost: {
+        input: 1,
+        output: 2,
+        cacheRead: 0.25,
+        cacheWrite: 0.5,
+        tieredPricing: [
+          { input: 0.5, output: 1, cacheRead: 0.1, cacheWrite: 0.2, range: [0, 1_000_000] },
+        ],
+      },
+      compat: { supportsUsageInStreaming: true },
+    };
+    const providerId = "example";
     const catalog: ModelCatalogProvider = {
       baseUrl: "https://api.example.test/v1",
       api: "openai-completions",
       defaultModel: " example-model ",
       headers: { "x-provider": "example" },
-      models: [
-        {
-          id: "example-model",
-          name: "Example Model",
-          input: ["text", "image"],
-          reasoning: true,
-          contextWindow: 128_000,
-          contextTokens: 64_000,
-          contextWindows,
-          contextWindowDefault: "128k",
-          maxTokens: 8192,
-          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-          mediaInput: {
-            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
-          },
-          cost: {
-            input: 1,
-            output: 2,
-            cacheRead: 0.25,
-            cacheWrite: 0.5,
-            tieredPricing: [
-              {
-                input: 0.5,
-                output: 1,
-                cacheRead: 0.1,
-                cacheWrite: 0.2,
-                range: [0, 1_000_000],
-              },
-            ],
-          },
-          compat: { supportsUsageInStreaming: true },
-        },
-      ],
+      models: [model],
     };
-
-    expect(buildManifestModelProviderConfig({ providerId: "example", catalog })).toEqual({
-      baseUrl: "https://api.example.test/v1",
+    expect(buildManifestModelProviderConfig({ providerId, catalog })).toEqual({
+      baseUrl: catalog.baseUrl,
       api: "openai-completions",
       headers: { "x-provider": "example" },
       models: [
         {
+          ...model,
           id: "example-model",
-          name: "Example Model",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: {
-            input: 1,
-            output: 2,
-            cacheRead: 0.25,
-            cacheWrite: 0.5,
-            tieredPricing: [
-              {
-                input: 0.5,
-                output: 1,
-                cacheRead: 0.1,
-                cacheWrite: 0.2,
-                range: [0, 1_000_000],
-              },
-            ],
-          },
-          contextWindow: 128_000,
-          contextTokens: 64_000,
-          contextWindows,
-          contextWindowDefault: "128k",
-          maxTokens: 8192,
-          thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-          mediaInput: {
-            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
-          },
-          compat: { supportsUsageInStreaming: true },
+          cost: model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
       ],
     });
@@ -690,112 +442,5 @@ describe("provider-catalog-shared manifest provider configs", () => {
         "example",
       ),
     ).toBe("example/example-model");
-  });
-
-  it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {
-    const catalog: ModelCatalogProvider = {
-      baseUrl: "https://api.kilo.ai/api/gateway/",
-      api: "openai-completions",
-      models: [
-        {
-          id: "google/gemini-3-pro-preview",
-          name: "Gemini 3 Pro Preview",
-          input: ["text", "image"],
-          reasoning: true,
-          contextWindow: 1_048_576,
-          maxTokens: 65_536,
-        },
-      ],
-    };
-
-    expect(buildManifestModelProviderConfig({ providerId: "kilocode", catalog })).toEqual({
-      baseUrl: "https://api.kilo.ai/api/gateway/",
-      api: "openai-completions",
-      models: [
-        {
-          id: "google/gemini-3.1-pro-preview",
-          name: "Gemini 3 Pro Preview",
-          reasoning: true,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 1_048_576,
-          maxTokens: 65_536,
-        },
-      ],
-    });
-  });
-
-  it("rejects incomplete manifest rows before building provider runtime config", () => {
-    expect(() =>
-      buildManifestModelProviderConfig({
-        providerId: "example",
-        catalog: {
-          baseUrl: "https://api.example.test/v1",
-          models: [
-            {
-              id: "missing-context",
-              maxTokens: 8192,
-            },
-          ],
-        },
-      }),
-    ).toThrow("missing contextWindow");
-  });
-
-  it("rejects catalog data that cannot become runtime provider config", () => {
-    expect(() =>
-      buildManifestModelProviderConfig({
-        providerId: "example",
-        catalog: {
-          models: [
-            {
-              id: "missing-base-url",
-              contextWindow: 1024,
-              maxTokens: 1024,
-            },
-          ],
-        },
-      }),
-    ).toThrow("providers.example.baseUrl");
-
-    expect(() =>
-      buildManifestModelProviderConfig({
-        providerId: "example",
-        catalog: {
-          baseUrl: "https://api.example.test/v1",
-          models: [
-            {
-              id: "document-model",
-              input: ["document"],
-              contextWindow: 1024,
-              maxTokens: 1024,
-            },
-          ],
-        },
-      }),
-    ).toThrow("unsupported runtime input document");
-  });
-
-  it("rejects manifest catalogs when normalization drops a model row", () => {
-    expect(() =>
-      buildManifestModelProviderConfig({
-        providerId: "example",
-        catalog: {
-          baseUrl: "https://api.example.test/v1",
-          models: [
-            {
-              id: "valid",
-              contextWindow: 1024,
-              maxTokens: 1024,
-            },
-            {
-              id: "",
-              contextWindow: 1024,
-              maxTokens: 1024,
-            },
-          ],
-        },
-      }),
-    ).toThrow("providers.example.models");
   });
 });

@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "System busyness placement" });
@@ -34,9 +35,12 @@ suite.define(() => {
       { viewport: { width: 1280, height: 900 }, reducedMotion: "no-preference" },
       async ({ page }) => {
         await installMockGateway(page, { methodResponses });
+        const layoutModule = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/debug/debug-overlay-layout.runtime.ts",
+        );
         const layoutRequests: string[] = [];
         page.on("request", (request) => {
-          if (request.url().includes("debug-overlay-layout.runtime-")) {
+          if (layoutModule.test(request.url())) {
             layoutRequests.push(request.url());
           }
         });
@@ -130,7 +134,15 @@ suite.define(() => {
       async ({ page, context }) => {
         await installMockGateway(page, { methodResponses });
         await page.goto(suite.server.baseUrl + "debug");
-        const panel = await openCompact(page);
+        await page.getByRole("button", { name: /^Open overlay/u }).tap();
+        const panel = page.getByRole("complementary", { name: "System busyness" });
+        // The read-only CPU card can cover these controls at narrow widths.
+        // Keep the real touch path reachable without dismissing it first.
+        await panel.getByRole("button", { name: "Show Gateway CPU breakdown" }).tap();
+        await panel.locator(".gateway-cpu-tooltip[open]").waitFor();
+        await panel.getByRole("button", { name: "Minimize system busyness" }).tap();
+        await panel.locator(".debug-overlay__widget").waitFor();
+        await settle(panel);
         const box = (await panel.locator("header").boundingBox())!;
         const before = (await panel.boundingBox())!;
         const cdp = await context.newCDPSession(page);

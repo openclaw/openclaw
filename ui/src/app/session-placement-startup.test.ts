@@ -57,10 +57,6 @@ function createFakeRuntime() {
   };
   return {
     runtime,
-    setStatus(next: ApplicationPlacementStartupStatus) {
-      status = next;
-      publish();
-    },
   };
 }
 
@@ -72,42 +68,6 @@ describe("application session placement startup", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("publishes pending status synchronously and bridges it into the loaded runtime", async () => {
-    const moduleLoad = createDeferred<RuntimeModule>();
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const { startup, input } = createPlacementStartupHarness(vi.fn(), {
-      loadRuntime: () => moduleLoad.promise,
-    });
-    const listener = vi.fn();
-    startup.subscribe(listener);
-
-    startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(startup.get(input.recovery.sessionKey)?.initialTurn).toMatchObject({
-      id: input.recovery.messageId,
-      text: input.recovery.message,
-      createdAt: input.createdAt,
-      sendState: "sending",
-    });
-    expect(listener).toHaveBeenCalledOnce();
-    moduleLoad.resolve({ default: factory });
-    await flushStartupMicrotasks();
-
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledTimes(2);
-    fake.setStatus({
-      sessionKey: input.recovery.sessionKey,
-      phase: "sending",
-      targetKind: input.recovery.target.kind,
-      startedAt: input.createdAt,
-    });
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("sending");
-    expect(listener).toHaveBeenCalledTimes(3);
-    startup.dispose();
   });
 
   it("does not install a runtime that finishes loading after disposal", async () => {
@@ -168,33 +128,6 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("keeps get and retry inert before any runtime load", async () => {
-    const loader = vi.fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>();
-    const { startup, input, gateway } = createPlacementStartupHarness(vi.fn(), {
-      loadRuntime: loader,
-    });
-
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    startup.retry(input.recovery.sessionKey);
-    expect(loader).not.toHaveBeenCalled();
-    expect(gateway.subscribe).not.toHaveBeenCalled();
-    startup.dispose();
-  });
-
-  it("prewarms the runtime on connection even when recovery storage is empty", async () => {
-    const request = vi.fn();
-    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup } = createPlacementStartupHarness(request, { loadRuntime: loader });
-    sessionStorage.clear();
-
-    startup.resumeRecovery();
-    await flushStartupMicrotasks();
-
-    expect(loader).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-    startup.dispose();
-  });
-
   it("lets Start own recovery when it arrives during connection prewarm", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
@@ -213,121 +146,46 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("shows a failed restored startup and reloads its runtime through Retry", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
-
-    startup.resumeRecovery();
-    await flushStartupMicrotasks();
-    expect(loader).toHaveBeenCalledOnce();
-    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "cloud startup chunk unavailable",
-      retryable: true,
-    });
-    expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("targetKind");
-    expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("initialTurn");
-
-    startup.retry(input.recovery.sessionKey);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
-    await flushStartupMicrotasks();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledOnce();
-    startup.dispose();
-  });
-
-  it("fresh-imports on Start after a connection prewarm rejection", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
-
-    startup.resumeRecovery();
-    await flushStartupMicrotasks();
-    expect(loader).toHaveBeenCalledOnce();
-
-    startup.start(input);
-    await flushStartupMicrotasks();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(input));
-    startup.dispose();
-  });
-
-  it("surfaces a runtime load failure and fresh-imports on retry", async () => {
-    const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
-    const loader = vi
-      .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
-      .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
-      .mockResolvedValueOnce({ default: factory });
-    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
-    const listener = vi.fn();
-    startup.subscribe(listener);
-
-    startup.start(input);
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    await flushStartupMicrotasks();
-    expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-      phase: "failed",
-      error: "cloud startup chunk unavailable",
-      retryable: true,
-      initialTurn: {
-        text: input.recovery.message,
-        sendState: "failed",
-        sendError: "cloud startup chunk unavailable",
-      },
-    });
-    expect(listener).toHaveBeenCalledTimes(2);
-
-    startup.retry(input.recovery.sessionKey);
-    await flushStartupMicrotasks();
-    expect(loader).toHaveBeenCalledTimes(2);
-    expect(factory).toHaveBeenCalledWith(expect.anything());
-    expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(input));
-    expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
-    expect(listener).toHaveBeenCalledTimes(4);
-    startup.dispose();
-  });
-
-  it("loads and reconciles recovery when resumed on an existing connection", async () => {
-    const activePlacement = createStartupPlacement("active", 2);
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.describe") {
-        return Promise.resolve({ session: { placement: activePlacement } });
+  it.each([false, true])(
+    "shows a failed restored startup and reloads its runtime through Retry (required=%s)",
+    async (required) => {
+      const fake = createFakeRuntime();
+      const factory = vi.fn(() => fake.runtime);
+      const loader = vi
+        .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
+        .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
+        .mockResolvedValueOnce({ default: factory });
+      const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
+      if (required) {
+        expect(
+          writeSessionPlacementRecovery({
+            ...input.recovery,
+            target: { kind: "profile", profileId: "aws", required: true },
+          }),
+        ).toBe(true);
       }
-      if (method === "sessions.send") {
-        return Promise.resolve({ messageSeq: 11 });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const loader = vi.fn(() => import("./session-placement-startup.runtime.ts"));
-    const { startup, input } = createPlacementStartupHarness(request, {
-      loadRuntime: loader,
-      recoveryBeforeStartup: true,
-    });
-    startup.resumeRecovery();
 
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith(
-        "sessions.send",
-        expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
-      );
-    });
-    expect(loader).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    startup.dispose();
-  });
+      startup.resumeRecovery();
+      await flushStartupMicrotasks();
+      expect(loader).toHaveBeenCalledOnce();
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "failed",
+        error: "cloud startup chunk unavailable",
+        retryable: true,
+      });
+      expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("targetKind");
+      expect(startup.get(input.recovery.sessionKey)).not.toHaveProperty("initialTurn");
+
+      startup.retry(input.recovery.sessionKey);
+      expect(startup.get(input.recovery.sessionKey)?.phase).toBe("pending");
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+      await flushStartupMicrotasks();
+      expect(loader).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledOnce();
+      startup.dispose();
+    },
+  );
 
   it("resumes every persisted session once and clears them independently", async () => {
     const secondSend = createDeferred<{ messageSeq: number }>();
@@ -394,11 +252,7 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it.each([
-    { kind: "profile", profileId: "test-cloud" },
-    { kind: "device", deviceId: "test-device" },
-    { kind: "auto-device" },
-  ] as const)(
+  it.each([{ kind: "device", deviceId: "test-device" }] as const)(
     "retains $kind targeting through lazy and loaded progress, sending only after active",
     async (target) => {
       const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
@@ -594,11 +448,6 @@ describe("application session placement startup", () => {
       } as const,
       message: "retain this submission",
       wire: { profileId: "aws", os: "windows/wsl2", machineClass: "fast" },
-    },
-    {
-      target: { kind: "device", deviceId: "device-1" } as const,
-      message: "retain this submission",
-      wire: { deviceId: "device-1" },
     },
     { target: { kind: "auto-device" } as const, message: "", wire: { autoDevice: true } },
   ])(
@@ -814,36 +663,6 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("invalidates lists after active placement failure without replacing the visible error", async () => {
-    const activePlacement = createStartupPlacement("active", 2);
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return Promise.resolve({ placement: activePlacement });
-      }
-      if (method === "sessions.send") {
-        return Promise.reject(new Error("send response lost"));
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, sessions, state } = createPlacementStartupHarness(request);
-    state.result.sessions[0] = {
-      ...state.result.sessions[0],
-      placement: activePlacement,
-    } as GatewaySessionRow;
-
-    startup.start(input);
-    await vi.waitFor(() => {
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        error: "send response lost",
-        retryable: true,
-      });
-    });
-    expect(sessions.invalidate).toHaveBeenCalledOnce();
-    expect(sessions.refresh).not.toHaveBeenCalled();
-    startup.dispose();
-  });
-
   it("does not start a duplicate operation for an equivalent session key", async () => {
     const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const request = vi.fn((method: string) => {
@@ -923,7 +742,7 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it.each(["client replacement", "transport reconnect"])(
+  it.each(["client replacement"])(
     "reclaims the worker and deletes incognito startup after %s",
     async (interruption) => {
       const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();

@@ -1,4 +1,5 @@
 import type { Locator } from "playwright";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 
 type HistoryPaginationSample = {
   marks: {
@@ -36,20 +37,19 @@ export async function installHistoryPaginationProbe(
   messageCount: number,
   targetSessionKey: string,
 ) {
-  await paneLocator.evaluate(
-    (element, { count, sessionKey }) => {
+  const applicationHandle = await getControlUiContextHandle(paneLocator.page());
+  const installation = paneLocator.evaluate(
+    (element, { application, count, sessionKey }) => {
       const pane = element as HTMLElement & {
         state: { chatMessages: unknown[] };
         loadingOlder: boolean;
-        requestUpdate: (...args: unknown[]) => void;
+        render: (...args: unknown[]) => unknown;
         updateComplete: Promise<boolean>;
       };
-      const app = document.querySelector("openclaw-app") as HTMLElement & {
-        context: {
-          gateway: { snapshot: { client: { request: (...args: unknown[]) => Promise<unknown> } } };
-        };
-      };
-      const client = app.context.gateway.snapshot.client;
+      const client = application.gateway.snapshot.client;
+      if (!client) {
+        throw new Error("History pagination probe has no connected Gateway client");
+      }
       const thread = pane.querySelector<HTMLElement>(".chat-thread")!;
       const sample: HistoryPaginationSample = {
         marks: { armed: performance.now() },
@@ -111,8 +111,8 @@ export async function installHistoryPaginationProbe(
         }
       });
       observer.observe({ type: "longtask" });
-      const originalRequest = client.request;
-      client.request = function (...args) {
+      const originalRequest = client.request.bind(client);
+      client.request = function <T>(...args: Parameters<typeof originalRequest>) {
         const params = args[1] as { sessionKey?: string; offset?: number } | undefined;
         const selected =
           args[0] === "chat.history" &&
@@ -121,7 +121,7 @@ export async function installHistoryPaginationProbe(
         if (selected) {
           sample.marks.request ??= performance.now();
         }
-        const promise = originalRequest.apply(this, args);
+        const promise = originalRequest<T>(...args);
         if (selected) {
           void promise.then(
             () => {
@@ -134,15 +134,17 @@ export async function installHistoryPaginationProbe(
         }
         return promise;
       };
-      const originalUpdate = pane.requestUpdate;
-      pane.requestUpdate = function (...args) {
-        originalUpdate.apply(this, args);
+      const originalRender = pane.render;
+      pane.render = function (...args) {
+        const result = originalRender.apply(this, args);
+        // Sample publication when the pane consumes the history, then fence its DOM commit.
         if (pane.state.chatMessages.length >= count && sample.marks.published === undefined) {
           sample.marks.published = performance.now();
           void pane.updateComplete.then(() => {
             sample.marks.paneUpdateComplete = performance.now();
           });
         }
+        return result;
       };
       const wheel = () => {
         sample.marks.wheel ??= performance.now();
@@ -212,13 +214,18 @@ export async function installHistoryPaginationProbe(
           mutations.disconnect();
           resize.disconnect();
           client.request = originalRequest;
-          pane.requestUpdate = originalUpdate;
+          pane.render = originalRender;
           thread.removeEventListener("wheel", wheel, true);
           thread.removeEventListener("scroll", scrolled);
           return sample;
         },
       };
     },
-    { count: messageCount, sessionKey: targetSessionKey },
+    { application: applicationHandle, count: messageCount, sessionKey: targetSessionKey },
   );
+  try {
+    await installation;
+  } finally {
+    await applicationHandle.dispose();
+  }
 }

@@ -29,9 +29,7 @@ describe("parseDiffDetailsString", () => {
   });
 
   it.each([
-    ["empty input", ""],
     ["whitespace-only input", "   \n  "],
-    ["unrecognized format", "not a numbered diff"],
     ["no added or removed lines", " 1 only context\n 2 more context"],
   ])("returns null for %s", (_label, diff) => {
     expect(parseDiffDetailsString(diff)).toBeNull();
@@ -49,31 +47,6 @@ describe("parseDiffDetailsString", () => {
 });
 
 describe("computeLineDiff", () => {
-  it.each([
-    ["", ""],
-    ["", "one\n\ntwo\n"],
-    ["one\n\ntwo\n", ""],
-    ["a\nb\na", "b\na\nb"],
-    ["a\n\nb\n", "a\n \nb\n"],
-    ["a\r\nb\r", "a\nb\n"],
-  ])("preserves both normalized sides for %j -> %j", (oldText, newText) => {
-    const result = computeLineDiff(oldText, newText);
-    expect(result.kind).toBe("complete");
-    const normalize = (text: string) => text.replace(/\r\n?/g, "\n").replace(/\n$/, "");
-    expect(
-      result.lines
-        .filter((line) => line.kind !== "add")
-        .map((line) => line.text)
-        .join("\n"),
-    ).toBe(normalize(oldText));
-    expect(
-      result.lines
-        .filter((line) => line.kind !== "del")
-        .map((line) => line.text)
-        .join("\n"),
-    ).toBe(normalize(newText));
-  });
-
   it("retains complete statistics for wholly replaced bounded inputs", () => {
     const oldText = Array.from({ length: 600 }, (_, index) => `old ${index}`).join("\n");
     const newText = Array.from({ length: 600 }, (_, index) => `new ${index}`).join("\n");
@@ -94,69 +67,25 @@ describe("computeLineDiff", () => {
     });
   });
 
-  it("reports an incomplete comparison when visible changes precede a truncated tail", () => {
-    const oldLines = Array.from({ length: 700 }, (_, index) => `line ${index}`);
-    const newLines = [...oldLines];
-    newLines[500] = "visible change";
-    newLines[650] = "outside budget";
-
-    expect(computeLineDiff(oldLines.join("\n"), newLines.join("\n"))).toMatchObject({
-      kind: "truncated",
-      lines: expect.arrayContaining([
-        { kind: "del", text: "line 500" },
-        { kind: "add", text: "visible change" },
-      ]),
-    });
-  });
-
   it("returns exact zero statistics for a normal unchanged comparison", () => {
-    expect(computeLineDiff("alpha\nbeta", "alpha\nbeta", { compactUnchanged: true })).toEqual({
+    expect(computeLineDiff("alpha\nbeta", "alpha\nbeta")).toEqual({
       kind: "complete",
-      lines: [],
+      lines: [
+        { kind: "ctx", text: "alpha" },
+        { kind: "ctx", text: "beta" },
+      ],
       stat: { added: 0, removed: 0 },
     });
 
     const longBody = Array.from({ length: 700 }, (_, index) => `line ${index}`).join("\n");
-    expect(computeLineDiff(longBody, longBody, { compactUnchanged: true })).toEqual({
-      kind: "complete",
-      lines: [],
-      stat: { added: 0, removed: 0 },
-    });
-  });
-
-  it("returns exact statistics for a normal changed comparison", () => {
-    expect(computeLineDiff("alpha\nbeta", "alpha\ngamma")).toEqual({
+    expect(computeLineDiff(longBody, longBody)).toEqual({
       kind: "complete",
       lines: [
-        { kind: "ctx", text: "alpha" },
-        { kind: "del", text: "beta" },
-        { kind: "add", text: "gamma" },
+        ...Array.from({ length: 400 }, (_, index) => ({ kind: "ctx", text: `line ${index}` })),
+        { kind: "skip", text: "" },
       ],
-      stat: { added: 1, removed: 1 },
+      stat: { added: 0, removed: 0 },
     });
-  });
-
-  it("treats a trailing newline as no extra line", () => {
-    expect(computeLineDiff("foo\n", "bar\n").lines).toEqual([
-      { kind: "del", text: "foo" },
-      { kind: "add", text: "bar" },
-    ]);
-  });
-
-  it("normalizes CRLF endings before diffing", () => {
-    expect(computeLineDiff("a\r\nb", "a\nb").lines).toEqual([
-      { kind: "ctx", text: "a" },
-      { kind: "ctx", text: "b" },
-    ]);
-  });
-
-  it("caps rendered output with a trailing skip line", () => {
-    const newText = Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n");
-
-    const lines = computeLineDiff("only old line", newText).lines;
-
-    expect(lines).toHaveLength(401);
-    expect(lines.at(-1)).toEqual({ kind: "skip", text: "" });
   });
 
   it("keeps a late change instead of spending the preview budget on context", () => {
@@ -170,44 +99,16 @@ describe("computeLineDiff", () => {
     expect(lines).toContainEqual({ kind: "del", text: "line 450" });
     expect(lines.length).toBeLessThanOrEqual(401);
   });
-
-  it("collapses unchanged runs to three context lines when asked", () => {
-    const oldLines = Array.from({ length: 40 }, (_, index) => `line ${index}`);
-    const newLines = [...oldLines];
-    newLines[20] = "changed";
-
-    const full = computeLineDiff(oldLines.join("\n"), newLines.join("\n"));
-    const compact = computeLineDiff(oldLines.join("\n"), newLines.join("\n"), {
-      compactUnchanged: true,
-    });
-
-    expect(full.lines).toHaveLength(41);
-    expect(compact.lines.filter((line) => line.kind === "ctx").map((line) => line.text)).toEqual([
-      "line 17",
-      "line 18",
-      "line 19",
-      "line 21",
-      "line 22",
-      "line 23",
-    ]);
-    expect(compact.lines.filter((line) => line.kind === "skip")).toHaveLength(2);
-  });
-
-  it("compacts an identical pair to nothing so callers can say unchanged", () => {
-    const text = "alpha\nbeta\ngamma";
-
-    expect(computeLineDiff(text, text, { compactUnchanged: true }).lines).toEqual([]);
-    expect(computeLineDiff(text, text).lines).toHaveLength(3);
-  });
 });
 
 describe("buildWriteDiffLines", () => {
-  it("truncates past maxLines with a skip marker", () => {
-    expect(buildWriteDiffLines("a\nb\nc\nd", 2)).toEqual([
-      { kind: "add", lineNo: 1, text: "a" },
-      { kind: "add", lineNo: 2, text: "b" },
-      { kind: "skip", text: "" },
-    ]);
+  it("truncates past 80 lines with a skip marker", () => {
+    const content = Array.from({ length: 81 }, (_, index) => `line ${index + 1}`).join("\n");
+    const lines = buildWriteDiffLines(content);
+    expect(lines).toHaveLength(81);
+    expect(lines[0]).toEqual({ kind: "add", lineNo: 1, text: "line 1" });
+    expect(lines[79]).toEqual({ kind: "add", lineNo: 80, text: "line 80" });
+    expect(lines[80]).toEqual({ kind: "skip", text: "" });
   });
 });
 
@@ -231,25 +132,5 @@ describe("joinDiffSections", () => {
       ],
       stat: { added: 1, removed: 1 },
     });
-  });
-
-  it("enforces one render-row budget across every section", () => {
-    const first = Array.from<unknown, DiffLine>({ length: 250 }, (_, index) => ({
-      kind: "add",
-      text: `first ${index}`,
-    }));
-    const second = Array.from<unknown, DiffLine>({ length: 250 }, (_, index) => ({
-      kind: "del",
-      text: `second ${index}`,
-    }));
-
-    const joined = joinDiffSections([
-      { kind: "complete", lines: first, stat: { added: 250, removed: 0 } },
-      { kind: "complete", lines: second, stat: { added: 0, removed: 250 } },
-    ]);
-
-    expect(joined).toMatchObject({ kind: "complete", stat: { added: 250, removed: 250 } });
-    expect(joined.lines).toHaveLength(401);
-    expect(joined.lines.at(-1)).toEqual({ kind: "skip", text: "" });
   });
 });

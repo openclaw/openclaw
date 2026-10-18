@@ -61,19 +61,6 @@ export function isSlackStreamingEnabled(params: {
   return false;
 }
 
-export function resolveSlackDisableBlockStreaming(params: {
-  useStreaming: boolean;
-  shouldUseDraftStream: boolean;
-  blockStreamingEnabled: boolean | undefined;
-}): boolean | undefined {
-  if (params.useStreaming || params.shouldUseDraftStream) {
-    return true;
-  }
-  return typeof params.blockStreamingEnabled === "boolean"
-    ? !params.blockStreamingEnabled
-    : undefined;
-}
-
 export function resolveExplicitSlackProgressTitle(
   entry: Parameters<typeof resolveChannelProgressDraftConfig>[0],
 ): string | undefined {
@@ -160,34 +147,6 @@ export function buildSlackEventDeliveryKey(
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,
   });
-}
-
-export function createSlackEventDeliveryTracker() {
-  const deliveredKeys = new Set<string>();
-  return {
-    hasDelivered(key: string | null) {
-      return key ? deliveredKeys.has(key) : false;
-    },
-    markDelivered(key: string | null) {
-      if (key) {
-        deliveredKeys.add(key);
-      }
-    },
-  };
-}
-
-export function shouldUseStreaming(params: {
-  streamingEnabled: boolean;
-  threadTs: string | undefined;
-}): boolean {
-  if (!params.streamingEnabled) {
-    return false;
-  }
-  if (!params.threadTs) {
-    logVerbose("slack-stream: streaming disabled — no reply thread target available");
-    return false;
-  }
-  return true;
 }
 
 export async function resolveSlackStreamRecipientTeamId(params: {

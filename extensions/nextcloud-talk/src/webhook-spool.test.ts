@@ -7,8 +7,15 @@ import {
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
-import { migrateNextcloudTalkLegacyReplayState } from "./webhook-spool-state.js";
+import {
+  createFileSharedActivityBody,
+  createSignedCreateMessageRequest,
+  createVoiceMessageActivityBody,
+} from "./monitor.test-fixtures.js";
+import {
+  migrateNextcloudTalkLegacyReplayState,
+  parseNextcloudTalkFileSharedActivity,
+} from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
 type NextcloudTalkIngressQueue = NonNullable<
@@ -46,6 +53,17 @@ function startSpool(
   });
 }
 
+async function withSpool(
+  spool: ReturnType<typeof startSpool>,
+  run: (spool: ReturnType<typeof startSpool>) => Promise<void>,
+): Promise<void> {
+  try {
+    await run(spool);
+  } finally {
+    await spool.stop();
+  }
+}
+
 async function withQueue<T>(fn: (queue: NextcloudTalkIngressQueue) => Promise<T>): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-ingress-"));
   const stateDir = await fs.realpath(created);
@@ -68,32 +86,17 @@ afterEach(() => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
-  it("does not start draining when migration completes after stop begins", async () => {
-    await withQueue(async (queue) => {
-      let releaseEntries: (() => void) | undefined;
-      const entries = vi.fn(
-        () =>
-          new Promise<[]>((resolve) => {
-            releaseEntries = () => resolve([]);
-          }),
-      );
-      const prune = vi.spyOn(queue, "prune");
-      const spool = createNextcloudTalkWebhookSpool({
-        accountId: "default",
-        queue,
-        deliver: vi.fn(),
-        runtime: { error: vi.fn(), log: vi.fn() },
-        pollIntervalMs: 60_000,
-        legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
-      });
-
-      const stopping = spool.stop();
-      await vi.waitFor(() => expect(entries).toHaveBeenCalledTimes(1));
-      releaseEntries?.();
-      await stopping;
-
-      expect(prune).not.toHaveBeenCalled();
-    });
+  it("accepts file metadata without the optional hide-download flag", () => {
+    const body = createFileSharedActivityBody();
+    const envelope = JSON.parse(body) as { object: { content: string } };
+    const content = JSON.parse(envelope.object.content) as {
+      parameters: { file: Record<string, unknown> };
+    };
+    delete content.parameters.file["hide-download"];
+    envelope.object.content = JSON.stringify(content);
+    expect(parseNextcloudTalkFileSharedActivity(envelope as Record<string, unknown>)).toEqual(
+      expect.objectContaining({ attachment: expect.objectContaining({ hideDownload: false }) }),
+    );
   });
 
   it("finishes durable admission for a receive that began before migration-time stop", async () => {
@@ -106,6 +109,7 @@ describe("Nextcloud Talk durable ingress", () => {
           }),
       );
       const deliver = vi.fn();
+      const prune = vi.spyOn(queue, "prune");
       const spool = createNextcloudTalkWebhookSpool({
         accountId: "default",
         queue,
@@ -122,6 +126,7 @@ describe("Nextcloud Talk durable ingress", () => {
 
       await expect(receiving).resolves.toBe("accepted");
       await stopping;
+      expect(prune).not.toHaveBeenCalled();
       expect(deliver).not.toHaveBeenCalled();
       expect(await queue.listPending({ limit: "all" })).toHaveLength(1);
     });
@@ -151,13 +156,10 @@ describe("Nextcloud Talk durable ingress", () => {
         enqueue: vi.fn().mockRejectedValue(appendError),
       } satisfies NextcloudTalkIngressQueue;
       const deliver = vi.fn();
-      const spool = startSpool(failingQueue, deliver);
-      try {
+      await withSpool(startSpool(failingQueue, deliver), async (spool) => {
         await expect(spool.receive(createRawEvent())).rejects.toBe(appendError);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 
@@ -181,26 +183,6 @@ describe("Nextcloud Talk durable ingress", () => {
         expect(recoveredDeliver).toHaveBeenCalledTimes(1);
       } finally {
         await recovered.stop();
-      }
-    });
-  });
-
-  it("preserves the retired room-token plus message-id guard scenario", async () => {
-    await withQueue(async (queue) => {
-      const delivered: Array<[messageId: string, roomId: string]> = [];
-      const spool = startSpool(queue, async (message, lifecycle) => {
-        delivered.push([message.messageId, message.roomToken]);
-        await lifecycle.onAdopted();
-      });
-      try {
-        const replay = createRawEvent({ messageId: "msg-guard", roomToken: "test-room-token" });
-        await spool.receive(replay);
-        await spool.waitForIdle();
-        await spool.receive(replay);
-        await spool.waitForIdle();
-        expect(delivered).toEqual([["msg-guard", "test-room-token"]]);
-      } finally {
-        await spool.stop();
       }
     });
   });
@@ -309,39 +291,49 @@ describe("Nextcloud Talk durable ingress", () => {
   it("stores the exact raw envelope in the room lane", async () => {
     await withQueue(async (queue) => {
       const rawEvent = createRawEvent({ messageId: "msg-raw", roomToken: "test-room-token" });
-      const spool = startSpool(queue, async (_message, lifecycle) => {
-        lifecycle.onDeferred();
-      });
-      try {
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({
-            id: "msg-raw",
-            laneKey: "room:test-room-token",
-            payload: expect.objectContaining({ rawEvent }),
-          }),
-        ]);
-      } finally {
-        await spool.stop();
-      }
+      await withSpool(
+        startSpool(queue, async (_message, lifecycle) => {
+          lifecycle.onDeferred();
+        }),
+        async (spool) => {
+          await spool.receive(rawEvent);
+          await spool.waitForIdle();
+          expect(await queue.listClaims()).toEqual([
+            expect.objectContaining({
+              id: "msg-raw",
+              laneKey: "room:test-room-token",
+              payload: expect.objectContaining({ rawEvent }),
+            }),
+          ]);
+        },
+      );
     });
   });
 
-  it("completes a gated turn that does not dispatch", async () => {
+  it("continues delivering ordinary Create Note text messages", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async () => {});
-      const spool = startSpool(queue, deliver);
-      try {
-        const rawEvent = createRawEvent({ messageId: "msg-gated" });
-        await spool.receive(rawEvent);
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(
+          spool.receive(
+            createRawEvent({
+              messageId: "msg-text-regression",
+              roomToken: "room-text-regression",
+              text: "ordinary text",
+            }),
+          ),
+        ).resolves.toBe("accepted");
         await spool.waitForIdle();
-        await spool.receive(rawEvent);
-        await spool.waitForIdle();
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await spool.stop();
-      }
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "msg-text-regression",
+            roomToken: "room-text-regression",
+            text: "ordinary text",
+            mediaType: "text/plain",
+          }),
+          expect.any(Object),
+        );
+      });
     });
   });
 
@@ -352,8 +344,7 @@ describe("Nextcloud Talk durable ingress", () => {
         lifecycle.onAdoptionFinalizing();
         adopt = lifecycle.onAdopted;
       });
-      const spool = startSpool(queue, deliver);
-      try {
+      await withSpool(startSpool(queue, deliver), async (spool) => {
         const rawEvent = createRawEvent({ messageId: "msg-finalizing" });
         await spool.receive(rawEvent);
         await spool.waitForIdle();
@@ -366,9 +357,256 @@ describe("Nextcloud Talk durable ingress", () => {
         await spool.receive(rawEvent);
         await spool.waitForIdle();
         expect(deliver).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("rejects a duplicate file_shared activity after completion", async () => {
+    await withQueue(async (queue) => {
+      const body = createFileSharedActivityBody();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            attachment: expect.objectContaining({ fileId: "9001" }),
+          }),
+          expect.any(Object),
+        );
+      });
+    });
+  });
+
+  it("replays an interrupted file_shared activity in its original room lane", async () => {
+    await withQueue(async (queue) => {
+      const body = createFileSharedActivityBody();
+      const interruptedDeliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      const interrupted = startSpool(queue, interruptedDeliver);
+      await interrupted.receive(body);
+      await interrupted.waitForIdle();
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({
+          id: "4242",
+          laneKey: "room:redacted-room-token",
+        }),
+      ]);
+      await interrupted.stop();
+
+      const recoveredDeliver = vi.fn(async (_message, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      const recovered = startSpool(queue, recoveredDeliver);
+      try {
+        await recovered.waitForIdle();
+        expect(recoveredDeliver).toHaveBeenCalledTimes(1);
+        expect(recoveredDeliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            attachment: expect.objectContaining({ fileId: "9001" }),
+          }),
+          expect.any(Object),
+        );
       } finally {
-        await spool.stop();
+        await recovered.stop();
       }
+    });
+  });
+
+  it("durably admits Talk file_shared activities", async () => {
+    await withQueue(async (queue) => {
+      const body = createFileSharedActivityBody();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "4242",
+            laneKey: "room:redacted-room-token",
+            payload: expect.objectContaining({ rawEvent: body }),
+          }),
+        ]);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4242",
+            roomToken: "redacted-room-token",
+            roomName: "Receipts",
+            senderId: "users/alice",
+            senderName: "Alice",
+            text: "@openclaw please inspect this receipt",
+            timestamp: expect.any(Number),
+            attachment: {
+              fileId: "9001",
+              name: "receipt.pdf",
+              mimeType: "application/pdf",
+              declaredSizeBytes: 24_576,
+              shareUrl: "https://nextcloud.example/s/redacted-share-token",
+              hideDownload: false,
+            },
+          }),
+          expect.any(Object),
+        );
+      });
+    });
+  });
+
+  it("admits a Talk file share with a numeric byte size", async () => {
+    await withQueue(async (queue) => {
+      const body = createFileSharedActivityBody({ fileSize: 1_234_567 });
+      const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
+          }),
+          expect.any(Object),
+        );
+      });
+    });
+  });
+
+  it("durably admits canonical native Talk voice-message activities", async () => {
+    await withQueue(async (queue) => {
+      const body = createVoiceMessageActivityBody();
+      const deliver = vi.fn(async (_message, lifecycle) => {
+        lifecycle.onDeferred();
+      });
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "4250",
+            laneKey: "room:redacted-room-token",
+            payload: expect.objectContaining({ rawEvent: body }),
+          }),
+        ]);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4250",
+            roomToken: "redacted-room-token",
+            roomName: "Voice notes",
+            senderId: "users/alice",
+            senderName: "Alice",
+            text: "",
+            attachment: {
+              fileId: "9010",
+              name: "voice-note.wav",
+              mimeType: "audio/wav",
+              declaredSizeBytes: 557_804,
+              shareUrl: "https://nextcloud.example/s/redacted-voice-share-token",
+              hideDownload: false,
+            },
+          }),
+          expect.any(Object),
+        );
+      });
+    });
+  });
+
+  it("bounds malformed file metadata as an unavailable attachment", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as { object: { id: string; content: string } };
+      payload.object.id = "4245";
+      payload.object.content = JSON.stringify({
+        message: "{file}",
+        parameters: { file: { type: "file" } },
+      });
+      const body = JSON.stringify(payload);
+      const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        await expect(spool.receive(body)).resolves.toBe("accepted");
+        await spool.waitForIdle();
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliver).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId: "4245",
+            text: "",
+            attachmentIssue: "media_missing_metadata",
+          }),
+          expect.any(Object),
+        );
+        expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("attachment");
+      });
+    });
+  });
+
+  it("keeps malformed normal-message activities without a file parameter ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as { object: { id: string; content: string } };
+      payload.object.id = "4246";
+      payload.object.content = "{not-json";
+      const deliver = vi.fn();
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it("keeps unrelated Talk Activity events ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as {
+        object: { id: string; name: string; content: string };
+      };
+      payload.object.id = "4243";
+      payload.object.name = "participant_joined";
+      payload.object.content = JSON.stringify({
+        message: "Alice joined the conversation",
+        parameters: {},
+      });
+      const deliver = vi.fn();
+      const log = vi.fn();
+      await withSpool(startSpool(queue, deliver, log), async (spool) => {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Activity objectType=Note)",
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  it("keeps Talk object_shared activities ignored", async () => {
+    await withQueue(async (queue) => {
+      const fixture = createFileSharedActivityBody();
+      const payload = JSON.parse(fixture) as {
+        object: { id: string; name: string; content: string };
+      };
+      payload.object.id = "4244";
+      payload.object.name = "object_shared";
+      payload.object.content = JSON.stringify({
+        message: "{object}",
+        parameters: { object: { type: "deck-card", id: "redacted" } },
+      });
+      const deliver = vi.fn();
+      await withSpool(startSpool(queue, deliver), async (spool) => {
+        await expect(spool.receive(JSON.stringify(payload))).resolves.toBe("ignored");
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -376,8 +614,7 @@ describe("Nextcloud Talk durable ingress", () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
       const log = vi.fn();
-      const spool = startSpool(queue, deliver, log);
-      try {
+      await withSpool(startSpool(queue, deliver, log), async (spool) => {
         const fileShare = JSON.stringify({
           type: "Create",
           actor: { type: "Person", id: "alice", name: "Alice" },
@@ -396,9 +633,7 @@ describe("Nextcloud Talk durable ingress", () => {
         );
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(deliver).not.toHaveBeenCalled();
-      } finally {
-        await spool.stop();
-      }
+      });
     });
   });
 });

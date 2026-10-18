@@ -65,7 +65,9 @@ export function createGatewayStoreTestStore(
   params: {
     settings?: ReturnType<typeof loadSettings>;
     persistDefaultConnectionSettings?: boolean;
+    ownsWarmBoot?: boolean;
     resourceBasePath?: string;
+    getModelCatalogTarget?: () => GatewayBrowserClientOptions["modelCatalog"];
     clientOptions?: Pick<
       GatewayBrowserClientOptions,
       "clientName" | "mode" | "platform" | "deviceFamily" | "instanceId" | "scopes"
@@ -84,7 +86,9 @@ export function createGatewayStoreTestStore(
     },
     {
       persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
+      ownsWarmBoot: params.ownsWarmBoot,
       resourceBasePath: params.resourceBasePath,
+      getModelCatalogTarget: params.getModelCatalogTarget,
       clientOptions: params.clientOptions,
     },
   );

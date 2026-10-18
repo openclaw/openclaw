@@ -39,8 +39,6 @@ const enDesktop = {
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",
-    agentInputPaused:
-      "You control this desktop. Agent input is paused until you switch to view only.",
     audio: {
       unavailable: "Audio unavailable",
       setupUnavailable:
@@ -77,6 +75,7 @@ const enDesktop = {
     controlTaken: "Another operator took control",
     controlTakenBy: "{operator} took control",
     disconnected: "Desktop disconnected: {reason}",
+    disconnectedClean: "Desktop disconnected",
     closeCode: "connection closed with code {code}",
     unknownReason: "unknown reason",
     errors: {

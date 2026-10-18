@@ -1,8 +1,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import { indexFirstByKey } from "../../../src/shared/dedupe-by-key.ts";
+import { normalizeSessionSearchText } from "../../../src/shared/session-search-text.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
@@ -13,14 +14,13 @@ const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
 function sessionMetadataMatchRank(
   row: GatewaySessionRow,
   normalizedSearch: string,
+  titleSearch: string,
   label: string,
 ): number {
+  const titles = [label, row.label, row.subject, row.category];
   const fields = [
-    label,
+    ...titles,
     row.key,
-    row.label,
-    row.subject,
-    row.category,
     row.kind,
     row.model,
     row.modelProvider,
@@ -31,20 +31,23 @@ function sessionMetadataMatchRank(
   ]
     .map((value) => normalizeLowercaseStringOrEmpty(value))
     .filter(Boolean);
-  if (fields.some((field) => field === normalizedSearch)) {
+  const titleFields = titleSearch ? titles.map(normalizeSessionSearchText) : [];
+  if (
+    fields.some((field) => field === normalizedSearch) ||
+    titleFields.some((field) => field === titleSearch)
+  ) {
     return 3;
   }
-  if (fields.some((field) => field.startsWith(normalizedSearch))) {
+  if (
+    fields.some((field) => field.startsWith(normalizedSearch)) ||
+    titleFields.some((field) => field.startsWith(titleSearch))
+  ) {
     return 2;
   }
-  return fields.some((field) => field.includes(normalizedSearch)) ? 1 : 0;
-}
-
-function transcriptSearchSnippet(snippet: string): string {
-  const compact = snippet.replace(/\s+/gu, " ").trim();
-  return compact.length > SESSION_SEARCH_SNIPPET_MAX_CHARS
-    ? `${truncateUtf16Safe(compact, SESSION_SEARCH_SNIPPET_MAX_CHARS - 1)}…`
-    : compact;
+  return fields.some((field) => field.includes(normalizedSearch)) ||
+    titleFields.some((field) => field.includes(titleSearch))
+    ? 1
+    : 0;
 }
 
 export function buildCommandPaletteSessionItems(params: {
@@ -55,6 +58,7 @@ export function buildCommandPaletteSessionItems(params: {
 }): CommandPaletteItem[] {
   const { visibleRows, visibleKeys, transcriptResult } = params;
   const normalizedSearch = normalizeLowercaseStringOrEmpty(params.search);
+  const titleSearch = normalizeSessionSearchText(params.search);
   const transcriptHitByKey = indexFirstByKey(
     transcriptResult?.results ?? [],
     (hit) => hit.sessionKey,
@@ -68,7 +72,7 @@ export function buildCommandPaletteSessionItems(params: {
   return [...rowsByKey.values()]
     .map((row) => {
       const label = resolveSessionDisplayName(row.key, row);
-      const rawMetadataRank = sessionMetadataMatchRank(row, normalizedSearch, label);
+      const rawMetadataRank = sessionMetadataMatchRank(row, normalizedSearch, titleSearch, label);
       return {
         row,
         label,
@@ -99,7 +103,10 @@ export function buildCommandPaletteSessionItems(params: {
       // The server match floor affects ordering, not whether the local metadata matched.
       description:
         transcriptHit && rawMetadataRank === 0
-          ? transcriptSearchSnippet(transcriptHit.snippet)
+          ? clampText(
+              transcriptHit.snippet.replace(/\s+/gu, " ").trim(),
+              SESSION_SEARCH_SNIPPET_MAX_CHARS,
+            )
           : undefined,
     }));
 }

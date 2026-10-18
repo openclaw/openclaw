@@ -35,6 +35,7 @@ Quick `/acp` flow from chat:
   </Step>
   <Step title="Stop">
     `/acp cancel` (current turn) or `/acp close` (session + bindings).
+    Cancellation waits for the accepted turn and its runtime cleanup to settle.
   </Step>
 </Steps>
 

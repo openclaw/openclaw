@@ -1,33 +1,38 @@
-import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { WhatsAppQaScenarioImplementation } from "./whatsapp-live.contracts.js";
-import { sendWhatsAppQaMediaAndObserve } from "./whatsapp-live.media.js";
 import {
-  WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
-  WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
-  WHATSAPP_QA_ONE_PIXEL_PNG,
   callWhatsAppGatewayMessageAction,
   callWhatsAppGatewayPoll,
   callWhatsAppGatewaySend,
   callWhatsAppGatewaySendConcurrently,
+  writeWhatsAppQaWorkspaceFixture,
+} from "./whatsapp-live.gateway.js";
+import {
+  sendWhatsAppQaMediaAndObserve,
+  runWhatsAppOutboundMediaChecks,
+  WHATSAPP_QA_AUDIO_OGG_OPUS_MIME,
+  WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_MARKER,
+  WHATSAPP_QA_ONE_PIXEL_PNG,
   createWhatsAppQaAudioOggOpusBuffer,
   createWhatsAppQaPdfBuffer,
-  requireWhatsAppTriggerMessageId,
   runWhatsAppStructuredInboundChecks,
+} from "./whatsapp-live.media.js";
+import {
+  requireWhatsAppTriggerMessageId,
   waitForScenarioObservedMessage,
   waitForWhatsAppSutReactionToTrigger,
-  writeWhatsAppQaWorkspaceFixture,
-} from "./whatsapp-live.operations.js";
+} from "./whatsapp-live.observations.js";
+import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
 function createWhatsAppOutboundPollScenario(
   target: "dm" | "group",
 ): WhatsAppQaScenarioImplementation {
   const group = target === "group";
-  return {
+  return createWhatsAppMessageScenario({
     posture: "direct-gateway",
     ...(group ? { requiresGroupJid: true } : {}),
-    buildRun: () => {
-      const token = `WHATSAPP_QA_${group ? "GROUP_" : ""}OUTBOUND_POLL_${randomUUID().slice(0, 8).toUpperCase()}`;
+    marker: `WHATSAPP_QA_${group ? "GROUP_" : ""}OUTBOUND_POLL`,
+    buildRun: (token) => {
       const question = `${token} choose one`;
       return {
         afterReply: async (_reply, context) => {
@@ -47,57 +52,48 @@ function createWhatsAppOutboundPollScenario(
           });
           return `${group ? "group " : ""}poll observed with ${poll.poll?.options.length ?? 0} options`;
         },
-        configMode: "allowlist",
-        expectReply: true,
         input: `${group ? "openclawqa reply" : "Reply"} with only this exact marker before ${group ? "group " : ""}outbound poll check: ${token}`,
-        matchText: token,
         target,
       };
     },
-  };
+  });
 }
 
 export const whatsappCapabilityScenarios = {
-  whatsappQaOutboundDocumentPreservesFilenameScenario: {
+  whatsappQaOutboundDocumentPreservesFilenameScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
-    buildRun: () => {
-      const token = `WHATSAPP_QA_DOCUMENT_FILE_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
-            buffer: createWhatsAppQaPdfBuffer(),
-            fileName: `whatsapp-qa-report-${token}.pdf`,
-          });
-          const documentStartedAt = new Date();
-          await callWhatsAppGatewaySend(context, {
-            forceDocument: true,
-            label: "document-filename",
-            mediaUrl: documentPath,
-            message: `${token}_CAPTION`,
-          });
-          const document = await waitForScenarioObservedMessage(context, {
-            observedAfter: documentStartedAt,
-            match: (message) =>
-              message.kind === "media" &&
-              message.hasMedia === true &&
-              message.text.includes(`${token}_CAPTION`) &&
-              message.mediaFileName === `whatsapp-qa-report-${token}.pdf`,
-          });
-          return `document ${document.mediaFileName ?? "<missing filename>"} preserved`;
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker before document filename check: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_DOCUMENT_FILE",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) => {
+        const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
+          buffer: createWhatsAppQaPdfBuffer(),
+          fileName: `whatsapp-qa-report-${token}.pdf`,
+        });
+        const documentStartedAt = new Date();
+        await callWhatsAppGatewaySend(context, {
+          forceDocument: true,
+          label: "document-filename",
+          mediaUrl: documentPath,
+          message: `${token}_CAPTION`,
+        });
+        const document = await waitForScenarioObservedMessage(context, {
+          observedAfter: documentStartedAt,
+          match: (message) =>
+            message.kind === "media" &&
+            message.hasMedia === true &&
+            message.text.includes(`${token}_CAPTION`) &&
+            message.mediaFileName === `whatsapp-qa-report-${token}.pdf`,
+        });
+        return `document ${document.mediaFileName ?? "<missing filename>"} preserved`;
+      },
+      input: `Reply with only this exact marker before document filename check: ${token}`,
+    }),
+  }),
 
-  whatsappQaOutboundSendSerializationScenario: {
+  whatsappQaOutboundSendSerializationScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
-    buildRun: () => {
-      const token = `WHATSAPP_QA_SERIAL_SEND_${randomUUID().slice(0, 8).toUpperCase()}`;
+    marker: "WHATSAPP_QA_SERIAL_SEND",
+    buildRun: (token) => {
       const markers = Array.from({ length: 5 }, (_, index) => `${token}_${index + 1}`);
       return {
         afterReply: async (_reply, context) => {
@@ -119,145 +115,101 @@ export const whatsappCapabilityScenarios = {
           );
           return `gateway parallel send delivered ${markers.length}/${markers.length} messages`;
         },
-        configMode: "allowlist",
-        expectReply: true,
         input: `Reply with only this exact marker before parallel send checks: ${token}`,
-        matchText: token,
-        target: "dm",
       };
     },
-  },
+  }),
 
   whatsappQaOutboundPollScenario: createWhatsAppOutboundPollScenario("dm"),
 
-  whatsappQaGroupOutboundMediaScenario: {
+  whatsappQaGroupOutboundMediaScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
     requiresGroupJid: true,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_OUTBOUND_MEDIA_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const mediaRootToken = randomUUID().slice(0, 8);
-          const imagePath = await writeWhatsAppQaWorkspaceFixture(context, {
-            buffer: WHATSAPP_QA_ONE_PIXEL_PNG,
-            fileName: `whatsapp-qa-group-${mediaRootToken}.png`,
-          });
-          const documentPath = await writeWhatsAppQaWorkspaceFixture(context, {
-            buffer: createWhatsAppQaPdfBuffer(),
-            fileName: `whatsapp-qa-group-${mediaRootToken}.pdf`,
-          });
+    marker: "WHATSAPP_QA_GROUP_OUTBOUND_MEDIA",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) =>
+        await runWhatsAppOutboundMediaChecks(context, token, "group"),
+      input: `openclawqa reply with only this exact marker before group outbound media checks: ${token}`,
+      target: "group",
+    }),
+  }),
 
-          await sendWhatsAppQaMediaAndObserve(context, {
-            kind: "image",
-            label: "group-image",
-            mediaUrl: imagePath,
-            message: `${token}_IMAGE`,
-          });
-
-          await sendWhatsAppQaMediaAndObserve(context, {
-            kind: "document",
-            label: "group-document",
-            mediaUrl: documentPath,
-            message: `${token}_DOCUMENT`,
-          });
-          return "gateway send delivered image and document media to the group";
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `openclawqa reply with only this exact marker before group outbound media checks: ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
-  },
-
-  whatsappQaGroupOutboundAudioScenario: {
+  whatsappQaGroupOutboundAudioScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
     requiresGroupJid: true,
-    buildRun: () => {
-      const token = `WHATSAPP_QA_GROUP_OUTBOUND_AUDIO_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const audioPath = await writeWhatsAppQaWorkspaceFixture(context, {
-            buffer: createWhatsAppQaAudioOggOpusBuffer({ variant: "group-trigger" }),
-            fileName: `whatsapp-qa-group-audio-${token}.ogg`,
-          });
-          await sendWhatsAppQaMediaAndObserve(context, {
-            kind: "audio",
-            label: "group-audio",
-            mediaUrl: audioPath,
-            message: `${token}_AUDIO`,
-          });
-          return "gateway send delivered audio media to the group";
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `openclawqa reply with only this exact marker before group outbound audio check: ${token}`,
-        matchText: token,
-        target: "group",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_GROUP_OUTBOUND_AUDIO",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) => {
+        const audioPath = await writeWhatsAppQaWorkspaceFixture(context, {
+          buffer: createWhatsAppQaAudioOggOpusBuffer({ variant: "group-trigger" }),
+          fileName: `whatsapp-qa-group-audio-${token}.ogg`,
+        });
+        await sendWhatsAppQaMediaAndObserve(context, {
+          kind: "audio",
+          label: "group-audio",
+          mediaUrl: audioPath,
+          message: `${token}_AUDIO`,
+        });
+        return "gateway send delivered audio media to the group";
+      },
+      input: `openclawqa reply with only this exact marker before group outbound audio check: ${token}`,
+      target: "group",
+    }),
+  }),
 
   whatsappQaGroupOutboundPollScenario: createWhatsAppOutboundPollScenario("group"),
 
-  whatsappQaMessageActionsScenario: {
+  whatsappQaMessageActionsScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
     configOverrides: {
       actions: true,
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_ACTIONS_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const triggerMessageId = requireWhatsAppTriggerMessageId(context);
-          const reactionStartedAt = new Date();
-          await callWhatsAppGatewayMessageAction(context, {
-            action: "react",
-            label: "react",
-            params: {
-              emoji: "👍",
-              messageId: triggerMessageId,
-            },
-          });
-          await waitForWhatsAppSutReactionToTrigger(context, {
-            expectation: { emoji: "👍" },
-            observedAfter: reactionStartedAt,
-          });
+    marker: "WHATSAPP_QA_ACTIONS",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) => {
+        const triggerMessageId = requireWhatsAppTriggerMessageId(context);
+        const reactionStartedAt = new Date();
+        await callWhatsAppGatewayMessageAction(context, {
+          action: "react",
+          label: "react",
+          params: {
+            emoji: "👍",
+            messageId: triggerMessageId,
+          },
+        });
+        await waitForWhatsAppSutReactionToTrigger(context, {
+          expectation: { emoji: "👍" },
+          observedAfter: reactionStartedAt,
+        });
 
-          const uploadStartedAt = new Date();
-          await callWhatsAppGatewayMessageAction(context, {
-            action: "upload-file",
-            label: "upload-file",
-            params: {
-              buffer: WHATSAPP_QA_ONE_PIXEL_PNG.toString("base64"),
-              caption: `${token}_UPLOAD`,
-              contentType: "image/png",
-              filename: "whatsapp-qa-upload.png",
-            },
-          });
-          await waitForScenarioObservedMessage(context, {
-            observedAfter: uploadStartedAt,
-            match: (message) =>
-              message.kind === "media" &&
-              message.mediaType?.startsWith("image/") === true &&
-              message.text.includes(`${token}_UPLOAD`),
-          });
-          return "message.action react and upload-file observed";
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker before action checks: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+        const uploadStartedAt = new Date();
+        await callWhatsAppGatewayMessageAction(context, {
+          action: "upload-file",
+          label: "upload-file",
+          params: {
+            buffer: WHATSAPP_QA_ONE_PIXEL_PNG.toString("base64"),
+            caption: `${token}_UPLOAD`,
+            contentType: "image/png",
+            filename: "whatsapp-qa-upload.png",
+          },
+        });
+        await waitForScenarioObservedMessage(context, {
+          observedAfter: uploadStartedAt,
+          match: (message) =>
+            message.kind === "media" &&
+            message.mediaType?.startsWith("image/") === true &&
+            message.text.includes(`${token}_UPLOAD`),
+        });
+        return "message.action react and upload-file observed";
+      },
+      input: `Reply with only this exact marker before action checks: ${token}`,
+    }),
+  }),
 
-  whatsappQaInboundStructuredMessagesScenario: {
+  whatsappQaInboundStructuredMessagesScenario: createWhatsAppMessageScenario({
     posture: "user-path",
-    buildRun: () => {
-      const token = `WHATSAPP_QA_STRUCTURED_${randomUUID().slice(0, 8).toUpperCase()}`;
+    marker: "WHATSAPP_QA_STRUCTURED",
+    buildRun: (token) => {
       const locationToken = `${token}_LOCATION`;
       const contactToken = `${token}_CONTACT`;
       const stickerToken = `${token}_STICKER`;
@@ -301,8 +253,6 @@ export const whatsappCapabilityScenarios = {
           });
           return "document, location, contact, and sticker elicited replies";
         },
-        configMode: "allowlist",
-        expectReply: true,
         input:
           `When a later WhatsApp location message shows ${locationCoordinateText}, ` +
           `reply with only this WhatsApp location marker: ${locationToken}. ` +
@@ -311,11 +261,9 @@ export const whatsappCapabilityScenarios = {
           `When a later WhatsApp sticker message appears, ` +
           `reply with only this WhatsApp sticker marker: ${stickerToken}. ` +
           `Reply with only this exact marker before structured inbound checks: ${token}`,
-        matchText: token,
-        target: "dm",
       };
     },
-  },
+  }),
 
   whatsappQaGroupAudioGatingScenario: {
     posture: "user-path",

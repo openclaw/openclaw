@@ -6,6 +6,7 @@ import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-sup
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
+  controlUiBundledSettingsStorageKey,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   waitForControlUiRoute,
@@ -104,7 +105,7 @@ suite.define(() => {
     const recorded = await newRecordedPage(artifactDir, "routing");
     const { page } = recorded;
     try {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         ...workboardUi,
         methodResponses: {
           "config.get": configSnapshot(true),
@@ -118,9 +119,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       const headerGlyph = page.locator(".workboard-board-glyph--header openclaw-appearance-glyph");
-      await expect
-        .poll(() => headerGlyph.evaluate((element) => element.shadowRoot?.textContent ?? ""))
-        .toContain("⚙");
+      await expect.poll(() => headerGlyph.textContent()).toContain("⚙");
       await expect
         .poll(() => headerGlyph.evaluate((element) => getComputedStyle(element).color))
         .toBe("rgb(34, 197, 94)");
@@ -136,18 +135,41 @@ suite.define(() => {
       }
 
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      await sidebar
-        .locator("wa-dropdown.sidebar-more-menu")
-        .getByRole("menuitem", { name: "Edit pinned items" })
-        .click();
-      const customize = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const workboardEntry = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="plugin:workboard/workboard"]'),
+      });
+      await workboardEntry.getByRole("button", { name: "Pin", exact: true }).click();
+      const pinnedWorkboard = sidebar.locator(
+        '.sidebar-rail [data-sidebar-entry="plugin:workboard/workboard"]',
       );
-      await customize.getByRole("menuitemcheckbox", { name: /Operations/u }).click();
-      const pinnedBoard = sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a');
+      await pinnedWorkboard.getByRole("link", { name: "Workboard", exact: true }).waitFor();
+      expect(await pinnedWorkboard.locator(".nav-item__children, .nav-item--child").count()).toBe(
+        0,
+      );
+      const boardEntry = sidebar.locator(".sidebar-pages__entry").filter({
+        has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
+      });
+      await boardEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
+      await boardEntry.getByRole("button", { name: "Pin", exact: true }).click();
+      const pinnedBoard = sidebar.locator(
+        '.sidebar-rail [data-sidebar-entry="plugin:workboard/board-ops"] a',
+      );
       await pinnedBoard.waitFor();
       expect(await pinnedBoard.getAttribute("href")).toBe("/workboard/ops");
+      expect(
+        await boardEntry.getByRole("link", { name: "Operations", exact: true }).isVisible(),
+      ).toBe(true);
+      expect(await boardEntry.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(1);
+      await expect
+        .poll(() =>
+          page.evaluate((key) => {
+            const stored = JSON.parse(localStorage.getItem(key) ?? "{}");
+            return stored.railShortcuts;
+          }, controlUiBundledSettingsStorageKey(suite.server.baseUrl)),
+        )
+        .toContain("plugin:workboard/board-ops");
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(artifactDir, "02-pinned-board.png"),
@@ -165,8 +187,13 @@ suite.define(() => {
       expect(new URL(page.url()).searchParams.get("agent")).toBe("main");
 
       await page.reload();
-      await sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a').waitFor();
+      await pinnedBoard.waitFor();
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+      expect(await pinnedBoard.getAttribute("href")).toBe("/workboard/ops");
+      await pinnedWorkboard.getByRole("link", { name: "Workboard", exact: true }).waitFor();
+      expect(await pinnedWorkboard.locator(".nav-item__children, .nav-item--child").count()).toBe(
+        0,
+      );
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(artifactDir, "03-legacy-normalized-and-persisted.png"),
@@ -237,13 +264,13 @@ suite.define(() => {
         await expect
           .poll(() =>
             agentScope
-              .locator("wa-dropdown-item[data-agent-option]")
+              .locator(".agent-select__option[data-agent-option]")
               .filter({ hasText: "Main" })
               .evaluate((option) => option === document.activeElement),
           )
           .toBe(true);
         await agentScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
         await expect
@@ -254,15 +281,12 @@ suite.define(() => {
         await expect
           .poll(
             () =>
-              agentScope.locator("wa-dropdown").evaluate((dropdown) => {
-                const popup = dropdown.shadowRoot?.querySelector("wa-popup");
-                return {
-                  open: (dropdown as HTMLElement & { open: boolean }).open,
-                  popupActive: Boolean(
-                    (popup as (HTMLElement & { active: boolean }) | null)?.active,
-                  ),
-                };
-              }),
+              agentScope.evaluate((picker) => ({
+                open:
+                  picker.querySelector(".agent-select__trigger")?.getAttribute("aria-expanded") ===
+                  "true",
+                popupActive: picker.querySelector(".agent-select__menu")?.matches(":popover-open"),
+              })),
             { timeout: 5_000 },
           )
           .toEqual({ open: false, popupActive: false });
@@ -310,17 +334,14 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}apps`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar.locator(".sidebar-nav__head-action").click();
-        await sidebar
-          .locator("wa-dropdown.sidebar-more-menu")
-          .getByRole("menuitem", { name: "Edit pinned items" })
-          .click();
-        await sidebar
-          .locator("wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)")
-          .getByRole("menuitemcheckbox", { name: /Operations/u })
-          .click();
-        await page.keyboard.press("Escape");
-        const pinnedBoard = sidebar.locator('[data-sidebar-entry="plugin:workboard/board-ops"] a');
+        await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+        const boardEntry = sidebar.locator(".sidebar-pages__entry").filter({
+          has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
+        });
+        await boardEntry.getByRole("button", { name: "Pin", exact: true }).click();
+        const pinnedBoard = sidebar.locator(
+          '.sidebar-rail [data-sidebar-entry="plugin:workboard/board-ops"] a',
+        );
         await pinnedBoard.click();
         await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
         await page.getByRole("button", { name: /New card/u }).click();
@@ -354,7 +375,7 @@ suite.define(() => {
 
   it("hides Workboard navigation while the plugin is inactive", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         nativePlugins: [],
         methodResponses: {
           "config.get": configSnapshot(false),
@@ -364,16 +385,16 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      const moreMenu = sidebar.locator("wa-dropdown.sidebar-more-menu");
-      await moreMenu.waitFor();
-      expect(await moreMenu.getByText("Workboard", { exact: true }).count()).toBe(0);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const customize = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu)",
-      );
-      expect(await customize.getByText("Workboard", { exact: true }).count()).toBe(0);
-      expect(await customize.locator('[value^="plugin:workboard/"]').count()).toBe(0);
+      await gateway.waitForRequest("config.get");
+      await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+      const pages = sidebar.locator(".sidebar-pages");
+      await pages.waitFor();
+      expect(await pages.getByRole("link", { name: "Workboard", exact: true }).count()).toBe(0);
+      expect(await pages.locator('[data-sidebar-entry^="plugin:workboard/"]').count()).toBe(0);
+      expect(
+        await sidebar.locator('.sidebar-rail [data-sidebar-entry^="plugin:workboard/"]').count(),
+      ).toBe(0);
+      expect(await gateway.getRequests("workboard.boards.list")).toHaveLength(0);
     });
   });
 });

@@ -217,8 +217,18 @@ flow:
                         - expr: config.parentSessionKey
                         - afterEventCursor:
                             expr: parentBefore.eventCursor
+                    - call: readSessionToolActivity
+                      saveAs: initialActivity
+                      args:
+                        - ref: env
+                        - expr: config.parentSessionKey
+                        - afterEventCursor:
+                            expr: parentBefore.eventCursor
+                    - set: initialTools
+                      value:
+                        expr: "initialActivity.filter((activity) => activity.kind === 'tool')"
                     - assert:
-                        expr: "initialTurn.successfulToolCallCounts[execToolName] === 1 && Object.entries(initialTurn.assistantToolCallCounts).every(([name, count]) => count === 0 || name === execToolName) && initialTurn.finalText.trim() === `QA-PROCESS-STARTED-${attemptId}`"
+                        expr: "initialTools.length === 1 && initialTools[0].toolName === execToolName && initialTools[0].isError === false && initialTools[0].input?.command === execCommand && initialTools[0].input?.background === true && initialTools[0].result?.details?.status === 'running' && typeof initialTools[0].result.details.sessionId === 'string' && initialTools[0].result.details.sessionId.length > 0 && initialTurn.finalText.trim() === `QA-PROCESS-STARTED-${attemptId}`"
                         message:
                           expr: "`initial turn must start only one OpenClaw exec and then finish: ${JSON.stringify({ tools: initialTurn.assistantToolCallCounts, successfulTools: initialTurn.successfulToolCallCounts, finalText: initialTurn.finalText })}`"
                     - call: env.gateway.call

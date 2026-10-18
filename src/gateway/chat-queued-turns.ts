@@ -4,10 +4,13 @@
  *
  * Active runs stay in chatAbortControllers. Queued waits must NOT look like
  * active runs (projection, timeout ownership, terminal dedupe), but they must
- * remain abortable by authorized requesters after chat.send terminalizes.
+ * remain abortable by authorized requesters until their input is consumed.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import { hasFollowupSteeringReservation } from "../auto-reply/reply/queue/state.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import {
   resolveChatAbortDiagnosticReason,
   type ChatAbortDiagnosticReason,
@@ -47,6 +50,19 @@ export function isQueuedChatTurnForSession(
   );
 }
 
+/** Project follow-up placement without changing parked steering cancellation ownership. */
+export function isQueuedFollowupChatTurnForSession(
+  turns: QueuedChatTurnMap | undefined,
+  runId: string,
+  scope: Pick<QueuedChatTurnEntry, "sessionId" | "sessionKey" | "agentId">,
+): boolean {
+  const entry = turns?.get(runId);
+  return (
+    isQueuedChatTurnForSession(turns, runId, scope) &&
+    Boolean(entry && !hasFollowupSteeringReservation(entry.sessionKey, entry.controller.signal))
+  );
+}
+
 type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;
@@ -60,12 +76,6 @@ type RegisterQueuedChatTurnParams = {
   /** Record cancellation while the exact queued entry is still current. */
   onAborted?: (reason: ChatAbortDiagnosticReason) => void;
 };
-
-function resolveExactRunId(runId: string): string | undefined {
-  // chat.send idempotency keys are exact protocol identities. Trimming here
-  // would diverge from the active-run and dedupe registries.
-  return runId.length > 0 ? runId : undefined;
-}
 
 function createQueuedChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
   // Queued turns can outlive active registrations; their signal owns restart disposition.
@@ -94,11 +104,14 @@ function deleteQueuedChatTurnEntry(
     return false;
   }
   detachQueuedChatTurnAbortListener(entry);
-  return chatQueuedTurns.delete(runId);
+  chatQueuedTurns.delete(runId);
+  notifyGatewayWorkMetricsChanged();
+  return true;
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
-  const runId = resolveExactRunId(params.runId);
+  // Run IDs are exact idempotency keys shared with the active-run registry; never trim them.
+  const runId = params.runId;
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return false;
@@ -136,6 +149,7 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     }
   };
   params.controller.signal.addEventListener("abort", entry.abortListener, { once: true });
+  notifyGatewayWorkMetricsChanged();
   return true;
 }
 
@@ -144,13 +158,12 @@ export function completeQueuedChatTurn(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const key = resolveExactRunId(runId);
-  if (!key) {
+  if (!runId) {
     return false;
   }
-  const entry = chatQueuedTurns.get(key);
+  const entry = chatQueuedTurns.get(runId);
   return entry?.controller === controller
-    ? deleteQueuedChatTurnEntry(chatQueuedTurns, key, entry)
+    ? deleteQueuedChatTurnEntry(chatQueuedTurns, runId, entry)
     : false;
 }
 
@@ -163,13 +176,15 @@ export function retireQueuedChatTurnCancellation(
   runId: string,
   controller: AbortController,
 ): boolean {
-  const key = resolveExactRunId(runId);
-  const entry = key ? chatQueuedTurns.get(key) : undefined;
+  const entry = runId ? chatQueuedTurns.get(runId) : undefined;
   if (!entry || entry.controller !== controller) {
     return false;
   }
   entry.abortable = false;
   detachQueuedChatTurnAbortListener(entry);
+  // Retired collect entries remain counted until abort or aggregate completion.
+  entry.abortListener = notifyGatewayWorkMetricsChanged;
+  controller.signal.addEventListener("abort", entry.abortListener, { once: true });
   return true;
 }
 
@@ -188,7 +203,7 @@ export function abortQueuedChatTurnById(
     allowSessionMismatch?: boolean;
   },
 ): { aborted: boolean } {
-  const runId = resolveExactRunId(params.runId);
+  const runId = params.runId;
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!runId || !sessionKey) {
     return { aborted: false };
@@ -229,16 +244,8 @@ export function listQueuedChatTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (k) => normalizeOptionalString(k)).filter((k): k is string =>
-      Boolean(k),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (id) => normalizeOptionalString(id)).filter(
-      (id): id is string => Boolean(id),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
+  const sessionIds = new Set(normalizeTrimmedStringList([...(params.sessionIds ?? [])]));
   const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   const defaultAgentId = normalizeOptionalString(params.defaultAgentId)?.toLowerCase();
   const matches: QueuedChatTurnMatch[] = [];
@@ -273,10 +280,7 @@ export function listQueuedChatTurnsForSession(params: {
   return matches;
 }
 
-/**
- * Abort all provided queued turns (already authorized by caller).
- * Order: abort signals first, then remove from map, so drain cannot promote mid-loop.
- */
+/** The caller authorizes each entry; its abort listeners run before its map removal. */
 export function abortQueuedChatTurns(
   chatQueuedTurns: QueuedChatTurnMap,
   matches: readonly QueuedChatTurnMatch[],

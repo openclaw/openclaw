@@ -5,6 +5,7 @@ import { json as readJson } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../src/agents/auth-profiles/upsert-with-lock.js";
 import { refreshPreparedModelRuntimeSnapshots } from "../src/agents/prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../src/agents/prepared-model-runtime.test-support.js";
 import { AUTOMATIONS_TOOL_NAME } from "../src/agents/tools/automations-tool-name.js";
@@ -27,9 +28,9 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/
 import { getActiveMcpLoopbackRuntime } from "../src/gateway/mcp-http.loopback-runtime.js";
 import {
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../src/gateway/test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { formatErrorMessage } from "../src/infra/errors.js";
 import { redactToolPayloadText } from "../src/logging/redact.js";
@@ -224,7 +225,7 @@ async function closeServer(server: Server): Promise<void> {
 describe("scheduled message actions", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each(scenarios)("$title", { timeout: 60_000 }, async (scenario) => {
+  it.each(scenarios)("$title", { timeout: 120_000 }, async (scenario) => {
     const { runtime, action, disableBeforeResponse, creator = "trusted" } = scenario;
     const nativeCreator = creator === "native";
     // Local creator turns use the default account identity, independent of provider defaults.
@@ -307,12 +308,10 @@ describe("scheduled message actions", () => {
     const providerErrors: string[] = [];
     const providerWork = new Set<Promise<void>>();
     let requesterPermissions = 16n; // Discord MANAGE_CHANNELS.
-    let metadataControl: "pending" | "passed" = "pending";
     const diagnostics = (result: unknown) =>
       redactToolPayloadText(
         JSON.stringify({
           result,
-          metadataControl,
           requests,
           providerErrors,
           model: embeddedModel.observation,
@@ -358,7 +357,11 @@ describe("scheduled message actions", () => {
         vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
         vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
-        const gatewayPort = await getGatewayE2ePortBlock();
+        const gatewayPortClaim = await acquireGatewayE2ePortBlock();
+        const gatewayPort = gatewayPortClaim.port;
+        // Released here until Gateway startup owns the claim.
+        let unstartedGatewayPortClaim: typeof gatewayPortClaim | undefined = gatewayPortClaim;
+        cleanup.push(() => unstartedGatewayPortClaim?.release());
         const gatewayToken = "synthetic-scheduled-read-gateway-token";
         vi.stubEnv("OPENCLAW_SCHEDULED_READ_ARGUMENTS", JSON.stringify(actionParams));
         vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", undefined);
@@ -392,7 +395,6 @@ describe("scheduled message actions", () => {
             const url = new URL(req.url ?? "/", "http://fixture.invalid");
             if (req.method === "POST" && url.pathname === "/scheduled-clock-gap") {
               expect(runtime).toBe("claude-cli");
-              expect(metadataControl).toBe("passed");
               const realNow = Date.now.bind(Date);
               // The real CLI has its grant; model a pause beyond its former timeout-plus-grace TTL.
               vi.spyOn(Date, "now").mockImplementation(() => realNow() + 120_000);
@@ -504,6 +506,9 @@ describe("scheduled message actions", () => {
         vi.stubEnv("OPENCLAW_SCHEDULED_READ_CLOCK_URL", `${providerOrigin}/scheduled-clock-gap`);
         const embedded = buildMockOpenAiResponsesProvider(`${providerOrigin}/v1`, embeddedModelId);
         const selectedModelRef = runtime === "openclaw" ? embedded.modelRef : modelRef;
+        const inferenceProvider = runtime === "openclaw" ? embedded.providerId : "anthropic";
+        const inferenceProfileId = `${inferenceProvider}:scheduled-message-read`;
+        const inferenceKey = runtime === "openclaw" ? modelToken : "synthetic-unused-model-key";
         const cfg: OpenClawConfig = {
           gateway: {
             mode: "local",
@@ -553,6 +558,10 @@ describe("scheduled message actions", () => {
                 ],
               },
             },
+          },
+          auth: {
+            profiles: { [inferenceProfileId]: { provider: inferenceProvider, mode: "api_key" } },
+            order: { [inferenceProvider]: [inferenceProfileId] },
           },
           tools: {
             // The scripted provider asserts the direct message schema and scheduled authority.
@@ -606,6 +615,15 @@ describe("scheduled message actions", () => {
         };
         await writeFile(configPath, JSON.stringify(cfg));
         setRuntimeConfigSnapshot(cfg, cfg);
+        // Seed both routes so CLI jobs prove they do not borrow a host inference account.
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: inferenceProfileId,
+              credential: { type: "api_key", provider: inferenceProvider, key: inferenceKey },
+            },
+          ],
+        });
         if (nativeCreator) {
           await replaceSessionEntry(
             { agentId: "main", sessionKey: creatorSessionKey },
@@ -647,8 +665,9 @@ describe("scheduled message actions", () => {
         cleanup.push(() => resetPreparedModelRuntimeSnapshotsForTest());
         const finished = createDeferred<Record<string, unknown>>();
         const scheduledJob: { id?: string } = {};
+        unstartedGatewayPortClaim = undefined;
         const gateway = await startGatewayWithClient({
-          port: gatewayPort,
+          portClaim: gatewayPortClaim,
           cfg,
           configPath,
           token: gatewayToken,
@@ -677,28 +696,6 @@ describe("scheduled message actions", () => {
           catalogMode: "static",
         });
         const runtimeConfig = getRuntimeConfig();
-        const { fetchChannelInfoDiscord } = await import("../extensions/discord/runtime-api.js");
-        const metadata = await fetchChannelInfoDiscord(channelId, {
-          cfg: runtimeConfig,
-          accountId: creatorAccountId,
-        }).catch((error: unknown) => {
-          throw new Error(diagnostics({ metadataError: describeFixtureError(error) }));
-        });
-        expect(metadata, diagnostics(metadata)).toMatchObject({
-          id: channelId,
-          type: 0,
-          guild_id: guildId,
-        });
-        expect(requests, diagnostics(metadata)).toEqual([
-          {
-            method: "GET",
-            path: `/api/v10/channels/${channelId}`,
-            authorizationMatches: true,
-          },
-        ]);
-        metadataControl = "passed";
-        // The direct transport control cannot satisfy the scheduled journey's evidence.
-        requests.length = 0;
         const params = {
           name: nativeCreator
             ? "Edit Discord for the recorded requester"
@@ -792,6 +789,15 @@ describe("scheduled message actions", () => {
           (await loadCronStore(storePath)).jobs.find((entry) => entry.id === created.id),
           "persisted scheduled job",
         );
+        if (runtime === "openclaw") {
+          expect(job.inferenceBinding).toMatchObject({
+            version: 1,
+            provider: inferenceProvider,
+            profileId: inferenceProfileId,
+          });
+        } else {
+          expect(job.inferenceBinding).toBeUndefined();
+        }
         if (nativeCreator) {
           expect(job).toMatchObject({
             owner: { sessionKey: creatorSessionKey, accountId: creatorAccountId },

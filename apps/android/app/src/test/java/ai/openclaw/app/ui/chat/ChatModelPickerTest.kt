@@ -94,7 +94,7 @@ class ChatModelPickerTest {
     assertEquals(ChatModelPickerAction.Select, chatModelPickerAction(catalog[3]))
     val choices = chatModelPickerChoices(catalog, listOf("openai/standard"), listOf("openai/priority"))
     assertEquals(listOf("fixture/quick", "fixture/legacy"), choices.map { it.providerQualifiedRef() })
-    assertFalse(chatModelSendBlocked(true, "openai/standard", catalog))
+    assertEquals(null, selectedChatModelSendBlockingReason(true, "openai/standard", catalog))
   }
 
   @Test
@@ -194,10 +194,10 @@ class ChatModelPickerTest {
     val failed = missing.copy(unavailableReason = GatewayModelUnavailableReason.AuthFailed)
     val cooling = missing.copy(unavailableReason = GatewayModelUnavailableReason.Cooldown)
 
-    assertEquals(GatewayModelUnavailableReason.MissingAuth, selectedChatModelSendUnavailableReason("synthetic/chat", listOf(missing)))
-    assertEquals(GatewayModelUnavailableReason.AuthFailed, selectedChatModelSendUnavailableReason("SYNTHETIC/CHAT", listOf(missing, failed)))
+    assertEquals(GatewayModelUnavailableReason.MissingAuth, selectedChatModelSendBlockingReason(true, "synthetic/chat", listOf(missing)))
+    assertEquals(GatewayModelUnavailableReason.AuthFailed, selectedChatModelSendBlockingReason(true, "SYNTHETIC/CHAT", listOf(missing, failed)))
     assertEquals(GatewayModelUnavailableReason.Cooldown, selectedChatModelUnavailableReason("synthetic/chat", listOf(failed, cooling)))
-    assertEquals(null, selectedChatModelSendUnavailableReason("synthetic/chat", listOf(failed, cooling)))
+    assertEquals(null, selectedChatModelSendBlockingReason(true, "synthetic/chat", listOf(failed, cooling)))
     assertEquals(null, selectedChatModelUnavailableReason("synthetic/chat", listOf(missing, missing.copy(available = true))))
     assertEquals(null, selectedChatModelUnavailableReason("synthetic/chat", listOf(missing, missing.copy(unavailableReason = null))))
     assertEquals(null, selectedChatModelUnavailableReason("synthetic/unknown", listOf(missing)))
@@ -229,8 +229,6 @@ class ChatModelPickerTest {
       null,
       selectedChatModelSendBlockingReason(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)),
     )
-    assertTrue(chatModelSendBlocked(gatewayReady = true, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
-    assertFalse(chatModelSendBlocked(gatewayReady = false, selectedModelRef = "synthetic/chat", catalog = listOf(missing)))
     assertEquals(
       null,
       chatModelUnavailableText(

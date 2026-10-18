@@ -1,10 +1,14 @@
 import { once } from "node:events";
+import { loadLibopus } from "libopus-wasm";
 import { createRealtimeVoiceAudioPortSender } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { DiscordAudioEvent } from "./audio-worker-protocol.js";
+import { DiscordRealtimeOutput } from "./realtime-output.runtime.js";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
-function createDirectPlaybackFixture() {
+async function createDirectPlaybackFixture() {
+  await loadLibopus();
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
   const audio = fixture.roomPlayer.audio;
   const output = fixture.playback.createOutputAudioPort();
@@ -13,15 +17,55 @@ function createDirectPlaybackFixture() {
   onTestFinished(() => {
     sender.close();
     fixture.close();
+    vi.useRealTimers();
   });
   return { fixture, audio, output, sender, successor };
 }
+
+it.each([0, 3])("preserves transferred PCM view bounds at offset %i", async (offset) => {
+  const { audio, output, sender } = await createDirectPlaybackFixture();
+  audio.send({ type: "output-hold", hold: true });
+  const append = vi.spyOn(DiscordRealtimeOutput.prototype, "append");
+  onTestFinished(() => append.mockRestore());
+  const expected = Buffer.alloc(9_600);
+  for (let index = 0; index < expected.length; index++) {
+    expected[index] = index % 251;
+  }
+  const storage = new ArrayBuffer(offset + expected.length + 7);
+  new Uint8Array(storage).fill(0xfe);
+  const transferred = new Uint8Array(storage, offset, expected.length);
+  transferred.set(expected);
+  const admitted = once(output.port, "message");
+  output.port.postMessage({ type: "audio", audio: transferred }, [storage]);
+  expect(storage.byteLength).toBe(0);
+  await admitted;
+  expect(append).toHaveBeenCalledTimes(1);
+  expect(append.mock.calls[0]?.[0]).toEqual(expected);
+
+  // Clear must retire the old converter before the next caller-owned chunk arrives.
+  sender.clear();
+  const borrowed = Buffer.from(expected);
+  const next = once(output.port, "message");
+  sender.sendAudio(borrowed);
+  borrowed.fill(0);
+  await next;
+  expect(append).toHaveBeenCalledTimes(2);
+  expect(append.mock.calls[1]?.[0]).toEqual(expected);
+  expect(append.mock.contexts[1]).not.toBe(append.mock.contexts[0]);
+
+  Atomics.store(new Int32Array(output.state), 0, 1);
+  const rejected = once(output.port, "message");
+  const late = Uint8Array.from(expected);
+  output.port.postMessage({ type: "audio", audio: late }, [late.buffer]);
+  await rejected;
+  expect(append).toHaveBeenCalledTimes(2);
+});
 
 it.each([
   { playback: "unheard", hold: true, delayEvents: false },
   { playback: "started before main receives its events", hold: false, delayEvents: true },
 ])("retains only unheard direct exact speech when $playback", async ({ hold, delayEvents }) => {
-  const { fixture, audio, output, sender, successor } = createDirectPlaybackFixture();
+  const { fixture, audio, output, sender, successor } = await createDirectPlaybackFixture();
   fixture.playback.enqueueExactSpeechMessage("one answer");
   expect(fixture.sendUserMessage).toHaveBeenCalledWith("one answer");
   if (delayEvents) {
@@ -40,13 +84,23 @@ it.each([
   await admitted;
   // The worker acknowledges after append, including its synchronous playback grant.
   expect(fixture.player.state.status === fixture.voiceSdk.AudioPlayerStatus.Idle).toBe(hold);
+  if (!hold) {
+    const state = fixture.player.state;
+    if (state.status === fixture.voiceSdk.AudioPlayerStatus.Idle) {
+      throw new Error("Expected an admitted playback resource");
+    }
+    if (state.resource.playStream.readableLength === 0) {
+      await once(state.resource.playStream, "readable");
+    }
+    expect(state.resource.read()).toBeInstanceOf(Buffer);
+  }
   fixture.closeSpeaker(true);
   fixture.playback.transferPendingSpeechTo(successor);
   expect(successor.deliverRetainedSpeech.mock.calls).toEqual(hold ? [["one answer"]] : []);
 });
 
 it("does not apply old direct playback events to the next exact-speech request", async () => {
-  const { fixture, audio, output, sender, successor } = createDirectPlaybackFixture();
+  const { fixture, audio, output, sender, successor } = await createDirectPlaybackFixture();
   const listeners = audio.listeners("event");
   const delayed: DiscordAudioEvent[] = [];
   const capture = (event: DiscordAudioEvent) => delayed.push(event);
@@ -78,7 +132,7 @@ it("does not apply old direct playback events to the next exact-speech request",
 });
 
 it("keeps exact speech owned when response completion overtakes direct PCM", async () => {
-  const { fixture, output, sender, successor } = createDirectPlaybackFixture();
+  const { fixture, output, sender, successor } = await createDirectPlaybackFixture();
   fixture.playback.enqueueExactSpeechMessage("in transit");
   const admitted = once(output.port, "message");
   sender.sendAudio(Buffer.alloc(9_600, 0x20));
@@ -93,7 +147,7 @@ it("keeps exact speech owned when response completion overtakes direct PCM", asy
 });
 
 it("releases a completed direct response with no PCM instead of wedging queued speech", async () => {
-  const { fixture } = createDirectPlaybackFixture();
+  const { fixture } = await createDirectPlaybackFixture();
   fixture.playback.enqueueExactSpeechMessage("empty response");
   const next = new Promise<void>((resolve) => {
     fixture.sendUserMessage.mockImplementation((text: string) => {
@@ -110,7 +164,7 @@ it("releases a completed direct response with no PCM instead of wedging queued s
 });
 
 it("ignores a late flush receipt after exact-speech ownership changes", async () => {
-  const { fixture, audio, successor } = createDirectPlaybackFixture();
+  const { fixture, audio, successor } = await createDirectPlaybackFixture();
   fixture.playback.enqueueExactSpeechMessage("old answer");
   const receipt = once(audio, "event");
   fixture.callbacks.onEvent?.({ direction: "server", type: "response.done" });
@@ -123,7 +177,7 @@ it("ignores a late flush receipt after exact-speech ownership changes", async ()
 });
 
 it("waits for a pending direct flush when an older idle event arrives", async () => {
-  const { fixture, audio, output, sender } = createDirectPlaybackFixture();
+  const { fixture, audio, output, sender } = await createDirectPlaybackFixture();
   const delayed: DiscordAudioEvent[] = [];
   const capture = (event: DiscordAudioEvent) => delayed.push(event);
   onTestFinished(() => {

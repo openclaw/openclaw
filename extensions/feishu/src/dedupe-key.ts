@@ -1,23 +1,18 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parsePostContent } from "./post.js";
 
 type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message" | "sender">;
 
-function parseContentRecord(content: string): Record<string, unknown> | null {
-  try {
-    return readRecord(JSON.parse(content));
-  } catch {
-    return null;
-  }
-}
-
 function resolvePostMediaParts(content: string): string[] {
-  const { attachments } = parsePostContent(content);
-  // Replay keys live for 24 hours across restarts; keep their shipped grouped order and duplicates.
+  const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
+  // Replay keys live for 24 hours across restarts; keep their shipped grouped
+  // order and duplicates. Top-level post files[] belong to download only;
+  // including them here would invalidate pre-upgrade captioned-post records.
   return (["image", "file"] as const).flatMap((kind) =>
     attachments
       .filter((attachment) => attachment.kind === kind)
@@ -30,7 +25,7 @@ function resolveMessageMediaParts(messageType: string, content: string): string[
     return resolvePostMediaParts(content);
   }
 
-  const parsed = parseContentRecord(content);
+  const parsed = readRecord(safeParseJson(content));
   if (!parsed) {
     return [];
   }
@@ -78,10 +73,7 @@ function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | un
   ) {
     return undefined;
   }
-  const contentHash = createHash("sha256")
-    .update(event.message.content, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+  const contentHash = sha256Hex(event.message.content).slice(0, 32);
   return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash]);
 }
 

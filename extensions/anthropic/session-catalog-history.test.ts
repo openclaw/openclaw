@@ -5,8 +5,9 @@ import { parseTranscriptLine } from "./session-catalog-transcript.js";
 
 const appended: Array<Record<string, unknown>> = [];
 
+// mock-isolation: Exercise native message projection without opening the transcript store.
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
-  withSessionTranscriptWriteLock: async (
+  withSessionTranscriptWrite: async (
     _params: unknown,
     run: (transcript: {
       appendMessage: (input: { message: Record<string, unknown> }) => Promise<void>;

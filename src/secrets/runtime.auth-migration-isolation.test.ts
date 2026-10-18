@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 

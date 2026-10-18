@@ -1,5 +1,6 @@
 // The shared systemd manager budgets are measured on a monotonic clock: a wall-clock step
 // while a probe runs must neither drain the remaining budget to the 1 ms floor nor inflate it.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

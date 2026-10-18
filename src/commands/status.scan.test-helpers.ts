@@ -1,5 +1,6 @@
 // Status scan test helpers provide shared mocks and config fixtures for scan suites.
 import type { Mock } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -63,7 +64,10 @@ function createStatusOsSummaryModuleMock(): StatusOsSummaryModuleMock {
   };
 }
 
-type StatusScanDepsRuntimeModuleMock = {
+type StatusScanDepsRuntimeModuleMock = Pick<
+  typeof import("./status.scan.deps.runtime.js"),
+  "getMemoryProvider" | "isMemoryProviderNative"
+> & {
   getTailnetHostname: UnknownMock;
   getMemorySearchManager: StatusScanSharedMocks["getMemorySearchManager"];
 };
@@ -73,7 +77,13 @@ function createStatusScanDepsRuntimeModuleMock(
 ): StatusScanDepsRuntimeModuleMock {
   return {
     getTailnetHostname: vi.fn(),
+    getMemoryProvider: vi.fn<StatusScanDepsRuntimeModuleMock["getMemoryProvider"]>(async () => ({
+      provider: null,
+    })),
     getMemorySearchManager: mocks.getMemorySearchManager,
+    isMemoryProviderNative: vi.fn<StatusScanDepsRuntimeModuleMock["isMemoryProviderNative"]>(
+      () => false,
+    ),
   };
 }
 
@@ -304,7 +314,10 @@ export async function loadStatusScanModuleForTest(
     buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
   }));
   vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
-  vi.doMock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
+  vi.doMock("../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../plugins/runtime/runtime-registry-loader.js")>()),
+    ...createStatusPluginRegistryModuleMock(mocks),
+  }));
   vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
 
   if (options.fastJson) {

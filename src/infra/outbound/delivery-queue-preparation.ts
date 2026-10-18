@@ -1,5 +1,4 @@
-// Fences stable outbound policy preparation across Gateway processes without
-// persisting payload content or modifying-hook context.
+// Checkpoints stable outbound policy preparation without persisting payload content.
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -8,7 +7,6 @@ import { executeDeliveryQueueOperation } from "../delivery-queue-worker-store.js
 import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.js";
 
 const STABLE_PREPARATION_LEASE_MS = 5 * 60_000;
-const STABLE_PREPARATION_LEASE_RENEW_MS = 30_000;
 
 export type StableDeliveryPreparationOwner = {
   current: () => Promise<StableDeliveryPreparation>;
@@ -44,74 +42,29 @@ export async function withStableDeliveryPreparation<T>(
   let entry = claim.entry;
   let leaseLost = false;
   let published = false;
-  let pendingWrite = Promise.resolve();
-  let checkpointFailure: { error: unknown } | undefined;
-  const replaceEntry = (
-    update: (current: StableDeliveryPreparation) => StableDeliveryPreparation,
+  const replaceEntry = async (
+    preparationState: StableDeliveryPreparation["preparationState"],
   ): Promise<void> => {
-    const write = pendingWrite.then(async () => {
-      if (leaseLost) {
-        throw new StableDeliveryPreparationLostError(params.id);
-      }
-      if (checkpointFailure) {
-        throw checkpointFailure.error;
-      }
-      const next = update(entry);
-      if (
-        !(await executeDeliveryQueueOperation(captured, params.stateDir, {
-          type: "deliveryQueue.replacePreparation",
-          input: { expectedEntry: entry, replacementEntry: next },
-        }))
-      ) {
-        leaseLost = true;
-        throw new StableDeliveryPreparationLostError(params.id);
-      }
-      entry = next;
-    });
-    pendingWrite = write.catch((error: unknown) => {
-      checkpointFailure ??= { error };
-    });
-    return write;
-  };
-  const leaseTimer = setInterval(() => {
-    if (!leaseLost && !checkpointFailure) {
-      void replaceEntry((current) => ({
-        ...current,
-        preparationLeaseExpiresAt: Date.now() + STABLE_PREPARATION_LEASE_MS,
-      })).catch(() => {
-        leaseLost = true;
-      });
+    const next = {
+      ...entry,
+      preparationState,
+      preparationLeaseExpiresAt: Date.now() + STABLE_PREPARATION_LEASE_MS,
+    };
+    if (
+      !(await executeDeliveryQueueOperation(captured, params.stateDir, {
+        type: "deliveryQueue.replacePreparation",
+        input: { expectedEntry: entry, replacementEntry: next },
+      }))
+    ) {
+      leaseLost = true;
+      throw new StableDeliveryPreparationLostError(params.id);
     }
-  }, STABLE_PREPARATION_LEASE_RENEW_MS);
-  leaseTimer.unref();
-  const stopRenewals = async (): Promise<void> => {
-    clearInterval(leaseTimer);
-    await pendingWrite;
+    entry = next;
   };
   const owner: StableDeliveryPreparationOwner = {
-    current: async () => {
-      // Freeze the exact CAS snapshot handed to atomic queue publication.
-      await stopRenewals();
-      if (leaseLost) {
-        throw new StableDeliveryPreparationLostError(params.id);
-      }
-      if (checkpointFailure) {
-        throw checkpointFailure.error;
-      }
-      return entry;
-    },
-    beforeFirstModifier: () =>
-      replaceEntry((current) => ({
-        ...current,
-        preparationState: "modifiers_started",
-        preparationLeaseExpiresAt: Date.now() + STABLE_PREPARATION_LEASE_MS,
-      })),
-    markPrepared: () =>
-      replaceEntry((current) => ({
-        ...current,
-        preparationState: "prepared",
-        preparationLeaseExpiresAt: Date.now() + STABLE_PREPARATION_LEASE_MS,
-      })),
+    current: async () => entry,
+    beforeFirstModifier: () => replaceEntry("modifiers_started"),
+    markPrepared: () => replaceEntry("prepared"),
     markPublished: () => {
       published = true;
     },
@@ -119,25 +72,18 @@ export async function withStableDeliveryPreparation<T>(
 
   try {
     const value = await params.run(owner);
-    await stopRenewals();
-    if (!published && leaseLost) {
-      throw new StableDeliveryPreparationLostError(params.id);
-    }
-    if (!published && checkpointFailure) {
-      throw checkpointFailure.error;
-    }
-    if (
-      !published &&
-      !(await executeDeliveryQueueOperation(captured, params.stateDir, {
-        type: "deliveryQueue.completePreparation",
-        input: { expectedEntry: entry },
-      }))
-    ) {
-      throw new Error(`Stable outbound preparation could not be settled: ${params.id}`);
+    if (!published) {
+      if (
+        !(await executeDeliveryQueueOperation(captured, params.stateDir, {
+          type: "deliveryQueue.completePreparation",
+          input: { expectedEntry: entry },
+        }))
+      ) {
+        throw new Error(`Stable outbound preparation could not be settled: ${params.id}`);
+      }
     }
     return { status: "claimed", value };
   } catch (error) {
-    await stopRenewals();
     if (!published && !leaseLost) {
       if (entry.preparationState === "claimed") {
         const released: StableDeliveryPreparation = {
@@ -157,7 +103,5 @@ export async function withStableDeliveryPreparation<T>(
       }
     }
     throw error;
-  } finally {
-    await stopRenewals();
   }
 }

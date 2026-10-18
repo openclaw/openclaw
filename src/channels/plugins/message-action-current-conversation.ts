@@ -1,6 +1,7 @@
 import { normalizeOptionalAccountId, normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeChatType, type ChatType } from "../chat-type.js";
-import type { ChannelMessageActionContext, ChannelPlugin } from "./types.js";
+import type { ChannelMessageActionContext } from "./types.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 
 const HOST_TARGET_KIND_PREFIXES = [
   "user",

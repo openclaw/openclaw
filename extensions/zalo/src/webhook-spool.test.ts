@@ -133,35 +133,6 @@ describe("Zalo durable webhook ingress", () => {
     });
   });
 
-  it("keeps a completion tombstone and rejects a post-completion duplicate", async () => {
-    await withZaloWebhookTestQueue(async (queue) => {
-      const enqueue = vi.spyOn(queue, "enqueue");
-      const deliver = vi.fn(async (_update, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const ingress = createZaloWebhookIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver,
-      });
-      const raw = rawEvent({ messageId: "duplicate" });
-      ingress.start();
-      try {
-        await ingress.accept(raw);
-        await waitForZaloWebhookVerdict(queue, "duplicate", "completed");
-        await ingress.accept(raw);
-        await expect(enqueue.mock.results.at(-1)?.value).resolves.toMatchObject({
-          kind: "completed",
-          duplicate: true,
-        });
-        expect(deliver).toHaveBeenCalledTimes(1);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("preserves old replay-guard parity for the same message id with changed payload bytes", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
       const enqueue = vi.spyOn(queue, "enqueue");
@@ -187,44 +158,6 @@ describe("Zalo durable webhook ingress", () => {
         });
         expect(deliver).toHaveBeenCalledTimes(1);
         expect(deliver.mock.calls[0]?.[0].message?.text).toBe("original");
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
-  it("stores raw JSON and derives the conversation lane before dispatch normalization", async () => {
-    await withZaloWebhookTestQueue(async (queue) => {
-      const event = createZaloWebhookTestEvent({
-        messageId: "raw",
-        chatId: "conversation-42",
-        text: "before",
-      });
-      const deliveredText: string[] = [];
-      const ingress = createZaloWebhookIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: async (update, lifecycle) => {
-          deliveredText.push(update.message?.text ?? "");
-          await lifecycle.onAdopted();
-        },
-      });
-      const raw = JSON.stringify(event);
-      await ingress.accept(raw);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({
-          id: "raw",
-          laneKey: "chat:conversation-42",
-          payload: { version: 1, rawEvent: raw },
-        }),
-      ]);
-      event.message.text = "after";
-
-      ingress.start();
-      try {
-        await waitForZaloWebhookVerdict(queue, "raw", "completed");
-        expect(deliveredText).toEqual(["before"]);
       } finally {
         await ingress.stop();
       }

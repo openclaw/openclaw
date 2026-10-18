@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -17,11 +18,14 @@ suite.define(() => {
     try {
       const page = await browser.newPage();
       let loadingNextRoute = false;
-      await page.route("**/assets/about-page-*.js*", async (route) => {
-        loadingNextRoute = true;
-        await routeReady;
-        await route.continue();
-      });
+      await page.route(
+        controlUiE2eBuiltModuleRequest("ui/src/pages/about/about-page.tsx"),
+        async (route) => {
+          loadingNextRoute = true;
+          await routeReady;
+          await route.continue();
+        },
+      );
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await page.locator(".new-session-page__message").fill("private pending draft");

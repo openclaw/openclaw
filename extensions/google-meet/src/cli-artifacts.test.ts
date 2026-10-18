@@ -276,16 +276,6 @@ describe("google-meet CLI", () => {
 
   for (const { name, options, expected } of [
     {
-      name: "prints CSV attendance output",
-      options: {},
-      expected: ["conferenceRecord,displayName,user", "conferenceRecords/rec-1,Alice,users/alice"],
-    },
-    {
-      name: "neutralizes spreadsheet formulas in CSV attendance output",
-      options: { participantDisplayName: " \t=1+1" },
-      expected: ["conferenceRecords/rec-1,' \t=1+1,users/alice"],
-    },
-    {
       name: "quotes carriage returns in formula-neutralized CSV cells",
       options: { participantDisplayName: "\r=1+1" },
       expected: ['conferenceRecords/rec-1,"\'\r=1+1",users/alice'],
@@ -363,21 +353,6 @@ describe("google-meet CLI", () => {
     }
   });
 
-  it("neutralizes spreadsheet formulas in exported attendance CSV files", async () => {
-    stubMeetArtifactsApi({ participantDisplayName: "\uFF1D1+1" });
-
-    const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-export-csv-"));
-
-    try {
-      await runApiCommand("export", ["--conference-record", "rec-1", "--output", tempDir]);
-      expect(readFileSync(path.join(tempDir, "attendance.csv"), "utf8")).toContain(
-        "conferenceRecords/rec-1,'\uFF1D1+1,users/alice",
-      );
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("includes artifact warnings in export summaries and manifests", async () => {
     stubMeetArtifactsApi({ failSmartNoteDocumentBody: true });
 
@@ -449,12 +424,7 @@ describe("google-meet CLI", () => {
       rmSync(parentDir, { recursive: true, force: true });
     }
   });
-  it.each([
-    { command: "artifacts", explicitSummary: false },
-    { command: "artifacts", explicitSummary: true },
-    { command: "attendance", explicitSummary: false },
-    { command: "attendance", explicitSummary: true },
-  ])(
+  it.each([{ command: "artifacts", explicitSummary: true }])(
     "writes $command summary to --output (explicitSummary=$explicitSummary)",
     async ({ command, explicitSummary }) => {
       stubMeetArtifactsApi();

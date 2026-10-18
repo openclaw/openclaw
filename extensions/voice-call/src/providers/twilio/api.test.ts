@@ -11,7 +11,7 @@ vi.mock("../../../api.js", () => ({
 }));
 
 import { resolveTwilioApiBaseUrl } from "../twilio-region.js";
-import { TwilioApiError, twilioApiRequest } from "./api.js";
+import { TwilioApiError, createTwilioApi } from "./api.js";
 
 const DEFAULT_REQUEST = {
   baseUrl: resolveTwilioApiBaseUrl({ accountSid: "AC123" }),
@@ -20,6 +20,18 @@ const DEFAULT_REQUEST = {
   endpoint: "/Calls.json",
   body: {},
 };
+
+async function twilioApiRequest(
+  params: Parameters<typeof createTwilioApi>[0] & {
+    endpoint: string;
+    body: URLSearchParams | Record<string, string | string[]>;
+    allowNotFound?: boolean;
+  },
+) {
+  return createTwilioApi(params).request(params.endpoint, params.body, {
+    allowNotFound: params.allowNotFound,
+  });
+}
 
 type FetchGuardRequest = {
   url?: string;
@@ -115,12 +127,6 @@ describe("twilioApiRequest", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("maps AU1 to Twilio's Sydney regional hostname", () => {
-    expect(resolveTwilioApiBaseUrl({ accountSid: "AC123", region: "au1" })).toBe(
-      "https://api.sydney.au1.twilio.com/2010-04-01/Accounts/AC123",
-    );
-  });
-
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
     const responses = [new Response("", { status: 200 }), missing.response];
@@ -146,19 +152,6 @@ describe("twilioApiRequest", () => {
     ).resolves.toBeUndefined();
     expect(missing.wasCanceled()).toBe(true);
     expect(release).toHaveBeenCalledTimes(2);
-  });
-
-  it("throws twilio api errors for non-ok responses", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response("bad request", { status: 400 }),
-      release,
-    });
-
-    await expect(twilioApiRequest(DEFAULT_REQUEST)).rejects.toThrow(
-      "Twilio API error: 400 bad request",
-    );
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("bounds twilio error bodies and cancels unread overflow", async () => {

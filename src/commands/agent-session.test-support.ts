@@ -1,13 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
-import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
+
+export async function withAgentCommandTestHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
+  return withTempHomeCore(fn, {
+    prefix: "openclaw-agent-",
+  });
+}
 
 export function createDefaultAgentResult(params?: {
   payloads?: Array<Record<string, unknown>>;
@@ -55,22 +63,6 @@ export function readSessionStore<T>(storePath: string): Record<string, T> {
   );
 }
 
-export function expectSqliteSessionFileMarker(params: {
-  agentId: string;
-  sessionFile: string | undefined;
-  sessionId?: string;
-  storePath: string;
-}): void {
-  const marker = parseSqliteSessionFileMarker(params.sessionFile);
-  expect(marker?.agentId).toBe(params.agentId);
-  if (params.sessionId) {
-    expect(marker?.sessionId).toBe(params.sessionId);
-  } else {
-    expect(marker?.sessionId).toBeTruthy();
-  }
-  expect(marker?.storePath).toBe(path.resolve(params.storePath));
-}
-
 export function expectOwnedCommandSession(params: {
   agentId: string;
   excludedAgentId: string;
@@ -94,4 +86,25 @@ export function expectOwnedCommandSession(params: {
       readConsistency: "latest",
     }),
   ).toBeUndefined();
+}
+
+export function createOutboundSessionRouteFixture(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  channel: string;
+  accountId?: string | null;
+  peer: { kind: "direct" | "group" | "channel"; id: string };
+  chatType: "direct" | "group" | "channel";
+  from: string;
+  to: string;
+}) {
+  const baseSessionKey = buildOutboundBaseSessionKey(params);
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer: params.peer,
+    chatType: params.chatType,
+    from: params.from,
+    to: params.to,
+  };
 }

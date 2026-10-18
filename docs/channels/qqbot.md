@@ -429,7 +429,7 @@ default.
   a flood of bot chatter should not starve human messages.
 - **Proactive messages not arriving:** QQ may block bot-initiated messages if
   the user has not interacted recently.
-- **Voice not transcribed:** ensure STT is configured and the provider is
+- **Voice not transcribed:** check that STT is configured and the provider is
   reachable.
 
 ## Related

@@ -66,10 +66,6 @@ describe("tool-loop recovery batch admission", () => {
       runId: "run-1",
       loopDetection: { enabled: true },
     });
-    if (!admission) {
-      throw new Error("Expected batch admission hook");
-    }
-
     const first = await admission({
       assistantMessage: {
         role: "assistant",

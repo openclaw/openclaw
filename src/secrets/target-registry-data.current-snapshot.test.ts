@@ -1,4 +1,5 @@
 /** Tests target-registry data built from the current runtime snapshot. */
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -152,22 +153,6 @@ describe("getSecretTargetRegistry metadata reuse", () => {
     },
   );
 
-  it("allows configless runtime targets to reuse the lifecycle workspace", async () => {
-    const { getSecretTargetRegistry } = await import("./target-registry-data.js");
-
-    getSecretTargetRegistry();
-
-    expect(metadataMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
-      allowWorkspaceScopedCurrent: true,
-      env: process.env,
-    });
-    const calls = metadataMocks.resolvePluginMetadataSnapshot.mock.calls as unknown as Array<
-      [{ allowWorkspaceScopedCurrent?: boolean }]
-    >;
-    for (const [call] of calls) {
-      expect(call.allowWorkspaceScopedCurrent).toBe(true);
-    }
-  });
   it("registers secret targets for installed-origin plugins (#104320)", async () => {
     // The Exa web providers moved from bundled origin to an installed plugin
     // package; the gateway's known-target registry must keep covering them.

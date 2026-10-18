@@ -1,8 +1,12 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { applyRemoteModelCatalogUpdate } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   canReadDetailedUpdateMetadata,
@@ -24,6 +28,8 @@ export function createDeferredGatewayUpdateCheck(params: {
     | ReturnType<typeof createGatewayUpdateCheck>
     | Promise<ReturnType<typeof createGatewayUpdateCheck>>;
   getConfig: () => OpenClawConfig;
+  /** Catalog republication borrows unchanged plugin instances from this live Gateway registry. */
+  getPluginRegistry: () => PluginRegistry | undefined;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -35,8 +41,6 @@ export function createDeferredGatewayUpdateCheck(params: {
   isClosing?: () => boolean;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): { start: () => void; stop: () => Promise<void> } {
-  // Reserve cancellation before an early RPC can start install discovery.
-  const lifecycle = createGatewayUpdateLifecycle(params.scheduler);
   let stopped = false;
   let started = false;
   let runWatcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
@@ -69,6 +73,27 @@ export function createDeferredGatewayUpdateCheck(params: {
     );
   };
 
+  // Early RPC discovery shares the same cancellation and publication owner,
+  // even before the post-ready background factory has been admitted.
+  const lifecycle = createGatewayUpdateLifecycle(params.scheduler, {
+    onUpdateAvailableChange: (updateAvailable) => {
+      latestUpdateAvailable = updateAvailable;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable,
+        ...(latestSchedule ? { schedule: latestSchedule } : {}),
+      };
+      broadcastUpdateAvailable(payload);
+    },
+    onUpdateScheduleChange: (schedule) => {
+      latestSchedule = schedule;
+      const payload: GatewayUpdateAvailableEventPayload = {
+        updateAvailable: latestUpdateAvailable,
+        schedule,
+      };
+      broadcastUpdateAvailable(payload);
+    },
+  });
+
   const stop = () => {
     stopped = true;
     return (stopPromise ??= (async () => {
@@ -95,9 +120,7 @@ export function createDeferredGatewayUpdateCheck(params: {
     void (async () => {
       if (params.waitForPostReadyWork) {
         await params.waitForPostReadyWork();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
       }
       if (stopped || params.isClosing?.()) {
         return;
@@ -107,28 +130,18 @@ export function createDeferredGatewayUpdateCheck(params: {
           owner = await params.createUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
+            applyRemoteCatalogUpdate: (signal) =>
+              withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
+                applyRemoteModelCatalogUpdate(params.getConfig, signal),
+              ),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,
             isNixMode: params.isNixMode,
             ...(params.activeWorkInspectors
               ? { activeWorkInspectors: params.activeWorkInspectors }
               : {}),
-            onUpdateAvailableChange: (updateAvailable) => {
-              latestUpdateAvailable = updateAvailable;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable,
-                ...(latestSchedule ? { schedule: latestSchedule } : {}),
-              };
-              broadcastUpdateAvailable(payload);
-            },
-            onUpdateScheduleChange: (schedule) => {
-              latestSchedule = schedule;
-              const payload: GatewayUpdateAvailableEventPayload = {
-                updateAvailable: latestUpdateAvailable,
-                schedule,
-              };
-              broadcastUpdateAvailable(payload);
-            },
+            onUpdateAvailableChange: lifecycle.onUpdateAvailableChange,
+            onUpdateScheduleChange: lifecycle.onUpdateScheduleChange,
           });
         } catch (err) {
           if (!stopped) {
@@ -141,16 +154,19 @@ export function createDeferredGatewayUpdateCheck(params: {
           return;
         }
         const updateCheck = owner;
-        initialization = (async () => updateCheck.initialize())().catch((err: unknown) => {
+        initialization = (async () => {
+          const result = await updateCheck.initialize();
+          if (result.status.error) {
+            throw new Error(result.status.error.message);
+          }
+        })().catch((err: unknown) => {
           if (!stopped) {
             params.log.warn(`gateway update status failed to initialize: ${String(err)}`);
           }
         });
       })();
       await ownerReady;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       if (!stopped && !params.isClosing?.()) {
         await runWithGatewayIndependentRootWorkAdmission(async () => {
           if (stopped || params.isClosing?.()) {

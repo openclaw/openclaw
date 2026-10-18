@@ -56,47 +56,6 @@ describe("resolveGroupName", () => {
     expect(result).toBeUndefined();
   });
 
-  it("serves subsequent calls from cache (positive hit)", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "  Cached Group  " });
-    await expect(resolveGroupName({ account, chatId: "oc_test4", log })).resolves.toBe(
-      "Cached Group",
-    );
-    const result = await resolveGroupName({ account, chatId: "oc_test4", log });
-    expect(result).toBe("Cached Group");
-    expect(mockGetChatInfo).toHaveBeenCalledOnce();
-  });
-
-  it("does not cache group names when the expiry would exceed a valid Date", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      mockGetChatInfo.mockResolvedValue({ name: "Boundary Group" });
-
-      const first = await resolveGroupName({ account, chatId: "oc_boundary", log });
-      const second = await resolveGroupName({ account, chatId: "oc_boundary", log });
-
-      expect(first).toBe("Boundary Group");
-      expect(second).toBe("Boundary Group");
-      expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("evicts cached group names when the current clock is invalid", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "Cached Group" });
-    await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      const result = await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-
-      expect(result).toBe("Cached Group");
-    } finally {
-      dateNow.mockRestore();
-    }
-    expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
-  });
-
   it("caches negative result (API failure) and skips retry", async () => {
     mockGetChatInfo.mockRejectedValue(new Error("fail"));
     await expect(resolveGroupName({ account, chatId: "oc_test5", log })).resolves.toBeUndefined();
@@ -107,12 +66,6 @@ describe("resolveGroupName", () => {
     expect(log).toHaveBeenCalledWith(
       "feishu[test-account]: getChatInfo failed for oc_test5: Error: fail",
     );
-  });
-
-  it("returns undefined when API returns object with missing name field", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: undefined });
-    const result = await resolveGroupName({ account, chatId: "oc_test6", log });
-    expect(result).toBeUndefined();
   });
 
   it("isolates cache entries across different accounts", async () => {

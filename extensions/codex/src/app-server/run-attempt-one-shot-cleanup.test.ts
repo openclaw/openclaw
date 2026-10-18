@@ -2,16 +2,29 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive } from "openclaw/plugin-sdk/process-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
-import { isJsonObject } from "./protocol.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
+  flattenCodexDynamicToolFunctions,
+  isJsonObject,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
+import {
+  createCodexRuntimePlanFixture,
   createNativeRunParams as createParams,
+  createRuntimeDynamicTool,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -19,10 +32,10 @@ import {
 } from "./run-attempt-test-harness.js";
 import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
-  resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import {
   createInferenceReadyClientHarness,
   createCodexInferenceReadResponses,
@@ -31,7 +44,19 @@ import {
 import * as processSnapshot from "./transport-process-snapshot.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-async function stopTaskOwnedProcess(pid: number): Promise<void> {
+// The deliberately retired root cannot report reaping its detached descendants.
+// Observe those foreign PIDs only until the owning test is aborted.
+async function waitForTaskOwnedProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isPidAlive(pid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Task-owned descendant ${pid} did not exit`, { cause: error });
+  }
+}
+
+async function stopTaskOwnedProcess(pid: number, signal: AbortSignal): Promise<void> {
   try {
     process.kill(pid, "SIGKILL");
   } catch (error) {
@@ -39,7 +64,7 @@ async function stopTaskOwnedProcess(pid: number): Promise<void> {
       throw error;
     }
   }
-  await expect.poll(() => isPidAlive(pid), { timeout: 2_000 }).toBe(false);
+  await waitForTaskOwnedProcessExit(pid, signal);
 }
 
 function runOneShot(
@@ -49,6 +74,7 @@ function runOneShot(
 ) {
   vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(client);
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace"));
+  setRuntimeConfigSnapshot(params.config ?? {});
   params.oneShotCliRun = true;
   params.cleanupBundleMcpOnRunEnd = true;
   params.onExecutionPhase = onExecutionPhase;
@@ -67,6 +93,106 @@ describe("Codex one-shot cleanup receipts", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("reuses the shared process across background turns that release their MCP resources", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    for (let index = 0; index < 2; index++) {
+      const params = createParams(
+        path.join(tempDir, `background-${index}.jsonl`),
+        path.join(tempDir, "workspace"),
+      );
+      params.cleanupBundleMcpOnRunEnd = true;
+      setRuntimeConfigSnapshot(params.config ?? {});
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
+      try {
+        await run.waitForTurnAccepted();
+        harness.send({
+          method: "turn/completed",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+        });
+        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+        expect(harness.client.getCloseError()).toBeUndefined();
+      } finally {
+        await run.catch(() => undefined);
+      }
+    }
+    expect(start).toHaveBeenCalledOnce();
+    expect(
+      harness.writes.filter((line) => JSON.parse(line).method === "thread/unsubscribe"),
+    ).toHaveLength(2);
+  });
+
+  it("uses host-owned tools for strict one-shot Codex runs", async () => {
+    const responses: Record<string, unknown> = {
+      initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      "config/read": { config: {}, layers: [] },
+      "configRequirements/read": { requirements: null },
+      "thread/start": threadStartResult(),
+      "turn/start": turnStartResult(),
+      "thread/backgroundTerminals/list": { data: [], nextCursor: null },
+    };
+    const harness = createInferenceReadyClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id?: number; method: string };
+        if (request.id !== undefined) {
+          send({ id: request.id, result: responses[request.method] ?? {} });
+        }
+      },
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.oneShotCliRun = true;
+    params.cleanupBundleMcpOnRunEnd = true;
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(params, true);
+    setCodexTestToolFactory(params, () => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    setRuntimeConfigSnapshot({});
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
+    const run = runCodexAppServerAttempt(params, { bindingStore: testCodexAppServerBindingStore });
+    try {
+      await run.waitForTurnAccepted();
+      const start = await waitForHarnessRequest(harness, "thread/start");
+      expect(start.params).toMatchObject({ config: { "features.code_mode": false } });
+      const { dynamicTools } = start.params as { dynamicTools: CodexDynamicToolSpec[] };
+      expect(
+        flattenCodexDynamicToolFunctions(dynamicTools)
+          .map((tool) => tool.name)
+          .toSorted(),
+      ).toEqual(["exec", "message", "process"]);
+      await waitForHarnessRequest(harness, "turn/start");
+      harness.send({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
+      });
+      expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
+    } finally {
+      harness.client.close();
+      await run.catch(() => undefined);
+    }
   });
 
   it.each(["completed", "cancelled"] as const)(
@@ -74,7 +200,7 @@ describe("Codex one-shot cleanup receipts", () => {
     async (completion) => {
       // Cold startup must not consume the unrelated attempt deadline in this cleanup fixture.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const turnAccepted = createDeferred<void>();
+      const turnAccepted = Promise.withResolvers<void>();
       let terminalTerminated = false;
       const results: Record<string, unknown> = {
         initialize: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
@@ -196,9 +322,9 @@ describe("Codex one-shot cleanup receipts", () => {
 
   it
     .skipIf(process.platform === "win32")
-    .each(["confirmed", "unknown", "forced", "signalled", "retired-command"])(
+    .for(["confirmed", "unknown", "forced", "signalled", "retired-command"])(
     "records one-shot cleanup accurately after %s app-server shutdown",
-    async (shutdown) => {
+    async (shutdown, { signal }) => {
       const rootPath = path.join(tempDir, "cleanup-root.mjs");
       const descendantPath = path.join(tempDir, "cleanup-descendant.mjs");
       const descendantPidPath = path.join(tempDir, "cleanup-descendant.pid");
@@ -236,7 +362,7 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.method === "test/complete") {
-    ${shutdown === "retired-command" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "retired-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
+    ${shutdown !== "forced" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "fixture-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
     send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } });
   } else if (request.id !== undefined) {
     send({ id: request.id, result: results[request.method] ?? {} });
@@ -265,7 +391,7 @@ process.stdin.on("end", () => ${
           new processSnapshot.ProcessInspectionError("unavailable"),
         );
       }
-      const turnStarted = createDeferred<void>();
+      const turnStarted = Promise.withResolvers<void>();
       const removeTurnStartedHandler = client.addNotificationHandler((notification) => {
         if (
           notification.method === "turn/started" &&
@@ -281,26 +407,36 @@ process.stdin.on("end", () => ${
       const warning = vi.spyOn(embeddedAgentLog, "warn");
       const run = runOneShot(client);
       try {
-        await Promise.race([
-          turnStarted.promise,
-          run.then(() => {
-            throw new Error("Codex attempt settled before the fixture emitted turn/started");
-          }),
-        ]);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            turnStarted.promise,
+            run,
+            "Codex attempt settled before the fixture emitted turn/started",
+          ),
+          signal,
+        );
         client.notify("test/complete");
-        expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
-        await exited;
+        expect(readAttemptTerminal(await withinTest(run, signal))).toMatchObject({
+          aborted: false,
+          timedOut: false,
+        });
+        await withinTest(exited, signal);
         const descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
         const signalled = shutdown === "forced" || shutdown === "signalled";
         expect(child.exitCode).toBe(signalled ? null : 0);
         expect(child.signalCode).toBe(signalled ? "SIGKILL" : null);
-        await expect
-          .poll(() => isPidAlive(descendantPid), { timeout: 2_000 })
-          .toBe(shutdown === "unknown" || shutdown === "retired-command");
-        // This is the cleanup guard that also records the one-shot recovery
-        // receipt; a clean root exit must not bypass its failure path.
-        if (shutdown === "confirmed") {
-          expect(warning).not.toHaveBeenCalled();
+        const retained = shutdown === "unknown" || shutdown === "retired-command";
+        if (!retained) {
+          await waitForTaskOwnedProcessExit(descendantPid, signal);
+        }
+        expect(isPidAlive(descendantPid)).toBe(retained);
+        // Confirmed termination is sufficient for host-tool-only turns. Native
+        // commands can have reparented descendants even after a clean root exit.
+        if (shutdown === "forced") {
+          expect(warning).toHaveBeenCalledWith(
+            "Codex app-server required forced shutdown; process cleanup confirmed",
+          );
+          expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/agent cleanup failed:/));
         } else {
           expect(warning).toHaveBeenCalledWith(
             expect.stringMatching(/agent cleanup failed:.*step=codex-shared-client-release/),
@@ -314,7 +450,7 @@ process.stdin.on("end", () => ${
         await run.catch(() => undefined);
         const descendantPid = Number(await fs.readFile(descendantPidPath, "utf8").catch(() => ""));
         if (descendantPid) {
-          await stopTaskOwnedProcess(descendantPid);
+          await stopTaskOwnedProcess(descendantPid, signal);
         }
       }
     },

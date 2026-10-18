@@ -30,11 +30,8 @@ export async function resolveTargetNodeRuntime(params: {
     nodeVersionSatisfiesEngine(version, params.engine) === true;
   const options = { ...params.recovery, acceptVersion };
   const available = await findUsableNodeRuntime(options);
-  if (available) {
-    return available.nodePath;
-  }
-  if (!params.recovery.installCommand) {
-    return undefined;
+  if (available || !params.recovery.installCommand) {
+    return available?.nodePath;
   }
   // Fixed upstream metadata selects an exact checksum-verified installer target.
   // An unavailable release is not permission to install a merely newer runtime.

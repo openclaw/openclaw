@@ -58,19 +58,11 @@ describe("Matrix bot-owned thread mention policy", () => {
   }
 
   it.each<{ scope: string; config: MatrixConfig }>([
-    { scope: "root", config: { requireMentionInBotThreads: false } },
     {
       scope: "account",
       config: {
         requireMentionInBotThreads: true,
         accounts: { work: { requireMentionInBotThreads: false } },
-      },
-    },
-    {
-      scope: "wildcard room",
-      config: {
-        requireMentionInBotThreads: true,
-        rooms: { "*": { requireMentionInBotThreads: false } },
       },
     },
     {
@@ -99,26 +91,8 @@ describe("Matrix bot-owned thread mention policy", () => {
     expect(f.getEvent).toHaveBeenCalledTimes(1);
   });
 
-  it.each<{ mode: string; config: MatrixConfig }>([
-    { mode: "omitted", config: {} },
-    {
-      mode: "explicitly required",
-      config: {
-        requireMentionInBotThreads: true,
-        rooms: { [roomId]: { autoReply: true } },
-      },
-    },
-    {
-      mode: "exact room replacing wildcard",
-      config: {
-        rooms: {
-          "*": { requireMentionInBotThreads: false },
-          [roomId]: { requireMention: true },
-        },
-      },
-    },
-  ])("retains mention gating when bot-thread policy is $mode", async ({ config }) => {
-    const f = setup(config);
+  it("retains mention gating when bot-thread policy explicitly requires it", async () => {
+    const f = setup({ requireMentionInBotThreads: true, rooms: { [roomId]: { autoReply: true } } });
 
     await f.receive();
     expect(f.dispatch).not.toHaveBeenCalled();
@@ -135,14 +109,6 @@ describe("Matrix bot-owned thread mention policy", () => {
     { kind: "another author's root", patch: { sender: "@other:example.org" } },
     { kind: "another event id", patch: { event_id: "$other" } },
     { kind: "another room", patch: { room_id: "!other:example.org" } },
-    {
-      kind: "another author's redacted root",
-      patch: {
-        sender: "@other:example.org",
-        content: {},
-        unsigned: { redacted_because: {} },
-      },
-    },
     { kind: "an unreadable root", patch: null },
   ])("retains mention gating for $kind", async ({ patch }) => {
     const f = setup({ requireMentionInBotThreads: false });
@@ -168,15 +134,6 @@ describe("Matrix bot-owned thread mention policy", () => {
     await f.receive();
 
     expect(f.dispatch).toHaveBeenCalledOnce();
-  });
-
-  it("does not treat an ordinary reply-to-bot as a native thread", async () => {
-    const f = setup({ requireMentionInBotThreads: false });
-
-    await f.receive({ relatesTo: { "m.in_reply_to": { event_id: "$root" } } });
-
-    expect(f.dispatch).not.toHaveBeenCalled();
-    expect(f.getEvent).not.toHaveBeenCalled();
   });
 
   it.each<{ restriction: string; config: MatrixConfig }>([

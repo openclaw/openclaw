@@ -16,8 +16,8 @@ import {
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
-  resetSystemEventsForTest,
 } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import {
@@ -40,7 +40,8 @@ afterEach(() => {
 describe("Matrix reaction ownership", () => {
   it("keeps a reaction on the runtime-bound global owner's queue", async () => {
     const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+      agents: { entries: { main: {}, research: {} } },
+      bindings: [{ agentId: "main", match: { channel: "matrix", accountId: "ops" } }],
       channels: { matrix: { dm: { allowFrom: ["*"] } } },
     };
     setRuntimeConfigSnapshot(cfg);

@@ -1,8 +1,8 @@
-// Setup finalize helpers write onboarding output and follow-up state.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { PreparedModelCatalogConfigReplacedError } from "../agents/prepared-model-catalog.errors.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
@@ -12,14 +12,17 @@ import {
   resolveControlUiHandoffTarget,
   waitForControlUiDocument,
 } from "../commands/control-ui-handoff.js";
-import {
-  buildGatewayInstallPlan,
-  gatewayInstallErrorHint,
-} from "../commands/daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "../commands/daemon-install-helpers.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "../commands/gateway-service-setup.js";
+import { resolveGatewaySetupRuntime } from "../commands/gateway-setup-runtime.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
 import { healthCommandNonExiting } from "../commands/health.js";
+import {
+  startOnboardingGatewayProcess,
+  type OnboardingGatewayProcess,
+} from "../commands/onboard-gateway-process.js";
 import {
   probeGatewayReachable,
   waitForGatewayReachable,
@@ -27,7 +30,6 @@ import {
   resolveLocalControlUiProbeLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   describeGatewayServiceRestart,
@@ -44,20 +46,17 @@ import {
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  cancelProcessExitAfterTuiReturn,
-  resolveTuiShutdownHardExitMs,
-  runTui,
-  scheduleProcessExitAfterTuiReturn,
-} from "../tui/tui.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { setupWizardShellCompletion } from "./setup.completion.js";
-import { resolveSetupSecretInputString } from "./setup.secret-input.js";
-import { resolveOnboardingGatewayRuntime } from "./setup.service-runtime.js";
+import {
+  gatewayAuthUsesLocalPassword,
+  resolveGatewayLocalPassword,
+} from "./setup.finalize-gateway-auth.js";
+import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
 
 type FinalizeOnboardingOptions = {
@@ -74,49 +73,13 @@ type FinalizeOnboardingOptions = {
 
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
-function buildSessionGatewayAuthOverride(params: {
-  nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
-  resolvedGatewayPassword: string;
-}): GatewayAuthConfig | undefined {
-  if (params.settings.authMode === "token" && params.settings.gatewayToken) {
-    return {
-      ...params.nextConfig.gateway?.auth,
-      mode: "token",
-      token: params.settings.gatewayToken,
-    };
-  }
-  if (params.settings.authMode === "password" && params.resolvedGatewayPassword) {
-    return {
-      ...params.nextConfig.gateway?.auth,
-      mode: "password",
-      password: params.resolvedGatewayPassword,
-    };
-  }
-  return params.nextConfig.gateway?.auth;
-}
-
 async function startSessionGatewayForOnboarding(params: {
-  nextConfig: OpenClawConfig;
-  settings: GatewayWizardSettings;
-  resolvedGatewayPassword: string;
+  port: number;
   prompter: WizardPrompter;
-}): Promise<import("../gateway/server.js").GatewayServer | undefined> {
+}): Promise<OnboardingGatewayProcess | undefined> {
   const progress = params.prompter.progress(t("wizard.finalize.sessionGatewayStarting"));
   try {
-    const { startGatewayServer } = await import("../gateway/server.js");
-    const server = await startGatewayServer(params.settings.port, {
-      bind: params.settings.bind,
-      ...(params.settings.bind === "custom" && params.settings.customBindHost
-        ? { host: params.settings.customBindHost }
-        : {}),
-      auth: buildSessionGatewayAuthOverride({
-        nextConfig: params.nextConfig,
-        settings: params.settings,
-        resolvedGatewayPassword: params.resolvedGatewayPassword,
-      }),
-      tailscale: params.nextConfig.gateway?.tailscale,
-    });
+    const server = await startOnboardingGatewayProcess({ port: params.port });
     progress.stop(t("wizard.finalize.sessionGatewayStarted"));
     return server;
   } catch (error) {
@@ -136,16 +99,13 @@ async function startSessionGatewayForOnboarding(params: {
 }
 
 async function closeSessionGatewayForOnboarding(params: {
-  sessionGateway: import("../gateway/server.js").GatewayServer;
+  sessionGateway: OnboardingGatewayProcess;
   runtime: RuntimeEnv;
-  reason: string;
 }): Promise<void> {
-  await params.sessionGateway.close({ reason: params.reason }).catch((error: unknown) => {
+  await params.sessionGateway.close().catch((error: unknown) => {
     params.runtime.error(formatErrorMessage(error));
   });
 }
-
-const loadSearchSetupModule = createLazyRuntimeModule(() => import("../flows/search-setup.js"));
 
 export type GatewayServiceSetupOutcome =
   | {
@@ -356,14 +316,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
         ],
       }));
     if (action === "restart") {
-      let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
+      let restartDoneMessage = t("wizard.finalize.gatewayService");
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       try {
         progress.update(t("wizard.finalize.gatewayServiceRestarting"));
-        const restartResult = await service.restart({
-          env: process.env,
-          stdout: process.stdout,
-        });
+        const restartResult = await service.restart({ env: process.env, stdout: process.stdout });
         const restartStatus = describeGatewayServiceRestart("Gateway", restartResult);
         restartDoneMessage = restartStatus.scheduled
           ? t("wizard.finalize.gatewayServiceRestartScheduled")
@@ -372,6 +329,8 @@ export async function ensureGatewayServiceForOnboarding(params: {
           status: "ready",
           action: restartStatus.scheduled ? "restart-scheduled" : "restarted",
         };
+      } catch (error) {
+        gateway = { status: "failed", error: formatErrorMessage(error) };
       } finally {
         progress.stop(restartDoneMessage);
       }
@@ -410,18 +369,24 @@ export async function ensureGatewayServiceForOnboarding(params: {
         ].join(" ");
       } else {
         const existingCommand = await service.readCommand(process.env);
-        const selection = await resolveOnboardingGatewayRuntime({
+        const selection = await resolveGatewaySetupRuntime({
           env: process.env,
           existingCommand,
           runtime: opts.daemonRuntime,
-          flow,
-          prompter,
+          selectRuntime:
+            flow === "quickstart"
+              ? undefined
+              : (suggested) =>
+                  prompter.select({
+                    message: t("wizard.finalize.daemonRuntime"),
+                    options: getLocalizedGatewayDaemonRuntimeOptions(),
+                    initialValue: suggested,
+                  }),
         });
-        const plan = await buildGatewayInstallPlan({
-          env: selection.env,
+        const installation = await prepareGatewayServiceInstall({
+          service,
+          selection,
           port: settings.port,
-          runtime: selection.runtime,
-          pinnedRuntimePath: selection.pinnedRuntimePath,
           existingCommand,
           warn: (message, title) => {
             installWarnings.push({ message, title });
@@ -429,14 +394,18 @@ export async function ensureGatewayServiceForOnboarding(params: {
           config: nextConfig,
         });
         await flushInstallWarnings();
-
+        if (flow === "quickstart" && !selection.pinnedRuntimePath) {
+          await prompter.note(
+            t(
+              installation.runtime === "bun"
+                ? "wizard.finalize.quickstartBunRuntime"
+                : "wizard.finalize.quickstartNodeRuntime",
+            ),
+            t("wizard.finalize.daemonRuntime"),
+          );
+        }
         progress.update(t("wizard.finalize.gatewayServiceInstalling"));
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          ...plan,
-          runtimePinUpdate: selection.runtimePinUpdate,
-        });
+        await installation.install();
         gateway = { status: "ready", action: "installed" };
       }
     } catch (err) {
@@ -471,7 +440,8 @@ export async function finalizeSetupWizard(
   // fail its health check, and the outro must not report plain success then.
   let gatewayHealthCheckFailed = false;
   let resolvedGatewayPassword = "";
-  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+  let sessionGateway: OnboardingGatewayProcess | undefined;
+  const readinessAbort = new AbortController();
 
   const { gateway, containerWithoutUserSystemd } = await ensureGatewayServiceForOnboarding({
     flow,
@@ -482,15 +452,13 @@ export async function finalizeSetupWizard(
     runtime,
   });
 
-  if (settings.authMode === "password") {
+  const usesLocalPassword = gatewayAuthUsesLocalPassword(settings.authMode);
+  if (usesLocalPassword) {
     try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
+      resolvedGatewayPassword = await resolveGatewayLocalPassword({
+        nextConfig,
+        env: process.env,
+      });
     } catch (error) {
       await prompter.note(
         [
@@ -502,17 +470,26 @@ export async function finalizeSetupWizard(
     }
   }
 
+  const probePassword = usesLocalPassword ? resolvedGatewayPassword : undefined;
+
   if (containerWithoutUserSystemd && !opts.skipUi) {
     sessionGateway = await startSessionGatewayForOnboarding({
-      nextConfig,
-      settings,
-      resolvedGatewayPassword,
+      port: settings.port,
       prompter,
     });
   }
 
   try {
-    if (!opts.skipHealth) {
+    if (!opts.skipHealth || sessionGateway) {
+      const showHealthCheckHelp = () =>
+        prompter.note(
+          [
+            t("common.docs"),
+            "https://docs.openclaw.ai/gateway/health",
+            "https://docs.openclaw.ai/gateway/troubleshooting",
+          ].join("\n"),
+          t("wizard.finalize.healthCheckHelp"),
+        );
       const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
@@ -521,22 +498,32 @@ export async function finalizeSetupWizard(
         tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
       });
       const probeOptions = {
+        signal: readinessAbort.signal,
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+        password: probePassword,
       };
-      // A failed replacement may leave the old Gateway alive. Observe it once;
-      // only successful install/restart needs the startup grace period.
-      gatewayProbe =
-        gateway.status === "failed"
-          ? await probeGatewayReachable(probeOptions)
-          : await waitForGatewayReachable({
+      // Nothing started (declined or failed install): probe once. A reused running
+      // Gateway keeps a bounded wait because the config just written can make it
+      // reload; started Gateways use the full startup timing.
+      const readiness =
+        gateway.status === "failed" || (gateway.status === "skipped" && !sessionGateway)
+          ? probeGatewayReachable(probeOptions)
+          : waitForGatewayReachable({
               ...probeOptions,
-              ...(gateway.status === "ready" && gateway.action !== "reused"
+              ...(sessionGateway || (gateway.status === "ready" && gateway.action !== "reused")
                 ? resolveGatewayStartupTiming()
                 : { deadlineMs: 15_000 }),
             });
-      if (gatewayProbe.ok) {
+      gatewayProbe = await (sessionGateway
+        ? Promise.race([
+            readiness,
+            sessionGateway.wait.then(() => {
+              throw new Error("Temporary Gateway exited before becoming reachable");
+            }),
+          ])
+        : readiness);
+      if (gatewayProbe.ok && !opts.skipHealth) {
         try {
           const healthConfig: OpenClawConfig =
             settings.authMode === "token" && settings.gatewayToken
@@ -557,8 +544,10 @@ export async function finalizeSetupWizard(
               json: false,
               timeoutMs: 10_000,
               config: healthConfig,
+              // Keep derived credentials on the Gateway configured by this setup run.
+              localPortOverride: settings.port,
               token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-              password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+              password: probePassword,
             },
             runtime,
           );
@@ -569,16 +558,9 @@ export async function finalizeSetupWizard(
           if (!(err instanceof ExitError)) {
             runtime.error(formatHealthCheckFailure(err));
           }
-          await prompter.note(
-            [
-              t("common.docs"),
-              "https://docs.openclaw.ai/gateway/health",
-              "https://docs.openclaw.ai/gateway/troubleshooting",
-            ].join("\n"),
-            t("wizard.finalize.healthCheckHelp"),
-          );
+          await showHealthCheckHelp();
         }
-      } else if (gateway.status !== "skipped") {
+      } else if (!gatewayProbe.ok && gateway.status !== "skipped") {
         runtime.error(
           formatHealthCheckFailure(
             new Error(
@@ -586,14 +568,7 @@ export async function finalizeSetupWizard(
             ),
           ),
         );
-        await prompter.note(
-          [
-            t("common.docs"),
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          t("wizard.finalize.healthCheckHelp"),
-        );
+        await showHealthCheckHelp();
         await prompter.note(
           buildGatewayRecoveryProjection({
             gateway,
@@ -602,7 +577,7 @@ export async function finalizeSetupWizard(
           }).detail,
           "Gateway",
         );
-      } else {
+      } else if (!gatewayProbe.ok) {
         await prompter.note(
           buildGatewayRecoveryProjection({ gateway, reachable: false }).detail,
           "Gateway",
@@ -622,25 +597,20 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const displayLinks = await resolveAdvertisedControlUiLinks({
+    const controlUiLinkOptions = {
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
       basePath: controlUiBasePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    const probeLinks = resolveLocalControlUiProbeLinks({
-      bind: settings.bind,
-      port: settings.port,
-      customBindHost: settings.customBindHost,
-      basePath: controlUiBasePath,
-      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
-    });
-    if (opts.skipHealth || (!gatewayProbe.ok && gateway.status !== "failed")) {
+    };
+    const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
+    const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
+    if ((opts.skipHealth && !sessionGateway) || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        password: probePassword,
       });
     }
     const controlUiEnabled =
@@ -706,7 +676,7 @@ export async function finalizeSetupWizard(
       { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
       { loadPreparedModelCatalogSnapshot },
     ] = await Promise.all([
-      import("../commands/auth-choice.js"),
+      import("../commands/auth-choice.model-check.js"),
       import("../agents/prepared-model-catalog.js"),
     ]);
     const modelCatalog = await loadPreparedModelCatalogSnapshot({
@@ -726,7 +696,7 @@ export async function finalizeSetupWizard(
         })
       : undefined;
     const modelAuthStatus = modelCatalogFacts
-      ? resolveDefaultModelAuthStatus(nextConfig, {
+      ? await resolveDefaultModelAuthStatus(nextConfig, {
           agentDir,
           ...(modelCatalogFacts.observedRoutes
             ? { observedRoutes: modelCatalogFacts.observedRoutes }
@@ -776,20 +746,30 @@ export async function finalizeSetupWizard(
       }
 
       if (gatewayProbe.ok) {
-        const tokenNotes = [
-          t("wizard.finalize.gatewayTokenShared"),
-          t("wizard.finalize.gatewayTokenStored"),
-          t("wizard.finalize.gatewayTokenView", {
-            command: formatCliCommand("openclaw gateway auth-token --show"),
-          }),
-          t("wizard.finalize.gatewayTokenGenerate", {
-            command: formatCliCommand("openclaw doctor --generate-gateway-token"),
-          }),
+        // Shared tokens conflict with trusted-proxy auth; do not suggest
+        // generating one when a different mode is configured.
+        const usesSharedToken = settings.authMode === "token";
+        const notes = [
+          ...(usesSharedToken
+            ? [
+                t("wizard.finalize.gatewayTokenShared"),
+                t("wizard.finalize.gatewayTokenStored"),
+                t("wizard.finalize.gatewayTokenView", {
+                  command: formatCliCommand("openclaw gateway auth-token --show"),
+                }),
+                t("wizard.finalize.gatewayTokenGenerate", {
+                  command: formatCliCommand("openclaw doctor --generate-gateway-token"),
+                }),
+              ]
+            : []),
           t("wizard.finalize.dashboardOpenAnytime", {
             command: formatCliCommand("openclaw dashboard --no-open"),
           }),
         ].filter(Boolean);
-        await prompter.note(tokenNotes.join("\n"), "Token");
+        await prompter.note(
+          notes.join("\n"),
+          usesSharedToken ? "Token" : t("wizard.finalize.dashboardTitle"),
+        );
       }
     } else if (opts.skipUi) {
       await prompter.note(t("wizard.finalize.skipControlUi"), t("wizard.finalize.controlUiTitle"));
@@ -810,7 +790,8 @@ export async function finalizeSetupWizard(
     const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
     let webSearchLines: string[];
     if (webSearchProvider) {
-      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
+      const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
+        await import("../flows/search-setup.js");
       const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
       const label = entry?.label ?? webSearchProvider;
       const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -819,17 +800,20 @@ export async function finalizeSetupWizard(
       const hasKey = keyConfigured || envAvailable;
       const authProviderId = entry?.authProviderId?.trim();
       const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
+      const authStore = authProviderId
+        ? await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
+        : undefined;
       const providerAuthProfileAvailable = authProviderId
         ? hasAuthProfileForProvider({
             provider: authProviderId,
-            agentDir,
+            authStore,
           })
         : false;
       const oauthAuthProfileAvailable =
         authProviderId && providerAuthProfileAvailable
           ? hasAuthProfileForProvider({
               provider: authProviderId,
-              agentDir,
+              authStore,
               type: "oauth",
             })
           : false;
@@ -889,7 +873,7 @@ export async function finalizeSetupWizard(
     } else {
       // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
       // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-      const { hasExistingKey, hasKeyInEnv } = await loadSearchSetupModule();
+      const { hasExistingKey, hasKeyInEnv } = await import("../flows/search-setup.js");
       const legacyDetected = configuredSearchProviders.find(
         (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
       );
@@ -950,6 +934,10 @@ export async function finalizeSetupWizard(
     );
 
     if (shouldLaunchTui) {
+      if (!gatewayProbe.ok && sessionGateway) {
+        await closeSessionGatewayForOnboarding({ sessionGateway, runtime });
+        sessionGateway = undefined;
+      }
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: false });
       try {
         await runTui({
@@ -957,11 +945,21 @@ export async function finalizeSetupWizard(
             ? {
                 config: nextConfig,
                 boundGateway: {
-                  url: displayLinks.wsUrl,
+                  // Proxy mode accepts the local password only over loopback,
+                  // so terminal handoff must not use an advertised interface.
+                  url: usesLocalPassword
+                    ? resolveLocalControlUiProbeLinks({
+                        bind: nextConfig.gateway?.bind ?? "loopback",
+                        port: settings.port,
+                        customBindHost: nextConfig.gateway?.customBindHost,
+                        basePath: undefined,
+                        tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
+                      }).wsUrl
+                    : displayLinks.wsUrl,
                   ...(settings.authMode === "token" && settings.gatewayToken
                     ? { token: settings.gatewayToken }
                     : {}),
-                  ...(settings.authMode === "password" && resolvedGatewayPassword
+                  ...(usesLocalPassword && resolvedGatewayPassword
                     ? { password: resolvedGatewayPassword }
                     : {}),
                 },
@@ -975,37 +973,17 @@ export async function finalizeSetupWizard(
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });
-        if (sessionGateway) {
-          // The temporary Gateway can own the same provider and child-process teardown as
-          // local TUI mode. Reuse that longer budget while keeping shutdown bounded.
-          const cleanupExitTimer = scheduleProcessExitAfterTuiReturn({
-            delayMs: resolveTuiShutdownHardExitMs({ localMode: true }),
-          });
-          try {
-            await closeSessionGatewayForOnboarding({
-              sessionGateway,
-              runtime,
-              reason: "onboarding tui exited",
-            });
-            sessionGateway = undefined;
-          } finally {
-            cancelProcessExitAfterTuiReturn(cleanupExitTimer);
-          }
-        }
       }
-      // Setup owns the temporary Gateway, so its cleanup must finish before
-      // the in-process TUI fallback is allowed to terminate the process.
-      scheduleProcessExitAfterTuiReturn();
       launchedTui = true;
     }
 
     return { launchedTui };
   } finally {
+    readinessAbort.abort();
     if (sessionGateway) {
       await closeSessionGatewayForOnboarding({
         sessionGateway,
         runtime,
-        reason: "onboarding finalize exited",
       });
     }
   }

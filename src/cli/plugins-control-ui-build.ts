@@ -1,16 +1,20 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
+  CONTROL_UI_PLUGIN_MAX_ASSETS,
   CONTROL_UI_PLUGIN_MAX_BUILD_BYTES,
+  isPluginControlUiAssetPath,
+  pluginControlUiGenerationHash,
 } from "../plugins/control-ui-assets.js";
+import { normalizeManifestControlUi } from "../plugins/manifest-control-ui.js";
 import type { PluginManifestControlUi } from "../plugins/manifest-types.js";
 import { PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { buildPluginBundle } from "./plugins-build-bundle.js";
+import { nameControlUiChunks } from "./plugins-control-ui-chunks.js";
 
 export async function writePluginBuildManifest(
   rootDir: string,
@@ -37,15 +41,34 @@ export async function buildPluginControlUi(params: {
   check?: boolean;
 }): Promise<PluginManifestControlUi> {
   const rootDir = await fs.realpath(params.rootDir);
+  const manifestText = await fs
+    .readFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME), "utf8")
+    .catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return "{}";
+      }
+      throw error;
+    });
+  const authored: unknown = JSON.parse(manifestText);
+  const presentation = normalizeManifestControlUi(
+    isRecord(authored) ? authored.controlUi : undefined,
+    isRecord(authored) ? authored.channels : undefined,
+  );
+  if (!presentation.ok) {
+    throw new Error(presentation.error);
+  }
   const entry = await fs.realpath(path.resolve(rootDir, params.source));
   const relative = path.relative(rootDir, entry);
   if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
     throw new Error("Control UI source must stay inside the plugin package.");
   }
-  const files = await buildPluginBundle({
+  const buildDir = path.join(rootDir, "dist/control-ui/build");
+  const outputs = await buildPluginBundle({
     absWorkingDir: rootDir,
     entryPoints: { index: entry },
-    outdir: path.join(rootDir, "dist/control-ui/build"),
+    outdir: buildDir,
+    splitting: true,
+    chunkNames: "chunk-[hash]",
     platform: "browser",
     target: "es2022",
     minify: true,
@@ -60,6 +83,34 @@ export async function buildPluginControlUi(params: {
     // bytes change the content hash that openclaw.plugin.json commits.
     alias: buildPluginLoaderAliasMap(entry, process.argv[1], import.meta.url, "src"),
   });
+  // esbuild hashes input paths into JS chunk names, including physical package
+  // store paths. Preserve module graph identity without binding asset identity
+  // to checkout location; the generation hash below covers every final byte.
+  const rawFiles = outputs.map((file) => ({
+    name: path.relative(buildDir, file.path),
+    contents: file.contents,
+  }));
+  // Reject unsafe or oversized raw output before graph parsing or renaming.
+  validateControlUiFiles(rawFiles);
+  const files = nameControlUiChunks(rawFiles);
+  validateControlUiFiles(files);
+  const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
+  const outputDir = path.join(rootDir, output);
+  const declaration = {
+    ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
+    ...(presentation.value?.settingsViews
+      ? { settingsViews: presentation.value.settingsViews }
+      : {}),
+    entry: `${output}/index.js`,
+    ...(files.some((file) => file.name === "index.css") ? { styles: [`${output}/index.css`] } : {}),
+  };
+  return await publishControlUiBuild(outputDir, declaration, files, params.check);
+}
+
+function validateControlUiFiles(files: Array<{ name: string; contents: Uint8Array }>): void {
+  if (files.length > CONTROL_UI_PLUGIN_MAX_ASSETS) {
+    throw new Error(`Control UI builds allow at most ${CONTROL_UI_PLUGIN_MAX_ASSETS} assets.`);
+  }
   if (
     files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
     files.reduce((total, file) => total + file.contents.length, 0) >
@@ -70,30 +121,26 @@ export async function buildPluginControlUi(params: {
     );
   }
   if (
-    !files.some((file) => path.basename(file.path) === "index.js") ||
-    files.some((file) => !["index.js", "index.css"].includes(path.basename(file.path)))
+    !files.some((file) => file.name === "index.js") ||
+    files.some(
+      (file) => file.name !== path.basename(file.name) || !isPluginControlUiAssetPath(file.name),
+    )
   ) {
     throw new Error(
-      "Control UI build must produce a JavaScript entrypoint and optional stylesheet.",
+      "Control UI build must produce a JavaScript entrypoint and only flat JavaScript/CSS assets.",
     );
   }
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(`${path.basename(file.path)}\0${file.contents.length}\0`).update(file.contents);
-  }
-  const output = `dist/control-ui/${hash.digest("hex")}`;
-  const outputDir = path.join(rootDir, output);
-  const declaration = {
-    entry: `${output}/index.js`,
-    ...(files.some((file) => file.path.endsWith(".css"))
-      ? { styles: [`${output}/index.css`] }
-      : {}),
-  };
-  if (params.check) {
+}
+
+async function publishControlUiBuild(
+  outputDir: string,
+  declaration: PluginManifestControlUi,
+  files: Array<{ name: string; contents: Uint8Array }>,
+  check?: boolean,
+): Promise<PluginManifestControlUi> {
+  if (check) {
     for (const file of files) {
-      const existing = await fs
-        .readFile(path.join(outputDir, path.basename(file.path)))
-        .catch(() => null);
+      const existing = await fs.readFile(path.join(outputDir, file.name)).catch(() => null);
       if (!existing?.equals(Buffer.from(file.contents))) {
         throw new Error("Control UI build is missing or stale. Run openclaw plugins build.");
       }
@@ -111,7 +158,7 @@ export async function buildPluginControlUi(params: {
   const staging = await fs.mkdtemp(path.join(generations, ".build-"));
   try {
     for (const file of files) {
-      await fs.writeFile(path.join(staging, path.basename(file.path)), file.contents);
+      await fs.writeFile(path.join(staging, file.name), file.contents);
     }
     await normalizeGenerationPermissions(staging, files);
     try {
@@ -125,7 +172,7 @@ export async function buildPluginControlUi(params: {
         throw error;
       }
       for (const file of files) {
-        const existing = await fs.readFile(path.join(outputDir, path.basename(file.path)));
+        const existing = await fs.readFile(path.join(outputDir, file.name));
         if (!existing.equals(Buffer.from(file.contents))) {
           throw new Error(
             "An immutable Control UI build was modified. Remove that build and rebuild.",
@@ -144,9 +191,9 @@ export async function buildPluginControlUi(params: {
 
 // mkdtemp is owner-only and file creation follows umask. Normalize generated
 // asset modes before publication or after validating a reused generation.
-async function normalizeGenerationPermissions(directory: string, files: Array<{ path: string }>) {
+async function normalizeGenerationPermissions(directory: string, files: Array<{ name: string }>) {
   await fs.chmod(directory, 0o755);
   for (const file of files) {
-    await fs.chmod(path.join(directory, path.basename(file.path)), 0o644);
+    await fs.chmod(path.join(directory, file.name), 0o644);
   }
 }

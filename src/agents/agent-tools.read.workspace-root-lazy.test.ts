@@ -1,14 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-// Regression guard: doctor's active-tool schema projection constructs the full
-// coding toolset to inspect tool input schemas. Workspace-scoped edit/write
-// tools used to resolve their fs-safe root eagerly at construction. When the
-// agent's workspace dir does not exist yet (e.g. an unresolved `${ENV}`
-// placeholder in the authored config), that orphaned a rejecting promise:
-//   "[openclaw] Unhandled promise rejection: FsSafeError: root dir not found"
-// The root must only be opened when a read/write/access operation actually runs.
-
 const rootSpy = vi.hoisted(() => vi.fn());
 
 type WorkspaceFileOps = {
@@ -24,8 +16,6 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => {
   return { ...actual, root: rootSpy };
 });
 
-// Capture the operations object handed to the underlying write/edit tools so the
-// regression can drive a single workspace write operation directly.
 vi.mock("./sessions/tools/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./sessions/tools/index.js")>();
   const stub = (name: string) => ({
@@ -59,8 +49,6 @@ function requireOps(ops: WorkspaceFileOps | undefined, label: string): Workspace
 
 describe("workspace-scoped coding tools resolve their fs root lazily", () => {
   it("does not orphan a rejecting fs-safe root when a write/edit targets a missing root", async () => {
-    // A missing root must reject the operation, without leaving an unawaited
-    // root promise that later surfaces as an unhandled rejection.
     rootSpy.mockReset().mockRejectedValue(new Error("root dir not found"));
     const missingWorkspace = "/openclaw-nonexistent-workspace-zzz/does/not/exist";
     const missingFile = path.join(missingWorkspace, "out.txt");
@@ -70,20 +58,9 @@ describe("workspace-scoped coding tools resolve their fs root lazily", () => {
     const writeOps = requireOps(captured.write, "write");
     const editOps = requireOps(captured.edit, "edit");
 
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      await expect(writeOps.writeFile(missingFile, "x")).rejects.toThrow();
-      await expect(editOps.writeFile(missingFile, "x")).rejects.toThrow();
-      // Let any orphaned rejection settle into the listener before asserting.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
-
-    expect(unhandled).toEqual([]);
+    expect(rootSpy).not.toHaveBeenCalled();
+    await expect(writeOps.writeFile(missingFile, "x")).rejects.toThrow("root dir not found");
+    await expect(editOps.writeFile(missingFile, "x")).rejects.toThrow("root dir not found");
+    expect(rootSpy).toHaveBeenCalledTimes(2);
   });
 });

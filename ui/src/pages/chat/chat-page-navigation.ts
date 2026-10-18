@@ -1,5 +1,4 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
   resolveSessionNavigationAgentId,
@@ -16,8 +15,6 @@ import {
 import { currentRouteLocation } from "./chat-canonical-location.ts";
 import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./session-route-data.ts";
-import type { ChatSplitLayout, ChatSplitPane } from "./split-layout-types.ts";
-import { applyUiCommandToSplitLayout, findPane, panesOf } from "./split-layout.ts";
 
 const paneRouteData = new WeakMap<
   SessionChatRouteData,
@@ -40,31 +37,6 @@ export function sameChatPaneRoute(
       before.agentId,
     ),
   );
-}
-
-function ownedChatPaneCommand(
-  context: ApplicationContext,
-  params: UiCommandDetail,
-): UiCommandDetail {
-  const { command, agentId } = params;
-  if (
-    command.kind !== "navigate" &&
-    command.kind !== "split" &&
-    command.kind !== "focus" &&
-    command.kind !== "close-pane"
-  ) {
-    return params;
-  }
-  return {
-    ...params,
-    sessionKey: params.sessionKey
-      ? ownedChatPaneSessionKey(context, params.sessionKey, agentId)
-      : undefined,
-    command: {
-      ...command,
-      sessionKey: ownedChatPaneSessionKey(context, command.sessionKey, agentId),
-    },
-  };
 }
 
 export function ownedChatPaneRouteData(
@@ -149,78 +121,4 @@ export function navigateChatPage(
       ? locationWithoutDraft(currentRouteLocation(), options)
       : options;
   context[replace ? "replace" : "navigate"](face, location);
-}
-
-type ChatPageCommandHost = {
-  context: ApplicationContext;
-  data: SessionChatRouteData;
-  presented: boolean;
-  pendingCreate: boolean;
-  narrow: boolean;
-  layout: ChatSplitLayout | undefined;
-  unboundPaneIds: ReadonlySet<string>;
-  classicLayout: (key: string) => ChatSplitLayout;
-  adoptPaneNavigation: (paneId: string, key: string, agentId?: string) => void;
-  updateRoute: (key: string, replace?: boolean, face?: BoardFace, agentId?: string) => void;
-  closeSplitPane: (layout: ChatSplitLayout, paneId: string) => void;
-  persistLayout: (layout: ChatSplitLayout | undefined) => void;
-  updateRouteToPane: (pane: ChatSplitPane) => void;
-};
-
-export function handleChatPageCommand(event: Event, host: ChatPageCommandHost): void {
-  if (!host.presented || host.pendingCreate || !(event instanceof CustomEvent)) {
-    return;
-  }
-  const {
-    command,
-    sessionKey: sourceSessionKey,
-    agentId,
-  } = ownedChatPaneCommand(
-    host.context,
-    // SAFETY: UI_COMMAND_EVENT comes from the validated Gateway adapter or typed local actions.
-    event.detail as UiCommandDetail,
-  );
-  if (command.kind === "navigate") {
-    event.preventDefault();
-    if (host.layout && host.unboundPaneIds.has(host.layout.activePaneId)) {
-      host.adoptPaneNavigation(host.layout.activePaneId, command.sessionKey, agentId);
-    }
-    host.updateRoute(command.sessionKey, false, undefined, agentId);
-    return;
-  }
-  if (command.kind !== "split" && command.kind !== "close-pane" && command.kind !== "focus") {
-    return;
-  }
-  if (command.kind === "split" && host.narrow) {
-    return;
-  }
-
-  const currentSessionKey = ownedChatPaneRouteData(host.context, host.data)?.sessionKey?.trim();
-  const layout =
-    host.layout ??
-    (command.kind === "split" && currentSessionKey
-      ? host.classicLayout(currentSessionKey)
-      : undefined);
-  if (!layout) {
-    return;
-  }
-  if (command.kind === "close-pane") {
-    const targetPane = panesOf(layout).find((pane) => pane.sessionKey === command.sessionKey);
-    if (!targetPane) {
-      return;
-    }
-    event.preventDefault();
-    host.closeSplitPane(layout, targetPane.id);
-    return;
-  }
-  const next = applyUiCommandToSplitLayout(layout, command, sourceSessionKey);
-  if (next === layout) {
-    return;
-  }
-  event.preventDefault();
-  host.persistLayout(next);
-  const activePane = next && findPane(next, next.activePaneId)?.pane;
-  if (activePane) {
-    host.updateRouteToPane(activePane);
-  }
 }

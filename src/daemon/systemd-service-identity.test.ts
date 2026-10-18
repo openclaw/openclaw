@@ -4,7 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import type { SystemdServiceIdentity } from "./service-types.js";
-import { restartSystemdService, startSystemdService } from "./systemd-lifecycle.js";
+import {
+  restartSystemdService,
+  startSystemdService,
+  stopSystemdService,
+} from "./systemd-lifecycle.js";
 import { captureSystemdServiceIdentity } from "./systemd-service-identity.js";
 
 const native = vi.hoisted(() => ({
@@ -64,41 +68,44 @@ beforeEach(() => {
   afterReset = undefined;
   resetFailure = undefined;
   native.open.mockResolvedValue({ query: native.query, close: native.close, verify: () => {} });
-  native.query.mockImplementation(async (args, _signatures, _deadline, assertCurrent) => {
-    assertCurrent?.();
-    const method = args[4];
-    if (!method) {
-      throw new Error("Missing synthetic native method");
-    }
-    if (method === "GetId") {
-      return [[current.busId]];
-    }
-    if (method === "GetNameOwner") {
-      return [[current.managerOwner]];
-    }
-    if (method === "GetConnectionUnixUser") {
-      return [[current.managerUid]];
-    }
-    if (method === "GetUnit" || method === "LoadUnit") {
-      return [["/org/freedesktop/systemd1/unit/openclaw_2eservice"]];
-    }
-    if (args[0] === "get-property") {
-      return method === "Id" ? [current.unitName, current.unitPath] : [current.serviceUser];
-    }
-    if (["ResetFailedUnit", "StartUnit", "RestartUnit"].includes(method)) {
-      expect(args[1]).toBe(original.managerOwner);
-      effects.push(method);
-      if (method === "ResetFailedUnit") {
-        afterReset?.();
-        if (resetFailure) {
-          throw resetFailure;
-        }
-        return [];
+  native.query.mockImplementation(
+    async (args, _signatures, _deadline, assertCurrent, beforeDispatch) => {
+      assertCurrent?.();
+      const method = args[4];
+      if (!method) {
+        throw new Error("Missing synthetic native method");
       }
-      return [["/org/freedesktop/systemd1/job/7"]];
-    }
-    throw new Error(`Unexpected synthetic native query: ${method}`);
-  });
+      if (method === "GetId") {
+        return [[current.busId]];
+      }
+      if (method === "GetNameOwner") {
+        return [[current.managerOwner]];
+      }
+      if (method === "GetConnectionUnixUser") {
+        return [[current.managerUid]];
+      }
+      if (method === "GetUnit" || method === "LoadUnit") {
+        return [["/org/freedesktop/systemd1/unit/openclaw_2eservice"]];
+      }
+      if (args[0] === "get-property") {
+        return method === "Id" ? [current.unitName, current.unitPath] : [current.serviceUser];
+      }
+      if (["ResetFailedUnit", "StartUnit", "StopUnit", "RestartUnit"].includes(method)) {
+        expect(args[1]).toBe(original.managerOwner);
+        beforeDispatch?.();
+        effects.push(method);
+        if (method === "ResetFailedUnit") {
+          afterReset?.();
+          if (resetFailure) {
+            throw resetFailure;
+          }
+          return [];
+        }
+        return [["/org/freedesktop/systemd1/job/7"]];
+      }
+      throw new Error(`Unexpected synthetic native query: ${method}`);
+    },
+  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -133,38 +140,39 @@ const changes = [
   },
 ] as const;
 
-it.each(changes)("refuses $name before native activation", async ({ change, reason }) => {
-  current = { ...current, ...change };
-  const failure = await startSystemdService({
-    stdout: new PassThrough(),
-    systemdIdentity: original,
-  }).catch((error: unknown) => error);
-  expect(native.systemctl).not.toHaveBeenCalled();
-  expect(failure).toMatchObject({ name: "ServiceOwnershipRefusalError", reason });
-  expect(effects).toEqual([]);
-  expect(native.close).toHaveBeenCalledOnce();
-});
-
-it.each(changes)(
-  "revalidates $name between reset-failed and restart",
-  async ({ change, reason }) => {
-    afterReset = () => {
+it.each(["before start", "during restart"])("refuses changed authority %s", async (phase) => {
+  for (const { name, change, reason } of changes) {
+    vi.clearAllMocks();
+    effects = [];
+    current = { ...original };
+    const replace = () => {
       current = { ...current, ...change };
     };
+    afterReset = phase === "during restart" ? replace : undefined;
+    if (phase === "before start") {
+      replace();
+    }
+    const activate = phase === "before start" ? startSystemdService : restartSystemdService;
     await expect(
-      restartSystemdService({ stdout: new PassThrough(), systemdIdentity: original }),
+      activate({ stdout: new PassThrough(), systemdIdentity: original }),
+      name,
     ).rejects.toMatchObject({ name: "ServiceOwnershipRefusalError", reason });
-    expect(effects).toEqual(["ResetFailedUnit"]);
+    expect(effects).toEqual(phase === "before start" ? [] : ["ResetFailedUnit"]);
     expect(native.systemctl).not.toHaveBeenCalled();
-  },
-);
+    expect(native.close).toHaveBeenCalledOnce();
+  }
+});
 
-it.each(["", "root", "0"])("accepts the same root account spelled %j", async (serviceUser) => {
-  current.serviceUser = serviceUser;
-  await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original });
-  expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
-  expect(native.open).toHaveBeenCalledExactlyOnceWith(original.bus.address, expect.any(Number));
-  expect(native.systemctl).not.toHaveBeenCalled();
+it("accepts root account aliases", async () => {
+  for (const serviceUser of ["", "root", "0"]) {
+    vi.clearAllMocks();
+    effects = [];
+    current.serviceUser = serviceUser;
+    await startSystemdService({ stdout: new PassThrough(), systemdIdentity: original });
+    expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
+    expect(native.open).toHaveBeenCalledExactlyOnceWith(original.bus.address, expect.any(Number));
+    expect(native.systemctl).not.toHaveBeenCalled();
+  }
 });
 
 it("retains the root privilege requirement for a pinned system unit", async () => {
@@ -249,4 +257,86 @@ it("refuses to capture authority for another service account", async () => {
     captureSystemdServiceIdentity({ env: {}, target: original, managerUid: 0 }),
   ).rejects.toBeInstanceOf(ServiceOwnershipRefusalError);
   expect(effects).toEqual([]);
+});
+
+it("root can retain the explicitly adopted non-root account through pinned stop and start", async () => {
+  current.serviceUser = "openclaw-fixture";
+  const identity = await captureSystemdServiceIdentity({
+    env: {},
+    target: original,
+    managerUid: 0,
+    rootServiceAccount: "openclaw-fixture",
+  });
+  await stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
+  await startSystemdService({ stdout: new PassThrough(), systemdIdentity: identity });
+  expect(effects).toEqual(["StopUnit", "ResetFailedUnit", "StartUnit"]);
+  expect(native.systemctl).not.toHaveBeenCalled();
+});
+
+it.each(["other-account", "root"])("an adopted account never admits %s", async (replacement) => {
+  current.serviceUser = "openclaw-fixture";
+  const identity = await captureSystemdServiceIdentity({
+    env: {},
+    target: original,
+    managerUid: 0,
+    rootServiceAccount: "openclaw-fixture",
+  });
+  current.serviceUser = replacement;
+  await expect(
+    stopSystemdService({ stdout: new PassThrough(), systemdIdentity: identity }),
+  ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+  expect(effects).toEqual([]);
+});
+
+it("refuses an explicit adopted account to a non-root inspector", async () => {
+  vi.spyOn(process, "geteuid").mockReturnValue(1000);
+  current.serviceUser = "openclaw-fixture";
+  await expect(
+    captureSystemdServiceIdentity({
+      env: {},
+      target: original,
+      rootServiceAccount: "openclaw-fixture",
+    }),
+  ).rejects.toMatchObject({ reason: "systemd-account-refused" });
+  expect(effects).toEqual([]);
+});
+
+it("checks effect-specific process facts after native inspection without requiring them after stop", async () => {
+  let serving = true;
+  const assertCurrent = () => {};
+  native.query.mockImplementationOnce(async () => {
+    // An asynchronous pre-effect revalidation may lose the observed process.
+    serving = false;
+    return [[current.busId]];
+  });
+  await expect(
+    stopSystemdService({
+      stdout: new PassThrough(),
+      systemdIdentity: original,
+      assertCurrent,
+      beforeEffect: () => {
+        if (!serving) {
+          throw new Error("process replaced");
+        }
+      },
+    }),
+  ).rejects.toThrow("process replaced");
+  expect(effects).toEqual([]);
+});
+
+it("does not downgrade a final effect guard refusal from reset-failed into a start", async () => {
+  const denied = new Error("original stopped-service custody ended");
+  const warn = vi.fn();
+  await expect(
+    startSystemdService({
+      stdout: new PassThrough(),
+      systemdIdentity: original,
+      warn,
+      beforeEffect: () => {
+        throw denied;
+      },
+    }),
+  ).rejects.toBe(denied);
+  expect(effects).toEqual([]);
+  expect(warn).not.toHaveBeenCalled();
 });
