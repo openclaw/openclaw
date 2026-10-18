@@ -71,6 +71,9 @@ async function prepare(cfg: OpenClawConfig, adapter: SessionBindingAdapter, dire
     author: { id: "user-1", bot: false },
   });
   const author = message.author;
+  if (!author) {
+    throw new Error("Expected a sender in the Discord fixture");
+  }
   const preflight = createDiscordPreflightArgs({
     cfg,
     discordConfig: cfg.channels?.discord ?? {},

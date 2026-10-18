@@ -25,11 +25,11 @@ let signers: string;
 
 type RunResult = Pick<ReturnType<typeof spawnSync>, "status" | "stdout" | "stderr">;
 function pass<T extends RunResult>(result: T) {
-  expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(0);
   return result;
 }
 function reject<T extends RunResult>(result: T) {
-  expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+  expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).not.toBe(0);
   return result;
 }
 

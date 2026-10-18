@@ -632,7 +632,11 @@ describe("DiscordPresenceListener", () => {
     const { store } = listener;
     await listener.offline();
     const claim = pausePresenceWork(store, "claim");
-    const rollback = pause(store.deleteIfEqual);
+    const deleteIfEqual = store.deleteIfEqual;
+    if (!deleteIfEqual) {
+      throw new Error("Expected conditional deletion in the presence fixture");
+    }
+    const rollback = pause(deleteIfEqual.bind(store));
     vi.spyOn(store, "deleteIfEqual").mockImplementationOnce(rollback.run);
     const event = listener.online();
     const stopped = vi.fn();
