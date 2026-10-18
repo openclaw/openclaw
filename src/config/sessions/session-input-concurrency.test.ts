@@ -1,16 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it as baseIt, vi } from "vitest";
+import { beforeEach, expect, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { listSessionPendingInputs } from "./session-accessor.pending-inputs.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
@@ -20,21 +16,14 @@ import { createSessionCompoundWorkerFixture } from "./session-compound-worker.te
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
+import { it as baseIt } from "./session-worker-state.test-support.js";
 
 const it = baseIt.extend<{
-  state: OpenClawTestState;
   f: ReturnType<typeof createSessionCompoundWorkerFixture>;
 }>({
-  state: [
-    async ({ task: _task }, use) =>
-      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
-        await use(state);
-      }),
-    { auto: true },
-  ],
   f: async ({ state: _state }, use) => use(createSessionCompoundWorkerFixture()),
 });
+beforeEach(() => setRuntimeConfigSnapshot({}));
 
 async function acquireInput(
   target: Parameters<typeof acquireSessionInputActor>[0],
@@ -50,17 +39,17 @@ function recorderFor(
   f: ReturnType<typeof createSessionCompoundWorkerFixture>,
   text: string,
   idempotencyKey: string,
-  overrides: Partial<Parameters<typeof createUserTurnTranscriptRecorder>[0]> = {},
+  onPersistenceError?: (error: unknown) => void,
 ) {
   return createUserTurnTranscriptRecorder({
     input: { text, idempotencyKey },
-    target: overrides.target ?? {
+    target: {
       ...f.scope,
       expectedSessionId: f.scope.sessionId,
       sessionEntry: f.read(),
     },
     updateMode: "none",
-    ...overrides,
+    onPersistenceError,
   });
 }
 
@@ -99,9 +88,7 @@ it("acquires a captured input actor outside unrelated writer work and checks aut
       { assertCurrent, assertReadable: assertCurrent },
     );
     input = expectDefined(await withinTest(acquiring, signal), "captured input actor");
-    const recorder = recorderFor(f, "Retain authority at the actual write", "captured-input", {
-      onPersistenceError() {},
-    });
+    const recorder = recorderFor(f, "captured input", "captured-input", () => {});
     bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
     write = recorder.persistApproved();
     void write.catch(() => {});
@@ -135,18 +122,15 @@ it("accepts input through a captured path alias using the native owner's canonic
     target: f.target,
     readSource: { ...captureSessionEntryReadSource(f.database, undefined), path: aliasPath },
   });
-  const recorder = recorderFor(f, "Accept through the original native owner", "aliased-input", {
-    target: {
-      ...f.scope,
-      storePath: aliasPath,
-      expectedSessionId: f.scope.sessionId,
-      sessionEntry: f.read(),
-    },
-  });
+  const recorder = recorderFor(
+    { ...f, scope: { ...f.scope, storePath: aliasPath } },
+    "aliased input",
+    "aliased-input",
+  );
   bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
   try {
     await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
-    expect(f.events()).toContainEqual(messageWith("Accept through the original native owner"));
+    expect(f.events()).toContainEqual(messageWith("aliased input"));
   } finally {
     await input.actor.release();
   }
@@ -156,7 +140,7 @@ it.for(["before", "after"] as const)(
   "checks input staging lifecycle changes %s writer admission",
   async (timing, { f }) => {
     const input = await acquireInput({ ...f.scope, target: f.target });
-    const recorder = recorderFor(f, "Continue after the previous run", "next-input");
+    const recorder = recorderFor(f, "next input", "next-input");
     bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
     const completePrevious = () =>
       patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
@@ -190,7 +174,7 @@ it.for(["before", "after"] as const)(
         await expect(staged).resolves.toBe(true);
         bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
         await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
-        expect(f.events()).toContainEqual(messageWith("Continue after the previous run"));
+        expect(f.events()).toContainEqual(messageWith("next input"));
       } else {
         await expect(staged).rejects.toThrow(
           /^Session actor (?:version changed before command admission|lifecycle changed before its durable phase)$/,
@@ -316,7 +300,7 @@ it.for([
       }
     };
     const input = await acquireInput({ ...f.scope, target: f.target }, assertCurrent);
-    const recorder = recorderFor(f, "Keep the original admission", "fenced-input");
+    const recorder = recorderFor(f, "admitted input", "fenced-input");
     await input.actor.read({ assertCurrent, authorize: assertCurrent });
     bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
     let metadataWrites = 0;
@@ -346,7 +330,7 @@ it.for([
         await recorder.persistFallback();
         expect(f.read()?.displayName).toBe(`Updated ${metadataWrites}`);
         expect(f.events().filter((event) => event.type === "message")).toEqual([
-          messageWith("Keep the original admission"),
+          messageWith("admitted input"),
         ]);
       } else {
         await expect(recorder.persistApproved()).rejects.toThrow(

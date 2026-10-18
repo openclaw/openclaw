@@ -23,6 +23,7 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 
 const external = vi.hoisted(() => ({
   findWorkspaces: vi.fn(async () => []),
@@ -89,25 +90,22 @@ async function fixture() {
     input: {
       entry: { sessionId: "session-1", lifecycleRevision: "revision-1", updatedAt: 1 },
       transcriptEvents: [
-        {
-          type: "session",
-          id: "session-1",
-          version: 3,
+        createSessionTranscriptHeader({
+          sessionId: "session-1",
           cwd: "/synthetic",
+          version: 3,
           timestamp: "2026-10-11T00:00:00.000Z",
-        },
-        {
-          type: "message",
-          id: "user",
-          parentId: null,
-          message: { role: "user", content: "Question" },
-        },
-        {
-          type: "message",
-          id: "answer",
-          parentId: "user",
-          message: { role: "assistant", content: "Answer", stopReason: "stop" },
-        },
+        }),
+        ...[
+          { id: "user", parentId: null, role: "user", content: "Question" },
+          {
+            id: "answer",
+            parentId: "user",
+            role: "assistant",
+            content: "Answer",
+            stopReason: "stop",
+          },
+        ].map(({ id, parentId, ...message }) => ({ type: "message", id, parentId, message })),
       ],
     },
   });
@@ -231,19 +229,16 @@ it.each([false, true])(
     if (failCommit) {
       await expect(externalOwner.run(() => remove())).rejects.toThrow("Companion commit refused");
       expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-1");
-      expect(externalOwner.companion.present).toBe(true);
-      expect(externalOwner.mutation.rollback).toHaveBeenCalledOnce();
-      expect(external.settleReceipt).not.toHaveBeenCalled();
     } else {
       await expect(externalOwner.run(() => remove())).resolves.toMatchObject({
         deleted: true,
         deletedSessionId: "session-1",
       });
       expect(owner.readSession(sessionKey, authority)).toBeUndefined();
-      expect(externalOwner.companion.present).toBe(false);
-      expect(externalOwner.mutation.rollback).not.toHaveBeenCalled();
-      expect(external.settleReceipt).toHaveBeenCalledOnce();
     }
+    expect(externalOwner.companion.present).toBe(failCommit);
+    expect(externalOwner.mutation.rollback).toHaveBeenCalledTimes(Number(failCommit));
+    expect(external.settleReceipt).toHaveBeenCalledTimes(Number(!failCommit));
   },
 );
 

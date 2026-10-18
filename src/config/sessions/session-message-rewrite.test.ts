@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it as baseIt, vi } from "vitest";
+import { expect, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -17,10 +17,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -39,17 +35,11 @@ import {
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
 import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
+import { it } from "./session-worker-state.test-support.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-
-const it = baseIt.extend<{ state: OpenClawTestState }>({
-  state: [
-    async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
-    { auto: true },
-  ],
-});
 
 // mock-isolation: Keep unrelated periodic maintenance outside the exact-row writer fixture.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -112,6 +102,17 @@ function fixture(agentId = "main", storePath?: string) {
 function requireMessage(message: unknown) {
   assert(isRecord(message), "invalid fixture message");
   return message;
+}
+
+async function withoutHostSql(run: () => Promise<void>, stop?: () => void) {
+  const sql = observeHostDataSql();
+  try {
+    await run();
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+    stop?.();
+  }
 }
 
 it("commits the exact prepared rewrite without rereading its payload or generation", async ({
@@ -181,13 +182,13 @@ it.for([
   async ([operation, agentId], { state }) => {
     const f = fixture(agentId, agentId === "main" ? undefined : state.statePath("shared.sqlite"));
     const before = f.rows();
-    const sql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       if (operation === "anchor") {
         await expect(
-          rewriteTranscriptMessageAtAnchor(f.anchor, (message) => {
-            return { ...requireMessage(message), __openclaw: { steerTargetRunId: "next-run" } };
-          }),
+          rewriteTranscriptMessageAtAnchor(f.anchor, (message) => ({
+            ...requireMessage(message),
+            __openclaw: { steerTargetRunId: "next-run" },
+          })),
         ).resolves.toMatchObject({ message: { __openclaw: { steerTargetRunId: "next-run" } } });
       } else {
         await expect(
@@ -202,10 +203,7 @@ it.for([
           }),
         ).resolves.toEqual({ messageId: "answer" });
       }
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    });
     const after = f.rows();
     expect(after.at(-1)).toEqual(before.at(-1));
     expect(after).not.toEqual(before);
@@ -226,11 +224,7 @@ it.each([
       (message) => {
         const current = requireMessage(message);
         if (change === "lifecycle") {
-          replaceSessionEntrySync(f.scope, {
-            sessionId: f.scope.sessionId,
-            updatedAt: 2,
-            lifecycleRevision: "successor",
-          });
+          f.entry({ updatedAt: 2, lifecycleRevision: "successor" });
         } else {
           runOpenClawAgentWriteTransaction(
             (database) => {
@@ -311,8 +305,7 @@ it.for([false, true])(
     const alternateBefore = alternate.rows();
     const updates: unknown[] = [];
     const stop = onInternalSessionTranscriptUpdate((update) => updates.push(update));
-    const sql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       await withOwnedSessionTranscriptWrites(
         {
           sessionTarget: { ...scope, expectedWriterRunId: "first-run" },
@@ -335,10 +328,7 @@ it.for([false, true])(
           }
         },
       );
-    } finally {
-      sql.restore();
-      stop();
-    }
+    }, stop);
     expect(alternate.rows()).toEqual(alternateBefore);
     expect(readSessionEntryRow(alternate.database, scope.sessionKey)?.entry.updatedAt).toBe(1);
     if (staleWriter) {
@@ -366,6 +356,5 @@ it.for([false, true])(
         }),
       ]);
     }
-    expect(sql.queries).toEqual([]);
   },
 );

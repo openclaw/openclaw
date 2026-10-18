@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, expect, it as baseIt, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -9,10 +9,6 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
 import {
   linkSessionConversation,
@@ -28,14 +24,11 @@ import * as rewrite from "./session-message-rewrite-domain.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import * as reconcile from "./session-transcript-reconcile.js";
+import { it } from "./session-worker-state.test-support.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
 
-const it = baseIt.extend<{ state: OpenClawTestState }>({
-  state: [
-    async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
-    { auto: true },
-  ],
-});
+type CompactOptions = Parameters<typeof trimSessionTranscriptForManualCompact>[1];
+type Authority = NonNullable<CompactOptions["authority"]>;
 
 const metadataFault = useSqliteWorkerFault([
   {
@@ -59,9 +52,8 @@ function fixture(entry?: Partial<Parameters<typeof replaceSessionEntrySync>[1]>)
   return {
     ...f,
     records,
-    compact: (
-      options: Omit<Parameters<typeof trimSessionTranscriptForManualCompact>[1], "maxLines"> = {},
-    ) => trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3, ...options }),
+    compact: (options: Omit<CompactOptions, "maxLines"> = {}) =>
+      trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3, ...options }),
   };
 }
 
@@ -71,16 +63,14 @@ function guardedFixture(entry?: Partial<Parameters<typeof replaceSessionEntrySyn
   return {
     ...f,
     before,
-    authority: (
-      overrides: Partial<
-        NonNullable<Parameters<typeof trimSessionTranscriptForManualCompact>[1]["authority"]>
-      > = {},
-    ) => ({
-      expectedLifecycleRevision: before.lifecycleRevision,
-      source: () => {},
-      assertHostCurrent() {},
-      ...overrides,
-    }),
+    guardedCompact: (source: Authority["source"] = () => {}, assertHostCurrent = () => {}) =>
+      f.compact({
+        authority: {
+          expectedLifecycleRevision: before.lifecycleRevision,
+          source,
+          assertHostCurrent,
+        },
+      }),
     unchanged: () => {
       expect(f.events()).toEqual(f.records);
       expect(f.read()).toEqual(before);
@@ -96,14 +86,35 @@ function guardedFixture(entry?: Partial<Parameters<typeof replaceSessionEntrySyn
   };
 }
 
-async function withoutHostSql(run: () => Promise<unknown>) {
+async function expectCompactWithoutHostSql(run: () => Promise<unknown>) {
   const sql = observeHostDataSql();
   try {
-    await run();
+    await expect(run()).resolves.toEqual({ compacted: true, kept: 3 });
     expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
   }
+}
+
+function onCommit(change: () => void) {
+  const changed = vi.fn(change);
+  probe.admission(admission, (request, grant, callback) => {
+    if (request.stage === "commit") {
+      changed();
+    }
+    callback(request, grant);
+  });
+  return changed;
+}
+
+function onDispatch(change: () => void, manualOnly = false) {
+  const execute = rewrite.executeSessionMessageRewriteOperation;
+  vi.spyOn(rewrite, "executeSessionMessageRewriteOperation").mockImplementation((...args) => {
+    if (!manualOnly || args[2].type === "session.transcript.manualCompact") {
+      change();
+    }
+    return execute(...args);
+  });
 }
 
 it("commits a bounded next-turn projection after trimming a large compressed transcript", async () => {
@@ -136,12 +147,9 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
   ).toEqual({ count: 1 });
   background.mockClear();
 
-  await withoutHostSql(async () => {
-    await expect(trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3 })).resolves.toEqual({
-      compacted: true,
-      kept: 3,
-    });
-  });
+  await expectCompactWithoutHostSql(() =>
+    trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3 }),
+  );
   expect(background).not.toHaveBeenCalled();
   expect(
     f.database.db
@@ -177,9 +185,7 @@ it("trims through the worker and clears accounting without host data SQL", async
     totalTokensFresh: true,
     cliSessionIds: { synthetic: "obsolete" },
   });
-  await withoutHostSql(async () => {
-    await expect(f.compact({ nowMs: 500 })).resolves.toEqual({ compacted: true, kept: 3 });
-  });
+  await expectCompactWithoutHostSql(() => f.compact({ nowMs: 500 }));
   expect(f.events()).toMatchObject([
     { type: "session", id: f.scope.sessionId },
     { id: "entry-3", parentId: null },
@@ -197,41 +203,26 @@ it("trims through the worker and clears accounting without host data SQL", async
 it("rolls back transcript and accounting when host authority closes at commit", async () => {
   const f = guardedFixture();
   let live = true;
-  let commitRequested = false;
-  probe.admission(admission, (request, grant, callback) => {
-    if (request.stage === "commit") {
-      commitRequested = true;
-      live = false;
-    }
-    callback(request, grant);
+  const commit = onCommit(() => {
+    live = false;
   });
   await expect(
-    f.compact({
-      authority: f.authority({
-        assertHostCurrent: () => {
-          if (!live) {
-            throw new Error("manual compaction authority closed");
-          }
-        },
-      }),
+    f.guardedCompact(undefined, () => {
+      if (!live) {
+        throw new Error("manual compaction authority closed");
+      }
     }),
   ).rejects.toThrow("manual compaction authority closed");
-  expect(commitRequested).toBe(true);
+  expect(commit).toHaveBeenCalled();
   f.unchanged();
 });
 
 it("rejects an entry rebound after prepared manual-compaction admission", async () => {
   const f = guardedFixture();
-  const execute = rewrite.executeSessionMessageRewriteOperation;
-  vi.spyOn(rewrite, "executeSessionMessageRewriteOperation").mockImplementation((...args) => {
+  onDispatch(() => {
     replaceSessionEntrySync(f.scope, { ...f.before, lifecycleRevision: "successor" });
-    return execute(...args);
   });
-  await expect(
-    f.compact({
-      authority: f.authority(),
-    }),
-  ).rejects.toThrow(
+  await expect(f.guardedCompact()).rejects.toThrow(
     "SQLite session state changed while preparing session.transcript.manual-compact",
   );
   expect(f.events()).toEqual(f.records);
@@ -243,13 +234,8 @@ it("rechecks a foreign source changed during the commit grant", async () => {
   const foreignScope = f.foreign();
   const foreign = openOpenClawAgentDatabase({ agentId: "main", path: foreignScope.storePath });
   const identity = readOpenClawAgentDatabaseIdentity(foreign);
-  let changed = false;
-  probe.admission(admission, (request, grant, callback) => {
-    if (request.stage === "commit") {
-      replaceSessionEntrySync(foreignScope, { ...f.before, label: "revoked" });
-      changed = true;
-    }
-    callback(request, grant);
+  const changed = onCommit(() => {
+    replaceSessionEntrySync(foreignScope, { ...f.before, label: "revoked" });
   });
   const source = Object.assign(() => {}, {
     async prepareSessionSource() {
@@ -276,12 +262,10 @@ it("rechecks a foreign source changed during the commit grant", async () => {
       };
     },
   });
-  await expect(
-    f.compact({
-      authority: f.authority({ source }),
-    }),
-  ).rejects.toThrow(/source changed|source revoked|confirmed native completion/i);
-  expect(changed).toBe(true);
+  await expect(f.guardedCompact(source)).rejects.toThrow(
+    /source changed|source revoked|confirmed native completion/i,
+  );
+  expect(changed).toHaveBeenCalled();
   f.unchanged();
 });
 
@@ -342,24 +326,11 @@ it.each([
       changed = true;
     };
     if (boundary === "dispatch") {
-      const execute = rewrite.executeSessionMessageRewriteOperation;
-      vi.spyOn(rewrite, "executeSessionMessageRewriteOperation").mockImplementation((...args) => {
-        if (args[2].type === "session.transcript.manualCompact") {
-          revoke();
-        }
-        return execute(...args);
-      });
+      onDispatch(revoke, true);
     } else {
-      probe.admission(admission, (request, grant, callback) => {
-        if (request.stage === "commit") {
-          revoke();
-        }
-        callback(request, grant);
-      });
+      onCommit(revoke);
     }
-    const compact = f.compact({
-      authority: f.authority({ source: current.source }),
-    });
+    const compact = f.guardedCompact(current.source);
     if (succeeds) {
       await expect(compact).resolves.toEqual({ compacted: true, kept: 3 });
       expect(f.events()).toHaveLength(3);

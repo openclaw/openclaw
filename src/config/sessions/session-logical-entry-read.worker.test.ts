@@ -97,15 +97,11 @@ function holdAdmission(agentId: string) {
   return gate;
 }
 
-async function readFirstSession(
-  kind: "read" | "admission",
-  scope: SessionAccessScope,
-  assertCurrent?: () => void,
-) {
+async function readFirstSession(kind: "read" | "admission", scope: SessionAccessScope) {
   if (kind === "read") {
-    return readSessionEntryInWorker(scope, assertCurrent);
+    return readSessionEntryInWorker(scope);
   }
-  const loaded = await loadSessionEntryForAdmission(scope, { assertCurrent });
+  const loaded = await loadSessionEntryForAdmission(scope);
   try {
     loaded.databaseClaim.assertCurrent();
     return loaded.entry;
