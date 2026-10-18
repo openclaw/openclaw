@@ -69,6 +69,8 @@ suite.define(() => {
           "Diagnostic output",
         ]);
         await openChatSidePanelType(pane, "Terminal");
+        // Embedded desktop opens on Sessions; choose the already-owned session.
+        await embedded.locator(".tp-session.is-current").click();
         await typeInTerminal(page, embedded, "diagnostic-command\r");
         const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
         await dock(pane, "bottom");
@@ -178,6 +180,8 @@ suite.define(() => {
           await openChatSidePanelType(activePane, "Files");
           await selectChat("Docking check");
           await openChatSidePanelType(activePane, "Terminal");
+          // Embedded desktop opens on Sessions; choose the already-owned session.
+          await embedded.locator(".tp-session.is-current").click();
           await typeInTerminal(page, embedded, "echo DOCKING_CONTINUITY\r");
           const sessionId = inputSession(await gateway.waitForRequest("terminal.input"));
           await selectChat("Other conversation");
@@ -227,7 +231,7 @@ suite.define(() => {
             };
             let restoreReleased = false;
             try {
-              await terminalCanvas(embedded).waitFor();
+              await embedded.locator(".tp-host canvas").waitFor({ state: "attached" });
               await openPicker();
               await gateway.resolveDeferred("terminal.attach");
               restoreReleased = true;
@@ -305,7 +309,7 @@ suite.define(() => {
             // B stays mounted while A hands its restored tabs to the bottom host.
             await selectChat("Docking check");
             await openChatSidePanelType(activePane, "Terminal");
-            await terminalCanvas(embedded).waitFor();
+            await embedded.locator(".tp-session-menu--inline").waitFor();
             await dock(activePane, "bottom");
             await expect.poll(() => liveTabs(bottom).count()).toBe(3);
             await selectChat("Other conversation");

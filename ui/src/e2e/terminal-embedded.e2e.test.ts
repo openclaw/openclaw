@@ -26,7 +26,11 @@ suite.define(() => {
         terminalEnabled: true,
         featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
         methodResponses: {
-          "terminal.list": { sessions: [] },
+          "terminal.list": {
+            sessions: [
+              { ...terminalSession("keyboard-terminal", { shell: "/bin/sh" }), attached: true },
+            ],
+          },
           "terminal.open": terminalSession("keyboard-terminal", { shell: "/bin/sh" }),
         },
       });
@@ -40,6 +44,9 @@ suite.define(() => {
         .locator("openclaw-terminal-panel")
         .filter({ has: page.locator(".tp-host") });
       const terminal = panel.locator(".tp-host");
+      if (route === "chat") {
+        await panel.locator(".tp-session.is-current").click();
+      }
       await terminal.locator("canvas").waitFor();
       await terminal.click();
       await page.keyboard.type("x");
@@ -295,7 +302,7 @@ suite.define(() => {
       expect(closeControlMetrics.borderRadius).not.toBe("0px");
       expect(closeControlMetrics.closeBorderBottomWidth).toBe("0px");
       expect(closeControlMetrics.closeInset).toBeGreaterThanOrEqual(-0.5);
-      expect(closeControlMetrics.tabHeight).toBe(30);
+      expect(closeControlMetrics.tabHeight).toBe(28);
       expect(closeControlMetrics.width).toBe(28);
       expect(closeControlMetrics.height).toBe(28);
       expect(closeControlMetrics.centerOffset).toBeLessThanOrEqual(0.5);

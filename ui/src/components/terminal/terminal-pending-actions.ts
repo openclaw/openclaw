@@ -7,6 +7,7 @@ import type {
   TerminalPanelError,
   TerminalPanelSessionTab,
   TerminalPanelSessionState,
+  TerminalStagedInput,
 } from "./terminal-panel-session-types.ts";
 import {
   loadPersistedTerminalActions,
@@ -27,7 +28,12 @@ export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
   currentGeneration: () => number;
   canRun: () => boolean;
-  attach: (sessionId: string, agentOwned: boolean, cancelIntent: () => void) => Promise<boolean>;
+  attach: (
+    sessionId: string,
+    agentOwned: boolean,
+    cancelIntent: () => void,
+    stagedInput?: TerminalStagedInput,
+  ) => Promise<boolean>;
   client: () => TerminalGatewayClient | null;
   present: (tab: TerminalPanelSessionTab) => void;
   showError: (text: string) => void;
@@ -159,7 +165,12 @@ export function createTerminalIntentQueue(persistent = true) {
         retireAction(action);
         host.present(tab);
       } else if (
-        !(await host.attach(tab.gatewaySessionId, tab.agentOwned ?? false, cancelIntent))
+        !(await host.attach(
+          tab.gatewaySessionId,
+          tab.agentOwned ?? false,
+          cancelIntent,
+          tab.stagedInput,
+        ))
       ) {
         return false;
       }
