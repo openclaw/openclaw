@@ -447,11 +447,7 @@ describe("Gateway GitHub publication attribution", () => {
         );
       onTestFinished(() => intercepted.mockRestore());
     }
-    const coordinator =
-      repository?.coordinator ??
-      createGitHubPublicationCoordinator({
-        placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-      });
+    const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
     const result = await coordinator.requestForSessionV2({
       agentId: "main",
       sessionKey: SESSION_KEY,
@@ -473,6 +469,15 @@ describe("Gateway GitHub publication attribution", () => {
   });
 
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
+    await persistPublicationTestSession();
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, {
+      publicShare: {
+        id: "a".repeat(48),
+        sessionId: loadSessionEntryReadOnly(scope)!.sessionId,
+        createdAt: 1,
+      },
+    });
     const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
     mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
     const coordinator = createGitHubPublicationCoordinator();
