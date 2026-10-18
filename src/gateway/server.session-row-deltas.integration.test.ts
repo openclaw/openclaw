@@ -144,7 +144,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
     }
   };
   roster.ws.on("message", observeFirstToolBatches);
-  onTestFinished(() => roster.ws.off("message", observeFirstToolBatches));
+  onTestFinished(() => {
+    roster.ws.off("message", observeFirstToolBatches);
+  });
   let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
