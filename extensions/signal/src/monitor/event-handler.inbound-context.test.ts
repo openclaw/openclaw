@@ -287,22 +287,15 @@ function createStatusReactionConfig(
     signal?: Partial<SignalChannelConfig>;
   } = {},
 ): OpenClawConfig {
-  return {
+  return createDirectConfig({
     messages: {
       ackReaction: "👀",
       ackReactionScope: "direct",
-      inbound: { debounceMs: 0 },
       statusReactions: { enabled: true },
       ...options.messages,
     },
-    channels: {
-      signal: {
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        ...options.signal,
-      },
-    },
-  } as OpenClawConfig;
+    signal: options.signal,
+  });
 }
 
 function createDirectConfig(
@@ -537,22 +530,12 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.Body).toContain("hello");
     expect(context.Body).not.toBe(context.BodyForAgent);
     expect(context.ChannelPromptContext).toBeUndefined();
-    const recordParams = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
-      | {
-          sessionKey?: string;
-          updateLastRoute?: {
-            channel?: string;
-            mainDmOwnerPin?: unknown;
-            sessionKey?: string;
-            to?: string;
-          };
-        }
-      | undefined;
-    expect(recordParams?.sessionKey).toBe(context.SessionKey);
-    expect(recordParams?.updateLastRoute?.sessionKey).toBe(context.SessionKey);
+    const recordParams = recordInboundSessionMock.mock.calls.at(-1)?.[0];
+    expect(recordParams).toMatchObject({
+      sessionKey: context.SessionKey,
+      updateLastRoute: { sessionKey: context.SessionKey, channel: "signal", to: "+15550002222" },
+    });
     expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
-    expect(recordParams?.updateLastRoute?.channel).toBe("signal");
-    expect(recordParams?.updateLastRoute?.to).toBe("+15550002222");
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
@@ -792,8 +775,9 @@ describe("signal createSignalEventHandler inbound context", () => {
 
   it("sends typing + read receipt for allowed DMs", async () => {
     vi.useFakeTimers();
+    const cfg = createDirectConfig();
     const handler = createTestHandler({
-      cfg: createDirectConfig(),
+      cfg,
       account: "+15550009999",
       blockStreaming: false,
       historyLimit: 0,
@@ -804,24 +788,18 @@ describe("signal createSignalEventHandler inbound context", () => {
     try {
       await receiveMessage(handler, { message: "hi" });
 
-      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
+      const sendOptions = {
+        cfg: createDirectConfig(),
         baseUrl: "http://localhost",
         account: "+15550009999",
         accountId: "default",
-      });
-      expect(sendReadReceiptMock).toHaveBeenCalledWith("signal:+15550001111", 1700000000000, {
-        cfg: {
-          messages: { inbound: { debounceMs: 0 } },
-          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-        },
-        baseUrl: "http://localhost",
-        account: "+15550009999",
-        accountId: "default",
-      });
+      };
+      expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", sendOptions);
+      expect(sendReadReceiptMock).toHaveBeenCalledWith(
+        "signal:+15550001111",
+        1700000000000,
+        sendOptions,
+      );
 
       await vi.advanceTimersByTimeAsync(3_000);
       expect(sendTypingMock).toHaveBeenCalledTimes(1);

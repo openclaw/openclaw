@@ -19,6 +19,7 @@ import {
 } from "../approval-reactions.js";
 import { signalPlugin } from "../channel.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
+import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const { getReplyFromConfigMock, sendMessageSignalMock } = vi.hoisted(() => ({
   getReplyFromConfigMock: vi.fn(),
@@ -74,6 +75,39 @@ type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
 describe("Signal partial final delivery ingress boundary", () => {
   let state: OpenClawTestState;
   let queue: ReturnType<typeof createChannelIngressQueueForTests<SignalIngressPayload>>;
+
+  const config = (): OpenClawConfig => ({
+    session: { store: state.statePath("sessions") },
+    channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+  });
+  const eventAt = (timestamp: number, message: string) =>
+    harnessModule.createSignalReceiveEvent({
+      timestamp,
+      dataMessage: { timestamp, message, attachments: [] },
+    });
+  const createHandler = (cfg: OpenClawConfig, overrides: Partial<SignalEventHandlerDeps> = {}) =>
+    eventHandlerModule.createSignalEventHandler(
+      harnessModule.createBaseSignalEventHandlerDeps({
+        cfg,
+        deliverReplies: async (params) =>
+          await deliverReplies({ ...params, cfg, chunkMode: "length" }),
+        ...overrides,
+      }),
+    );
+  const monitorFor = (handler: ReturnType<typeof createHandler>) =>
+    startSignalIngressMonitor({
+      accountId: "default",
+      queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
+      dispatch: async (event, lifecycle: SignalIngressLifecycle) => await handler(event, lifecycle),
+      runtime: { error: vi.fn(), log: vi.fn() },
+    });
+  const receive = async (
+    monitor: Awaited<ReturnType<typeof monitorFor>>,
+    event: ReturnType<typeof eventAt>,
+  ) => {
+    await monitor.receive(event);
+    await monitor.waitForIdle();
+  };
 
   beforeEach(async () => {
     state = await createOpenClawTestState({
@@ -138,31 +172,18 @@ describe("Signal partial final delivery ingress boundary", () => {
       .mockResolvedValueOnce({ messageId: "1700000005999" })
       .mockRejectedValueOnce(new Error("second Signal send failed"));
 
-    const handler = eventHandlerModule.createSignalEventHandler(
-      harnessModule.createBaseSignalEventHandlerDeps({
-        cfg,
+    const monitor = await monitorFor(
+      createHandler(cfg, {
         baseUrl: "http://signal.test:8080",
         account: "+15550009999",
         accountId: "default",
         mediaMaxBytes: 8 * 1024 * 1024,
-        deliverReplies: async (params) =>
-          await deliverReplies({ ...params, cfg, chunkMode: "length" }),
       }),
     );
-    const monitor = await startSignalIngressMonitor({
-      accountId: "default",
-      queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-      dispatch: async (event, lifecycle: SignalIngressLifecycle) => await handler(event, lifecycle),
-      runtime: { error: vi.fn(), log: vi.fn() },
-    });
-    const event = harnessModule.createSignalReceiveEvent({
-      timestamp,
-      dataMessage: { timestamp, message: "please run it", attachments: [] },
-    });
+    const event = eventAt(timestamp, "please run it");
 
     try {
-      await monitor.receive(event);
-      await monitor.waitForIdle();
+      await receive(monitor, event);
 
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
@@ -186,8 +207,7 @@ describe("Signal partial final delivery ingress boundary", () => {
         decision: "allow-once",
       });
 
-      await monitor.receive(event);
-      await monitor.waitForIdle();
+      await receive(monitor, event);
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
     } finally {
@@ -199,10 +219,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     "recovers an unsent final without replaying ingress (successful block: %s)",
     async (sendBlock) => {
       const timestamp = sendBlock ? 1_700_000_005_005 : 1_700_000_005_004;
-      const cfg = {
-        session: { store: state.statePath("sessions") },
-        channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-      } as OpenClawConfig;
+      const cfg = config();
       getReplyFromConfigMock.mockImplementation(async (_ctx, options: GetReplyOptions) => {
         if (sendBlock) {
           await options.onBlockReply?.({ text: "Delivered block" });
@@ -217,30 +234,13 @@ describe("Signal partial final delivery ingress boundary", () => {
           cause: new Error("offline"),
         }),
       );
-      const handler = eventHandlerModule.createSignalEventHandler(
-        harnessModule.createBaseSignalEventHandlerDeps({
-          cfg,
-          blockStreaming: true,
-          deliverReplies: async (params) =>
-            await deliverReplies({ ...params, cfg, chunkMode: "length" }),
-        }),
-      );
-      const createMonitor = async () =>
-        await startSignalIngressMonitor({
-          accountId: "default",
-          queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-          dispatch: async (event, lifecycle) => await handler(event, lifecycle),
-          runtime: { error: vi.fn(), log: vi.fn() },
-        });
-      const event = harnessModule.createSignalReceiveEvent({
-        timestamp,
-        dataMessage: { timestamp, message: "send a block and a final", attachments: [] },
-      });
+      const handler = createHandler(cfg, { blockStreaming: true });
+      const createMonitor = () => monitorFor(handler);
+      const event = eventAt(timestamp, "send a block and a final");
       const monitor = await createMonitor();
       const initialTexts = [...(sendBlock ? ["Delivered block"] : []), "Distinct final"];
       try {
-        await monitor.receive(event);
-        await monitor.waitForIdle();
+        await receive(monitor, event);
         expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual(initialTexts);
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
         expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toMatchObject([
@@ -259,8 +259,7 @@ describe("Signal partial final delivery ingress boundary", () => {
 
       const restarted = await createMonitor();
       try {
-        await restarted.receive(event);
-        await restarted.waitForIdle();
+        await receive(restarted, event);
         expect(getReplyFromConfigMock).toHaveBeenCalledOnce();
         expect(sendMessageSignalMock).toHaveBeenCalledTimes(initialTexts.length);
         expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toHaveLength(1);
@@ -282,8 +281,7 @@ describe("Signal partial final delivery ingress boundary", () => {
         expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
 
         await drain();
-        await restarted.receive(event);
-        await restarted.waitForIdle();
+        await receive(restarted, event);
         expect(getReplyFromConfigMock).toHaveBeenCalledOnce();
         expect(sendMessageSignalMock).toHaveBeenCalledTimes(initialTexts.length + 1);
         expect(await queue.listPending({ limit: "all" })).toEqual([]);
@@ -300,10 +298,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     });
     getReplyFromConfigMock.mockResolvedValue({ text: "retry me" });
     sendMessageSignalMock.mockRejectedValueOnce(error);
-    const cfg = {
-      session: { store: state.statePath("sessions") },
-      channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
-    } as OpenClawConfig;
+    const cfg = config();
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -319,29 +314,11 @@ describe("Signal partial final delivery ingress boundary", () => {
         },
       ]),
     );
-    const createMonitor = async () => {
-      const handler = eventHandlerModule.createSignalEventHandler(
-        harnessModule.createBaseSignalEventHandlerDeps({
-          cfg,
-          deliverReplies: async (params) =>
-            await deliverReplies({ ...params, cfg, chunkMode: "length" }),
-        }),
-      );
-      return await startSignalIngressMonitor({
-        accountId: "default",
-        queue: queue as Parameters<typeof startSignalIngressMonitor>[0]["queue"],
-        dispatch: async (event, lifecycle) => await handler(event, lifecycle),
-        runtime: { error: vi.fn(), log: vi.fn() },
-      });
-    };
-    const event = harnessModule.createSignalReceiveEvent({
-      timestamp,
-      dataMessage: { timestamp, message: "please retry", attachments: [] },
-    });
+    const createMonitor = () => monitorFor(createHandler(cfg));
+    const event = eventAt(timestamp, "please retry");
 
     const first = await createMonitor();
-    await first.receive(event);
-    await first.waitForIdle();
+    await receive(first, event);
     await first.stop();
     expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual(["retry me"]);
     expect(sendMessageSignalMock).toHaveBeenCalledOnce();
@@ -409,8 +386,7 @@ describe("Signal partial final delivery ingress boundary", () => {
     });
 
     try {
-      await retryMonitor.receive(event);
-      await retryMonitor.waitForIdle();
+      await receive(retryMonitor, event);
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(2);
       expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual([
@@ -426,8 +402,7 @@ describe("Signal partial final delivery ingress boundary", () => {
         }),
       ).toMatchObject({ kind: "completed", duplicate: true });
 
-      await retryMonitor.receive(event);
-      await retryMonitor.waitForIdle();
+      await receive(retryMonitor, event);
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
     } finally {
       await retryMonitor.stop();
