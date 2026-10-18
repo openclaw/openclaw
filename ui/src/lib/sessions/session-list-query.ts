@@ -437,7 +437,6 @@ export function coalesceSessionRefresh(
 
 export type ManagedSessionListRefresh = {
   append: boolean;
-  immediate?: boolean;
   offset?: number;
   invalidated?: true;
   background?: true;
