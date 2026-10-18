@@ -9,7 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
-import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { collectSessionAdmissionReferences } from "../../config/sessions/session-history-eviction-candidates.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -160,7 +160,7 @@ describe
         const database = withEngineStoreAdmission(() => openOpenClawAgentDatabase(options));
         const identity = readOpenClawAgentDatabaseIdentity(database);
         assert(typeof identity.identity === "string");
-        const actor = await createDurableSessionActorFactory({
+        const actor = await createSessionActorFactory({
           ...options,
           path: database.path,
         }).acquire(

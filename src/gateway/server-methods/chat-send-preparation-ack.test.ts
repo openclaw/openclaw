@@ -19,7 +19,8 @@ import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { getCompetingSessionWorkAdmissionRelease } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as transcriptPersistence from "../../sessions/user-turn-transcript.persistence.js";
 import * as skillSelection from "../../skills/library/selection.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -134,8 +135,8 @@ it("retries a failed custody write with the same request identity without acknow
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
     expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-    expect(fixture.context.chatAbortControllers.has(fixture.params.idempotencyKey)).toBe(false);
-    await getSessionWorkAdmissionRelease({
+    expect(rpcSourceTesting.has(fixture.params.idempotencyKey)).toBe(false);
+    await getCompetingSessionWorkAdmissionRelease({
       scope: fixture.scope.storePath,
       identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
     });

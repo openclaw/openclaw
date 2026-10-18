@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
@@ -232,6 +231,7 @@ function* createMessageToolSteps(
       const {
         authorization: trustedTurnContext,
         currentPromptReaction,
+        sourceReplyOperation,
         config: rawConfig,
         scheduledRead,
         assertDashboardReadCurrent,
@@ -370,8 +370,8 @@ function* createMessageToolSteps(
         assertActionCurrent();
         const sourceReplyDelivered =
           requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
-        if (sourceReplyDelivered && options?.sessionId) {
-          resolveActiveReplyOperationForSessionId(options.sessionId)?.markSourceReplyDelivered();
+        if (sourceReplyDelivered) {
+          sourceReplyOperation?.markSourceReplyDelivered();
         }
         return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
           jsonResult({ ok: true, channel: "webchat", ...result, remove, dryRun }),
@@ -703,11 +703,7 @@ function* createMessageToolSteps(
           ) {
             messageDelivery.sourceReplyDelivered = true;
             // A later stall cannot erase this answer; recovery and its notice read it.
-            if (options?.sessionId) {
-              resolveActiveReplyOperationForSessionId(
-                options.sessionId,
-              )?.markSourceReplyDelivered();
-            }
+            sourceReplyOperation?.markSourceReplyDelivered();
           }
           if (action === "poll-vote" && pollVoteEchoRoute && pollEchoSessionKey) {
             const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;

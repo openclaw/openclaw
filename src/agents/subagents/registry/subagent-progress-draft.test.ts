@@ -9,8 +9,11 @@ import { abortControlledSubagents } from "../../../gateway/server-methods/chat-a
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../infra/system-events.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as detachActiveEmbeddedRun,
+  registerTestEmbeddedRun as attachActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   setSubagentAnnounceDeliveryDepsForTest,
@@ -26,6 +29,7 @@ import {
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { adoptPausedSubagentRunForFollowUp } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { testing as registryTesting } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = useSubagentControlFixture();
@@ -201,6 +205,50 @@ it("does not adopt a card for a cohort whose completion was already delivered", 
   expect(stale.push).not.toHaveBeenCalled();
 });
 
+it.each(["visible result", "exhausted"] as const)(
+  "recovers a known missing required result through periodic admission: %s",
+  async (outcome) => {
+    const spawns = await yieldCohort("parent-turn", ["a"]);
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    const wakes = answerWakes(draft, [
+      "NO_REPLY",
+      outcome === "visible result" ? "The delegated work is done." : "NO_REPLY",
+      "NO_REPLY",
+    ]);
+    await endRun("a");
+    expect(wakes).toHaveLength(1);
+    expect(draft.retire).not.toHaveBeenCalled();
+    expect(subagentRuns.get("a")?.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 1,
+    });
+    await registryTesting.sweepOnceForTests();
+    await fixture.settle();
+    expect(wakes).toHaveLength(1);
+
+    const clock = vi.spyOn(Date, "now");
+    try {
+      for (let attempt = 1; attempt < (outcome === "visible result" ? 2 : 3); attempt++) {
+        const due = subagentRuns.get("a")?.requesterSettleWake?.nextAttemptAt;
+        expect(due).toBeTypeOf("number");
+        clock.mockReturnValue(due!);
+        await registryTesting.sweepOnceForTests();
+        await fixture.settle();
+        expect(wakes).toHaveLength(attempt + 1);
+        expect(wakes[attempt]?.runId).toBe(`${wakes[0]!.runId}:retry-${attempt}`);
+      }
+      expect(draft.retire).toHaveBeenCalledOnce();
+      expect(subagentRuns.get("a")?.requesterSettleWake).toBeUndefined();
+      await registryTesting.sweepOnceForTests();
+      await fixture.settle();
+      expect(wakes).toHaveLength(outcome === "visible result" ? 2 : 3);
+    } finally {
+      clock.mockRestore();
+    }
+  },
+);
+
 it.each([
   ["killSessionSubagentRuns", "running", "committed"],
   ["abortControlledSubagents", "completed", "committed"],
@@ -251,7 +299,20 @@ it("keeps the card when stop cannot interrupt a child that is still finishing", 
     runId: "a",
     isAbortable: false,
   });
-  setActiveEmbeddedRun("a-session", handle, childKey("a"), undefined, "main");
+  attachActiveEmbeddedRun(
+    "a-session",
+    handle,
+    childKey("a"),
+    undefined,
+    "main",
+    undefined,
+    undefined,
+    {
+      storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+        agentId: "main",
+      }),
+    },
+  );
   try {
     await killSessionSubagentRuns({
       cfg: getRuntimeConfig(),
@@ -266,7 +327,7 @@ it("keeps the card when stop cannot interrupt a child that is still finishing", 
     expect(child?.requesterSettleWake).toBeDefined();
     expect(draft.retire).not.toHaveBeenCalled();
   } finally {
-    clearActiveEmbeddedRun("a-session", handle, childKey("a"));
+    detachActiveEmbeddedRun("a-session", handle, childKey("a"));
   }
   answerWakes(draft, ["The delegated work is done."]);
   await endRun("a");

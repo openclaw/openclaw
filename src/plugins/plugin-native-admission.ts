@@ -29,7 +29,7 @@ import {
 } from "./plugin-native-reference.js";
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { resolvePluginModulePackageRoot } from "./plugin-package-metadata-capture.js";
-import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { getPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -241,9 +241,7 @@ export function createPluginNativeAdmission(
   const key = `${path.resolve(rootDir)}\0${entryKey ?? ""}`;
   const owner = state.owners.get(path.resolve(rootDir));
   const publishAdmission =
-    owner && !state.artifactPreservingReadOnly
-      ? createPluginSourceAdmissionPublisher({ stateDir: state.publicationStateDir })
-      : undefined;
+    owner && !state.artifactPreservingReadOnly ? getPluginSourceAdmissionPublisher() : undefined;
   const prepared = recovery?.receipt ?? state.receipts.get(key);
   const selected = new Map<string, PluginNativeNamespaceFact>();
   const priorNamespaces = new Set<PluginNativeNamespaceFact>();

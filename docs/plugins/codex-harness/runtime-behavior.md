@@ -20,7 +20,12 @@ turn's dynamic-tool output budget cannot hold them. These tools do not change
 Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
-Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+Codex dynamic tools default to `searchable` loading when the native surface is
+enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
+including session UI tools and managed shell paths. Tool policy, argument
+validation, session authority, and effect ownership still apply. Dashboard and
+widget actions use these session-bound tools; a shell CLI connection and device
+pairing do not replace them. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
@@ -59,6 +64,11 @@ native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
+Requester policy and parent lineage remain bound to preparation: revoking or
+reassigning the requester before native thread or turn dispatch rejects the
+operation before that request reaches Codex. This also applies to `/btw`. Hosted
+search runs inside Codex; OpenClaw validates admission of the search-enabled
+native turn, rather than receiving a separate callback for each hosted search.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
 direct because they are turn-control or delegation contracts. Guidance uses
@@ -184,9 +194,11 @@ If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
 startup deadline. A registration failure keeps its specific error when it settles
 during that cleanup, instead of becoming a generic initialization timeout.
-Canceling a shared-client waiter leaves service-owned startup running even if it
-was the only waiter. Later callers can join it; once ready, an unused client
-retires after the idle grace. Isolated startup remains caller-owned.
+Shared startup has its own deadline. Canceling a shared-client waiter leaves
+service-owned startup running even if it was the only waiter. Later callers can
+join it; once ready, an unused client retires after the idle grace. Isolated
+startup remains caller-owned. See
+[startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
@@ -293,6 +305,12 @@ transcript identifies the child, its status, and its result session key; a warni
 records retirement even if the transcript note cannot be written. Other pending
 turns of the same child remain independent. Parent subscription retention during
 ordinary completion retries is unchanged.
+
+If a chat's previous client was retired while other chats still use it, the
+next turn waits for that client to exit before resuming. Stopping that turn
+ends the wait without closing a healthy new client. A startup deadline also
+ends the wait, but retires the startup client; neither path resumes the thread
+while its old writer remains alive.
 
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.

@@ -316,6 +316,7 @@ function startHeartbeat(
       return withDatabaseAdmission(operation);
     } finally {
       Atomics.add(renewalProgress, 0, 1n);
+      Atomics.notify(renewalProgress, 0);
       Atomics.notify(shared, state.ack);
     }
   }

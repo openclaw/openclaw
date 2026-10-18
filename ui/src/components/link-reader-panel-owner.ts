@@ -81,6 +81,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
   let refreshRequested = false;
   let nextTabId = 0;
   let requestAbort: AbortController | null = null;
+  let recoveryScope: string | undefined;
   let returnFocus: HTMLElement | null = null;
   let scrollContent = false;
   let focusAddress = false;
@@ -142,16 +143,24 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       (!previousReaders ||
         previousReaders.length !== props.readers.length ||
         previousReaders.some((reader, index) => reader !== props.readers[index]));
-    if (
+    const identityChanged =
       changed.has("client") ||
-      changed.has("available") ||
       changed.has("agentId") ||
-      readersChanged
-    ) {
-      // Cached documents belong to this connection epoch, never a replacement gateway.
+      recoveryScope !== props.client?.recoveryScope;
+    const recoveryRetired = props.client?.offlineRecoveryRetired;
+    recoveryScope = props.client?.recoveryScope;
+    if (identityChanged || recoveryRetired) {
       resetTabViews();
     }
-    if (readersChanged && props.available) {
+    if (changed.has("available") && !props.available) {
+      abortRequest();
+      for (const tab of state.tabs) {
+        tab.reloadPending = Boolean(tabTarget(tab));
+      }
+    }
+    if (readersChanged && (props.available || recoveryRetired)) {
+      abortRequest();
+      const previousTarget = currentTarget();
       // Disabled or replaced contributions cannot retain old data or request authority.
       state.tabs = state.tabs.flatMap((tab) => {
         const current = tabTarget(tab);
@@ -159,6 +168,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
           return props.readers.length > 0 ? [tab] : [];
         }
         if (!resolveLinkReaderTarget(current.href, props.readers)) {
+          setTabView(tab, { status: "idle" });
           return [];
         }
         tab.history = tab.history.flatMap((entry) => {
@@ -166,12 +176,18 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
           return resolved ? [resolved] : [];
         });
         tab.index = tab.history.findIndex((entry) => entry.href === current.href);
+        if (tabTarget(tab)?.reader !== current.reader) {
+          setTabView(tab, { status: "idle" });
+        }
+        tab.reloadPending = true;
         return [tab];
       });
       if (!state.tabs.some((tab) => tab.id === state.activeId)) {
         state.activeId = state.tabs[0]?.id ?? null;
       }
-      state.urlDraft = currentTarget()?.href ?? "";
+      if (currentTarget()?.href !== previousTarget?.href) {
+        state.urlDraft = currentTarget()?.href ?? "";
+      }
       if (state.tabs.length === 0 && previousReaders?.length) {
         closePanel();
       }
@@ -206,7 +222,9 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     if (
       host.isConnected &&
       panelPresented() &&
-      (active?.view.status === "idle" || refreshRequested)
+      props.available &&
+      active &&
+      (active.view.status === "idle" || active.reloadPending || refreshRequested)
     ) {
       void loadDetail();
     }
@@ -265,6 +283,10 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
   }
   function abortRequest(): void {
     const active = activeTab();
+    if (active?.view.status === "ready" && active.view.refreshing) {
+      // An interrupted silent refresh still owes this tab fresh data.
+      active.reloadPending = true;
+    }
     requestAbort?.abort();
     requestAbort = null;
     if (active?.view.status === "loading") {
@@ -290,6 +312,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     abortRequest();
     for (const tab of state.tabs) {
       setTabView(tab, { status: "idle" });
+      tab.reloadPending = false;
     }
   }
   function selectHostedTab(id: string): void {
@@ -316,6 +339,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       history: target ? [target] : [],
       index: target ? 0 : -1,
       view: { status: "idle" },
+      reloadPending: false,
     };
     state.tabs.push(tab);
     state.activeId = tab.id;
@@ -471,6 +495,9 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
   }
   function commitUrl(event: Event): void {
     event.preventDefault();
+    if (!props.available) {
+      return;
+    }
     const draft = state.urlDraft.trim();
     const target = resolveLinkReaderTarget(
       /^[a-z][a-z0-9+.-]*:/iu.test(draft) ? draft : "https://" + draft,
@@ -501,7 +528,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
     const agentId = props.agentId;
     const sessionKey = props.sessionKey;
     const generation = client?.connectionGeneration;
-    const recoveryScope = client?.recoveryScope;
+    const requestRecoveryScope = client?.recoveryScope;
     if (!target || !tab || !client || !props.available || !panelPresented()) {
       return;
     }
@@ -514,6 +541,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       previous.sections[section] = "loading";
     } else {
       requestAbort = request;
+      tab.reloadPending = false;
       if (previous) {
         previous.refreshing = true;
         previous.message = undefined;
@@ -529,7 +557,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
       props.agentId === agentId &&
       props.sessionKey === sessionKey &&
       client.connectionGeneration === generation &&
-      client.recoveryScope === recoveryScope &&
+      client.recoveryScope === requestRecoveryScope &&
       props.available &&
       panelPresented() &&
       activeTab() === tab &&
@@ -600,7 +628,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
         }
         const next = createReaderReadyView(detail, previous);
         const imageMethod = target.reader.linkReader.imageMethod;
-        const images = imageMethod
+        next.images = imageMethod
           ? new LinkReaderImages(
               client,
               imageMethod,
@@ -611,13 +639,12 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
                 props.agentId === agentId &&
                 props.sessionKey === sessionKey &&
                 client.connectionGeneration === generation &&
-                client.recoveryScope === recoveryScope &&
+                client.recoveryScope === requestRecoveryScope &&
                 state.tabs.includes(tab) &&
                 props.readers.includes(target.reader) &&
                 tab.view === next,
             )
           : undefined;
-        next.images = images;
         setTabView(tab, next);
         if (next.sections.files && previous?.detail.files) {
           void loadDetail("files");
@@ -647,6 +674,7 @@ export function createLinkReaderPanel(host: HTMLElement, props: LinkReaderPanelP
           }
         } else {
           abortRequest();
+          tab.reloadPending = false;
           setTabView(tab, { status: "error", message: linkReaderErrorMessage(error) });
         }
         publish();

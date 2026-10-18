@@ -24,6 +24,7 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -401,18 +402,26 @@ function CanvasPreview(props: {
       props.canvasPluginSurfaceUrl,
       props.allowExternalEmbedUrls ?? false,
     );
-  // A changed sandbox, URL, or height restarts the iframe, matching the original keyed preview.
+  let initialized = false;
+  const presentation = createCanvasFramePresentation(
+    () => `${sandbox()}\0${props.content.entryUrl ?? ""}\0${src() ? 1 : 0}`,
+    src,
+    () => initialized,
+  );
   return (
-    <Show
-      when={`${sandbox()}\u0000${src() ?? ""}\u0000${props.content.preferredHeight ?? ""}`}
-      keyed
-    >
+    <Show when={presentation.identity()} keyed>
       {(_identity) => (
         <iframe
+          ref={() => {
+            initialized = false;
+          }}
+          onLoad={() => {
+            initialized = true;
+          }}
           class="chat-tool-card__preview-frame"
           title={props.title}
           sandbox={sandbox()}
-          src={src() ?? undefined}
+          src={presentation.src()}
           style={{
             height: props.content.preferredHeight
               ? `${props.content.preferredHeight}px`
@@ -430,11 +439,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
     ["file", "markdown", "attachment", "session-diff"].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
-  const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
       class={{ "sidebar-panel-host--fill": fillHost() }}
-      ref={markdownRef}
+      ref={markdownBlocksRef(markdownPresented)}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}
     >

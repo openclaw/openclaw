@@ -13,11 +13,13 @@ const report: SessionSystemPromptReport = {
   generatedAt: 1,
   sessionId: "context-instance",
   sessionKey,
+  workspaceDir: "/projects/openclaw",
   systemPrompt: { chars: 40000, projectContextChars: 16000, nonProjectContextChars: 24000 },
   injectedWorkspaceFiles: [
     {
       name: "AGENTS.md",
       path: "/workspace/AGENTS.md",
+      origin: { kind: "agent-workspace", rootPath: "/workspace" },
       missing: false,
       rawChars: 12000,
       injectedChars: 12000,
@@ -26,9 +28,19 @@ const report: SessionSystemPromptReport = {
     {
       name: "USER.md",
       path: "/workspace/USER.md",
+      origin: { kind: "agent-workspace", rootPath: "/workspace" },
       missing: false,
-      rawChars: 4000,
-      injectedChars: 4000,
+      rawChars: 2000,
+      injectedChars: 2000,
+      truncated: false,
+    },
+    {
+      name: "AGENTS.md",
+      path: "/projects/openclaw/AGENTS.md",
+      origin: { kind: "execution-project", rootPath: "/projects/openclaw" },
+      missing: false,
+      rawChars: 2000,
+      injectedChars: 2000,
       truncated: false,
     },
   ],
@@ -36,7 +48,20 @@ const report: SessionSystemPromptReport = {
   tools: {
     listChars: 0,
     schemaChars: 12000,
-    entries: [{ name: "exec", summaryChars: 800, schemaChars: 12000 }],
+    entries: [
+      { name: "exec", source: "openclaw", summaryChars: 800, schemaChars: 8000 },
+      {
+        name: "read_docs",
+        source: "mcp",
+        serverName: "Docs",
+        summaryChars: 100,
+        schemaChars: 4000,
+      },
+    ],
+    deferred: {
+      schemaChars: 30000,
+      entries: [{ name: "search_docs", source: "mcp", serverName: "Docs", schemaChars: 30000 }],
+    },
   },
 };
 
@@ -111,7 +136,7 @@ suite.define(() => {
         path.join(suite.artifactDir, "context-initial-" + width + "-panel.png"),
         initial.elements[0]!.png,
       );
-      await context.getByText("Workspace memory", { exact: true }).waitFor();
+      await context.getByText("Workspace files", { exact: true }).waitFor();
       const request = await gateway.waitForRequest("sessions.usage");
       expect(request.params).toMatchObject({
         key: sessionKey,
@@ -125,12 +150,17 @@ suite.define(() => {
         .poll(() => context.locator('[data-context-category="messages"]').textContent())
         .toContain("37k");
       await context.locator('[data-context-details="files"] > summary').click();
-      await context.getByText("AGENTS.md", { exact: true }).waitFor();
+      await context.getByText("AGENTS.md", { exact: true }).first().waitFor();
+      expect(await context.getByText("AGENTS.md", { exact: true }).count()).toBe(2);
+      await context.getByText("Agent workspace", { exact: true }).waitFor();
+      await context.getByText("Project · openclaw", { exact: true }).waitFor();
+      await context.getByText("/projects/openclaw/AGENTS.md", { exact: true }).waitFor();
+      await context.getByText("Available on demand", { exact: true }).waitFor();
       await context.getByRole("button", { name: "Compact session", exact: true }).waitFor();
       const after = await takeControlUiScreenshotFrame(
         page,
         panel,
-        [context.getByText("AGENTS.md", { exact: true })],
+        [context.getByText("AGENTS.md", { exact: true }).first()],
         { elements: [panel], animations: "disabled" },
       );
       await writeFile(
@@ -143,6 +173,18 @@ suite.define(() => {
       );
       expect(await context.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
+      );
+      await context.locator('[data-context-details="files"] > summary').click();
+      await context.locator('[data-context-details="tools"] > summary').click();
+      await context.getByText("System tools", { exact: true }).waitFor();
+      await context
+        .locator('[data-context-details="tools"]')
+        .getByText("MCP tools · Docs", { exact: true })
+        .waitFor();
+      await context.locator('[data-context-details="deferred"] > summary').click();
+      await context.getByText("search_docs", { exact: true }).waitFor();
+      expect(await context.locator('[data-context-category="tools"]').textContent()).toContain(
+        "3k",
       );
       if (width > 900) {
         const draft = page.locator(
@@ -184,7 +226,7 @@ suite.define(() => {
           ],
         });
         await context.getByRole("button", { name: "Refresh", exact: true }).click();
-        await context.getByText("Workspace memory", { exact: true }).waitFor();
+        await context.getByText("Workspace files", { exact: true }).waitFor();
         await context.locator('[data-context-details="files"] > summary').click();
         await context.getByText("Unverified", { exact: true }).waitFor();
         await expect

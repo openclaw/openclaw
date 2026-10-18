@@ -4,12 +4,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { waitForGatewayActiveWork } from "../../infra/gateway-active-work.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -138,6 +141,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
   ).catch((error: unknown) => error);
   try {
     await edited.promise;
+    const operation = getSessionControllerOperation(SESSION_KEY);
     const initial = placements.get(SESSION_ID);
     const claim = initial && projectWorkerSessionTurnClaim(initial);
     if (!claim) {
@@ -150,6 +154,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     markGatewayRestartDraining("stop (SIGTERM)");
     finish.resolve();
     expect(isAgentRunRestartAbortReason(await attempt)).toBe(true);
+    expect(operation?.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     await expect(waitForGatewayActiveWork(0)).resolves.toMatchObject({ drained: true });
     expect(placements.get(SESSION_ID)).toMatchObject({
       state: "active",
@@ -215,5 +220,72 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
   } finally {
     finish.resolve();
     await attempt;
+  }
+});
+
+it("lets a worker turn that committed its terminal outcome finish through restart drain", async () => {
+  const { placements, SESSION_ID, SESSION_KEY } = fixture;
+  await fixture.seedActivePlacement();
+  const launched = createDeferred();
+  const finish = createDeferred();
+  let workerSignal: AbortSignal | undefined;
+  const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+    request.onDispatchReady?.();
+    workerSignal = request.signal;
+    launched.resolve();
+    await finish.promise;
+    const leafId = await (
+      await fixture.openSessionManager()
+    ).appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "finished during drain" }],
+        timestamp: 41,
+      }),
+    );
+    return fixture.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+  });
+  const environments = {
+    ...fixture.unusedEnvironments(),
+    get: () => fixture.attachedEnvironment(),
+    acquireTurnCredential: async () => fixture.credential(),
+    acknowledgeCredentialDelivery: async () => true,
+    startTunnel: async () =>
+      fixture.createWorkerTurnTunnel({
+        launchTurn,
+        reconcileWorkspace: fixture.reconcileUnchangedLocalWorkspace,
+      }),
+    stopTunnel: vi.fn(async () => {}),
+    destroy: vi.fn(async () => fixture.attachedEnvironment()),
+  };
+  const runId = "finishing-turn";
+  const turn = fixture.turn(runId);
+  const attempt = runWithGatewayIndependentRootWorkAdmission(() =>
+    fixture
+      .createWorkerSessionTurnPlacementProvider({ environments, placements })
+      .executeTurn(
+        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
+        turn,
+        unexpected,
+      ),
+  ).catch((error: unknown) => error);
+  try {
+    await launched.promise;
+    const operation = getSessionControllerOperation(SESSION_KEY);
+    // The reply runner freezes cancellation once it accepts a terminal outcome.
+    operation?.freezeAbort();
+    markGatewayRestartDraining("stop (SIGTERM)");
+    expect(workerSignal?.aborted).toBe(false);
+    expect(operation?.result).toBeNull();
+
+    finish.resolve();
+    expect(await attempt).toMatchObject({ payloads: [{ text: "finished during drain" }] });
+    await expect(waitForSessionRunEnd(SESSION_ID)).resolves.toBe(true);
+    expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+    expect(environments.destroy).not.toHaveBeenCalled();
+  } finally {
+    finish.resolve();
+    await attempt;
+    await waitForSessionRunEnd(SESSION_ID);
+    turn.preparedRunAdmission.close();
   }
 });

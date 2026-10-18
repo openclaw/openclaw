@@ -657,7 +657,7 @@ export function createSidebarNarration() {
     }
   }
   return {
-    read: () => ({ lines, observerDigests, tools }),
+    read: () => ({ lines, observerDigests, tools, runIds }),
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);

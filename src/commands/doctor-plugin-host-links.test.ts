@@ -5,7 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolvePluginNpmGenerationProjectDir } from "../plugins/install-paths.js";
+import * as installRecordsOwner from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
+import {
+  listPluginOpenClawHostLinkIssues,
+  maybeRepairPluginOpenClawHostLinks,
+} from "./doctor-plugin-host-links.js";
 import {
   detectPluginRegistryHealthIssues,
   maybeRepairPluginRegistryState,
@@ -20,6 +27,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.mocked(note).mockReset();
 });
 
@@ -104,6 +112,91 @@ function createDoctorParams(stateDir: string, shouldRepair: boolean) {
     prompter: { shouldRepair },
   };
 }
+
+it("audits and repairs only the selected managed npm generations", async () => {
+  const stateDir = tempDirs.make("openclaw-active-host-links-");
+  const records: Record<string, PluginInstallRecord> = {};
+  const activePackages: string[] = [];
+  const stalePackages: string[] = [];
+  for (const pluginId of ["first", "second"]) {
+    const packageName = `@fixture/${pluginId}`;
+    for (let generation = 0; generation <= 20; generation++) {
+      const flatPackage = writeManagedNpmPlugin({
+        stateDir,
+        packageName,
+        pluginId,
+        version: "1.0.0",
+      });
+      const flatRoot = path.dirname(path.dirname(path.dirname(flatPackage)));
+      const root = resolvePluginNpmGenerationProjectDir({
+        npmDir: path.join(stateDir, "npm"),
+        packageName,
+        generationKey: String(generation),
+      });
+      fs.renameSync(flatRoot, root);
+      const packageDir = path.join(root, "node_modules", ...packageName.split("/"));
+      const manifestPath = path.join(packageDir, "package.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      manifest.peerDependencies = { openclaw: "*" };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      if (generation === 0) {
+        records[pluginId] = { source: "npm", installPath: packageDir, resolvedName: packageName };
+        activePackages.push(packageDir);
+      } else {
+        stalePackages.push(packageDir);
+      }
+    }
+  }
+  await writeInstallRecords(stateDir, records);
+  const reads = vi.spyOn(fs.promises, "readdir");
+  const syncReads = vi.spyOn(fs, "readdirSync");
+  const params = createDoctorParams(stateDir, false);
+  const started = performance.now();
+  const audit = await listPluginOpenClawHostLinkIssues(params);
+  await maybeRepairPluginOpenClawHostLinks({ ...params, prompter: { shouldRepair: true } });
+  console.info(`host-link audit + repair: ${(performance.now() - started).toFixed(1)} ms`);
+
+  expect(
+    syncReads.mock.calls.some(([dir]) => String(dir) === path.join(stateDir, "npm", "projects")),
+  ).toBe(false);
+
+  expect(audit.peerLinkIssues.map((issue) => issue.packageDir).toSorted()).toEqual(
+    activePackages.toSorted(),
+  );
+  for (const packageDir of activePackages) {
+    expect(fs.realpathSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(
+      fs.realpathSync(process.cwd()),
+    );
+  }
+  for (const packageDir of stalePackages) {
+    expect(fs.existsSync(path.join(packageDir, "node_modules", "openclaw"))).toBe(false);
+    expect(
+      reads.mock.calls.some(([dir]) =>
+        String(dir).startsWith(path.dirname(path.dirname(packageDir))),
+      ),
+    ).toBe(false);
+  }
+});
+
+it("warns and falls back for unreadable records without swallowing invalid records", async () => {
+  const stateDir = tempDirs.make("openclaw-host-record-failure-");
+  const read = vi.spyOn(
+    installRecordsOwner,
+    "readPersistedInstalledPluginIndexInstallRecordsAsync",
+  );
+  const load = vi.spyOn(installRecordsOwner, "loadInstalledPluginIndexInstallRecords");
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  read.mockRejectedValueOnce(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+  await expect(listPluginOpenClawHostLinkIssues({ stateDir })).resolves.toMatchObject({
+    peerLinkIssues: [],
+  });
+  expect(warning).toHaveBeenCalledOnce();
+  const invalid = new Error("Persisted plugin install records are invalid");
+  read.mockResolvedValueOnce(null);
+  load.mockRejectedValueOnce(invalid);
+  await expect(listPluginOpenClawHostLinkIssues({ stateDir })).rejects.toBe(invalid);
+  expect(warning).toHaveBeenCalledOnce();
+});
 
 describe("registered host links", () => {
   const source = "clawhub";

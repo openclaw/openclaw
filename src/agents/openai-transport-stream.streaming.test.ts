@@ -9,10 +9,8 @@ import {
   COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   expectOpenAITransportRequestPolicy,
 } from "../../test/helpers/openai-transport-request-policy.js";
-import {
-  classifyAssistantFailoverReason,
-  formatUserFacingAssistantErrorText,
-} from "./embedded-agent-helpers.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
+import { formatUserFacingAssistantErrorText } from "./embedded-agent-helpers/error-text.js";
 import {
   type CapturedStreamEvent,
   makeCompletionsModel,

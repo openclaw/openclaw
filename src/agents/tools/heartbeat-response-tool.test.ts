@@ -1,8 +1,8 @@
 // Heartbeat response tool tests cover the one-shot heartbeat contract and
 // provider-portable schema shape.
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
-import { createHeartbeatResponseTool } from "./heartbeat-response-tool.js";
+import { resolveHeartbeatResponseTool } from "./heartbeat-response-tool.js";
 
 function readSchemaProperty(schema: unknown, key: string): Record<string, unknown> {
   const root = schema as { properties?: Record<string, unknown> };
@@ -24,11 +24,12 @@ type HeartbeatResponseDetails = {
   scratch?: string;
 };
 
-describe("createHeartbeatResponseTool", () => {
+describe("resolveHeartbeatResponseTool", () => {
   it("uses flat enum schemas for provider portability", () => {
     // Some providers reject anyOf literal unions in tool schemas; flat enums are
     // the portable contract for heartbeat status fields.
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
 
     const outcome = readSchemaProperty(tool.parameters, "outcome");
     const priority = readSchemaProperty(tool.parameters, "priority");
@@ -48,7 +49,8 @@ describe("createHeartbeatResponseTool", () => {
   });
 
   it("accepts a quiet no-change outcome without claiming persistence", async () => {
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
 
     const result = await tool.execute("call-1", {
       outcome: "no_change",
@@ -70,7 +72,8 @@ describe("createHeartbeatResponseTool", () => {
   it("rejects repeated heartbeat responses from the same tool instance", async () => {
     // A heartbeat turn has one final outcome; accepting multiple writes would
     // make notification delivery ambiguous.
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
 
     await tool.execute("call-1", {
       outcome: "no_change",
@@ -88,7 +91,8 @@ describe("createHeartbeatResponseTool", () => {
   });
 
   it("captures scratch without echoing future prompt content to the model", async () => {
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
     const scratch = "Private monitor context that must not enter tool output.";
 
     const result = await tool.execute("call-1", {
@@ -108,7 +112,8 @@ describe("createHeartbeatResponseTool", () => {
   });
 
   it("accepts an urgent notification without claiming persistence", async () => {
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
 
     const result = await tool.execute("call-1", {
       outcome: "needs_attention",
@@ -133,7 +138,8 @@ describe("createHeartbeatResponseTool", () => {
   });
 
   it("rejects missing notify because quiet vs visible delivery must be explicit", async () => {
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
 
     await expect(
       tool.execute("call-1", {

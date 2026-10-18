@@ -208,7 +208,7 @@ describe("Codex initialization through the registered session deletion owner", (
             isWebchatConnect: () => false,
             context: {
               getRuntimeConfig: () => ({}),
-              chatAbortControllers: new Map(),
+              rpcSources: new Map(),
               getSessionEventSubscriberConnIds: () => new Set(),
               broadcastToConnIds: vi.fn(),
             } as unknown as GatewayRequestContext,

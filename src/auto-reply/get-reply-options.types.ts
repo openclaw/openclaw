@@ -143,9 +143,9 @@ export type TurnAdoptionLifecycle = {
   /** Requested cadence for pre-adoption heartbeats. */
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
-  onAbandoned?: () => void;
+  onAbandoned?: () => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
-  onSettled?: () => void;
+  onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
   onCancellationRetired?: () => void;
   /** Stable cancellation owner for collect-mode batches. */

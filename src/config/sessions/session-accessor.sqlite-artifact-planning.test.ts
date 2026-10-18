@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -165,7 +165,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     let following: Promise<void> | undefined;
     try {
@@ -175,7 +175,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
         "Artifact worker read was bypassed",
       );
       if (outcome === "admitted") {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, sessionId],
           assertAllowed: () => {},

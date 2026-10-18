@@ -24,7 +24,7 @@ export type SetTuiActivityStatus = (status: string, runOutcome?: TuiRunOutcome) 
 
 const PROGRAM_STATUS_APP = "openclaw";
 
-export function resolveTuiProgramState(params: {
+function resolveTuiProgramState(params: {
   activityStatus: string;
   previous: TuiProgramState | null;
   isConnected: boolean;

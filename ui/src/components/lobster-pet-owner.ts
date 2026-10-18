@@ -1,5 +1,6 @@
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import * as dex from "./lobster-dex.ts";
 import * as contract from "./lobster-pet-contract.ts";
 import type { LobsterPetDismissMenuPosition } from "./lobster-pet-dismiss-menu.tsx";
@@ -75,7 +76,7 @@ export class LobsterPetOwner {
     onPasserMidCross: () => this.reactToPasser(),
     onPasserDone: () => this.scheduleNextAct(),
   });
-  private readonly interactions = new LobsterPetInteractions(this.host, {
+  private readonly interactions = new LobsterPetInteractions({
     soundsEnabled: () => this.inputs.soundsEnabled,
     canHuff: () => this.inputs.mode !== "offline",
     canGaze: () => this.presence === "in" && this.act === null && !this.vigil,
@@ -121,6 +122,7 @@ export class LobsterPetOwner {
   private restartPending = false;
 
   private active = false;
+  private stopVisibility?: () => void;
   private readonly listeners = new Set<() => void>();
 
   constructor(
@@ -135,12 +137,13 @@ export class LobsterPetOwner {
     this.geometry.connect();
     this.traffic.connect();
     this.interactions.connect();
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
   }
 
   dispose() {
     this.active = false;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.clearActTimers();
     this.restartPending = false;
     this.scheduledVisiting = false;
@@ -295,6 +298,7 @@ export class LobsterPetOwner {
     this.host.toggleAttribute("data-floor-enabled", this.inputs.floorEnabled);
     this.reconcilePresence();
     this.traffic.update();
+    this.startPendingActs();
   }
 
   // Reconcile in the update pass to avoid chaining post-update state changes.
@@ -341,7 +345,7 @@ export class LobsterPetOwner {
     }
   }
 
-  afterCommit() {
+  private startPendingActs() {
     if (!this.active || !this.restartPending) {
       return;
     }
@@ -687,6 +691,7 @@ export class LobsterPetOwner {
       flavor,
       bottle: this.traffic.bottle,
       onPointerDown: this.interactions.handleHoldStart,
+      onSprite: this.interactions.bindSprite,
       onPointerUp: this.interactions.handleHoldEnd,
       onPointerCancel: this.interactions.handleHoldCancel,
       onContextMenu: this.openDismissMenu,

@@ -26,6 +26,7 @@ export * from "./sessions-goal.js";
 export * from "./sessions-provider-review.js";
 export {
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionOwnerSessionCountSchema,
   type SessionsListParams,
   type SessionOwnerSessionCount,

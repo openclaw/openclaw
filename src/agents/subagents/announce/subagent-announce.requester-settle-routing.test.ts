@@ -8,6 +8,7 @@ import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-a
 import { resolveInProcessGatewaySyntheticScopes } from "../../../gateway/server-plugin-in-process-scopes.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -121,10 +122,11 @@ describe("requester settle routing and session authority", () => {
       });
     }
     registryRead.listSubagentRunsForRequester.mockReturnValue(cohort);
-    loadRequester.mockReturnValue({
+    const requester: Awaited<ReturnType<typeof deliveryRuntime.loadRequesterSessionEntry>> = {
       cfg: {},
       canonicalKey: requesterSessionKey,
       agentId: "main",
+      storePath: "/synthetic/requester-settle.sqlite",
       entry: {
         ...requesterIdentity,
         updatedAt: 1,
@@ -135,12 +137,19 @@ describe("requester settle routing and session authority", () => {
           origin: { provider: "webchat", to: requesterSessionKey, surface: "webchat" },
         },
       },
-    });
+    };
+    loadRequester.mockResolvedValue(requester);
     setSubagentAnnounceDeliveryDepsForTest({
       getRuntimeConfig: () => ({}),
-      loadRequesterSessionEntry: loadRequester,
+      loadRequesterSessionEntry: () => requester,
       getRequesterSessionActivity: () => ({
         sessionId: requesterIdentity.sessionId,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/requester-settle.sqlite",
+          sessionKey: requesterSessionKey,
+          agentId: requester.agentId,
+          incarnation: requesterIdentity.sessionId,
+        }),
         isActive: false,
       }),
     });

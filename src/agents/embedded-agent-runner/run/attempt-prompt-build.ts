@@ -415,6 +415,7 @@ type PromptContextAttempt = Pick<
   | "messageChannel"
   | "messageProvider"
   | "requireExplicitMessageTarget"
+  | "messageToolFinalByDefault"
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
@@ -512,6 +513,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       channel: attempt.messageChannel ?? attempt.messageProvider,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
+      messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),

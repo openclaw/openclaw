@@ -7,6 +7,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
+import { captureSessionRowGeneration } from "../../session-row-identity.js";
 import { shareSidebarSessionRows } from "../../session-row-presentation.js";
 import {
   createDispatchTestHarness,
@@ -84,7 +85,9 @@ it.each(["wire", "shared", "internal"] as const)(
       [`delta:${base.rowsRevision}`, "all-rows-changed"],
       ["delta:unknown", "unknown-base"],
     ] as const) {
-      const payload = shareSidebarSessionRows(changed, token, [previous]);
+      const payload = shareSidebarSessionRows(changed, token, [
+        captureSessionRowGeneration(previous),
+      ]);
       expect(Object.keys(payload).toSorted()).toEqual(["rowsRevision", "sessions", "sharedFacts"]);
       const events = await dispatch(
         "sessions.list",

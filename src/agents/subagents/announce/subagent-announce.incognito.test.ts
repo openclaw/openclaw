@@ -9,12 +9,20 @@ import {
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { deliverAgentHarnessCompletion } from "../../../plugin-sdk/agent-harness-completion.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  clearSessionControllerMailbox,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
@@ -25,16 +33,15 @@ import {
   type AgentHarnessCompletionCustody,
 } from "../../agent-harness-completion-custody.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { maybeSteerSubagentAnnounce } from "./subagent-announce-active-wake.js";
 import { loadRequesterSessionEntry } from "./subagent-announce-delivery.runtime.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   buildCompactAnnounceStatsLine,
   readSubagentRunAnnounceResult,
 } from "./subagent-announce-output.js";
+import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -119,6 +126,7 @@ beforeEach(async () => {
   }
 });
 afterEach(() => {
+  setSubagentAnnounceDeliveryDepsForTest();
   clearRuntimeConfigSnapshot();
   resetGatewayWorkAdmission();
   memorySessionActorOwners.reset();
@@ -137,23 +145,48 @@ describe("selected incognito announcement requester", () => {
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const injected: string[] = [];
-    const handle = createEmbeddedRunHandle({ supportsTranscriptCommitWait: true });
-    handle.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, _options, assertCurrent) => {
-        entered.resolve();
-        await resume.promise;
-        assertCurrent();
-        injected.push(text);
+    const target = captureSessionTarget({
+      storeScope: actor.path,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionId,
+    });
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId,
+      resetTriggered: false,
+      target,
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {},
+      supportsTranscriptCommitWait: true,
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, _options, assertCurrent) => {
+          entered.resolve();
+          await resume.promise;
+          assertCurrent();
+          injected.push(text);
+        },
       },
-    };
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    });
+    const input = reserveSessionControllerSource(sessionKey, {
+      target,
+      policy: { mode: "steer" },
+    });
     const pending = withMemorySource(actor, () =>
-      maybeSteerSubagentAnnounce({
+      sendSubagentAnnounceDirectly({
         requesterSessionKey: sessionKey,
+        targetRequesterSessionKey: sessionKey,
         requesterAgentId: "main",
-        steerMessage: "Child completed",
+        requesterIsSubagent: false,
+        triggerMessage: "Child completed",
+        expectsCompletionMessage: true,
+        directIdempotencyKey: "incognito-closed-requester-completion",
+        controllerInput: input,
       }),
     );
     try {
@@ -164,12 +197,20 @@ describe("selected incognito announcement requester", () => {
       );
       actor.closeSession(sessionKey);
       resume.resolve();
-      await expect(pending).resolves.toEqual({ status: "source_owner_changed" });
+      await expect(pending).resolves.toMatchObject({
+        delivered: false,
+        reason: "source_owner_changed",
+      });
       expect(injected).toEqual([]);
     } finally {
       resume.resolve();
-      await pending;
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      try {
+        await pending;
+      } finally {
+        operation.complete();
+        retireSessionControllerInput(input);
+        clearSessionControllerMailbox(input.mailbox, () => {});
+      }
     }
   });
 
@@ -181,29 +222,76 @@ describe("selected incognito announcement requester", () => {
       entry: { sessionId: "local-requester", updatedAt: 1, incognito: true },
     });
     const injected: string[] = [];
-    const handle = createEmbeddedRunHandle({ supportsTranscriptCommitWait: true });
-    handle.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, _options, assertCurrent) => {
-        assertCurrent();
-        injected.push(text);
+    const foreignStorePath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: "/synthetic/foreign-announcement" },
+    });
+    const operation = createReplyOperation({
+      sessionKey,
+      sessionId: "foreign-requester",
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope: foreignStorePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: "foreign-requester",
+      }),
+    });
+    operation.setPhase("running");
+    operation.attachBackend({
+      kind: "embedded",
+      cancel() {},
+      supportsTranscriptCommitWait: true,
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, _options, assertCurrent) => {
+          assertCurrent();
+          injected.push(text);
+        },
       },
-    };
-    setActiveEmbeddedRun("foreign-requester", handle, sessionKey);
+    });
+    const input = reserveSessionControllerSource(sessionKey, {
+      target: captureSessionTarget({
+        storeScope: actor.path,
+        sessionKey,
+        agentId: "main",
+        incarnation: "local-requester",
+      }),
+      policy: { mode: "steer" },
+    });
+    const callGateway = vi.fn<typeof runtimeCallGateway>().mockResolvedValue({
+      status: "ok",
+      result: { payloads: [{ text: "Completion accepted by local requester" }] },
+    });
+    setSubagentAnnounceDeliveryDepsForTest({ callGateway });
     try {
       await expect(
         withMemorySource(actor, () =>
-          maybeSteerSubagentAnnounce({
+          sendSubagentAnnounceDirectly({
             requesterSessionKey: sessionKey,
+            targetRequesterSessionKey: sessionKey,
             requesterAgentId: "main",
-            steerMessage: "Private completion",
+            requesterIsSubagent: false,
+            triggerMessage: "Private completion",
+            expectsCompletionMessage: true,
+            directIdempotencyKey: "incognito-physical-requester-completion",
+            controllerInput: input,
           }),
         ),
-      ).resolves.toEqual({ status: "none" });
+      ).resolves.toMatchObject({ delivered: true, path: "direct" });
       expect(injected).toEqual([]);
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({ sessionKey, agentId: "main" }),
+        }),
+      );
     } finally {
-      clearActiveEmbeddedRun("foreign-requester", handle, sessionKey);
+      operation.complete();
+      retireSessionControllerInput(input);
+      clearSessionControllerMailbox(input.mailbox, () => {});
     }
   });
 

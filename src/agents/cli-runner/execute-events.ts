@@ -259,12 +259,20 @@ export function createCliEventHandlers(params: {
     // Claude enforces this MCP response timeout. Keep recovery behind that
     // deadline while the request is still in the CLI's own tool runtime.
     const timeoutMs = context.managedMcpToolTimeoutMs;
-    emitTrustedDiagnosticEvent(
+    const deadlineAtMs =
       timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
-        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
-            deadlineAtMs: startedAt + timeoutMs,
-          })
-        : diagnosticEvent,
+        ? startedAt + timeoutMs
+        : undefined;
+    runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+      phase: "start",
+      toolName: event.name,
+      toolCallId: event.toolCallId,
+      deadlineAtMs,
+    });
+    emitTrustedDiagnosticEvent(
+      deadlineAtMs === undefined
+        ? diagnosticEvent
+        : markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, { deadlineAtMs }),
     );
     emitToolUseStart(event, true);
   };
@@ -278,6 +286,13 @@ export function createCliEventHandlers(params: {
     activeParsedTools.delete(event.toolCallId);
     const trustedOutcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
     const toolName = activeTool?.toolName ?? event.name;
+    if (!event.incomplete) {
+      runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+        phase: "end",
+        toolName,
+        toolCallId: event.toolCallId,
+      });
+    }
     const now = Date.now();
     const trustedTerminalReason =
       trustedOutcome &&
@@ -401,6 +416,7 @@ export function createCliEventHandlers(params: {
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
     if (text || delta) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
@@ -432,6 +448,7 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
     if (text) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
     }
     assistantVisibleText = "";

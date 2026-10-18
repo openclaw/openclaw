@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createEffect, onCleanup, onSettled } from "solid-js";
+import { createResizeObserver } from "../lib/reactive/observers.ts";
 
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
@@ -25,7 +26,6 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
   let textarea!: HTMLTextAreaElement;
   let entry!: HTMLDivElement;
   let actions!: HTMLDivElement;
-  let observer: ResizeObserver | undefined;
   let frame: number | undefined;
   let measuredValue: string | undefined;
   let measuredPlaceholder: string | undefined;
@@ -88,19 +88,14 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
       }
     },
   );
+  createResizeObserver(() => [entry, actions], scheduleLayout);
   onSettled(() => {
     props.onInputRef(textarea);
-    if (typeof ResizeObserver === "function") {
-      observer = new ResizeObserver(scheduleLayout);
-      observer.observe(entry);
-      observer.observe(actions);
-    }
     scheduleLayout();
   });
   onCleanup(() => {
     // A replacement field can mount before the old interop root is disposed.
     props.onInputRef(undefined, textarea);
-    observer?.disconnect();
     if (frame !== undefined) {
       cancelAnimationFrame(frame);
     }

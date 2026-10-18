@@ -1,6 +1,12 @@
-import type { CopilotClient } from "@github/copilot-sdk";
-import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CopilotClient, Tool as SdkTool } from "@github/copilot-sdk";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  type AnyAgentTool,
+  type AgentHarnessAttemptResult as AgentHarnessAttemptResultContract,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
+import { runCopilotAttempt as runCopilotAttemptImpl } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
@@ -17,6 +23,13 @@ export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResu
     timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
     timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
   };
+}
+
+/** Runs a Copilot attempt inside an admitted session turn, the way Gateway runs reach it. */
+export function runCopilotAttempt(...[params, deps]: Parameters<typeof runCopilotAttemptImpl>) {
+  return runInHarnessToolAuthorityForTest(params, "copilot", (admitted) =>
+    runCopilotAttemptImpl(admitted, deps),
+  );
 }
 
 export type SessionEventShape = {
@@ -175,5 +188,27 @@ export function makeFakeSdk(
     createSession,
     resumeSession,
     sessions,
+  };
+}
+
+export function createStubToolBridge(
+  sdkTools: SdkTool[] = [],
+  sourceTools: AnyAgentTool[] = [],
+  extras: { cleanup?: () => void; codeModeEngaged?: boolean } = {},
+) {
+  return {
+    ...extras,
+    promptToolPolicy: {
+      apply: (params: { toolsAllow?: string[]; forceToolNames?: readonly string[] } = {}) => {
+        const allowed = applyEmbeddedAttemptToolsAllow(sdkTools, params.toolsAllow);
+        const names = new Set([
+          ...allowed.map((tool) => tool.name),
+          ...(params.forceToolNames ?? []),
+        ]);
+        const tools = sdkTools.filter((tool) => names.has(tool.name));
+        return { tools, callableToolNames: tools.map((tool) => tool.name) };
+      },
+    },
+    sourceTools,
   };
 }

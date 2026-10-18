@@ -18,6 +18,7 @@ import {
 } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
+import { prepareCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
@@ -302,7 +303,10 @@ export function installSessionToolResultGuard(
     AppendReceipt
   > {
     const assistantSource = readAgentAssistantSource(acknowledgementSource);
-    const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
+    const runOwnedMessage = prepareCodeModeCheckpoint(
+      attachSessionTranscriptRunId(message, transcriptRunId),
+      acknowledgementSource,
+    );
     const parentEntryId = sessionManager.getLeafId();
     const originalTarget = sessionManager.getSessionTarget();
     const {

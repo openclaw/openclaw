@@ -10,7 +10,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "opencode-go-native",
-      "baseUrls": ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"]
+      "baseUrls": ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1", "https://opencode.ai/inference/go/openai/v1", "https://opencode.ai/inference/go/anthropic", "https://opencode.ai/inference/go/anthropic/v1", "https://opencode.ai/inference/go/google/v1beta"]
     }
   ],
   "providerRequest": {
@@ -23,7 +23,7 @@
   "modelCatalog": {
     "providers": {
       "opencode-go": {
-        "baseUrl": "https://opencode.ai/zen/go/v1",
+        "baseUrl": "https://opencode.ai/inference/go/openai/v1",
         "api": "openai-completions",
         "models": [
           {
@@ -135,7 +135,7 @@
             "id": "qwen3.8-max",
             "name": "Qwen3.8 Max",
             "api": "anthropic-messages",
-            "baseUrl": "https://opencode.ai/zen/go",
+            "baseUrl": "https://opencode.ai/inference/go/anthropic",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,

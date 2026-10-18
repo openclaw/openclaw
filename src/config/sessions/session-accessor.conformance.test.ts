@@ -9,7 +9,7 @@ import {
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -1419,7 +1419,7 @@ describe("sqlite session normalization", () => {
     }
 
     await seedEntry(admittedScope(dashboardKey), dashboardEntry);
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: paths.storePath,
       identities: [dashboardKey, dashboardEntry.sessionId],
       assertAllowed: () => {},

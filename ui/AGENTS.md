@@ -1,13 +1,10 @@
 # Control UI Guide
 
-UI ownership rules here; repo-global architecture, proof, Git rules in root `AGENTS.md`.
-
 ## Solid
 
 - Before writing, reviewing, or refactoring any Solid code here, read the [Solid skill](../.agents/skills/solid/SKILL.md) in full, the installed `node_modules/solid-js/CHEATSHEET.md` it points to, and the references it routes you to; for existing code, the [refactor checklist](../.agents/skills/solid/references/refactor-checklist.md). State ownership below still applies.
 
-The Control UI and its plugin views use Solid 2 and native primitives. Lit and
-Web Awesome have been removed from these surfaces.
+The Control UI and its plugin views use Solid 2 and native primitives; never add Lit or Web Awesome.
 
 Solid route modules expose `renderSolid(props)` from the existing lazy page import.
 The outlet mounts that renderer once and supplies live `data`, `loaderPending`, and
@@ -37,11 +34,9 @@ imports inside their route's `component` loader.
 
 ## Reload Performance
 
-- Prove the bench executes the live hot function with `--cpu-profile` before measuring a fix; never mix profiled and unprofiled timings.
-
 - Reload cost is main-thread render/reconcile triggered per Gateway message; JSON parse and transport are negligible. Measured no win or regressions (2026-10-15, Team-scale bench, quiet AWS, ≥7 interleaved pairs): socket worker/SharedWorker, delivery scheduling/chunking, batched boot RPC, V8 compile hints/chunk sizing, cached DOM shell replay. WebSocket permessage-deflate saves bytes on slow links, not render time. Retry only with new evidence.
 - Cut work at its owner: memoize values read per item (`createMemo`), render reused UI as components rather than helper calls, keep row identity through placement/history/live updates, check cheap state before reading layout.
-- Measure with `scripts/bench-control-ui-cold-load.ts` (long-task and render-pass probes) over several untraced runs; single DevTools traces inflate timing.
+- Measure with `scripts/bench-control-ui-cold-load.ts` (long-task and render-pass probes) over several untraced runs; single DevTools traces inflate timing. Confirm the hot function with `--cpu-profile` first; never mix profiled and unprofiled timings.
 
 ## i18n Rules
 
@@ -50,8 +45,7 @@ imports inside their route's `component` loader.
 - Register lazy English synchronously at each consumer, including Settings search before page load. Keep startup/shared copy eager; preserve shared `en` + sibling namespaces. Retain empty subtree anchors when extraction changes flattened order/grouped memory aliases. Never import host catalog owner into runtime.
 - Source PRs: update English/adapters/wiring, run keyless `pnpm ui:i18n:baseline`, commit changed raw-copy baseline. Exclude fallback/locale metadata + translation memory: CI rejects mixed diffs except canonical `release/YYYY.M.PATCH` branches or detected complete canonical-memory migrations.
 - Deterministic keyless `pnpm ui:i18n:verify`: English shape, runtime wiring, raw-copy drift in lint/changed-check UI. Foreign parity: post-merge bot + strict generated-output gate.
-- Serialized `control-ui-locale-refresh`: translate after merge, open generated PR with exact-head auto-merge. Authenticated `pnpm ui:i18n:sync`: maintainer/release repair path; new keys require provider auth. Drift: workflow/release prep, never manual translation/merging generated outputs.
-- `pnpm release:prep` syncs before freeze; `pnpm ui:i18n:check` = zero-fallback release/generated-output gate. `pnpm ui:i18n:report` = hardcoded-copy priorities + fallback metadata, not drift.
+- Foreign drift: the `control-ui-locale-refresh` workflow or release prep fixes it; never translate by hand or merge generated locale output.
 
 ## CSS / Template Linting
 
@@ -60,12 +54,11 @@ imports inside their route's `component` loader.
 
 ## Stylesheet Policy
 
-- No universal targets/pseudo-elements after `:has()` compound, `:has()` with `::placeholder`, or descendants after sibling-relative `:has(+ …)` on repeated items. Use owner-set classes, named children, or subject custom property. No `:has()` subjects on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, `body`, including modifiers, `:is()`/`:where()`, nested `&`: insertions restyle subtree; stylelint cannot resolve nesting.
+- `:has()` limits: stylelint's `selector-disallowed-list` enforces them on raw selectors (config comments say why). Apply the same limits by hand to nested `&` selectors, which stylelint cannot resolve.
 - New-tab links/controls: pointer cursors; state-changing controls: default arrow.
-- Colors: `src/styles/base.css` tokens (`color-no-hex`). Stated exemptions: token definitions, `lobster-pet.css` artwork, `--theme-chip-*` previews.
-- `max-width` breakpoints: 400/560/640/768/900/1100/1320px + 932×500 landscape-phone compound. Round new thresholds up; new rungs require config comment + this rule updates.
-- Duplicate selectors = errors; deliberate topic reopens need `stylelint-disable-next-line no-duplicate-selectors -- <reason>`.
-- `node --import tsx scripts/audit-control-ui-dead-css.mts` advisory. Verify selectors before deleting; extend dynamic-stem detection, not allowlist.
+- Colors: use `src/styles/base.css` tokens.
+- Breakpoints: stylelint's allowed list owns the ladder; add a rung only in config, with a comment.
+- `node --import ./scripts/tsx.mjs scripts/audit-control-ui-dead-css.mts` advisory. Verify selectors before deleting; extend dynamic-stem detection, not allowlist.
 - Nest CSS only while rewriting section; no conversion sweeps.
 - No `@layer`: shared light-DOM CSS depends on import order/specificity + lazy page CSS. Reconsider only with computed-style parity across all routes on mocked dev server.
 
@@ -87,11 +80,7 @@ imports inside their route's `component` loader.
 
 - Gateway serves `dist/control-ui`; source edits need `pnpm ui:build`. Before trusting live result: verify served `/assets/index-*.js` hash changed.
 
-## Scope
-
-- UI-specific rules here; root `AGENTS.md` owns repo-global workflow.
-
 ## Visual Proof
 
-- Substantial UI design changes: follow [Control UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test); inspect states in HTML gallery + collect per-example feedback.
+- Large design changes: run the [UI stress test](../.agents/skills/control-ui-e2e/SKILL.md#ui-stress-test).
 - Never capture the retired Discord invitation artwork. Mock/E2E harnesses default to `communityInvite: false`; compact Community entry scenarios opt in with `communityInvite: true`. Capture only the current entry and on-demand sheet, with synthetic content.

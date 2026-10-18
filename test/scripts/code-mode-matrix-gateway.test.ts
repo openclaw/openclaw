@@ -394,17 +394,14 @@ describe("Gateway matrix task oracles", () => {
     expect(Object.values(checks).every(Boolean)).toBe(accepted);
   });
 
-  it.each(["retained"] as const)(
-    "grades %s retention while preserving the correct-answer observation",
-    () => {
-      const { events, receipts } = invoiceEvidence();
-      const trace = collectGatewayMatrixTrace(events);
+  it("grades retained retention while preserving the correct-answer observation", () => {
+    const { events, receipts } = invoiceEvidence();
+    const trace = collectGatewayMatrixTrace(events);
 
-      const checks = evaluate("invoices-auto-retention", INVOICES, trace, receipts);
-      expect(checks.answer).toBe(true);
-      expect(Object.values(checks).every(Boolean)).toBe(true);
-    },
-  );
+    const checks = evaluate("invoices-auto-retention", INVOICES, trace, receipts);
+    expect(checks.answer).toBe(true);
+    expect(Object.values(checks).every(Boolean)).toBe(true);
+  });
 });
 
 const AUTOMATION = {
@@ -555,18 +552,15 @@ describe("terminal automation evidence", () => {
     expect(Object.values(checks).every(Boolean)).toBe(false);
   });
 
-  it.each(["recurring"] as const)(
-    "rejects a %s job even when its name and final cleanup match",
-    () => {
-      const trace = automationEvidence("complete");
-      const created = automationActivity(trace, "add");
-      created.result.schedule = { kind: "every", everyMs: 86400000 };
-      const checks = evaluate("automation-contracts", AUTOMATION, trace);
-      expect(checks.answer).toBe(true);
-      expect(checks.createdRemoved).toBe(true);
-      expect(checks.createdFacts).toBe(false);
-    },
-  );
+  it("rejects a recurring job even when its name and final cleanup match", () => {
+    const trace = automationEvidence("complete");
+    const created = automationActivity(trace, "add");
+    created.result.schedule = { kind: "every", everyMs: 86400000 };
+    const checks = evaluate("automation-contracts", AUTOMATION, trace);
+    expect(checks.answer).toBe(true);
+    expect(checks.createdRemoved).toBe(true);
+    expect(checks.createdFacts).toBe(false);
+  });
 
   it.each(["partial"] as const)(
     "rejects %s inventories as proof of clean, isolated removal",
@@ -672,18 +666,15 @@ describe("serialization probe evidence", () => {
     },
   );
 
-  it.each(["invented-value"] as const)(
-    "rejects %s despite a correct final serialization claim",
-    () => {
-      for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
-        const evidence = serializationEvidence(task);
-        expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
-        const checks = evaluateGatewayMatrixTask(evidence);
-        expect(checks.answer).toBe(true);
-        expect(Object.values(checks).every(Boolean)).toBe(false);
-      }
-    },
-  );
+  it("rejects invented-value despite a correct final serialization claim", () => {
+    for (const task of ["return-value-effects", "result-save-invalid-json"] as const) {
+      const evidence = serializationEvidence(task);
+      expectDefined(evidence.trace.outcomes[0], "probe outcome").details.value = null;
+      const checks = evaluateGatewayMatrixTask(evidence);
+      expect(checks.answer).toBe(true);
+      expect(Object.values(checks).every(Boolean)).toBe(false);
+    }
+  });
 });
 
 function configReadEvidence() {
@@ -775,7 +766,7 @@ function processEvidence(recovery = false) {
 }
 
 describe("process lifecycle evidence", () => {
-  it.each(["single-helper"] as const)("requires exactly one successful helper launch: %s", () => {
+  it("requires exactly one successful helper launch: single-helper", () => {
     const trace = processEvidence();
 
     const checks = evaluate("process-contracts", PROCESS, trace);
@@ -1171,17 +1162,12 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
 });
 
 describe("fixed Gateway matrix comparisons", () => {
-  it.each(["timeout"] as const)(
-    "rejects a changed %s instead of comparing different workloads",
-    () => {
-      const baseline = comparisonRow();
-      const candidate = comparisonRow();
-      candidate.workload.settings.timeoutSeconds = 121;
-      expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow(
-        "workload changed",
-      );
-    },
-  );
+  it("rejects a changed timeout instead of comparing different workloads", () => {
+    const baseline = comparisonRow();
+    const candidate = comparisonRow();
+    candidate.workload.settings.timeoutSeconds = 121;
+    expect(() => compareCodeModeMatrixResults([baseline], [candidate])).toThrow("workload changed");
+  });
 
   it("rejects duplicate or missing paired cells", () => {
     const row = comparisonRow();

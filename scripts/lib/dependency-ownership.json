@@ -61,11 +61,6 @@
       "class": "plugin-runtime",
       "risk": ["mdns", "network"]
     },
-    "@modelcontextprotocol/client": {
-      "owner": "core:mcp",
-      "class": "core-runtime",
-      "risk": ["protocol-client", "network"]
-    },
     "@modelcontextprotocol/core": {
       "owner": "core:mcp",
       "class": "core-runtime",

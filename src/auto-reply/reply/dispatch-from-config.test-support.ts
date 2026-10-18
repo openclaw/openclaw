@@ -45,6 +45,7 @@ import {
   runtimePluginMocks,
   sessionBindingMocks,
   sessionStoreMocks,
+  setDiscordTestRegistry,
   stageSandboxMediaMocks,
   threadInfoMocks,
   transcriptMocks,
@@ -85,11 +86,13 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 
 export let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acpx.js").tryDispatchAcpReplyHook;
 
-export let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+export let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
 
-export let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
+export let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 
-let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
+export let isSessionRunActiveForKey: typeof import("../../sessions/session-controller.js").isSessionRunActiveForKey;
+
+let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
 
 export let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 
@@ -121,6 +124,34 @@ function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
 
 export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
+}
+
+export function resetDeliverySettlementFixture() {
+  // Keep the delivery cases on their original non-ACP, Discord-only fixture.
+  setDiscordTestRegistry();
+  mocks.tryFastAbortFromMessage.mockReset();
+  setNoAbort();
+  hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
+  sessionStoreMocks.updateSessionEntry.mockClear();
+  acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
+    resolveSessionAsync: async () => ({ kind: "none" as const }),
+    getObservabilitySnapshot: () => ({
+      runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
+      turns: {
+        active: 0,
+        queueDepth: 0,
+        completed: 0,
+        failed: 0,
+        averageLatencyMs: 0,
+        maxLatencyMs: 0,
+      },
+      errorsByCode: {},
+    }),
+    runTurn: vi.fn(),
+  }));
+  runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
+    runtimePluginMocks.pluginRegistry,
+  );
 }
 
 export function createActiveSlackThread(userId: string) {
@@ -425,8 +456,10 @@ export const globalBeforeAll0 = async () => {
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   // The broad facade imports the real manager outside this fixture's mocked dispatch boundary.
   ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acpx.js"));
-  ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
-  ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
+  ({ createReplyOperation, getSessionControllerOperation, isSessionRunActiveForKey } =
+    await import("../../sessions/session-controller.js"));
+  ({ testing: controllerTesting } =
+    await import("../../sessions/session-controller.test-support.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
 };
@@ -525,7 +558,7 @@ export const describe0BeforeEach0 = () => {
   );
   acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
-  replyRunTesting.resetReplyRunRegistry();
+  controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
   mocks.isRoutableChannel.mockReset();
   mocks.isRoutableChannel.mockImplementation((channel) =>

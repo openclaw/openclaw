@@ -1,11 +1,21 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+  recordCommandProcessFailure,
+} from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
-import { cloneProjectCheckout, ProjectCloneError } from "./project-clone-runtime.js";
+import {
+  cloneProjectCheckout,
+  ProjectCloneError,
+  readProjectCheckoutRemoteHead,
+  refreshProjectCheckout,
+} from "./project-clone-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -163,3 +173,254 @@ it("removes a settled partial checkout before the normal network retry", async (
   await expect(fs.lstat(partial)).rejects.toMatchObject({ code: "ENOENT" });
   expect(command).toHaveBeenCalledTimes(2);
 });
+
+const projectUrl = "https://github.com/example/project.git";
+const pinnedCommit = "a".repeat(40);
+const successfulGit: processExec.SpawnResult = { ...failedClone, code: 0, stderr: "" };
+
+it("retains a clone when its thrown failure records uncertain cleanup", async () => {
+  const target = path.join(dirs.make("openclaw-clone-recorded-"), "checkout");
+  const sentinel = path.join(target, "partial.txt");
+  const failure = recordCommandProcessFailure(new Error("synthetic capture failure"), {
+    code: null,
+    termination: "signal",
+    cleanup: "uncertain",
+  });
+  const command = vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async () => {
+    await fs.mkdir(target);
+    await fs.writeFile(sentinel, "owned clone data");
+    throw failure;
+  });
+
+  const error = await cloneProjectCheckout({ url: projectUrl, target }).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(hasCommandProcessCleanupError(error)).toBe(true);
+  expect(error).toHaveProperty("cause", failure);
+  await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("owned clone data");
+  expect(command).toHaveBeenCalledOnce();
+});
+
+it.each(["probe", "fetch", "repair"] as const)(
+  "retains a pinned checkout after uncertain %s work",
+  async (phase) => {
+    const target = path.join(dirs.make("openclaw-pinned-cleanup-"), "checkout");
+    const sentinel = path.join(target, "partial.txt");
+    const failure = recordCommandProcessFailure(new Error("synthetic repair capture failure"), {
+      code: null,
+      termination: "signal",
+      cleanup: "uncertain",
+    });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(
+      async (argv): Promise<processExec.SpawnResult> => {
+        if (argv.includes("clone")) {
+          await fs.mkdir(target);
+          await fs.writeFile(sentinel, "pinned clone data");
+          return successfulGit;
+        }
+        if (argv.includes("rev-list")) {
+          return phase === "probe"
+            ? { ...successfulGit, stdout: pinnedCommit, cleanup: "uncertain" }
+            : { ...failedClone, stderr: "missing commit" };
+        }
+        if (argv.includes("fetch")) {
+          return phase === "fetch"
+            ? { ...successfulGit, cleanup: "uncertain" }
+            : {
+                ...failedClone,
+                stderr: "which is in the commit graph file but not in the object database",
+              };
+        }
+        if (argv.includes("for-each-ref")) {
+          throw failure;
+        }
+        throw new Error("unexpected pinned Git command");
+      },
+    );
+
+    const error = await cloneProjectCheckout({
+      url: projectUrl,
+      target,
+      requiredCommit: pinnedCommit,
+    }).catch((caught: unknown) => caught);
+
+    expect(hasCommandProcessCleanupError(error)).toBe(true);
+    if (phase === "repair") {
+      expect(error).toHaveProperty("cause", failure);
+    }
+    await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("pinned clone data");
+  },
+);
+
+it.each(["uncertain", "settled auth failure"] as const)(
+  "cleans or preserves a pinned checkout after %s",
+  async (outcome) => {
+    const target = path.join(dirs.make("openclaw-pinned-outcome-"), "checkout");
+    const sentinel = path.join(target, "partial.txt");
+    const failure = new CommandProcessCleanupError();
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
+      if (argv.includes("clone")) {
+        await fs.mkdir(target);
+        await fs.writeFile(sentinel, "pinned clone data");
+        return successfulGit;
+      }
+      if (outcome === "uncertain") {
+        throw failure;
+      }
+      return { ...failedClone, stderr: "Authentication failed" };
+    });
+
+    const error = await cloneProjectCheckout({
+      url: projectUrl,
+      target,
+      requiredCommit: pinnedCommit,
+    }).catch((caught: unknown) => caught);
+
+    if (outcome === "uncertain") {
+      expect(error).toBe(failure);
+      await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("pinned clone data");
+    } else {
+      expect(error).toBeInstanceOf(ProjectCloneError);
+      expect(error).toHaveProperty("failure", "auth_required");
+      await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
+
+it.each(["fetch", "repair", "inventory", "success", "auth failure", "cleanup failure"] as const)(
+  "retains or cleans refresh staging after %s",
+  async (phase) => {
+    const root = dirs.make("openclaw-refresh-cleanup-");
+    const target = path.join(root, "checkout");
+    const objects = path.join(root, "objects");
+    await fs.mkdir(target);
+    await fs.mkdir(objects);
+    vi.spyOn(os, "tmpdir").mockReturnValue(root);
+    const failure = recordCommandProcessFailure(new Error("synthetic repair capture failure"), {
+      code: null,
+      termination: "signal",
+      cleanup: "uncertain",
+    });
+    const cleanupFailure = new Error("synthetic staging removal failure");
+    let staging = "";
+    let managedInventories = 0;
+    const published: (string | Uint8Array | undefined)[] = [];
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(
+      async (argv, options): Promise<processExec.SpawnResult> => {
+        const cwd = argv[argv.indexOf("-C") + 1];
+        if (argv.includes("--git-path")) {
+          return { ...successfulGit, stdout: objects };
+        }
+        if (argv.includes("--show-object-format")) {
+          return { ...successfulGit, stdout: "sha1" };
+        }
+        if (argv.includes("config")) {
+          return { ...successfulGit, code: 1 };
+        }
+        if (argv.includes("init") && cwd) {
+          staging = cwd;
+          await fs.writeFile(path.join(staging, "partial.txt"), "owned staging data");
+          return successfulGit;
+        }
+        if (argv.includes("for-each-ref")) {
+          if (cwd === target) {
+            if (phase === "repair" && managedInventories++ > 0) {
+              throw failure;
+            }
+            return {
+              ...successfulGit,
+              stdout: phase === "repair" ? `refs/remotes/origin/main ${pinnedCommit}` : "",
+            };
+          }
+          return {
+            ...successfulGit,
+            stdout: `refs/remotes/origin/main ${pinnedCommit}`,
+            cleanup: phase === "inventory" ? "uncertain" : undefined,
+          };
+        }
+        if (argv.includes("update-ref")) {
+          if (cwd === staging) {
+            return {
+              ...failedClone,
+              stderr: "which is in the commit graph file but not in the object database",
+            };
+          }
+          published.push(typeof options === "number" ? undefined : options.input);
+          return successfulGit;
+        }
+        if (argv.includes("fetch")) {
+          if (phase === "auth failure") {
+            return { ...failedClone, stderr: "Authentication failed" };
+          }
+          return {
+            ...successfulGit,
+            cleanup: phase === "fetch" ? "uncertain" : undefined,
+          };
+        }
+        throw new Error("unexpected refresh Git command");
+      },
+    );
+    const remove = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (location, options) => {
+      if (phase === "cleanup failure" && location === staging) {
+        throw cleanupFailure;
+      }
+      return remove(location, options);
+    });
+
+    const error = await refreshProjectCheckout({ target, url: projectUrl }).catch(
+      (caught: unknown) => caught,
+    );
+
+    if (!staging) {
+      throw new Error("refresh did not initialize its staging directory");
+    }
+    if (phase === "fetch" || phase === "repair" || phase === "inventory") {
+      expect(hasCommandProcessCleanupError(error)).toBe(true);
+      if (phase === "repair") {
+        expect(error).toHaveProperty("cause", failure);
+      }
+      expect(published).toEqual([]);
+      await expect(fs.readFile(path.join(staging, "partial.txt"), "utf8")).resolves.toBe(
+        "owned staging data",
+      );
+    } else if (phase === "cleanup failure") {
+      expect(error).toBe(cleanupFailure);
+      expect(published).toEqual([`update refs/remotes/origin/main ${pinnedCommit}\n`]);
+    } else {
+      expect(published).toEqual(
+        phase === "success" ? [`update refs/remotes/origin/main ${pinnedCommit}\n`] : [],
+      );
+      if (phase === "success") {
+        expect(error).toBeUndefined();
+      } else {
+        expect(error).toBeInstanceOf(ProjectCloneError);
+        expect(error).toHaveProperty("failure", "auth_required");
+      }
+      await expect(fs.lstat(staging)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  },
+);
+
+it.each(["uncertain", "present", "absent"] as const)(
+  "observes the remote head when its outcome is %s",
+  async (outcome) => {
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+      ...successfulGit,
+      stdout: outcome === "absent" ? "" : `${pinnedCommit}\trefs/heads/main\n`,
+      ...(outcome === "uncertain" ? { cleanup: "uncertain" } : {}),
+    });
+    const observed = readProjectCheckoutRemoteHead({
+      target: dirs.make("openclaw-head-cleanup-"),
+      url: projectUrl,
+      branch: "main",
+    });
+
+    if (outcome === "uncertain") {
+      await expect(observed).rejects.toBeInstanceOf(CommandProcessCleanupError);
+    } else {
+      await expect(observed).resolves.toBe(outcome === "present" ? pinnedCommit : undefined);
+    }
+  },
+);

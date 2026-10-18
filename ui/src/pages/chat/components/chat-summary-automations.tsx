@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, onSettled, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { gatewayPresentationScope } from "../../../app/gateway-presentation-scope.ts";
@@ -39,9 +39,9 @@ export function ChatSummaryAutomations(props: Props) {
   let dirty = true;
   let active = true;
   let presentationScope = 0;
-  // Imperative request admission samples live presentation without owning its dependency.
-  const readPresented = () => untrack(presented);
-  const visible = (isPresented = readPresented()) =>
+  const jobLinks = new Map<string, HTMLAnchorElement>();
+  let statusMessage: HTMLDivElement | undefined;
+  const visible = (isPresented = presented()) =>
     active && host.isConnected && isPresented && host.ownerDocument.visibilityState !== "hidden";
   const state = () => {
     revision();
@@ -93,7 +93,7 @@ export function ChatSummaryAutomations(props: Props) {
     publish();
   }
 
-  async function load(append = false, retry?: HTMLButtonElement, isPresented = readPresented()) {
+  async function load(append = false, retry?: HTMLButtonElement, isPresented = presented()) {
     const current = cron;
     if (
       !readAccess ||
@@ -122,12 +122,10 @@ export function ChatSummaryAutomations(props: Props) {
           visible() &&
           host.ownerDocument.activeElement === host.ownerDocument.body
         ) {
-          // Retry targets the first current child row after keyed list reconciliation.
-          host
-            .querySelector<HTMLElement>(
-              ".chat-summary__automation, .chat-summary__automation-message",
-            )
-            ?.focus();
+          const target = jobLinks.get(cron.cronJobs[0]?.id ?? "") ?? statusMessage;
+          if (target?.isConnected) {
+            target.focus();
+          }
         }
       });
     }
@@ -144,7 +142,7 @@ export function ChatSummaryAutomations(props: Props) {
       const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
       let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
       // Reject obsolete event delivery before queued binding cleanup runs.
-      const current = () => untrack(() => props.gateway === source && props.sessionKey === key);
+      const current = () => props.gateway === source && props.sessionKey === key;
       // Connection publications retire request scopes before the next cron event is delivered.
       const unsubscribe = source.subscribe((snapshot) => {
         if (!current()) {
@@ -231,8 +229,20 @@ export function ChatSummaryAutomations(props: Props) {
       <For each={state().cronJobs} keyed={(job) => job.id}>
         {(job) => {
           const search = () => `?${new URLSearchParams({ job: job().id })}`;
+          let link: HTMLAnchorElement;
+          let id: string;
+          onSettled(() => () => {
+            if (jobLinks.get(id) === link) {
+              jobLinks.delete(id);
+            }
+          });
           return (
             <a
+              ref={(element) => {
+                link = element;
+                id = job().id;
+                jobLinks.set(id, element);
+              }}
               class="chat-summary__automation"
               href={`${pathForRoute("cron", context?.basePath ?? "")}${search()}`}
               onClick={(event) => {
@@ -271,7 +281,12 @@ export function ChatSummaryAutomations(props: Props) {
         </div>
       ) : (
         !loaded() && (
-          <div class="chat-summary__automation-message" role="status" tabindex={-1}>
+          <div
+            ref={(element) => (statusMessage = element)}
+            class="chat-summary__automation-message"
+            role="status"
+            tabindex={-1}
+          >
             {!state().cronSessionFilter
               ? t("chat.sessionDetails.automationUnavailable")
               : !state().connected

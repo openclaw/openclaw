@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
@@ -369,15 +369,22 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(props: {
-  model: LoginGateProps;
-  host: LoginGateElement;
-}): SolidJSX.Element {
-  const host = untrack(() => props.host);
+function LoginGateContent(
+  props: {
+    model: LoginGateProps;
+  },
+  host: LoginGateElement,
+): SolidJSX.Element {
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
   const [now, setNow] = createSignal(Date.now());
-  const polling = useVisiblePoll(1_000, () => setNow(Date.now()));
+  useVisiblePoll(1_000, () => setNow(Date.now()), {
+    enabled: () =>
+      Boolean(props.model.reconnectPending) &&
+      props.model.lastErrorCode === "GATEWAY_BUSY" &&
+      (props.model.reconnectAt ?? 0) > now(),
+    immediate: true,
+  });
   let refreshAttempt: { props: LoginGateProps } | undefined;
   const cancelRefresh = () => {
     refreshAttempt = undefined;
@@ -409,21 +416,6 @@ function LoginGateContent(props: {
     () => {
       if (refreshAttempt && !ownsRefresh(refreshAttempt)) {
         cancelRefresh();
-      }
-    },
-  );
-  createEffect(
-    () =>
-      props.model.reconnectPending &&
-      props.model.lastErrorCode === "GATEWAY_BUSY" &&
-      (props.model.reconnectAt ?? 0) > now(),
-    (running) => {
-      if (running) {
-        if (polling.start() && document.visibilityState !== "hidden") {
-          setNow(Date.now());
-        }
-      } else {
-        polling.stop();
       }
     },
   );
@@ -537,7 +529,18 @@ function LoginGateContent(props: {
 export const LoginGate = defineSolidBridge<BridgeProps>(
   "openclaw-login-gate",
   (props, host) => (
-    <Show when={props.props}>{(model) => <LoginGateContent model={model()} host={host} />}</Show>
+    <Show when={props.props}>
+      {(model) =>
+        LoginGateContent(
+          {
+            get model() {
+              return model();
+            },
+          },
+          host,
+        )
+      }
+    </Show>
   ),
   {
     properties: { props: { default: undefined, attribute: false } },

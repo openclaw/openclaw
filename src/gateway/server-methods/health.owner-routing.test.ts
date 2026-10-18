@@ -36,8 +36,6 @@ async function callStatus(
     context: {
       hostLifecycle,
       cron: { getSuspensionBlockerCount: () => 0 },
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
     } as never,
     client: { connect: { role: "operator", scopes } } as never,
     isWebchatConnect: () => false,

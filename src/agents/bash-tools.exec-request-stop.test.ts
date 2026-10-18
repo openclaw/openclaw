@@ -262,7 +262,16 @@ test.for([
             await withinTest(entered.promise, signal);
             const capture = (deviceId: string) =>
               captureExecRequestCancellation(continuation, (identity) =>
-                canRequesterAbortChatRun(identity, { deviceId, isAdmin: false }),
+                canRequesterAbortChatRun(
+                  {
+                    ...identity,
+                    requester: {
+                      connectionId: identity.ownerConnId,
+                      deviceId: identity.ownerDeviceId,
+                    },
+                  },
+                  { deviceId, isAdmin: false },
+                ),
               );
             const denied = capture("foreign-device");
             expect(denied.cancel()).toBe(false);
@@ -282,12 +291,30 @@ test.for([
             expect(routed).toHaveLength(1);
             expect(readExecRequestOwners(routed[0]!)).toHaveLength(1);
             const denied = captureExecRequestCancellation(origin, (identity) =>
-              canRequesterAbortChatRun(identity, { deviceId: "foreign-device", isAdmin: false }),
+              canRequesterAbortChatRun(
+                {
+                  ...identity,
+                  requester: {
+                    connectionId: identity.ownerConnId,
+                    deviceId: identity.ownerDeviceId,
+                  },
+                },
+                { deviceId: "foreign-device", isAdmin: false },
+              ),
             );
             expect(denied.cancel()).toBe(false);
             await denied.settle();
             const cancellation = captureExecRequestCancellation(origin, (identity) =>
-              canRequesterAbortChatRun(identity, { deviceId: "origin-device", isAdmin: false }),
+              canRequesterAbortChatRun(
+                {
+                  ...identity,
+                  requester: {
+                    connectionId: identity.ownerConnId,
+                    deviceId: identity.ownerDeviceId,
+                  },
+                },
+                { deviceId: "origin-device", isAdmin: false },
+              ),
             );
             expect(cancellation.cancel()).toBe(true);
             await cancellation.settle();

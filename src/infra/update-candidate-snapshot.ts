@@ -10,6 +10,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { extractErrorCode } from "./errors.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
@@ -415,12 +416,16 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             result.outputLimitExceeded || stderrOutputExceeded
               ? "output-limit"
               : result.termination;
-          throw new Error(
-            `Update state snapshot failed (${termination}): ${redactSupportString(
-              diagnostics.failure(diagnostics.stderr() || result.stderr, termination).message,
-              { env: params.env, stateDir: params.stateDir },
-              { maxLength: 20_000 },
-            )}`,
+          const failure = diagnostics.failure(diagnostics.stderr() || result.stderr, termination);
+          throw Object.assign(
+            new Error(
+              `Update state snapshot failed (${termination}): ${redactSupportString(
+                failure.message,
+                { env: params.env, stateDir: params.stateDir },
+                { maxLength: 20_000 },
+              )}`,
+            ),
+            { code: extractErrorCode(failure) },
           );
         }
         return JSON.parse(result.stdout) as unknown;

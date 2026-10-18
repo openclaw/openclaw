@@ -428,8 +428,13 @@ filtering does not change diagnostic collection or queue behavior.
 ## Darwin process inspection
 
 Use `openclaw/plugin-sdk/process-runtime` for macOS process observations.
+This is a breaking Plugin SDK change: `DarwinProcess.uid` is replaced by
+`owner: "same" | "different" | "unknown"`. Replace comparisons such as
+`row.uid === process.getuid()` with `row.owner === "same"`; unknown ownership
+does not authorize cleanup.
 Core cleanup and plugins share this owner. `readDarwinProcessSnapshot(deadline, pids?)`
-returns PID, parent PID, process group, state, effective UID, and an opaque `startedAt`
+returns PID, parent PID, process group, state, ownership (`same`, `different`, or
+`unknown` relative to the observer), and an opaque `startedAt`
 identity. Omitting `pids` requests all start identities and can fail for other users.
 Prefer `readDarwinProcessTree(deadline, roots)` for containment: it reads complete
 process topology, then start identities only for the roots, their descendants,
@@ -440,10 +445,11 @@ command fingerprint when authorizing cleanup of a retained PID.
 `readDarwinProcessCommandLine(pid, deadline)` returns joined arguments and never reads
 process environment values. Deadlines use `performance.now()` milliseconds.
 
-Bun uses in-process libproc for identities and the pinned proc-safe native argument
-reader, so neither operation executes `ps`. Node has no Bun FFI and the pinned
-proc-safe package has no Darwin census API; Node retains deadline-bounded `ps`
-inspection. There is no fallback from failed native inspection to `ps` under Bun.
+Node and Bun use the pinned proc-safe native census and argument reader, so neither
+operation executes `ps`, including inside macOS Seatbelt sandboxes. Unreadable
+topology fails the census; unrelated unreadable birth identities do not prevent
+inspection of a selected tree. There is no fallback from failed native inspection to `ps`.
 A missing PID is omitted, while `DarwinProcessInspectionError.reason` distinguishes
-`permission`, `deadline`, and `unavailable`. Callers must not treat these errors as
+`permission`, `deadline`, and `unavailable`; its `code` is respectively `EPERM`,
+`ETIMEDOUT`, or `EIO`. Callers must not treat these errors as
 proof that a process or integration is absent.

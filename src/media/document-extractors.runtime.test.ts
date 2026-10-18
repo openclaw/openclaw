@@ -115,7 +115,7 @@ describe("extractDocumentContent", () => {
       config: { env: { vars: { SECRET_VALUE: "do-not-pass" } } },
     });
     if (row.valid) {
-      expect(result).toStrictEqual({ text, images: [], metadata, extractor: "pdf" });
+      expect(result).toStrictEqual({ text, images: [], metadata });
       expect(extract).toHaveBeenCalledWith(publicRequest);
     } else {
       expect(result).not.toHaveProperty("metadata");

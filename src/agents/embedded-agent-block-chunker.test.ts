@@ -1,10 +1,13 @@
-// Covers streaming chunk boundaries for embedded-agent text blocks.
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { EmbeddedBlockChunker, type BlockChunkMetadata } from "./embedded-agent-block-chunker.js";
+import {
+  EmbeddedBlockChunker,
+  type BlockChunkMetadata,
+  type BlockReplyChunking,
+} from "./embedded-agent-block-chunker.js";
 import { agentProcessTestEntrypoints } from "./process-runtime.test-support.js";
 
 function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
@@ -13,18 +16,73 @@ function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
   return chunks;
 }
 
+function paragraphChunker(min: number, max: number, options: Partial<BlockReplyChunking> = {}) {
+  return new EmbeddedBlockChunker({ minChars: min, maxChars: max, ...options });
+}
+
+function renderedCode(text: string) {
+  const ir = markdownToIR(text);
+  return ir.styles
+    .filter((span) => span.style === "code_block")
+    .map((span) => ir.text.slice(span.start, span.end));
+}
+
+function renderedBody(code: string[]) {
+  return code.map((text) => text.replace(/\n$/u, "")).join("");
+}
+
+function captureChunks() {
+  const chunks: string[] = [];
+  const metadata: BlockChunkMetadata[] = [];
+  const emitted: [string, string | undefined][] = [];
+  const emit = (chunk: string, options?: BlockChunkMetadata) => {
+    chunks.push(chunk);
+    emitted.push([chunk, options?.sourceText]);
+    if (options) {
+      metadata.push(options);
+    }
+  };
+  return { chunks, metadata, emitted, emit };
+}
+
 function expectChunksWithinLength(chunks: string[], maxLength: number) {
-  expect(
-    chunks
-      .map((chunk, index) => ({ index, length: chunk.length }))
-      .filter((entry) => entry.length > maxLength),
-  ).toStrictEqual([]);
+  expect(chunks.filter((chunk) => chunk.length > maxLength)).toStrictEqual([]);
+}
+
+function expectDrained(chunker: EmbeddedBlockChunker, length: number) {
+  expect(chunker).toMatchObject({ bufferedText: "", consumedLength: length, sourceLength: length });
+  expect(chunker.hasBuffered()).toBe(false);
+}
+
+function expectSourceCoverage(metadata: BlockChunkMetadata[], source: string) {
+  expect(metadata.map((entry) => entry.sourceText).join("")).toBe(source);
+  let offset = 0;
+  for (const entry of metadata) {
+    expect(entry).toMatchObject({
+      sourceStart: offset,
+      sourceText: source.slice(offset, entry.sourceEnd),
+    });
+    offset = entry.sourceEnd;
+  }
+  expect(offset).toBe(source.length);
+}
+
+function streamChunks(chunker: EmbeddedBlockChunker, source: string, delta: number, force = false) {
+  const capture = captureChunks();
+  for (let offset = 0; offset < source.length; offset += delta) {
+    chunker.append(source.slice(offset, offset + delta));
+    if (!force) {
+      chunker.drain({ force: false, emit: capture.emit });
+    }
+  }
+  chunker.drain({ force: true, emit: capture.emit });
+  return capture;
 }
 
 describe("EmbeddedBlockChunker", () => {
   it("emits a whole leading grapheme that exactly fills the hard cap", () => {
     const cluster = `e${"\u0301".repeat(1199)}`;
-    const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
+    const chunker = paragraphChunker(800, 1200);
     chunker.append(cluster);
     expect(drainChunks(chunker)).toEqual([cluster]);
     expect(chunker.bufferedText).toBe("");
@@ -35,117 +93,71 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(cluster.length + 4);
   });
 
-  it.each([{ name: "skin tone", prefixLength: 1198, cluster: "👋🏽" }])(
-    "keeps a fitting $name intact at the normal streaming cap",
-    ({ prefixLength, cluster }) => {
-      const source = `${"x".repeat(prefixLength)}${cluster}done`;
-      const boundaries = new Set(
-        Array.from(
-          new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source),
-          (segment) => segment.index,
-        ),
-      );
-      boundaries.add(source.length);
+  it("keeps a fitting skin tone intact at the normal streaming cap", () => {
+    const cluster = "👋🏽";
+    const source = `${"x".repeat(1198)}${cluster}done`;
+    const boundaries = new Set(
+      Array.from(
+        new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(source),
+        (segment) => segment.index,
+      ),
+    );
+    boundaries.add(source.length);
 
-      // Cover complete terminal output and provider-like deltas, including a
-      // delta ending at the cap before the rest of its grapheme has arrived.
-      for (const deltaSize of [source.length, 17, 1]) {
-        for (const force of [false, true]) {
-          const chunker = new EmbeddedBlockChunker({ minChars: 800, maxChars: 1200 });
-          const chunks: string[] = [];
-          const metadata: BlockChunkMetadata[] = [];
-          const emit = (chunk: string, options?: BlockChunkMetadata) => {
-            chunks.push(chunk);
-            if (options) {
-              metadata.push(options);
-            }
-          };
-          for (let offset = 0; offset < source.length; offset += deltaSize) {
-            chunker.append(source.slice(offset, offset + deltaSize));
-            if (!force) {
-              chunker.drain({ force: false, emit });
-            }
-          }
-          chunker.drain({ force: true, emit });
-
-          expect(chunks.join("")).toBe(source);
-          expectChunksWithinLength(chunks, 1200);
-          expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
-          expect(metadata.map((entry) => entry.sourceText).join("")).toBe(source);
-          expect(metadata.every((entry) => boundaries.has(entry.sourceEnd))).toBe(true);
-          expect(metadata.map((entry) => entry.sourceStart)).toEqual([
-            0,
-            ...metadata.slice(0, -1).map((entry) => entry.sourceEnd),
-          ]);
-          expect(chunker.consumedLength).toBe(source.length);
-          expect(chunker.bufferedText).toBe("");
-        }
-      }
-    },
-  );
-
-  it.each([
-    {
-      breakPreference: "paragraph",
-      text: "Aaaa\n\nBbbb\n\nCccc",
-      normal: [{ chunk: "Aaaa\n\nBbbb", sourceText: "Aaaa\n\nBbbb\n\n" }],
-      forced: [
-        { chunk: "Aaaa", sourceText: "Aaaa\n\n" },
-        { chunk: "Bbbb", sourceText: "Bbbb\n\n" },
-        { chunk: "Cccc", sourceText: "Cccc" },
-      ],
-      tail: "Cccc",
-    },
-  ] as const)(
-    "preserves $breakPreference selection and source cursors across a forced tail",
-    ({ breakPreference, text, normal, forced, tail }) => {
+    for (const deltaSize of [source.length, 17, 1]) {
       for (const force of [false, true]) {
-        const prefix = force ? `${"x".repeat(20)}\n` : "";
-        const source = prefix + text;
-        const chunker = new EmbeddedBlockChunker({ minChars: 3, maxChars: 20, breakPreference });
-        const emitted: Array<{ chunk: string; sourceText: string | undefined }> = [];
-        const emit = (chunk: string, options?: { sourceText: string }) =>
-          emitted.push({ chunk, sourceText: options?.sourceText });
-        chunker.append(source);
-        chunker.drain({ force, emit });
-        expect(emitted).toEqual(
-          force ? [{ chunk: "x".repeat(20), sourceText: prefix }, ...forced] : normal,
-        );
-        expect(chunker.bufferedText).toBe(force ? "" : tail);
-        expect(chunker.hasBuffered()).toBe(!force);
-        expect(chunker.consumedLength).toBe(source.length - (force ? 0 : tail.length));
-        expect(chunker.sourceLength).toBe(source.length);
-        emitted.length = 0;
-        chunker.drain({ force: true, emit });
-        expect(emitted).toEqual(force ? [] : [{ chunk: tail, sourceText: tail }]);
-        expect(chunker.bufferedText).toBe("");
-        expect(chunker.hasBuffered()).toBe(false);
-        expect(chunker.consumedLength).toBe(source.length);
-        expect(chunker.sourceLength).toBe(source.length);
-        expect(drainChunks(chunker, true)).toEqual([]);
+        const chunker = paragraphChunker(800, 1200);
+        const { chunks, metadata } = streamChunks(chunker, source, deltaSize, force);
+        expect(chunks.join("")).toBe(source);
+        expectChunksWithinLength(chunks, 1200);
+        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
+        expectSourceCoverage(metadata, source);
+        expect(metadata.every((entry) => boundaries.has(entry.sourceEnd))).toBe(true);
+        expectDrained(chunker, source.length);
       }
-    },
-  );
+    }
+  });
+
+  it("preserves paragraph selection and source cursors across a forced tail", () => {
+    const tail = "Cccc";
+    for (const force of [false, true]) {
+      const prefix = force ? `${"x".repeat(20)}\n` : "";
+      const source = `${prefix}Aaaa\n\nBbbb\n\nCccc`;
+      const chunker = paragraphChunker(3, 20);
+      const { emitted, emit } = captureChunks();
+      chunker.append(source);
+      chunker.drain({ force, emit });
+      expect(emitted).toEqual(
+        force
+          ? [
+              ["x".repeat(20), prefix],
+              ["Aaaa", "Aaaa\n\n"],
+              ["Bbbb", "Bbbb\n\n"],
+              ["Cccc", "Cccc"],
+            ]
+          : [["Aaaa\n\nBbbb", "Aaaa\n\nBbbb\n\n"]],
+      );
+      expect(chunker.bufferedText).toBe(force ? "" : tail);
+      expect(chunker.hasBuffered()).toBe(!force);
+      expect(chunker.consumedLength).toBe(source.length - (force ? 0 : tail.length));
+      expect(chunker.sourceLength).toBe(source.length);
+      emitted.length = 0;
+      chunker.drain({ force: true, emit });
+      expect(emitted).toEqual(force ? [] : [[tail, tail]]);
+      expectDrained(chunker, source.length);
+      expect(drainChunks(chunker, true)).toEqual([]);
+    }
+  });
 
   it.each([
-    {
-      name: "incomplete blank-line delta",
-      deltas: ["    A_153587\n\n", "    B_153587"],
-      force: false,
-      code: "A_153587\n\nB_153587\n",
-    },
-    {
-      name: "fitting tail in an oversized forced drain",
-      deltas: ["Intro text here.\n\n    line one\n    line two\n\n    line four\n    line five"],
-      force: true,
-      code: "line one\nline two\n\nline four\nline five\n",
-    },
-  ])("preserves rendered indented code through $name", ({ deltas, force, code }) => {
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars: 60,
-      breakPreference: "paragraph",
-    });
+    [false, ["    A_153587\n\n", "    B_153587"], "A_153587\n\nB_153587\n"],
+    [
+      true,
+      ["Intro text here.\n\n    line one\n    line two\n\n    line four\n    line five"],
+      "line one\nline two\n\nline four\nline five\n",
+    ],
+  ] as const)("preserves rendered indented code (force=%s)", (force, deltas, code) => {
+    const chunker = paragraphChunker(1, 60);
     const chunks: string[] = [];
     for (const delta of deltas) {
       chunker.append(delta);
@@ -155,28 +167,20 @@ describe("EmbeddedBlockChunker", () => {
     }
     chunks.push(...drainChunks(chunker, true));
 
-    const renderedCode = chunks.flatMap((chunk) => {
-      const ir = markdownToIR(chunk);
-      return ir.styles
-        .filter((span) => span.style === "code_block")
-        .map((span) => ir.text.slice(span.start, span.end));
-    });
-    expect(renderedCode).toEqual([code]);
+    expect(chunks.flatMap(renderedCode)).toEqual([code]);
     expectChunksWithinLength(chunks, 60);
     expect(chunker.consumedLength).toBe(deltas.join("").length);
   });
 
-  it.each([false])(
-    "completes Unicode code followed by a long whitespace run (force: %s)",
-    async (force) => {
-      // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
-      const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
-      const result = await runNodeScript(
-        (workerArgv) => [
-          ...workerArgv(chunkerUrl).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          `
+  it("completes Unicode code followed by a long whitespace run before force", async () => {
+    // A synchronous stalled drain needs an external deadline, not Vitest's in-process timer.
+    const chunkerUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.blockChunker);
+    const result = await runNodeScript(
+      (workerArgv) => [
+        ...workerArgv(chunkerUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        `
             import assert from "node:assert/strict";
             import { EmbeddedBlockChunker } from ${JSON.stringify(chunkerUrl.href)};
             import { markdownToIR } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.markdownIr).href)};
@@ -191,7 +195,7 @@ describe("EmbeddedBlockChunker", () => {
             };
             chunker.append(source);
             console.log("drain-started");
-            chunker.drain({ force: ${force}, emit });
+            chunker.drain({ force: false, emit });
             chunker.drain({ force: true, emit });
             assert.equal(chunks.map((chunk) => {
               assert.ok(chunk.length <= 60 && chunk.isWellFormed());
@@ -207,39 +211,32 @@ describe("EmbeddedBlockChunker", () => {
             assert.equal(chunker.hasBuffered(), false);
             console.log("drain-completed");
           `,
-        ],
-        process.env,
-        5_000,
-        { requireProcessTreeExit: true },
-      );
-      expect(result.error, result.stdout + result.stderr).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-    },
-  );
+      ],
+      process.env,
+      5_000,
+      { requireProcessTreeExit: true },
+    );
+    expect(result.error, result.stdout + result.stderr).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
 
-  it.each([">     literal"])("leaves nested-container Markdown unchanged: %s", (source) => {
-    const chunker = new EmbeddedBlockChunker({ minChars: 50, maxChars: 60 });
+  it("leaves nested-container Markdown unchanged", () => {
+    const source = ">     literal";
+    const chunker = paragraphChunker(50, 60);
     chunker.append(source);
     expect(drainChunks(chunker)).toEqual([]);
     expect(drainChunks(chunker, true)).toEqual([source]);
   });
 
   it("reconciles indented source after a cap without replaying delivered code", () => {
-    const chunker = new EmbeddedBlockChunker({ minChars: 10, maxChars: 60 });
+    const chunker = paragraphChunker(10, 60);
     chunker.append(`    ${"A".repeat(56)}old`);
     const first = drainChunks(chunker);
     expect(chunker.consumedLength).toBe(56);
     const snapshot = `    ${"A".repeat(52)}NEW`;
     expect(chunker.replace(snapshot)).toBe(true);
     const chunks = [...first, ...drainChunks(chunker, true)];
-    const code = chunks.map((chunk) => {
-      const ir = markdownToIR(chunk);
-      return ir.styles
-        .filter((span) => span.style === "code_block")
-        .map((span) => ir.text.slice(span.start, span.end).replace(/\n$/, ""))
-        .join("");
-    });
-    expect(code.join("")).toBe(`${"A".repeat(52)}NEW`);
+    expect(renderedBody(chunks.flatMap(renderedCode))).toBe(`${"A".repeat(52)}NEW`);
     expect(chunker.consumedLength).toBe(snapshot.length);
     expect(chunker.sourceLength).toBe(snapshot.length);
     expect(drainChunks(chunker, true)).toEqual([]);
@@ -251,15 +248,8 @@ describe("EmbeddedBlockChunker", () => {
       { opener: "```txt\n", body: "abcdefghijklmnop", renderedOpener: "```txt\n" },
       { opener: "```abcdefghijkl\n", body: "a", renderedOpener: "```\n" },
     ]) {
-      const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
-      const chunks: string[] = [];
-      const sources: BlockChunkMetadata[] = [];
-      const emit = (chunk: string, metadata?: BlockChunkMetadata) => {
-        chunks.push(chunk);
-        if (metadata) {
-          sources.push(metadata);
-        }
-      };
+      const chunker = paragraphChunker(1, 20);
+      const { chunks, metadata: sources, emit } = captureChunks();
       const checkpoint = opener + body;
       chunker.append(checkpoint);
       chunker.drain({ force: false, emit });
@@ -281,129 +271,63 @@ describe("EmbeddedBlockChunker", () => {
       ).toBe("abcdefghijklmnopqrstuvwxyz");
       expectChunksWithinLength(chunks, 20);
       expect(sources).toHaveLength(chunks.length);
-      expect(sources.map((metadata) => metadata.sourceText).join("")).toBe(source);
-      expect(sources.map((metadata) => metadata.sourceStart)).toEqual([
-        0,
-        ...sources.slice(0, -1).map((metadata) => metadata.sourceEnd),
-      ]);
-      expect(
-        sources.every(
-          (metadata) =>
-            source.slice(metadata.sourceStart, metadata.sourceEnd) === metadata.sourceText,
-        ),
-      ).toBe(true);
-      expect(chunker.consumedLength).toBe(source.length);
-      expect(chunker.sourceLength).toBe(source.length);
+      expectSourceCoverage(sources, source);
+      expectDrained(chunker, source.length);
       expect(drainChunks(chunker, true)).toEqual([]);
     }
   });
 
-  type FenceDrainScenario = {
-    name: string;
-    steps: Array<{ append?: string; force?: boolean; expected: string[]; buffered?: string }>;
-  };
-  it.each([
-    {
-      name: "punctuation at cap",
-      steps: [{ append: "```ts\nabcdefghijklm.", expected: ["```ts\nabcdefghij\n```"] }],
-    },
-  ] satisfies FenceDrainScenario[])(
-    "keeps streamed fence boundaries intact: $name",
-    ({ steps }: FenceDrainScenario) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 8,
-        maxChars: 20,
-        breakPreference: "paragraph",
-      });
-      for (const step of steps) {
-        if (step.append !== undefined) {
-          chunker.append(step.append);
-        }
-        expect(drainChunks(chunker, "force" in step && step.force)).toEqual(step.expected);
-        if (step.buffered !== undefined) {
-          expect(chunker.bufferedText).toBe(step.buffered);
-        }
-      }
-    },
-  );
+  it("keeps streamed fence boundaries intact at punctuation at the cap", () => {
+    const chunker = paragraphChunker(8, 20);
+    chunker.append("```ts\nabcdefghijklm.");
+    expect(drainChunks(chunker)).toEqual(["```ts\nabcdefghij\n```"]);
+  });
 
-  it.each([true])(
-    "reports original source across synthetic wrappers with a preserved break: %s",
-    (preserveBreak) => {
-      const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
-      const delivered: Array<{ text: string; sourceText?: string }> = [];
-      const fenced = "```txt\nabcdefghijklmnopqr\n```\n\n";
-      if (preserveBreak) {
-        chunker.reset([fenced.length]);
-      }
-      chunker.append(`${fenced}Tail`);
-      chunker.drain({
-        force: true,
-        emit: (text, options) => delivered.push({ text, sourceText: options?.sourceText }),
-      });
+  it("reports original source across synthetic wrappers with a preserved break", () => {
+    const chunker = paragraphChunker(1, 20);
+    const { emitted, emit } = captureChunks();
+    const fenced = "```txt\nabcdefghijklmnopqr\n```\n\n";
+    chunker.reset([fenced.length]);
+    chunker.append(`${fenced}Tail`);
+    chunker.drain({ force: true, emit });
 
-      expect(delivered).toEqual([
-        { text: "```txt\nabcdefghi\n```", sourceText: "```txt\nabcdefghi" },
-        { text: "```txt\njklmnopqr\n```", sourceText: "jklmnopqr\n```\n\n" },
-        { text: "Tail", sourceText: "Tail" },
-      ]);
-    },
-  );
+    expect(emitted).toEqual([
+      ["```txt\nabcdefghi\n```", "```txt\nabcdefghi"],
+      ["```txt\njklmnopqr\n```", "jklmnopqr\n```\n\n"],
+      ["Tail", "Tail"],
+    ]);
+  });
 
   it("preserves code and source coverage across shortened fence metadata and indented code", () => {
     const body = `${"A".repeat(56)} TAIL`;
     const source = `\`\`\`${"language".repeat(20)}\nreal\n\`\`\`\n\n    ${body}`;
-    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 60 });
-    const chunks: string[] = [];
-    const sources: string[] = [];
+    const chunker = paragraphChunker(1, 60);
+    const { chunks, metadata, emit } = captureChunks();
     chunker.append(source);
-    chunker.drain({
-      force: true,
-      emit: (text, options) => {
-        chunks.push(text);
-        sources.push(options?.sourceText ?? "");
-      },
-    });
-    const code = chunks.flatMap((text) => {
-      const ir = markdownToIR(text);
-      return ir.styles
-        .filter((span) => span.style === "code_block")
-        .map((span) => ir.text.slice(span.start, span.end));
-    });
+    chunker.drain({ force: true, emit });
+    const code = chunks.flatMap(renderedCode);
     expect(code[0]).toBe("real\n");
-    // This indented body has no authored newline; each rendered fragment adds one.
-    expect(
-      code
-        .slice(1)
-        .map((text) => text.replace(/\n$/u, ""))
-        .join(""),
-    ).toBe(body);
-    expect(sources.join("")).toBe(source);
+    expect(renderedBody(code.slice(1))).toBe(body);
+    expectSourceCoverage(metadata, source);
     expect(chunker.consumedLength).toBe(source.length);
     expectChunksWithinLength(chunks, 60);
   });
 
-  it.each([{ name: "below the cap", suffix: "Unchanged paragraph follows.\n", ready: false }])(
-    "drains a preserved short prefix $name and on force without merging its suffix",
-    ({ suffix, ready }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 12,
-        maxChars: 50,
-        breakPreference: "newline",
-      });
-      const prefix = "Corrected. ";
-      chunker.reset([prefix.length]);
-      chunker.append(prefix + suffix);
+  it("drains a preserved short prefix below the cap on force without merging its suffix", () => {
+    const chunker = paragraphChunker(12, 50, { breakPreference: "newline" });
+    const prefix = "Corrected. ";
+    const suffix = "Unchanged paragraph follows.\n";
+    chunker.reset([prefix.length]);
+    chunker.append(prefix + suffix);
 
-      expect(drainChunks(chunker)).toEqual(ready ? [prefix] : []);
-      expect(chunker.bufferedText).toBe(ready ? suffix : prefix + suffix);
-      expect(drainChunks(chunker, true)).toEqual(ready ? [suffix] : [prefix, suffix]);
-      expect(chunker.bufferedText).toBe("");
-    },
-  );
+    expect(drainChunks(chunker)).toEqual([]);
+    expect(chunker.bufferedText).toBe(prefix + suffix);
+    expect(drainChunks(chunker, true)).toEqual([prefix, suffix]);
+    expect(chunker.bufferedText).toBe("");
+  });
 
   it("replaces a pending preserved boundary before introducing a code fence", () => {
-    const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 50 });
+    const chunker = paragraphChunker(1, 50);
     const prefix = "Corrected. ";
     chunker.reset([prefix.length]);
     chunker.append(`${prefix}Unchanged prose follows.`);
@@ -415,30 +339,23 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.bufferedText).toBe("");
   });
 
-  it.each([{ tail: "", changed: true, expected: [] }])(
-    "reconciles pending '$tail' without replaying drained source",
-    ({ tail, changed, expected }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 10,
-        maxChars: 16,
-        breakPreference: "sentence",
-      });
-      for (const sentence of ["Hello world.", "Next sentence."]) {
-        chunker.append(`${sentence} `);
-        expect(drainChunks(chunker)).toEqual([sentence]);
-      }
-      chunker.append("Tail");
-      expect(chunker.consumedLength).toBe("Hello world. Next sentence. ".length);
-      const snapshot = `Hello world. Next sentence.${tail ? ` ${tail}` : ""}`;
+  it("reconciles an empty pending tail without replaying drained source", () => {
+    const chunker = paragraphChunker(10, 16, { breakPreference: "sentence" });
+    for (const sentence of ["Hello world.", "Next sentence."]) {
+      chunker.append(`${sentence} `);
+      expect(drainChunks(chunker)).toEqual([sentence]);
+    }
+    chunker.append("Tail");
+    expect(chunker.consumedLength).toBe("Hello world. Next sentence. ".length);
+    const snapshot = "Hello world. Next sentence.";
 
-      expect(chunker.replace(snapshot)).toBe(changed);
-      expect(chunker.sourceLength).toBe(snapshot.length);
-      expect(drainChunks(chunker, true)).toEqual(expected);
-      expect(chunker.consumedLength).toBe(snapshot.length);
-      expect(chunker.replace(snapshot)).toBe(false);
-      expect(drainChunks(chunker, true)).toEqual([]);
-    },
-  );
+    expect(chunker.replace(snapshot)).toBe(true);
+    expect(chunker.sourceLength).toBe(snapshot.length);
+    expect(drainChunks(chunker, true)).toEqual([]);
+    expect(chunker.consumedLength).toBe(snapshot.length);
+    expect(chunker.replace(snapshot)).toBe(false);
+    expect(drainChunks(chunker, true)).toEqual([]);
+  });
 
   it("buffers without chunking and replaces a native source suffix before or after a drain", () => {
     const chunker = new EmbeddedBlockChunker();
@@ -461,121 +378,60 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual([" \n"]);
   });
 
-  it.each([
-    {
-      name: "long-language",
-      header: "```very-long-language-name\n",
-      renderedHeader: "```\n",
-      body: "q".repeat(22),
-      tail: "qqqq\nold\n```",
-      maxChars: 30,
-      replacement: "",
-    },
-  ])(
-    "reconciles $name fenced source with '$replacement' pending code",
-    ({ header, renderedHeader, body, tail, maxChars, replacement }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 10,
-        maxChars,
-        breakPreference: "paragraph",
-      });
-      chunker.append(`${header}${body}${tail}`);
-      expect(drainChunks(chunker)).toEqual([`${renderedHeader}${body}\n\`\`\``]);
-      expect(chunker.consumedLength).toBe(header.length + body.length);
+  it("reconciles long-language fenced source with empty pending code", () => {
+    const header = "```very-long-language-name\n";
+    const body = "q".repeat(22);
+    const chunker = paragraphChunker(10, 30);
+    chunker.append(`${header}${body}qqqq\nold\n\`\`\``);
+    expect(drainChunks(chunker)).toEqual([`\`\`\`\n${body}\n\`\`\``]);
+    expect(chunker.consumedLength).toBe(header.length + body.length);
 
-      const snapshot = `${header}${body}${replacement}\n\`\`\``;
-      expect(chunker.replace(snapshot)).toBe(true);
-      expect(chunker.sourceLength).toBe(snapshot.length);
-      expect(chunker.bufferedText).toBe(`${renderedHeader}${replacement}\n\`\`\``);
-      expect(drainChunks(chunker, true)).toEqual(
-        replacement ? [`${renderedHeader}${replacement}\n\`\`\``] : [],
-      );
-      expect(chunker.consumedLength).toBe(snapshot.length);
-    },
-  );
-
-  it.each([
-    {
-      name: "minimum paragraph length",
-      minChars: 30,
-      maxChars: 200,
-      flushOnParagraph: true,
-      flushTail: false,
-      source: "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
-      expected: ["First paragraph.\n\nSecond paragraph."],
-      tail: "Third paragraph.",
-    },
-  ])(
-    "respects paragraph boundaries and size limits: $name",
-    ({ minChars, maxChars, flushOnParagraph, flushTail, source, expected, tail }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars,
-        maxChars,
-        breakPreference: "paragraph",
-        flushOnParagraph,
-      });
-      chunker.append(source);
-      const chunks = drainChunks(chunker);
-      expect(chunks).toEqual(expected);
-      expectChunksWithinLength(chunks, maxChars);
-      expect(chunker.bufferedText).toBe(tail);
-      if (flushTail) {
-        expect(drainChunks(chunker, true)).toEqual([tail]);
-        expect(chunker.bufferedText).toBe("");
-      }
-    },
-  );
-
-  it("keeps forced maxChars chunks valid at UTF-16 boundaries", () => {
-    const plainChunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    plainChunker.append(`${"x".repeat(19)}😀tail`);
-
-    expect(drainChunks(plainChunker)).toEqual(["x".repeat(19)]);
-    expect(plainChunker.bufferedText).toBe("😀tail");
-
-    const tinyChunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars: 1,
-      breakPreference: "paragraph",
-    });
-    tinyChunker.append("😀tail");
-
-    expect(drainChunks(tinyChunker)).toEqual(["😀", "t", "a", "i", "l"]);
-    expect(tinyChunker.bufferedText).toBe("");
-
-    const fencedChunker = new EmbeddedBlockChunker({
-      minChars: 10,
-      maxChars: 20,
-      breakPreference: "paragraph",
-    });
-    fencedChunker.append(`\`\`\`txt\n${"x".repeat(12)}😀tail`);
-
-    expect(drainChunks(fencedChunker)).toEqual([`\`\`\`txt\n${"x".repeat(9)}\n\`\`\``]);
-    expect(fencedChunker.bufferedText).toBe("```txt\nxxx😀tail");
+    const snapshot = `${header}${body}\n\`\`\``;
+    expect(chunker.replace(snapshot)).toBe(true);
+    expect(chunker.sourceLength).toBe(snapshot.length);
+    expect(chunker.bufferedText).toBe("```\n\n```");
+    expect(drainChunks(chunker, true)).toEqual([]);
+    expect(chunker.consumedLength).toBe(snapshot.length);
   });
 
-  it.each(["open"])("bounds paragraph candidate scans while streaming a long %s fence", (kind) => {
+  it("respects paragraph boundaries and minimum paragraph length", () => {
+    const chunker = paragraphChunker(30, 200, { flushOnParagraph: true });
+    chunker.append("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
+    expect(drainChunks(chunker)).toEqual(["First paragraph.\n\nSecond paragraph."]);
+    expect(chunker.bufferedText).toBe("Third paragraph.");
+  });
+
+  it.each([
+    [1, 20, `${"x".repeat(19)}😀tail`, ["x".repeat(19)], "😀tail"],
+    [1, 1, "😀tail", ["😀", "t", "a", "i", "l"], ""],
+    [
+      10,
+      20,
+      `\`\`\`txt\n${"x".repeat(12)}😀tail`,
+      [`\`\`\`txt\n${"x".repeat(9)}\n\`\`\``],
+      "```txt\nxxx😀tail",
+    ],
+  ] as const)(
+    "keeps min=%i/max=%i chunks valid at UTF-16 boundaries",
+    (min, max, source, chunks, pending) => {
+      const chunker = paragraphChunker(min, max);
+      chunker.append(source);
+      expect(drainChunks(chunker)).toEqual(chunks);
+      expect(chunker.bufferedText).toBe(pending);
+    },
+  );
+
+  it("bounds paragraph candidate scans while streaming a long open fence", () => {
     const maxChars = 1_200;
-    const chunker = new EmbeddedBlockChunker({
-      minChars: 1,
-      maxChars,
+    const chunker = paragraphChunker(1, maxChars, {
       breakPreference: "newline",
       flushOnParagraph: true,
     });
     const code = "code\n\n".repeat(600);
     const closing = "```\n\nAfter";
-    const initial = `\`\`\`txt\n${code}${kind === "closed" ? closing : ""}`;
+    const initial = `\`\`\`txt\n${code}`;
     const completed = `\`\`\`txt\n${code}${closing}`;
-    const chunks: string[] = [];
-    const sources: string[] = [];
-    const emit = (chunk: string, options?: { sourceText: string }) => {
-      chunks.push(chunk);
-      sources.push(options?.sourceText ?? "");
-    };
+    const { chunks, metadata, emit } = captureChunks();
     chunker.append(initial);
     let candidates = 0;
     const scanSpy = vi.spyOn(fences, "scanFenceSpans");
@@ -603,15 +459,11 @@ describe("EmbeddedBlockChunker", () => {
     const streamedCount = chunks.length;
     expect(streamedCount).toBeGreaterThan(1);
     expect(chunker.sourceLength).toBe(initial.length);
-    if (kind === "open") {
-      chunker.append(closing);
-    }
+    chunker.append(closing);
     chunker.drain({ force: true, emit });
 
-    expect(sources.join("")).toBe(completed);
-    expect(chunker.consumedLength).toBe(completed.length);
-    expect(chunker.sourceLength).toBe(completed.length);
-    expect(chunker.bufferedText).toBe("");
+    expectSourceCoverage(metadata, completed);
+    expectDrained(chunker, completed.length);
     expectChunksWithinLength(chunks, maxChars);
     for (const chunk of chunks.filter((text) => text.startsWith("```"))) {
       expect(chunk.startsWith("```txt\n")).toBe(true);
@@ -625,51 +477,31 @@ describe("EmbeddedBlockChunker", () => {
     expect(candidates).toBeLessThanOrEqual(3 * (streamedCount + 1));
   });
 
-  it.each([{ marker: "```", finalLine: "    ``` XXXXXXXX", force: true }])(
-    "preserves the final content line in an unfinished $marker fence (force: $force)",
-    ({ marker, finalLine, force }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 1,
-        maxChars: 20,
-        breakPreference: "paragraph",
-      });
-      chunker.append(`${marker}txt\n12345678\n${finalLine}`);
+  it("preserves the final content line in an unfinished backtick fence on force", () => {
+    const finalLine = "    ``` XXXXXXXX";
+    const chunker = paragraphChunker(1, 20);
+    chunker.append(`\`\`\`txt\n12345678\n${finalLine}`);
 
-      const chunks = drainChunks(chunker, force);
-      if (!force) {
-        chunks.push(...drainChunks(chunker, true));
-      }
+    const chunks = drainChunks(chunker, true);
 
-      expectChunksWithinLength(chunks, 20);
-      const contentCodePoint = finalLine.includes("😀") ? "😀" : "X";
-      expect(
-        Array.from(chunks.join("")).filter((value) => value === contentCodePoint),
-      ).toHaveLength(Array.from(finalLine).filter((value) => value === contentCodePoint).length);
-      expect(chunker.bufferedText).toBe("");
-    },
-  );
+    expectChunksWithinLength(chunks, 20);
+    expect(Array.from(chunks.join("")).filter((value) => value === "X")).toHaveLength(8);
+    expect(chunker.bufferedText).toBe("");
+  });
 
-  it.each([{ marker: "```", closingMarker: "   ``` \t" }])(
-    "recognizes valid $marker closing-fence variants",
-    ({ marker, closingMarker }) => {
-      const chunker = new EmbeddedBlockChunker({
-        minChars: 1,
-        maxChars: 20,
-        breakPreference: "paragraph",
-      });
-      chunker.append(`${marker}txt\n${"q".repeat(32)}\n${closingMarker}`);
+  it("recognizes a backtick closing fence with surrounding whitespace", () => {
+    const chunker = paragraphChunker(1, 20);
+    chunker.append(`\`\`\`txt\n${"q".repeat(32)}\n   \`\`\` \t`);
 
-      const chunks = drainChunks(chunker, true);
+    const chunks = drainChunks(chunker, true);
 
-      expectChunksWithinLength(chunks, 20);
-      expect(chunks.join("").match(/q/g)).toHaveLength(32);
-      expect(chunks.every((chunk) => chunk.includes("q"))).toBe(true);
-      expect(chunker.bufferedText).toBe("");
-    },
-  );
+    expectChunksWithinLength(chunks, 20);
+    expect(chunks.join("").match(/q/g)).toHaveLength(32);
+    expect(chunks.every((chunk) => chunk.includes("q"))).toBe(true);
+    expect(chunker.bufferedText).toBe("");
+  });
 
   describe("Markdown tables", () => {
-    // Discord's native block-streaming defaults.
     const chunking = { minChars: 800, maxChars: 1200, breakPreference: "paragraph" } as const;
     const intro = "Here is the quarterly summary you asked for.";
     const buildTable = (rowCount: number) =>
@@ -682,33 +514,18 @@ describe("EmbeddedBlockChunker", () => {
         ),
       ].join("\n");
     const capRows = buildTable(38);
-    // Pad one header cell so the whole table is exactly maxChars long.
     const tableAtCap = capRows.replace(
       "Region",
       `Region${" ".repeat(chunking.maxChars - capRows.length)}`,
     );
 
-    function streamChunks(text: string, delta: number) {
-      const chunker = new EmbeddedBlockChunker(chunking);
-      const chunks: string[] = [];
-      for (let index = 0; index < text.length; index += delta) {
-        chunker.append(text.slice(index, index + delta));
-        chunks.push(...drainChunks(chunker));
-      }
-      chunks.push(...drainChunks(chunker, true));
-      return chunks;
-    }
+    const tableChunks = (text: string, delta: number) =>
+      streamChunks(new EmbeddedBlockChunker(chunking), text, delta).chunks;
 
-    it.each([
-      {
-        name: "when it exactly fills maxChars and a heading follows directly",
-        text: `${intro}\n\n${tableAtCap}\n# Next steps`,
-        expected: [intro, tableAtCap, "# Next steps"],
-        oneShot: true,
-      },
-    ])("keeps a streamed table that fits maxChars whole $name", ({ text, expected, oneShot }) => {
-      for (const delta of oneShot ? [1, 17, 43, text.length] : [1, 17, 43]) {
-        expect(streamChunks(text, delta)).toEqual(expected);
+    it("keeps a streamed table whole when it fills maxChars and a heading follows directly", () => {
+      const text = `${intro}\n\n${tableAtCap}\n# Next steps`;
+      for (const delta of [1, 17, 43, text.length]) {
+        expect(tableChunks(text, delta)).toEqual([intro, tableAtCap, "# Next steps"]);
       }
     });
 
@@ -717,8 +534,7 @@ describe("EmbeddedBlockChunker", () => {
         "\n",
       );
       for (const delta of [1, 17]) {
-        const lengths = (source: string) =>
-          streamChunks(source, delta).map((chunk) => chunk.length);
+        const lengths = (source: string) => tableChunks(source, delta).map((chunk) => chunk.length);
         expect(lengths(text)).toEqual(lengths(text.replaceAll("|", "/")));
       }
     });

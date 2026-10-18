@@ -2,6 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket } from "ws";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
@@ -12,6 +13,8 @@ import {
 } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listSystemPresence, upsertPresence } from "../infra/system-presence.js";
+import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -26,6 +29,8 @@ import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import type { GatewaySessionRow } from "./session-utils.types.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type ConnectionIdReads = { count: number };
 
@@ -108,6 +113,71 @@ describe("gateway connection state", () => {
     expect(state.chatRunState.runs.get("active")?.buffer).toBe("unfinished response");
     state.chatRunState.clearRun("active");
     expect(state.chatRunState.runs.size).toBe(0);
+  });
+
+  it("shares active-run snapshots within a publication and refreshes after Stop", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {};
+      setRuntimeConfigSnapshot(cfg);
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:publication",
+        sessionId: "publication-session",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const source = createRpcSourceForTest({}, { ...scope, storeScope: scope.storePath });
+      const release = await claimRpcSourceForTest(source);
+      rpcSourceTesting.set("publication-run", source);
+      const state = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "active-publication",
+        cfg,
+      });
+      onTestFinished(() => state.mentionInbox.dispose());
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      onTestFinished(() => projection.dispose());
+      onTestFinished(state.attachSessionRowProjection(projection));
+      await projection.ensureMaterialized();
+      const first = makeClient("publication-first", { count: 0 });
+      const second = makeClient("publication-second", { count: 0 });
+      for (const peer of [first, second]) {
+        peer.client.connect.scopes = ["operator.admin"];
+        peer.client.connect.client = {
+          id: "openclaw-control-ui",
+          version: "test",
+          platform: "web",
+          mode: "webchat",
+        };
+        state.clients.add(peer.client);
+      }
+      first.send.mockImplementationOnce(() => {
+        requestRpcSourceCancellation(source);
+      });
+      state.broadcast(
+        "sessions.changed",
+        { sessionKey: scope.sessionKey, reason: "metadata" },
+        {
+          sessionKeys: [scope.sessionKey],
+          agentId: scope.agentId,
+        },
+      );
+      const frame = (peer: typeof first, index = 0): { payload: { session: GatewaySessionRow } } =>
+        JSON.parse(String(peer.send.mock.calls[index]?.[0]));
+      expect(frame(first).payload.session.hasActiveRun).toBe(true);
+      expect(frame(second).payload.session.hasActiveRun).toBe(true);
+      state.broadcast(
+        "sessions.changed",
+        { sessionKey: scope.sessionKey, reason: "metadata" },
+        {
+          sessionKeys: [scope.sessionKey],
+          agentId: scope.agentId,
+        },
+      );
+      expect(frame(first, 1).payload.session.hasActiveRun).toBe(false);
+      expect(frame(second, 1).payload.session.hasActiveRun).toBe(false);
+      release();
+    });
   });
 
   it("uses committed policy for projected and plain session events through tentative activation", async () => {

@@ -19,7 +19,7 @@ type PastedTextProps = {
 };
 
 function PastedText(props: PastedTextProps) {
-  const [excerpt, setExcerpt] = createSignal("", { ownedWrite: true });
+  const [excerpt, setExcerpt] = createSignal("");
   const source = createMemo(
     () => ({ src: props.src, sizeBytes: props.sizeBytes, scope: props.scope }),
     {

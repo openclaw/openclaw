@@ -5,16 +5,7 @@ import {
   MessageInjectionAcceptedUnconfirmedError,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import type {
-  ReplyBackendMessageInjectionV2,
-  ReplyToolAuthorityOverlay,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import {
-  beginReplyMessageInjectionTarget,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { testing } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -26,6 +17,15 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ReplyBackendMessageInjectionV2,
+  ReplyToolAuthorityOverlay,
+} from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -35,11 +35,9 @@ import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roste
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
-  queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../embedded-agent-runner/runs.js";
-import {
   createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  steerTestSessionTurn,
   testing as embeddedTesting,
 } from "../embedded-agent-runner/runs.test-support.js";
 import {
@@ -55,7 +53,7 @@ import {
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   clearRuntimeConfigSnapshot();
   vi.useRealTimers();
 });
@@ -104,13 +102,20 @@ it.each(["allowed", "refused", "revoked"] as const)(
       ...createEmbeddedRunHandle(),
       messageInjectionV2: injection,
     });
-    const outcome = queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
-      sessionId,
-      "independent caller input",
-      { onQueueAccepted },
-      () => canInject,
-      sourcePreparation,
-    );
+    const outcome = steerTestSessionTurn(sessionId, "independent caller input", {
+      onQueueAccepted,
+      canAdmit: () => canInject,
+      assertCurrent: () => {
+        if (!canInject) {
+          throw new Error("independent caller revoked");
+        }
+      },
+      toolAuthorityPreparation: {
+        ...sourcePreparation,
+        compatAssertCurrent() {},
+      },
+    });
+    void outcome.catch(() => {});
     try {
       if (caller === "revoked") {
         await awaitGateBeforeSettlement(
@@ -121,7 +126,11 @@ it.each(["allowed", "refused", "revoked"] as const)(
         canInject = false;
         resume.resolve();
       }
-      await expect(outcome).resolves.toMatchObject({ queued: caller === "allowed" });
+      if (caller !== "allowed") {
+        await expect(outcome).rejects.toThrow("independent caller revoked");
+      } else {
+        await expect(outcome).resolves.toMatchObject({ status: "accepted" });
+      }
       if (caller === "allowed") {
         expect(enqueue).toHaveBeenCalledOnce();
         expect(session.getSteeringMessages()).toEqual(["independent caller input"]);
@@ -133,7 +142,7 @@ it.each(["allowed", "refused", "revoked"] as const)(
       }
     } finally {
       resume.resolve();
-      await outcome;
+      await outcome.catch(() => {});
     }
   },
 );
@@ -274,7 +283,7 @@ it.each([
         const accepted =
           surface === "registry"
             ? await beginReplyMessageInjectionTarget(
-                replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!,
+                captureCurrentReplyMessageInjectionTarget(sessionKey)!,
                 run.prompt,
                 { isInboundUserMessage: true, toolAuthorityOverlay: overlay },
               ).then(async (attempt) => (await attempt.outcome).status === "accepted")
@@ -303,7 +312,7 @@ it.each([
     change,
     surface: "registry" as const,
   })),
-  ...(["registry", "embedded"] as const).flatMap((surface) =>
+  ...(["registry", "controller"] as const).flatMap((surface) =>
     (["legacy-session", "legacy-revision", "legacy-metadata"] as const).map((change) => ({
       change,
       surface,
@@ -427,7 +436,7 @@ it.each([
       operation.attachBackend(handle);
       operation.setPhase("running");
       setActiveEmbeddedRun("original", handle, sessionKey);
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+      const target = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
       try {
         const options = {
           isInboundUserMessage: true,
@@ -440,10 +449,11 @@ it.each([
             ? beginReplyMessageInjectionTarget(target, "steer", options).then(
                 async (attempt) => (await attempt.outcome).status === "accepted",
               )
-            : queueGuardedEmbeddedAgentMessageWithOutcomeAsync("original", "steer", options, () => {
-                assertCurrent();
-                return true;
-              }).then((result) => result.queued);
+            : steerTestSessionTurn("original", "steer", options).then(
+                (result) => result.status === "accepted",
+                // Controller authority failures reject; both surfaces must leave input unqueued.
+                () => false,
+              );
         await awaitGateBeforeSettlement(
           recorderEntered.promise,
           accepted,

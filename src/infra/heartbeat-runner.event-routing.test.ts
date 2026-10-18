@@ -6,6 +6,8 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   createLastTargetConfig,
@@ -336,6 +338,21 @@ describe("Heartbeat event routing", () => {
         return { text: queue === "base" ? "Restart complete" : "HEARTBEAT_OK" };
       });
 
+      const active = busy
+        ? createReplyOperation({
+            sessionKey: isolatedKey,
+            sessionId: "busy-isolated-session",
+            agentId: "main",
+            resetTriggered: false,
+            target: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: isolatedKey,
+              agentId: "main",
+              incarnation: "busy-isolated-session",
+            }),
+          })
+        : undefined;
+      active?.setPhase("running");
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
@@ -346,9 +363,8 @@ describe("Heartbeat event routing", () => {
         deps: {
           getReplyFromConfig: replySpy,
           telegram: sendTelegram,
-          getQueueSize: () => (busy ? 1 : 0),
         },
-      });
+      }).finally(() => active?.complete());
       if (busy) {
         expect(result).toMatchObject({ status: "skipped", reason: "requests-in-flight" });
         expect(replySpy).not.toHaveBeenCalled();

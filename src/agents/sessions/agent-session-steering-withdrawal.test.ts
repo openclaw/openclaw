@@ -1,22 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { bindMessageInjectionAdmission } from "../../auto-reply/reply/message-injection-authority.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
-import { testing } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../embedded-agent-runner/runs.js";
-import {
   createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+  steerTestSessionTurn,
   testing as embeddedTesting,
 } from "../embedded-agent-runner/runs.test-support.js";
 import {
@@ -32,7 +29,7 @@ import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 registerAgentSessionLoopTestLifecycle();
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.useRealTimers();
 });
 
@@ -49,7 +46,6 @@ async function setupSteering(sessionId: string, prepare?: () => Promise<void>, f
     return held.response;
   });
   const sessionKey = `agent:main:${sessionId}`;
-  const operation = createTestReplyOperation({ sessionId, sessionKey });
   const queueMessage: ReplyBackendMessageInjectionV2["queueMessage"] = (
     text,
     options,
@@ -74,21 +70,19 @@ async function setupSteering(sessionId: string, prepare?: () => Promise<void>, f
     cancel,
     messageInjectionV2: { version: 2 as const, isAvailable: () => true, queueMessage },
   };
-  operation.attachBackend(handle);
-  operation.setPhase("running");
-  setActiveEmbeddedRun(sessionId, handle, sessionKey);
+  const operation = registerTestEmbeddedRun(sessionId, handle, sessionKey);
   const queue = (
-    surface: "registry" | "embedded" | "session",
+    surface: "registry" | "controller" | "session",
     text: string,
     options: Parameters<typeof queueMessage>[1],
   ) => {
     if (surface === "session") {
       return queueMessage(text, options, () => {}, "run");
     }
-    if (surface === "embedded") {
-      return queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, text, options);
+    if (surface === "controller") {
+      return steerTestSessionTurn(sessionId, text, options);
     }
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+    const target = captureCurrentReplyMessageInjectionTarget(sessionKey)!;
     return beginReplyMessageInjectionTarget(target, text, options).then((attempt) =>
       finalizeReplyMessageInjectionAttempt({ target, attempt }),
     );
@@ -97,7 +91,7 @@ async function setupSteering(sessionId: string, prepare?: () => Promise<void>, f
 }
 
 it.each(
-  (["registry", "embedded"] as const).flatMap((surface) =>
+  (["registry", "controller"] as const).flatMap((surface) =>
     (["none", "error"] as const).map((observer) => ({
       surface,
       observer,
@@ -141,9 +135,7 @@ it.each(
       expect(session.getSteeringMessages()).toEqual([]);
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      expect(result).toMatchObject(
-        surface === "registry" ? { status: "rejected" } : { queued: false },
-      );
+      expect(result).toMatchObject({ status: "rejected" });
     } finally {
       if (!terminated) {
         held.release();
@@ -155,7 +147,7 @@ it.each(
 );
 
 it.each([
-  ...(["registry", "embedded"] as const).flatMap((surface) =>
+  ...(["registry", "controller"] as const).flatMap((surface) =>
     (["fulfilled", "rejected"] as const).map((admission) => ({ surface, admission })),
   ),
   { surface: "session", admission: "reported" } as const,
@@ -232,11 +224,7 @@ it.each([
         expect(failure).toBe(persistenceError);
       } else {
         expect(failure).toBeUndefined();
-        expect(result).toMatchObject(
-          surface === "registry"
-            ? { status: "indeterminate" }
-            : { queued: true, transcriptCommit: "unconfirmed" },
-        );
+        expect(result).toMatchObject({ status: "indeterminate" });
       }
       expect(onQueueAccepted).not.toHaveBeenCalledWith(false);
       expect(cancel).not.toHaveBeenCalled();

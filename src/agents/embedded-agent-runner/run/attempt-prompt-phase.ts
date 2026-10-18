@@ -428,6 +428,7 @@ export async function runEmbeddedAttemptPromptPhase(
       await submitEmbeddedAttemptPrompt({
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
         attempt,
+        registration: preparedStreamRuntime.stream.registration,
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,

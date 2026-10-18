@@ -74,7 +74,6 @@ it.each([0, 2])(
       getLifecycleGeneration: () => generation,
       initialQueuedLifecycleGeneration: generation,
       globalLane: "normalization-stop-global",
-      sessionLane: "normalization-stop-session",
       setParams: vi.fn(),
       setLifecycleGeneration: vi.fn(),
     });

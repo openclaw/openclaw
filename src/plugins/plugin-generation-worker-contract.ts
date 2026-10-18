@@ -25,9 +25,10 @@ export type GenerationWorkerInput = (
   | { operation: "call"; handle: number; args: GenerationWireValue[]; asynchronous: boolean }
   | { operation: "close" }
 ) & { nativeLoads?: string[] };
-export type GenerationWorkerReply =
+export type GenerationWorkerReply = (
   | { value: GenerationWireValue; resources: number; admission?: GenerationWireValue }
-  | { error: { message: string; name: string; stack?: string }; resources: number };
+  | { error: { message: string; name: string; stack?: string }; resources: number }
+) & { released?: number[] };
 export type GenerationWorkerCallback =
   | { kind: "publish"; id: number; publication: PluginSourceAdmissionPublication }
   | { kind: "published"; id: number; accepted?: boolean; error?: string }

@@ -98,7 +98,7 @@ it.skipIf(chmodFaultUnavailable)(
     } finally {
       reads.mockRestore();
       await fs.chmod(stagingRoot, 0o700);
-      await ensureBrowserProxyUploadCleanup({ uploadDir, retentionMs: 0 });
+      await discardStagedBrowserProxyUpload({ body: {}, directory: expired });
       vi.useRealTimers();
     }
   },

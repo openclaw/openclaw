@@ -12,6 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -30,7 +31,7 @@ import { createBoardHandlers } from "./server-methods/board.js";
 import { createProgressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
@@ -48,6 +49,7 @@ import {
 } from "./session-sharing.test-utils.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type Peer = ReturnType<typeof makeClient>;
 const readPeer = (name: string) => makeClient(name, "operator", ["operator.read"]);
@@ -175,7 +177,6 @@ describe("board and progress event session ownership", () => {
           broadcastToConnIds,
           getRuntimeConfig: () => cfg,
           getSessionEventSubscriberConnIds: () => new Set(peers.map(({ client }) => client.connId)),
-          chatAbortControllers: new Map(),
           resolveGatewayContext: (): GatewayRequestContext => context,
         } as unknown as GatewayRequestContext;
         bindSessionRowProjection(context, connection.getSessionRowProjection);
@@ -723,27 +724,25 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     peers.forEach(({ client }) => connection.clients.add(client));
     const { broadcastToConnIds } = connection;
     const publications: Promise<void>[] = [];
+    const parentSource = createRpcSourceForTest(
+      { projectSessionActive: true },
+      {
+        runId: "parent-run",
+        sessionId: "parent-viewer",
+        sessionKey: parent.sessionKey,
+        agentId: parent.agentId,
+        storeScope: rowProjection.capture({ key: parent.sessionKey, agentId: parent.agentId })!
+          .storeTarget.storePath,
+      },
+    );
+    const releaseParentRun = await claimRpcSourceForTest(parentSource);
+    rpcSourceTesting.reset([["parent-run", parentSource]]);
     const publish = createLifecycleEventBroadcastHandler({
       getSessionRowProjection: () => rowProjection,
       broadcastToConnIds,
       sessionEventSubscribers: {
         getAll: () => new Set(peers.map(({ client }) => client.connId)),
       },
-      chatAbortControllers: new Map([
-        [
-          "parent-run",
-          {
-            controller: new AbortController(),
-            sessionId: "parent-viewer",
-            sessionKey: parent.sessionKey,
-            agentId: parent.agentId,
-            startedAtMs: 1,
-            expiresAtMs: Date.now() + 60_000,
-            projectSessionActive: true,
-            executionStarted: true,
-          },
-        ],
-      ]),
     });
     const unsubscribe = onSessionLifecycleEvent((event) => {
       publications.push(publish(event));
@@ -808,6 +807,7 @@ it("delivers committed collector updates to a parent-only cross-agent viewer", a
     } finally {
       unsubscribe();
       await Promise.allSettled(publications);
+      releaseParentRun();
       detach();
       rowProjection.dispose();
       await connection.mentionInbox.dispose();

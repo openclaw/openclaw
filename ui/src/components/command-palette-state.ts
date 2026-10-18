@@ -16,10 +16,7 @@ import {
   type HumanMentionMenuHost,
 } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
-import {
-  PluginIconController,
-  pluginIconFetchContext,
-} from "../pages/plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
 import {
   getCommandPaletteModelItems,
   getStaticCommandPaletteCatalogItems,
@@ -87,7 +84,7 @@ export class CommandPaletteState {
   }
   open = false;
   private pluginIconUrls: Record<string, string> = {};
-  private readonly pluginIcons = new PluginIconController({
+  private readonly pluginIcons = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(this.context!),
     isConnected: () => this.element.isConnected && this.open && this.gateway.connected,
     onUrlsChange: (urls) => {

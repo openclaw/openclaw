@@ -5,11 +5,10 @@ export {
   claimNextQueuedFollowupRequestFrom,
   enqueueFollowupRun,
   getFollowupQueueDepth,
-  parkSteerCandidate,
+  reserveSteerCandidate,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
 export { clearRemovedQueuedAuthProfiles, refreshQueuedFollowupSession } from "./queue/state.js";
 export type { FollowupRun, QueueSettings } from "./queue/types.js";
-export { isFollowupRunAborted, resolveFollowupAbortSignal } from "./queue/types.js";
+export { FollowupRunDeferredError, resolveFollowupAbortSignal } from "./queue/types.js";
 export { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-export { FollowupRunDeferredError } from "./queue/types.js";

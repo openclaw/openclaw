@@ -1,7 +1,7 @@
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 /** Last-resort feedback once no continuation can answer a stalled turn. */
 export const STALLED_TURN_NOTICE_TEXT =
@@ -45,6 +45,8 @@ export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string
     images: undefined,
     imageOrder: undefined,
     media: undefined,
+    controllerInput: undefined,
+    controllerClaim: undefined,
     // The stalled turn's signal, adoption lifecycle, and receipts belong to the
     // aborted dispatch; sharing them would cancel or settle this run with it.
     abortSignal: undefined,

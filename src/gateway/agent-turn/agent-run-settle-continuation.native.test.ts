@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   loadTranscriptEvents,
@@ -9,16 +11,19 @@ import {
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withSessionSendDelivery, type SessionSendDelivery } from "../session-send-delivery.js";
 import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
-import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
+import { createAgentTurnTestContext } from "./agent-run-dispatch.test-support.js";
 import {
   prepareAgentRunUserTurn,
   reconcileAgentRunUserTurnCompletion as reconcileCompletion,
   releasePreparedAgentRunUserTurn as release,
 } from "./agent-run-user-turn.js";
+import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
 const reads = vi.hoisted(() => ({ command: vi.fn() }));
 // mock-isolation: Keep model/tools outside this regression; the Gateway terminal dispatcher stays native.
@@ -33,7 +38,7 @@ describe("requester-settle processing survives later user turns", () => {
   const message = "Synthesize the completed child result";
   const request = { message, idempotencyKey: runId, deliver: false };
   const scope = () => ({ agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() });
-  const preparationContext = createTrackedDispatch().context;
+  const preparationContext = createAgentTurnTestContext();
   const logGateway = { ...preparationContext.logGateway, warn: vi.fn() };
   const prepare = (overrides: Partial<Parameters<typeof prepareAgentRunUserTurn>[0]> = {}) =>
     prepareAgentRunUserTurn({
@@ -131,21 +136,74 @@ describe("requester-settle processing survives later user turns", () => {
     await upsertSessionEntryCore(scope(), entry);
   });
 
+  it.each([false, true])(
+    "reconciles prior private input but admits a fresh deliverable continuation (private=%s)",
+    async (privateCompletion) => {
+      const boundRequest = { ...request, expectedExistingSessionId: sessionId };
+      const original = await prepare({
+        privateCompletion: privateCompletion ? true : undefined,
+        request: boundRequest,
+      });
+      await original.recorder!.persistApproved();
+      await complete(original);
+      await release(original);
+      rotateAgentEventLifecycleGeneration();
+      const retryRunId = buildRequesterSettleWakeIdentity({
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        batchRunIds: ["child"],
+        rearmGeneration: 1,
+        hasPrivateCompletion: privateCompletion,
+        retainedWake: { status: "pending", attemptCount: 1, nextAttemptAt: 30_000 },
+      }).runId;
+      expect(retryRunId).toBe(privateCompletion ? runId : `${runId}:retry-1`);
+      const retryMessage = privateCompletion
+        ? message
+        : `${message}. Continue from the current transcript.`;
+      const retry = await prepare({
+        privateCompletion: privateCompletion ? true : undefined,
+        runId: retryRunId,
+        request: { ...boundRequest, idempotencyKey: retryRunId, message: retryMessage },
+        message: retryMessage,
+        effectiveTranscriptInputText: retryMessage,
+      });
+      if (privateCompletion) {
+        await expectAcknowledgement(retry, {
+          status: "ok",
+          summary: "completed",
+          inputProcessingCompleted: true,
+        });
+      } else {
+        expectNoReconciliation(retry);
+        expect(await retry.recorder!.persistApproved()).toMatchObject({ appended: true });
+        await complete(retry);
+      }
+      await release(retry);
+      const users = (await loadTranscriptEvents(scope())).filter(
+        (entry) =>
+          isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
+      );
+      expect(users).toHaveLength(privateCompletion ? 1 : 2);
+      expect(reads.command).not.toHaveBeenCalled();
+    },
+  );
+
   it("reconciles one completed yielded input after two newer finished turns without reopening it", async () => {
     const original = await prepare();
     await original.recorder!.persistApproved();
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await manager.appendMessageAsync(assistant("toolUse"));
     await manager.appendCustomMessageEntryAsync("openclaw.sessions_yield", "", false, { runId });
-    const dispatch = createTrackedDispatch();
-    dispatch.context.chatAbortControllers.clear();
-    const entry = {
-      ...dispatch.entry,
-      sessionKey,
-      sessionId,
-      operationalRunInstance: { runId, instanceId: "settle-native-instance" },
-    };
-    dispatch.context.chatAbortControllers.set(runId, entry);
+    const context = createAgentTurnTestContext();
+    const entry = createTestRpcSource(
+      {
+        sessionKey,
+        sessionId,
+        operationalRunInstance: { runId, instanceId: "settle-native-instance" },
+      },
+      runId,
+    );
+    rpcSourceTesting.set(runId, entry);
     const emitFinal = vi.fn();
     await dispatchAgentRunFromGateway({
       admittedRunEntry: entry,
@@ -154,16 +212,16 @@ describe("requester-settle processing survives later user turns", () => {
         sessionKey,
         allowModelOverride: false,
         userTurnTranscriptRecorder: original.recorder,
-        abortSignal: entry.controller.signal,
+        abortSignal: entry.input.abortSignal,
       },
       runId,
       dedupeKeys: [],
-      abortController: entry.controller,
+      abortController: testRpcSourceController(entry),
       cleanupAbortController: () => {
-        dispatch.context.chatAbortControllers.delete(runId);
+        rpcSourceTesting.deleteExpected(runId, entry);
       },
       io: { emitAcceptance: vi.fn(), emitFinal },
-      context: dispatch.context,
+      context,
     });
     expect(emitFinal).toHaveBeenCalledWith(
       [true, expect.objectContaining({ status: "ok", inputProcessingCompleted: true }), undefined],
@@ -277,38 +335,84 @@ describe("requester-settle processing survives later user turns", () => {
     await expect(release(original)).rejects.toThrow("completion authority revoked");
   });
   it.each([false, true])(
-    "preserves producer timeout grace (producer settles=%s)",
-    async (producerSettles) => {
-      let finishGrace: (() => void) | undefined;
-      const controller = new AbortController();
+    "retains timeout input until its producer settles (classified=%s)",
+    async (classified) => {
+      const entry = createTestRpcSource(
+        {
+          sessionKey,
+          sessionId,
+          operationalRunInstance: { runId, instanceId: "settle-timeout-instance" },
+        },
+        runId,
+      );
+      rpcSourceTesting.set(runId, entry);
+      const controller = testRpcSourceController(entry);
       const original = await prepare({
         abortSignal: controller.signal,
         getAbortStopReason: () => "timeout",
-        deferTimeoutCompletion: (settle) => {
-          finishGrace = settle;
-          return true;
-        },
       });
       await original.recorder!.persistApproved();
-      controller.abort();
-      await original.recorder!.waitForPendingInputSettlement!();
-      expect(completion(original)).toBeUndefined();
-      expect(finishGrace).toBeTypeOf("function");
-      if (producerSettles) {
-        await complete(original, {
-          status: "timeout",
-          stopReason: "timeout",
-          timeoutPhase: "provider",
-          providerStarted: true,
-        });
-      }
-      finishGrace!();
-      await original.recorder!.waitForPendingInputSettlement!();
-      expect(completion(original)).toMatchObject({
-        status: "timeout",
-        reason: producerSettles ? "hard_timeout" : "timed_out",
+      const producerEntered = createDeferred();
+      const finishProducer = createDeferred();
+      reads.command.mockImplementationOnce(async () => {
+        producerEntered.resolve();
+        await finishProducer.promise;
+        return {
+          payloads: [],
+          meta: {
+            aborted: true,
+            ...(classified ? { timeoutPhase: "provider", providerStarted: true } : {}),
+          },
+        };
       });
-      await release(original);
+      const cleanupAbortController = vi.fn(() => {
+        rpcSourceTesting.deleteExpected(runId, entry);
+      });
+      const emitFinal = vi.fn();
+      const execution = withSessionTurn(
+        { sessionKey, sessionId, target: entry.input.target, controllerInput: entry.input },
+        () =>
+          dispatchAgentRunFromGateway({
+            admittedRunEntry: entry,
+            ingressOpts: {
+              message: original.message,
+              sessionKey,
+              allowModelOverride: false,
+              userTurnTranscriptRecorder: original.recorder,
+              abortSignal: controller.signal,
+            },
+            runId,
+            dedupeKeys: [],
+            abortController: controller,
+            cleanupAbortController,
+            io: { emitAcceptance: vi.fn(), emitFinal },
+            context: createAgentTurnTestContext(),
+          }),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          producerEntered.promise,
+          execution,
+          "Timeout continuation did not enter its producer",
+        );
+        controller.abort(new DOMException("Synthetic producer deadline", "TimeoutError"));
+        await original.recorder!.waitForPendingInputSettlement!();
+        expect(original.recorder!.getProcessingCompletion!()).toBeUndefined();
+        expect(cleanupAbortController).not.toHaveBeenCalled();
+        expect(emitFinal).not.toHaveBeenCalled();
+        finishProducer.resolve();
+        await execution;
+        await original.recorder!.waitForPendingInputSettlement!();
+        expect(original.recorder!.getProcessingCompletion!()).toMatchObject({
+          status: "timeout",
+          reason: classified ? "hard_timeout" : "timed_out",
+        });
+        expect(cleanupAbortController).toHaveBeenCalledOnce();
+      } finally {
+        finishProducer.resolve();
+        await execution;
+        await release(original);
+      }
       rotateAgentEventLifecycleGeneration();
       const replay = await prepare();
       // Timeouts remain nonfinal; they must not become a successful duplicate acknowledgement.

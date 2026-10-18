@@ -75,6 +75,18 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     );
 
     expect(executionAgentsIndex).toBeGreaterThan(lastAgentFileIndex);
+    expect(
+      result.bootstrapInjectionStats.filter((file) => file.name === "AGENTS.md"),
+    ).toMatchObject([
+      {
+        path: path.join(agentWorkspace, "AGENTS.md"),
+        origin: { kind: "agent-workspace", rootPath: agentWorkspace },
+      },
+      {
+        path: path.join(sessionWorkspace, "AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: sessionWorkspace },
+      },
+    ]);
     expect(result.contextFiles[executionAgentsIndex]).toEqual(
       expect.objectContaining({
         path: path.join(sessionWorkspace, "AGENTS.md"),

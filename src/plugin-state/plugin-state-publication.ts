@@ -12,6 +12,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -296,20 +297,15 @@ export function withPluginStatePublication(
       throw error;
     }
     let installed = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const settlement = owner.admission.settlement;
-        // A completed rollback has no receipt; a committed write must publish before denial ends.
-        pending.finish(
-          settlement?.kind === "completed" && (!settlement.committed || installed)
-            ? "completed"
-            : "unknown",
-        );
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      const settlement = owner.admission.settlement;
+      // A completed rollback has no receipt; a committed write must publish before denial ends.
+      pending.finish(
+        settlement?.kind === "completed" && (!settlement.committed || installed)
+          ? "completed"
+          : "unknown",
+      );
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       pending.install(facts);
       installed = true;

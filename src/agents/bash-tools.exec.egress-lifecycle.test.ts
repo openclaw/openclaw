@@ -49,17 +49,16 @@ vi.mock("../auto-reply/dispatch.js", () => ({
     const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "completion lifecycle");
     const signal = expectDefined(lifecycle.abortSignal, "completion cancellation");
     lifecycle.onDeferred?.();
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
+    const onAbort = async () => {
       try {
-        lifecycle.onAbandoned?.();
+        await lifecycle.onAbandoned?.();
       } finally {
-        lifecycle.onSettled?.();
+        await lifecycle.onSettled?.();
       }
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    signal.addEventListener("abort", () => void onAbort(), { once: true });
     if (signal.aborted) {
-      onAbort();
+      await onAbort();
     }
     return {
       deferredToActiveRun: "followup",

@@ -4,14 +4,19 @@ import * as policy from "../../agents/tool-policy.js";
 import * as identity from "../../audit/execution-identity-admission.js";
 import * as admission from "../../channels/message-access/admission-evidence.js";
 import * as ingress from "../../gateway/local-user-ingress.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
-import { FollowupRunDeferredError, type FollowupRun } from "./queue.js";
-import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
+import type { FollowupRun } from "./queue.js";
+import {
+  createQueueTestRun,
+  installQueueRuntimeErrorSilencer,
+  rejectQueuePreparation,
+} from "./queue.test-helpers.js";
+import { resolveFollowupDeliveryStorageKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
-import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -30,10 +35,6 @@ const carrierRun = {
   provider: "openai",
   model: "gpt-route",
   memberRoleIds: ["operator", "member"],
-  thinkLevelOverride: "high",
-  fastModeOverride: true,
-  verboseLevel: "on",
-  reasoningLevel: "on",
   trustedInternalHandoff: {
     kind: "subagent-completion",
     sourceSessionKey: "agent:child",
@@ -65,7 +66,11 @@ it("drains the complete parked image turn after active steering rejects it", asy
   });
   run.userTurnTranscriptRecorder = recorder;
   const persist = vi.spyOn(recorder, "persistApproved");
-  const operation = createTestReplyOperation({ sessionKey: key, sessionId: run.run.sessionId });
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: run.run.sessionId,
+    resetTriggered: false,
+  });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
   const reject = vi
@@ -73,10 +78,18 @@ it("drains the complete parked image turn after active steering rejects it", asy
     .mockRejectedValue(new Error("no active turn to steer"));
   operation.attachBackend({
     kind: "embedded",
+    supportsTranscriptCommitWait: true,
     supportsQueueMessageImages: true,
     toolAuthorityFingerprint,
     cancel: vi.fn(),
-    messageInjection: { isAvailable: () => true, queueMessage: reject },
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        assertCurrent();
+        await reject();
+      },
+    },
   });
   operation.setPhase("running");
   const typing = createMockTypingController();
@@ -87,7 +100,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
         opts: undefined,
         providedReplyOperation: operation,
         queueKey: key,
-        releaseAdmissionTicket: vi.fn(),
         replyOperationRunState: undefined,
         resolvedQueue: { mode: "steer", debounceMs: 0 },
         restartRecoverySourceTurnId: run.messageId,
@@ -95,7 +107,6 @@ it("drains the complete parked image turn after active steering rejects it", asy
         sessionCtx: {},
         sessionKey: key,
         touchActiveSessionEntry: async () => {},
-        typing,
         typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
       }),
     ).resolves.toBe("handled");
@@ -114,6 +125,35 @@ it("drains the complete parked image turn after active steering rejects it", asy
     operation.complete();
     persist.mockRestore();
   }
+});
+
+it("keeps participant evidence out of sender-scoped collect routing", () => {
+  const audit = admission.createChannelAdmissionAudit({ enabled: true });
+  evidenceCleanups.add(() => audit.close());
+  const runs = ["person-1", "person-2"].map((senderId) => {
+    const item = createQueueTestRun({
+      prompt: `from ${senderId}`,
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    item.channelAdmissionEvidence = createChannelParticipantAdmissionEvidence({
+      audit,
+      channelId: "slack",
+      accountId: "default",
+      participantId: senderId,
+    });
+    item.run = {
+      ...item.run,
+      senderId,
+      senderE164: `+1555000${senderId.at(-1)}`,
+      senderIsOwner: false,
+    };
+    return item;
+  });
+
+  expect(resolveFollowupDeliveryStorageKey(runs[0]!)).not.toBe(
+    resolveFollowupDeliveryStorageKey(runs[1]!),
+  );
 });
 
 it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", async (kind) => {
@@ -164,7 +204,7 @@ it.each(["same", "mixed"] as const)("preserves deferred %s-participant facts", a
   q.start(async (run) => {
     q.calls.push(run);
     if (q.calls.length === 1) {
-      throw new FollowupRunDeferredError();
+      rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
     }
     q.done.resolve();
   });
@@ -348,7 +388,7 @@ describe("queued Gateway attach evidence", () => {
       attempts += 1;
       if (attempts === 1) {
         ingress.attachGatewayLocalUserIngress(client, prepareIngress("replacement-person"));
-        throw new Error("Synthetic pre-admission delivery failure");
+        rejectQueuePreparation(run, new Error("Synthetic pre-admission preparation failure"));
       }
       await admit(run);
     });

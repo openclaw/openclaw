@@ -9,6 +9,7 @@ import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import { DEFAULT_DEPS } from "./manager.types.js";
 
 it.each([
@@ -70,7 +71,6 @@ it.each([
         const close = vi.spyOn(f.runtime, "close");
         const cancellation = f.manager.cancelSession({
           ...f.target,
-          expectedOwnerKey: "agent:main:main",
           reason: "locator-replacement",
         });
         const result = Promise.allSettled([cancellation]);
@@ -116,7 +116,6 @@ it.each([
           }));
           await f.manager.cancelSession({
             ...f.target,
-            expectedOwnerKey: "agent:main:main",
             reason: "successor-retry",
           });
           expect(f.ensureSession).toHaveBeenCalledTimes(2);
@@ -172,7 +171,6 @@ it.each([
         try {
           await f.manager.cancelSession({
             ...f.target,
-            expectedOwnerKey: "agent:main:main",
             reason: "normalized-cancel",
           });
           expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
@@ -284,11 +282,8 @@ it.each([
             turnResult,
             "Turn settled before runtime entry.",
           );
-          const cancellation = f.manager.cancelSession({
+          const cancellation = stopAcpControllerTurns({
             ...f.target,
-            expectedRunId: "active-locator",
-            expectedInstanceId: context.operationalRunInstance.instanceId,
-            expectedOwnerKey: "agent:main:main",
             reason: "active-locator-replacement",
           });
           cancelResult = Promise.allSettled([cancellation]).then((result) => {
@@ -314,16 +309,13 @@ it.each([
           });
           releaseRead.resolve();
           releaseTurn.resolve();
-          await awaitGateBeforeSettlement(
-            cancelEntered.promise,
-            cancelResult,
-            "An admitted Stop abandoned its captured runtime cleanup.",
-          );
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          expect(turnSettled).toBe(false);
-          expect(cancelSettled).toBe(false);
+          if (boundary === "cancel-rpc") {
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            expect(turnSettled).toBe(false);
+            expect(cancelSettled).toBe(false);
+          }
           expect(close).not.toHaveBeenCalled();
           releaseCancel.resolve();
           await Promise.all([turnResult, cancelResult]);
@@ -337,10 +329,14 @@ it.each([
           });
           expect(readDurableAcpSignals(f, "active-locator")).toEqual([]);
           expect(events).toContainEqual({ type: "done", status: terminalStatus });
-          expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
-            handle: expect.objectContaining({ runtimeSessionName: "retained-runtime" }),
-            reason: "active-locator-replacement",
-          });
+          if (boundary === "cancel-rpc") {
+            expect(f.cancel).toHaveBeenCalledExactlyOnceWith({
+              handle: expect.objectContaining({ runtimeSessionName: "retained-runtime" }),
+              reason: "active-locator-replacement",
+            });
+          } else {
+            expect(f.cancel).not.toHaveBeenCalled();
+          }
           expect(close).not.toHaveBeenCalled();
           if (sourceKind === "incognito") {
             expect(memorySessionActorOwners.read({ agentId: "main", path })).toBe(memory);

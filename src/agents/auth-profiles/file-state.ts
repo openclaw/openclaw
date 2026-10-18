@@ -179,19 +179,15 @@ function directoryState(directory: string): DirectoryState {
     presence: new Map(),
     dirty: false,
     publishChange: captureFileChangePublisher(),
-    observation: observeOwnedDirectory(
-      directory,
-      (filename) => {
-        if (
-          filename === undefined ||
-          legacyNames.has(filename) ||
-          [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
-        ) {
-          void refreshDirectory(directory, state);
-        }
-      },
-      { recoveryIntervalMs: 30_000 },
-    ),
+    observation: observeOwnedDirectory(directory, (filename) => {
+      if (
+        filename === undefined ||
+        legacyNames.has(filename) ||
+        [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
+      ) {
+        void refreshDirectory(directory, state);
+      }
+    }),
   };
   directories.set(directory, state);
   return state;

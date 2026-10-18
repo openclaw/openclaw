@@ -12,6 +12,7 @@ import {
   ensureBoardSchema,
   putBoardWidgetInDatabase,
 } from "../boards/sqlite-board-store.kernel.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   assignSessionOwner,
   replaceSessionEntrySync,
@@ -29,9 +30,9 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureUserProfilesSchema } from "../state/user-profiles-schema.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController } from "./chat-abort.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import {
   initializeSessionReadContext,
   listSessions,
@@ -44,6 +45,7 @@ import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -621,14 +623,17 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         acceptsSerializedJson: true,
       });
     expect((await readActive()).sessions).toHaveLength(0);
-    const run = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+    const run = registerRpcSourceForTest({
+      storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       runId: "serialization-run",
       sessionId: entry.sessionId,
       sessionKey: scope.sessionKey,
       agentId: scope.agentId,
-      timeoutMs: 60_000,
     });
+    if (!run.entry) {
+      throw new Error("Expected a registered serialization run");
+    }
+    const releaseRun = await claimRpcSourceForTest(run.entry);
     try {
       expect((await readActive()).sessions).toHaveLength(1);
       expect((await read(0)).sessions[0]).toMatchObject({
@@ -637,6 +642,7 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
         snapshotAt: start + 104,
       });
     } finally {
+      releaseRun();
       run.cleanup();
     }
     clock.mockReturnValue(start + 105);

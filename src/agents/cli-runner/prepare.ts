@@ -240,16 +240,15 @@ async function prepareCliRunContextWithinReadFence(
     agentId: sessionOwner,
     config: workspaceConfig,
   });
-  const resolvedWorkspace = workspaceResolution.workspaceDir;
+  const workspaceDir = workspaceResolution.workspaceDir;
   const redactedSessionId = redactRunIdentifier(params.sessionId);
   const redactedSessionKey = redactRunIdentifier(params.sessionKey);
-  const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+  const redactedWorkspace = redactRunIdentifier(workspaceDir);
   if (workspaceResolution.usedFallback) {
     cliBackendLog.warn(
       `[workspace-fallback] caller=runCliAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
     );
   }
-  const workspaceDir = resolvedWorkspace;
   const suppliedSessionKey = params.sessionKey?.trim();
   if (suppliedSessionKey) {
     // Native questions and MCP tools share explicit aliases; absent native keys stay sessionless.
@@ -712,9 +711,9 @@ async function prepareCliRunContextWithinReadFence(
           trigger: params.trigger,
           sessionKey: params.sessionKey,
           isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+          isCanonicalWorkspace: canonicalWorkspace === workspaceDir,
           effectiveWorkspace: workspaceDir,
-          resolvedWorkspace,
+          resolvedWorkspace: workspaceDir,
           hasBootstrapFileAccess,
         });
   const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
@@ -1417,6 +1416,7 @@ async function prepareCliRunContextWithinReadFence(
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
+            preparedSessionEntry: params.sessionEntry,
             requesterProfileId,
             workspaceDir,
             cwd,

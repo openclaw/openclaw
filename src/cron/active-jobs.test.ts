@@ -1,4 +1,4 @@
-// Unit coverage for the active-job accounting the heartbeat busy guard depends on.
+// Unit coverage for active-job accounting and execution authority.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -15,7 +15,6 @@ import {
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
   getActiveCronJobCount,
-  hasActiveCronJobsExceptMarkers,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
@@ -28,47 +27,6 @@ import { prepareCronRunAdmission } from "./run-admission.js";
 
 afterEach(() => {
   resetCronActiveJobs();
-});
-
-describe("hasActiveCronJobsExceptMarkers", () => {
-  it("discounts only the named job's own marker", () => {
-    const marker = markCronJobActive("nightly-report");
-
-    expect(getActiveCronJobCount()).toBeGreaterThan(0);
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(false);
-  });
-
-  it("still reports busy while an unrelated job is active", () => {
-    const marker = markCronJobActive("nightly-report");
-    markCronJobActive("different-job");
-
-    // The owning job must not be waved through while another run holds a marker:
-    // Cron executes jobs up to the built-in concurrency limit.
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(true);
-  });
-
-  it("discounts every exact coalesced owner", () => {
-    const first = markCronJobActive("first-report");
-    const second = markCronJobActive("second-report");
-
-    expect(hasActiveCronJobsExceptMarkers([first!, second!])).toBe(false);
-  });
-
-  it("reports idle once the unrelated job clears", () => {
-    const marker = markCronJobActive("nightly-report");
-    const otherMarker = markCronJobActive("different-job");
-    clearCronJobActive("different-job", otherMarker);
-
-    expect(hasActiveCronJobsExceptMarkers([marker!])).toBe(false);
-  });
-
-  it("does not discount a replacement marker with the same job id", () => {
-    const staleMarker = markCronJobActive("nightly-report");
-    const replacementMarker = markCronJobActive("nightly-report");
-
-    expect(hasActiveCronJobsExceptMarkers([staleMarker!])).toBe(true);
-    expect(hasActiveCronJobsExceptMarkers([replacementMarker!])).toBe(false);
-  });
 });
 
 describe("cron message action authority", () => {

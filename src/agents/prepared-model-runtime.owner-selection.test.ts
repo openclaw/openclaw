@@ -156,6 +156,34 @@ describe("prepared model runtime owner selection", () => {
     },
   );
 
+  it("keeps explicit empty selections exact for raw published reads", async () => {
+    const input = fixture.agentInput("default", {});
+    const workspaceDir = "/tmp/explicit-published-workspace";
+    const published = await publishPreparedModelRuntimeSnapshot(
+      {
+        ...input,
+        workspaceDir,
+        runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "openclaw" }],
+      },
+      { provenance: "configured", catalogMode: "static" },
+    );
+
+    for (const requestedWorkspace of [workspaceDir, ""]) {
+      const request = {
+        ...input,
+        workspaceDir: requestedWorkspace,
+        runtimePluginSelections: [],
+      };
+      await expect(prepareModelRuntimeSnapshot(request)).rejects.toThrow(
+        "prepared model runtime owner was not published",
+      );
+      await expect(loadPreparedModelRuntimeSnapshot(request)).resolves.toBe(published);
+      await expect(
+        prepareModelRuntimeSnapshot({ ...request, runtimePluginSelections: undefined }),
+      ).resolves.toBe(published);
+    }
+  });
+
   it("prepares prompt-only runtime owners separately from the configured agent generation", async () => {
     const config = gatewayConfig();
     await publishGateway(config, { catalogMode: "static" });

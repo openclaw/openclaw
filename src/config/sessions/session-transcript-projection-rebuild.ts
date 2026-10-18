@@ -92,24 +92,6 @@ function getProjectionKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptProjectionDatabase>(db);
 }
 
-/** Older same-version writers can leave a current watermark over unclassified rows. */
-export function hasUnclassifiedSessionTranscriptEvents(
-  db: EngineConnection,
-  sessionId: string,
-): boolean {
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      getProjectionKysely(db)
-        .selectFrom("session_transcript_active_events")
-        .select("session_id")
-        .where("session_id", "=", sessionId)
-        .where("context_eligible", "is", null)
-        .limit(1),
-    ) !== undefined
-  );
-}
-
 function readCanonicalEventId(event: unknown): string | null {
   if (!isCanonicalSessionTranscriptEntry(event) || typeof event.id !== "string") {
     return null;

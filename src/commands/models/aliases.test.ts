@@ -135,6 +135,22 @@ it("preserves safely named prototype aliases in deterministic JSON output", asyn
     zeta: "openai/gpt-5.6-sol",
   });
 });
+
+it.each([{}, { plain: true }])("keeps alias reports on one terminal line (%j)", async (opts) => {
+  const alias = "café\u001b[2J\nforged";
+  const target = "openai/model\u001b]0;hidden\u0007\tnext";
+  configureModels({ [target]: { alias } });
+  await modelsAliasesListCommand(opts, runtime);
+  expect(runtime.logs.join("\n")).toContain("café\\nforged");
+  expect(runtime.logs.join("\n")).toContain("openai/model\\tnext");
+  for (const control of ["\u001b", "\u0007", "\t"]) {
+    expect(runtime.logs.join("\n")).not.toContain(control);
+  }
+  runtime.logs.length = 0;
+  await modelsAliasesListCommand({ json: true }, runtime);
+  expect(JSON.parse(runtime.logs[0] ?? "").aliases).toEqual({ [alias]: target });
+});
+
 it("removes every case-colliding alias from an existing config", async () => {
   configureModels({
     "openai/gpt-5.4-mini": { alias: "Fast" },

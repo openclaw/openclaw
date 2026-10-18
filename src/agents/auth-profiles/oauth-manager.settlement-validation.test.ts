@@ -8,6 +8,7 @@ import {
 } from "../../infra/state-migrations.shared-auth-store.js";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -38,14 +39,23 @@ const {
   formatProviderAuthProfileApiKeyWithPluginMock,
 } = getOAuthProviderRuntimeMocks();
 
+let releaseHeldRefresh: (() => void) | undefined;
 function holdRefresh() {
   const started = createDeferredCore();
-  const result = createDeferredCore<OAuthCredential>();
-  refreshProviderOAuthCredentialWithPluginMock.mockImplementation(() => {
+  const result = createDeferredCore<() => OAuthCredential | undefined>();
+  releaseHeldRefresh = () => result.resolve(() => undefined);
+  refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
     started.resolve();
-    return result.promise;
+    return (await result.promise)();
   });
-  return { started: started.promise, ...result };
+  return {
+    started: started.promise,
+    resolve: (credential: OAuthCredential) => result.resolve(() => credential),
+    reject: (error: unknown) =>
+      result.resolve(() => {
+        throw error;
+      }),
+  };
 }
 
 function createWorkspaceAccessToken(accountId: string, rotation: string): string {
@@ -68,6 +78,7 @@ describe("createOAuthManager settlement credential validation", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempRoot: string;
   let mainAgentDir: string;
+  let work: AsyncWorkScope;
   const profileId = "openai:default";
   const provider = "openai";
   const expiredStore = (
@@ -102,6 +113,8 @@ describe("createOAuthManager settlement credential validation", () => {
     return Promise.all([createPeer(0), createPeer(1)]);
   }
   beforeEach(async () => {
+    work = new AsyncWorkScope();
+    releaseHeldRefresh = undefined;
     envSnapshot = captureEnv(OAUTH_AGENT_ENV_KEYS);
     tempRoot = "";
     resetFileLockStateForTest();
@@ -113,10 +126,10 @@ describe("createOAuthManager settlement credential validation", () => {
     tempRoot = await createOAuthTestTempRoot("openclaw-oauth-settlement-validator-");
     mainAgentDir = await createOAuthMainAgentDir(tempRoot);
     ({ resolveApiKeyForProfile } = await import("./oauth.js"));
-    const { resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js");
-    resetOAuthRefreshQueuesForTest();
   });
   afterEach(async () => {
+    releaseHeldRefresh?.();
+    await work.drain();
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -230,20 +243,22 @@ describe("createOAuthManager settlement credential validation", () => {
 
     const refresh = holdRefresh();
     const validatedRotations: string[] = [];
-    const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-      store: ensureAuthProfileStore(ownerAgentDir),
-      profileId,
-      agentDir: ownerAgentDir,
-      validateOAuthCredential: (credential) => {
-        const accountId = resolveOpenAICodexAuthIdentity({
-          access: credential.access,
-        }).accountId;
-        if (accountId !== "workspace-a") {
-          throw new Error("credential owner mismatch");
-        }
-        validatedRotations.push(credential.access);
-      },
-    });
+    const resolving = work.track(() =>
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(ownerAgentDir),
+        profileId,
+        agentDir: ownerAgentDir,
+        validateOAuthCredential: (credential) => {
+          const accountId = resolveOpenAICodexAuthIdentity({
+            access: credential.access,
+          }).accountId;
+          if (accountId !== "workspace-a") {
+            throw new Error("credential owner mismatch");
+          }
+          validatedRotations.push(credential.access);
+        },
+      }),
+    );
     await refresh.started;
     const newerShared = {
       type: "oauth" as const,
@@ -286,12 +301,14 @@ describe("createOAuthManager settlement credential validation", () => {
     const refresh = holdRefresh();
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
-    const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-      store: ensureAuthProfileStore(peers[0]),
-      profileId,
-      agentDir: peers[0],
-      validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
-    });
+    const resolving = work.track(() =>
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(peers[0]),
+        profileId,
+        agentDir: peers[0],
+        validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
+      }),
+    );
     await refresh.started;
     await persistAuthProfileBatch({
       agentDir: mainAgentDir,
@@ -349,12 +366,14 @@ describe("createOAuthManager settlement credential validation", () => {
     const refresh = holdRefresh();
 
     const validatedWorkspaceIds: Array<string | undefined> = [];
-    const resolving = resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-      store: ensureAuthProfileStore(peers[0]),
-      profileId,
-      agentDir: peers[0],
-      validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
-    });
+    const resolving = work.track(() =>
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(peers[0]),
+        profileId,
+        agentDir: peers[0],
+        validateOAuthCredential: workspaceValidator(validatedWorkspaceIds),
+      }),
+    );
     await refresh.started;
     const conflictingOwner = {
       type: "oauth" as const,

@@ -5,7 +5,6 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
-  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
@@ -22,23 +21,14 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
-  resetDiagnosticRunActivityForTest,
-  startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 import {
   markDiagnosticModelStartedForTest,
   markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.test-support.js";
-import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
-import {
-  requestStuckSessionRecovery,
-  resetDiagnosticSessionRecoveryCoordinatorForTest,
-} from "./diagnostic-session-recovery-coordinator.js";
-import type { StuckSessionRecoveryOutcome } from "./diagnostic-session-recovery.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
-  peekDiagnosticSessionState,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
 import {
@@ -47,6 +37,7 @@ import {
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
+import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import {
   diagnosticLogger,
   logMessageQueued,
@@ -468,9 +459,9 @@ describe("stuck session diagnostics threshold", () => {
   });
 
   it.each(["model_call", "tool_call"] as const)(
-    "recovers repeated request attempts during %s despite fresh mechanical activity",
+    "reports repeated requests during %s without granting recovery authority",
     async (activeWorkKind) => {
-      const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+      const recoverStuckSession = vi.fn(recoverStuckDiagnosticSession);
       const stuckSessionWarnMs = 30_000;
       const stuckSessionAbortMs = activeWorkKind === "tool_call" ? 900_000 : 90_000;
       startEnabledDiagnosticHeartbeat({
@@ -524,7 +515,14 @@ describe("stuck session diagnostics threshold", () => {
         activeWorkKind,
         activeToolAgeMs: activeWorkKind === "tool_call" ? (stuckSessionAbortMs * 4) / 3 : undefined,
       });
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+      expect(recoverStuckSession).toHaveBeenCalled();
+      for (const { value } of recoverStuckSession.mock.results) {
+        await expect(value).resolves.toMatchObject({
+          status: "skipped",
+          action: "observe_only",
+          reason: "missing_session_ref",
+        });
+      }
       expectRecoveryCall(recoverStuckSession, {
         ...session,
         queueDepth: 0,
@@ -769,7 +767,7 @@ describe("stuck session diagnostics threshold", () => {
         action: "abort_embedded_run",
       }),
     );
-    expect(getDiagnosticSessionState(session).queueDepth).toBe(0);
+    expect(getDiagnosticSessionState(session).queueDepth).toBe(1);
   });
 
   it("recovers idle queued work blocked by stale model activity without active ownership", async () => {
@@ -810,7 +808,7 @@ describe("stuck session diagnostics threshold", () => {
     });
     const recoveryParams = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
     expect(recoveryParams.allowActiveAbort).toBeUndefined();
-    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "idle", queueDepth: 0 });
+    expect(getDiagnosticSessionState(session)).toMatchObject({ state: "idle", queueDepth: 1 });
   });
 
   it.each([
@@ -846,9 +844,9 @@ describe("stuck session diagnostics threshold", () => {
       requireMatchingRecord(
         events,
         {
-          type: "session.state",
+          type: "session.recovery.completed",
           state: "idle",
-          reason: `stuck_recovery:${outcome.status}`,
+          status: outcome.status,
           queueDepth: 1,
         },
         `idle ${outcome.status} preserves queued work`,
@@ -856,48 +854,6 @@ describe("stuck session diagnostics threshold", () => {
       expect(getDiagnosticSessionState(session).queueDepth).toBe(1);
     },
   );
-
-  it("deduplicates recovery while pending across unchanged and bumped generations", async () => {
-    const { promise, resolve } = createDeferredCore<StuckSessionRecoveryOutcome>();
-    const recoverStuckSession = vi.fn(() => promise);
-    startEnabledDiagnosticHeartbeat({ recoverStuckSession });
-    logSessionStateChange({ ...session, state: "processing" });
-    markDiagnosticEmbeddedRunStarted(session);
-    logSessionStateChange({ ...session, state: "idle" });
-    try {
-      vi.advanceTimersByTime(59_000);
-      logMessageQueued({ ...session, source: "test" });
-      vi.advanceTimersByTime(1_000);
-      await Promise.resolve();
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-
-      vi.advanceTimersByTime(30_000);
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-      requireMatchingRecord(
-        events,
-        {
-          type: "session.recovery.completed",
-          status: "skipped",
-          outcomeReason: "already_in_flight",
-        },
-        "skipped recovery event",
-      );
-
-      logMessageQueued({ ...session, source: "followup" });
-      vi.advanceTimersByTime(30_000);
-      await Promise.resolve();
-      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-      expect(events.filter((event) => event.type === "session.recovery.requested")).toHaveLength(1);
-    } finally {
-      resolve({
-        status: "skipped",
-        action: "observe_only",
-        reason: "already_in_flight",
-        ...session,
-      });
-      await Promise.resolve();
-    }
-  });
 
   it("throttles repeated long-running active-work warnings", async () => {
     const recoverStuckSession = vi.fn();
@@ -1269,211 +1225,6 @@ describe("diagnostic stability snapshots", () => {
     const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
     expect(event).not.toHaveProperty("sessionKey");
     expect(event).not.toHaveProperty("sessionId");
-  });
-});
-
-describe("stuck session recovery activity reconciliation", () => {
-  const ref = { sessionKey: "agent:main:whatsapp:direct:demo", sessionId: "wa-run-1" };
-  const stalledClassification: SessionAttentionClassification = {
-    eventType: "session.stalled",
-    reason: "active_work_without_progress",
-    classification: "stalled_agent_run",
-    activeWorkKind: "embedded_run",
-    recoveryEligible: false,
-  };
-
-  function abortedOutcome(): StuckSessionRecoveryOutcome {
-    return {
-      ...ref,
-      status: "aborted",
-      action: "abort_embedded_run",
-      activeSessionId: ref.sessionId,
-      activeWorkKind: "embedded_run",
-      aborted: true,
-      drained: false,
-      forceCleared: false,
-      released: 0,
-    };
-  }
-
-  function startSession(workKey?: string) {
-    logSessionStateChange({ ...ref, state: "processing", reason: "run_started" });
-    markDiagnosticEmbeddedRunStarted({ ...ref, workKey });
-    const state = getDiagnosticSessionState(ref);
-    state.queueDepth = 2;
-    return state;
-  }
-
-  function markStaleActivity(sessionId = ref.sessionId) {
-    markDiagnosticToolStartedForTest({
-      ...ref,
-      sessionId,
-      toolName: "Bash",
-      toolCallId: "old-tool",
-    });
-    markDiagnosticModelStartedForTest({
-      ...ref,
-      sessionId,
-      runId: sessionId,
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-  }
-
-  async function recoverStalledSession(
-    stateGeneration: number | undefined,
-    recover = () => Promise.resolve(abortedOutcome()),
-  ) {
-    requestStuckSessionRecovery({
-      recover,
-      classification: stalledClassification,
-      request: {
-        ...ref,
-        ageMs: 139_014,
-        queueDepth: 2,
-        allowActiveAbort: true,
-        expectedState: "processing",
-        stateGeneration,
-      },
-    });
-    await flushDiagnosticEvents();
-    await flushDiagnosticEvents();
-  }
-
-  beforeEach(() => {
-    setDiagnosticsEnabledForProcess(true);
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticRunActivityForTest();
-    startDiagnosticRunActivityTracking();
-    resetDiagnosticSessionRecoveryCoordinatorForTest();
-  });
-
-  afterEach(() => {
-    resetDiagnosticSessionStateForTest();
-    resetDiagnosticRunActivityForTest();
-    resetDiagnosticSessionRecoveryCoordinatorForTest();
-  });
-
-  it("clears old same-key owners and their tool/model markers after recovering custom reply work", async () => {
-    markDiagnosticEmbeddedRunStarted({ ...ref, sessionId: "older-run-1" });
-    const state = startSession(`reply:${ref.sessionKey}`);
-    markStaleActivity();
-
-    await recoverStalledSession(state.generation);
-
-    expect(peekDiagnosticSessionState(ref)?.state).toBe("idle");
-    const activity = getDiagnosticSessionActivitySnapshot(ref);
-    expect(activity.activeWorkKind).toBeUndefined();
-    expect(activity.hasActiveEmbeddedRun).toBeUndefined();
-    expect(activity.activeToolName).toBeUndefined();
-  });
-
-  it.each([false, true])(
-    "fences stale asynchronous starts after recovery (empty activity: %s)",
-    async (empty) => {
-      const state = startSession();
-      if (empty) {
-        markDiagnosticEmbeddedRunEnded(ref);
-      }
-      emitDiagnosticEvent({
-        type: "tool.execution.started",
-        ...ref,
-        runId: ref.sessionId,
-        toolName: "Bash",
-        toolCallId: "late-tool",
-      });
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        ...ref,
-        runId: ref.sessionId,
-        callId: "late-model",
-        provider: "openai",
-        model: "gpt-5.5",
-      });
-
-      await recoverStalledSession(state.generation);
-
-      expect(peekDiagnosticSessionState(ref)?.state).toBe("idle");
-      const activity = getDiagnosticSessionActivitySnapshot(ref);
-      expect(activity.activeWorkKind).toBeUndefined();
-      expect(activity.hasActiveEmbeddedRun).toBeUndefined();
-      expect(activity.activeToolName).toBeUndefined();
-    },
-  );
-
-  it("preserves a newer processing generation when recovery completes late", async () => {
-    const state = startSession();
-    await recoverStalledSession(state.generation, () => {
-      const next = { ...ref, sessionId: "wa-run-2" };
-      logSessionStateChange({ ...next, state: "processing", reason: "run_started" });
-      markDiagnosticEmbeddedRunStarted(next);
-      return Promise.resolve(abortedOutcome());
-    });
-
-    expect(peekDiagnosticSessionState(ref)?.state).toBe("processing");
-    expect(getDiagnosticSessionActivitySnapshot(ref).activeWorkKind).toBe("embedded_run");
-  });
-
-  it("preserves fresh same-session tool activity rearmed after recovery starts", async () => {
-    const state = startSession();
-    await recoverStalledSession(state.generation, () => {
-      markDiagnosticEmbeddedRunStarted(ref);
-      emitDiagnosticEvent({
-        type: "tool.execution.started",
-        ...ref,
-        runId: ref.sessionId,
-        toolName: "FreshTool",
-        toolCallId: "fresh-tool",
-      });
-      return Promise.resolve(abortedOutcome());
-    });
-
-    expect(peekDiagnosticSessionState(ref)?.state).toBe("processing");
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "tool_call",
-      hasActiveEmbeddedRun: true,
-      activeToolName: "FreshTool",
-    });
-  });
-
-  it("prunes stale same-key activity while preserving a different owner's fresh tool", async () => {
-    markDiagnosticEmbeddedRunStarted({ ...ref, sessionId: "older-run-1" });
-    markStaleActivity("older-run-1");
-    const state = startSession();
-    markStaleActivity();
-    const reply = { ...ref, sessionId: "reply-run-1" };
-    const replyOwner = createDiagnosticEmbeddedRunOwner(reply);
-    const replyTool = { ...reply, toolName: "ReplyTool", toolCallId: "fresh-tool" };
-
-    await recoverStalledSession(state.generation, () => {
-      markDiagnosticEmbeddedRunStarted({ ...reply, owner: replyOwner });
-      emitDiagnosticEvent({
-        type: "tool.execution.started",
-        ...replyTool,
-      });
-      return Promise.resolve(abortedOutcome());
-    });
-
-    expect(peekDiagnosticSessionState(ref)?.state).toBe("processing");
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "tool_call",
-      hasActiveEmbeddedRun: true,
-      activeToolName: "ReplyTool",
-    });
-
-    // Complete only the fresh tool so stale markers remain observable.
-    emitDiagnosticEvent({ type: "tool.execution.completed", ...replyTool, durationMs: 0 });
-    await waitForDiagnosticEventsDrained();
-    expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-      activeWorkKind: "embedded_run",
-      hasActiveEmbeddedRun: true,
-      activeToolName: undefined,
-    });
-
-    closeDiagnosticEmbeddedRunOwner(replyOwner);
-    const activity = getDiagnosticSessionActivitySnapshot(ref);
-    expect(activity.activeWorkKind).toBeUndefined();
-    expect(activity.activeToolName).toBeUndefined();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

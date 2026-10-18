@@ -3,7 +3,7 @@ import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-re
 import type { ReplyPayload } from "../types.js";
 import type { SettledAgentTurn } from "./agent-runner-execution.types.js";
 import type { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 export function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): AdmittedFollowupTurn {
@@ -36,7 +36,6 @@ export function createTurn(overrides: Partial<AdmittedFollowupTurn> = {}): Admit
       key: "main",
       current: () => undefined,
       publish: () => undefined,
-      adopt: () => undefined,
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,

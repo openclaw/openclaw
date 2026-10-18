@@ -77,9 +77,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     providedReplyOperation,
     preparedSessionState,
     resolvedQueue,
-    embeddedAgentRuntime,
-    resolveActiveEmbeddedSessionId,
-    resolvePreparedSessionState,
+    isRunActive,
     runReplyAgent,
     queueKey,
     shouldSteer,
@@ -481,6 +479,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      onOperationAdmitted: opts?.onReplyOperationAdmitted,
       internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
@@ -653,13 +652,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       shouldFollowup,
       hasQueuedFollowups,
       isActive,
-      isRunActive: async () => {
-        const latestSessionState = resolvePreparedSessionState();
-        const latestActiveSessionId =
-          resolveActiveEmbeddedSessionId(latestSessionState.sessionFile) ??
-          latestSessionState.sessionId;
-        return embeddedAgentRuntime?.isEmbeddedAgentRunActive(latestActiveSessionId) ?? false;
-      },
+      isRunActive,
       opts:
         authorityRunId || cronCreatorAuthorityCapability
           ? {

@@ -75,8 +75,11 @@ hooks read the accepted activity for their attempt from the transcript when need
 If a `before_message_write` hook suppresses a nested activity row, finalization and
 agent-end hooks omit that activity too. The successful tool still counts as completed
 for turn settlement; suppressing its display history does not undo its execution.
-Starts and partial updates remain transient. Older missing child history cannot be
-reconstructed from source code or outer results.
+Terminal tool and activity events are published only after the nested activity
+append is accepted. Effect and replay-safety evidence is captured before that
+append, so a persistence failure cannot undo a known tool effect or make it safe
+to repeat. Starts and partial updates remain transient. Older missing child
+history cannot be reconstructed from source code or outer results.
 
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.

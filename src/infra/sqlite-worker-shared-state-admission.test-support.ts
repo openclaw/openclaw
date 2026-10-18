@@ -127,14 +127,18 @@ export function registerSharedStateWorkerAdmissionTests(
         grant();
       });
     try {
-      expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+      expect(() => openOpenClawStateDatabase(options)).toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       expect(() =>
         runOpenClawStateWriteTransaction(
           ({ db }) => storeDeviceAuthTokenInDatabase(db, deviceToken("sync", "must-not-commit")),
           options,
         ),
-      ).toThrow("offline maintenance");
-      await expect(write("unrelated")).rejects.toThrow("offline maintenance");
+      ).toThrow("without an active schema lease or maintenance scope");
+      await expect(write("unrelated")).rejects.toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       await expect(wrongOwner.run(() => write("wrong"))).rejects.toThrow("does not own");
       await expect(unbound.run(() => write("unbound"))).rejects.toThrow("does not own");
       expect(stages).toEqual([]);
@@ -148,7 +152,7 @@ export function registerSharedStateWorkerAdmissionTests(
         write("late", () => {
           lateOwner = acquireGatewayStateOwner({ databasePath: database.path });
         }),
-      ).rejects.toThrow("offline maintenance");
+      ).rejects.toThrow("without an active schema lease or maintenance scope");
       lateOwner?.release();
       expect(stages).toEqual(
         ["accepted", "revoked", "late"].flatMap((id) => [`${id}:transaction`, `${id}:commit`]),

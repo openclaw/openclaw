@@ -42,6 +42,7 @@ export async function startGatewayEarlyRuntime(params: {
   broadcast: GatewayMaintenanceParams["broadcast"];
   maintenance: Omit<
     GatewayMaintenanceParams,
+    | "resolveGatewayContext"
     | "scheduler"
     | "broadcast"
     | "getRuntimeConfig"
@@ -177,6 +178,7 @@ export async function startGatewayEarlyRuntime(params: {
         () =>
           startGatewayMaintenanceTimers({
             ...params.maintenance,
+            resolveGatewayContext,
             scheduler: params.scheduler,
             broadcast: params.broadcast,
             activeWorkInspectors,

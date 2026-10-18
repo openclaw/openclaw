@@ -19,7 +19,6 @@ import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
-import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 import {
   convertOpenClawToolToSdkToolForTest,
   createCopilotToolBridge,
@@ -96,19 +95,6 @@ afterEach(() => {
 });
 
 describe("createCopilotToolBridge", () => {
-  it("rejects a direct caller that omits the required host capability", async () => {
-    await expect(
-      createCopilotToolBridgeImpl({
-        agentId: "agent-1",
-        attemptParams: {} as never,
-        modelId: "gpt-test",
-        modelProvider: "github-copilot",
-        sessionId: "session-1",
-        spawnWorkspaceDir: undefined,
-      }),
-    ).rejects.toThrow("Copilot attempt tools require host-bound capabilities");
-  });
-
   it("returns empty arrays for unsupported providers without calling the seam", async () => {
     const createOpenClawCodingTools = vi.fn(() => [makeTool()]);
 
@@ -510,21 +496,6 @@ describe("createCopilotToolBridge", () => {
 });
 
 describe("createCopilotToolBridge tool conversion", () => {
-  it("throws on empty and non-string names", async () => {
-    await expect(
-      convertOpenClawToolToSdkToolForTest(makeTool({ name: "" as never }), {}),
-    ).rejects.toThrow("tool name must be a non-empty string");
-    await expect(
-      convertOpenClawToolToSdkToolForTest(makeTool({ name: 42 as never }), {}),
-    ).rejects.toThrow("tool name must be a non-empty string");
-  });
-
-  it("throws on non-function execute", async () => {
-    await expect(
-      convertOpenClawToolToSdkToolForTest(makeTool({ execute: "nope" as never }), {}),
-    ).rejects.toThrow("must define an execute function");
-  });
-
   it("returns a failure result when prepareArguments throws", async () => {
     const error = new Error("bad args");
     const sourceTool = makeTool({

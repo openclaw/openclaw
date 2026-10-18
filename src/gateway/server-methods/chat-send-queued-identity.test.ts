@@ -1,22 +1,58 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { collectRuntimeMetadata } from "../../auto-reply/reply/queue/delivery-context.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { completeFollowupRunLifecycle } from "../../auto-reply/reply/queue/lifecycle.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+} from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { QueuedFollowupReplyBatch } from "../../auto-reply/reply/queue/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  attachSessionControllerInputOperation,
+  bindSessionControllerSource,
+  claimSessionControllerInput,
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  isRpcSourceQueued,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareAgentWaitForTurn } from "../agent-turn/agent-wait.js";
-import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
 
 const sessionKey = "agent:main:queued-identity";
-afterEach(() => {
+const target = captureSessionTarget({
+  storeScope: "/synthetic/queued-identity/sessions",
+  sessionKey,
+  incarnation: "session",
+  agentId: "main",
+});
+const ownedSources: RpcSourceRef[] = [];
+const ownedOperations: ReplyOperation[] = [];
+afterEach(async () => {
   clearFollowupQueue(sessionKey);
+  ownedOperations.splice(0).forEach((operation) => operation.complete());
+  const sources = ownedSources.splice(0);
+  for (const source of sources) {
+    if (source.input.claim) {
+      releaseSessionControllerClaim(source.input.claim);
+    }
+    retireSessionControllerInput(source.input);
+  }
+  await Promise.allSettled(sources.map((source) => source.input.settlement.promise));
   clearRuntimeConfigSnapshot();
 });
 
@@ -24,23 +60,28 @@ function fixture(originatingChannel = "webchat") {
   const cfg = {};
   setRuntimeConfigSnapshot(cfg);
   const context = createDirectChatContext({
-    chatQueuedTurns: new Map(),
     getRuntimeConfig: () => cfg,
   });
   function source(runId: string) {
-    const controller = new AbortController();
+    const registration = registerChatAbortController({
+      target,
+      runId,
+      sessionKey,
+      sessionId: "session",
+      agentId: "main",
+      timeoutMs: 10_000,
+    });
+    if (!registration.registered) {
+      throw new Error("Expected a new queued source");
+    }
+    const { controller, entry: sourceRef } = registration;
+    ownedSources.push(sourceRef);
     const adoption = createChatSendTurnAdoptionLifecycle({
       accountId: undefined,
       context,
-      chatQueuedTurns: context.chatQueuedTurns,
+      sourceRef,
       runId,
       controller,
-      sessionBinding: {
-        sessionKey,
-        sessionId: "session",
-        agentId: "main",
-        lifecycleGeneration: "test",
-      },
       sessionKey,
       agentId: "main",
       originatingChannel,
@@ -66,7 +107,8 @@ function fixture(originatingChannel = "webchat") {
         deliver: adoption.onQueuedFollowupReplyBatch,
       },
     };
-    return { run, adoption, controller };
+    bindSessionControllerSource(sourceRef.input, run);
+    return { run, adoption, controller, sourceRef };
   }
   const enqueue = (runId: string, dropPolicy: "old" | "new" = "old", cap = 10) => {
     const item = source(runId);
@@ -84,7 +126,23 @@ function fixture(originatingChannel = "webchat") {
     vi
       .mocked(context.broadcast)
       .mock.calls.flatMap(([event, payload]) => (event === "chat" ? [payload] : []));
-  return { context, enqueue, terminals };
+  const execution = async (sources: ReturnType<typeof source>[] = []) => {
+    const mailboxClaim = sources[0] ? await claimSessionControllerInput(sources[0].run) : undefined;
+    const operation = createReplyOperation({
+      mailboxClaim,
+      target,
+      sessionKey,
+      sessionId: "session",
+      agentId: "main",
+      resetTriggered: false,
+    });
+    ownedOperations.push(operation);
+    for (const queuedSource of sources) {
+      attachSessionControllerInputOperation(queuedSource.run, operation);
+    }
+    return operation;
+  };
+  return { context, enqueue, terminals, execution };
 }
 
 describe("queued chat input identity", () => {
@@ -141,7 +199,7 @@ describe("queued chat input identity", () => {
       ]);
       inputs.forEach(({ run }) => completeFollowupRunLifecycle(run));
       expect(terminals()).toEqual(ids.map((runId) => expect.objectContaining({ runId, state })));
-      expect(context.chatQueuedTurns.size).toBe(0);
+      expect(ids.every((id) => !isRpcSourceQueued(rpcSourceTesting.get(id)))).toBe(true);
       for (const id of ids) {
         expect(
           (await prepareAgentWaitForTurn(context, { runId: id, timeoutMs: 0 }).wait()).result,
@@ -186,53 +244,39 @@ describe("queued chat input identity", () => {
     ]);
   });
 
-  it("withdraws only the selected input before consumption", () => {
-    const { context, enqueue, terminals } = fixture();
+  it("withdraws only the selected input before consumption", async () => {
+    const { enqueue, terminals, execution } = fixture();
+    const active = await execution();
     const first = enqueue("cancel-B1");
     const second = enqueue("cancel-B2");
-    const active = new AbortController();
-    context.chatAbortControllers.set("active-A", {
-      controller: active,
-      sessionId: "session",
-      sessionKey,
-      startedAtMs: 0,
-      expiresAtMs: Number.MAX_SAFE_INTEGER,
-    });
-    expect(
-      abortQueuedChatTurnById(context.chatQueuedTurns, {
-        runId: "cancel-B1",
-        sessionKey,
-        stopReason: "rpc",
-      }),
-    ).toEqual({ aborted: true });
+    expect(requestRpcSourceCancellation(first.sourceRef, createAgentRunDirectAbortError())).toBe(
+      true,
+    );
     expect(first.controller.signal.aborted).toBe(true);
     expect(second.controller.signal.aborted).toBe(false);
-    expect(active.signal.aborted).toBe(false);
-    expect(context.chatQueuedTurns.has("cancel-B2")).toBe(true);
+    expect(active.abortSignal.aborted).toBe(false);
+    expect(isRpcSourceQueued(second.sourceRef)).toBe(true);
     expect(terminals()).toEqual([
       expect.objectContaining({ runId: "cancel-B1", state: "aborted" }),
     ]);
   });
 
   it.each([1, 2])("waits for %i consumed inputs to settle after cancellation", async (count) => {
-    const { context, enqueue, terminals } = fixture();
-    const { adoption } = enqueue(`running-B-${count}`);
-    await adoption.lifecycle.onAdopted();
-    const primary = count === 1 ? adoption : enqueue(`primary-B-${count}`).adoption;
-    if (primary !== adoption) {
-      await primary.lifecycle.onAdopted();
+    const { context, enqueue, terminals, execution } = fixture();
+    const source = enqueue(`running-B-${count}`);
+    const primary = count === 1 ? source : enqueue(`primary-B-${count}`);
+    await execution(primary === source ? [source] : [source, primary]);
+    await admitFollowupRunLifecycle(source.run);
+    if (primary !== source) {
+      await admitFollowupRunLifecycle(primary.run);
     }
-    primary.onRunStarted("running-C");
-    abortQueuedChatTurnById(context.chatQueuedTurns, {
-      runId: `running-B-${count}`,
-      sessionKey,
-      stopReason: "rpc",
-    });
+    primary.adoption.onRunStarted("running-C");
+    requestRpcSourceCancellation(source.sourceRef, createAgentRunDirectAbortError());
     expect(terminals()).toEqual([]);
     expect(context.dedupe.get(`chat:running-B-${count}`)?.payload).toMatchObject({
       status: "accepted",
     });
-    await adoption.onQueuedFollowupReplyBatch({
+    await source.adoption.onQueuedFollowupReplyBatch({
       kind: "queued-followup",
       runId: "running-C",
       originatingChannel: "webchat",

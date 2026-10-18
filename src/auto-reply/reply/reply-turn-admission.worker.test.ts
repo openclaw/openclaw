@@ -19,6 +19,15 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import {
+  getSessionControllerOperation,
+  waitForReplyRunSuccessorAdmission,
+} from "../../sessions/session-controller.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "../../sessions/session-controller.session-reader.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
@@ -29,12 +38,6 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
-import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 beforeEach(() => {
@@ -42,7 +45,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
@@ -174,7 +177,7 @@ it("creates a missing persistent store through reply admission without main-thre
       expect(fs.existsSync(storePath)).toBe(true);
       expect(sharing.readCurrent(cfg).target).toBeNull();
       await completeAdmission(result, sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       sql.expectIdle();
     } finally {
       try {
@@ -279,7 +282,7 @@ it("retains one actor per cold/reopened reply admission and drains it without ma
         await withinTest(actorPhase, signal);
         expect(await withinTest(successor.pending, signal)).toMatchObject({ settled: true });
         expect(databaseClaim.isCurrent()).toBe(false);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
         sql.expectIdle();
       } finally {
         try {
@@ -358,18 +361,18 @@ it("cancels a contended persistent admission without claiming the reply or poiso
       controller.abort(new Error("Synthetic cancelled reply"));
       await setImmediate();
       expect(Atomics.load(holder.released, 0)).toBe(0);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-      expect(replyRunRegistry.get(followerKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(followerKey)).toBeUndefined();
       await holder.release();
       await expect(pending).resolves.toEqual({ status: "skipped", reason: "aborted" });
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       result = await follower;
       expect(result).toMatchObject({
         status: "owned",
         sessionEntry: { sessionId: followerSessionId },
       });
       await completeAdmission(result, followerKey);
-      expect(replyRunRegistry.get(followerKey)).toBeUndefined();
+      expect(getSessionControllerOperation(followerKey)).toBeUndefined();
     } finally {
       try {
         controller.abort();
@@ -455,7 +458,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
               ).toBe(true);
             }
             expect(databaseClaim.isCurrent()).toBe(ending === "user-abort");
-            expect(replyRunRegistry.get(activeKey)).toBe(operation);
+            expect(getSessionControllerOperation(activeKey)).toBe(operation);
           }
           operation.complete();
           expect(databaseClaim.isCurrent()).toBe(false);
@@ -466,7 +469,7 @@ it.each(["complete", "user-abort", "restart-abort", "frozen-restart"] as const)(
           expect(settlement.isSettled()).toBe(false);
           await holder.release();
           expect(await successor).toMatchObject({ settled: true });
-          expect(replyRunRegistry.get(activeKey)).toBeUndefined();
+          expect(getSessionControllerOperation(activeKey)).toBeUndefined();
           sql.expectIdle();
         } finally {
           try {

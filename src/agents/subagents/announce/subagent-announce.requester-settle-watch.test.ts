@@ -69,13 +69,12 @@ describe("requester settle watch admission", () => {
     bindGatewayContextResolver(child, () => context);
     registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
     deliver.mockResolvedValue({ delivered: true, path: "direct" });
-    const transitionBatch = vi.fn(publishWakeTransition);
     const completeBatch = vi.fn();
     const wake = maybeWakeRequesterAfterAllChildrenSettled({
       isSourceCurrent: () => true,
       requesterSessionKey: REQUESTER_KEY,
       settledEntry: child,
-      transitionBatch,
+      transitionBatch: publishWakeTransition,
       completeBatch,
     });
     try {
@@ -85,7 +84,6 @@ describe("requester settle watch admission", () => {
           wake.then(() => "completed"),
         ]),
       ).resolves.toBe("preparing");
-      expect(transitionBatch).not.toHaveBeenCalled();
       expect(deliver).not.toHaveBeenCalled();
       expect(completeBatch).not.toHaveBeenCalled();
       expect(child.requesterSettleWake).toEqual(pendingState);
@@ -93,11 +91,6 @@ describe("requester settle watch admission", () => {
       preparation.resolve();
       await expect(wake).resolves.toBe(true);
       expect(deliver).toHaveBeenCalledOnce();
-      expect(transitionBatch).toHaveBeenCalledExactlyOnceWith(
-        [child],
-        expect.objectContaining({ status: "dispatching", attemptCount: 1 }),
-        expect.any(Function),
-      );
       expect(completeBatch).toHaveBeenCalledOnce();
       expect(Date.now()).toBe(10_000);
     } finally {

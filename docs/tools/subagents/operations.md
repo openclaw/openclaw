@@ -45,6 +45,11 @@ unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
 warning. The backlog size does not discard results or change their retention.
 
+When completion delivery expires while the requester is busy, OpenClaw hands
+the result to a later requester wake. If that wake also ends without delivering
+it, the delivery is recorded as failed right away instead of staying suspended;
+the result and the earlier blocked-delivery notice are kept.
+
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.
@@ -129,6 +134,8 @@ next activation or restart. Recovery does not keep a separate retry timer.
 Requester recovery selects each retained turn's children without repeatedly
 scanning unrelated run history. Completed children remain in saved batches when
 their delivery receipts are needed to prevent replaying an already delivered result.
+Binding restored runs to the new Gateway does not emit session activity updates
+for unchanged records. Recovery and cleanup still publish their actual changes.
 Durably completed cleanup does not replay interrupted child-session effects on restart.
 The saved interruption still rejects late child results, and pending requester wakes
 continue through their existing settlement owner.
@@ -203,6 +210,8 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+Cancelling a queued follow-up by its `runId` removes only that follow-up; the
+active run and other queued follow-ups in the same session continue.
 
 Every new registration records its selected owning agent as `childAgentId`,
 including agent-qualified child keys, and the original child session identity.

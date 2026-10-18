@@ -712,7 +712,7 @@ export function createGatewayBroadcaster(params: {
         }
         state.socket.recordEventSent?.(
           event,
-          frame.byteLength,
+          frame,
           sessionEventMetrics?.(c.connId),
           presenceDelivery?.mode ?? (presencePayload ? "legacy" : undefined),
         );

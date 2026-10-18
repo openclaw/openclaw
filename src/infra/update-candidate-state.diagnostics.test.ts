@@ -54,6 +54,30 @@ it("reports the active worker step for SIGILL without blaming storage", () => {
   expect(message).toContain("terminated by a signal");
   expect(message).not.toMatch(/Check access|free space|storage performance/);
 });
+
+it.each([true, false])(
+  "keeps the output-limit cause with warnings (retryAdvice=%s)",
+  (retryAdvice) => {
+    const error = inspection({ retryAdvice }).failure(
+      "ExperimentalWarning: private diagnostic",
+      "output-limit, signal SIGTERM",
+    );
+    expect(error).toHaveProperty("code", "output-limit");
+    expect(error.message).toContain("Worker output exceeded its capture limit");
+    expect(error.message).not.toMatch(/host crash|supervisor|free space|retry the update/);
+    expect(error.message.includes("Report this update failure")).toBe(retryAdvice);
+  },
+);
+
+it.each(["timeout", "no-output-timeout", "signal, signal SIGTERM"])(
+  "does not misclassify %s as an output limit",
+  (termination) => {
+    const error = inspection().failure("ordinary worker warning", termination);
+    expect(error).not.toHaveProperty("code", "output-limit");
+    expect(error.message).toContain(`(${termination})`);
+    expect(error.message).not.toContain("capture limit");
+  },
+);
 it("streams valid snapshot progress separately from the diagnostic stderr budget", () => {
   const progress = vi.fn();
   const exceeded = vi.fn();

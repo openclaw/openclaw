@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { children, For, Show } from "solid-js";
+import { children, For, onCleanup, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -341,6 +341,8 @@ export function SettingsDefaultDescription(props: { value: string; overridden: b
 
 export function SettingsSegmented<T extends string>(props: SettingsSegmentedProps<T, JSX.Element>) {
   const name = nextSettingsRadioName();
+  const inputs = new Map<string, HTMLInputElement>();
+  const radios = () => props.options.flatMap((option) => inputs.get(option.value) ?? []);
   return (
     <Show
       when={props.mode === "buttons"}
@@ -353,31 +355,41 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
           aria-orientation="horizontal"
         >
           <For each={props.options} keyed={(option) => option.value}>
-            {(option) => (
-              <label
-                class={[
-                  "settings-segmented__btn",
-                  { "settings-segmented__btn--active": option().value === props.value },
-                ]}
-                title={option().title}
-                data-test-id={option().testId}
-              >
-                <input
-                  ref={(element) => props.inputRef?.(option().value, element)}
-                  class="settings-segmented__input"
-                  type="radio"
-                  name={name}
-                  value={option().value}
-                  checked={option().value === props.value}
-                  disabled={props.disabled || option().disabled}
-                  aria-label={option().ariaLabel}
-                  onClick={(event) => settingsRadioClick(event, option().value, props)}
-                  onChange={(event) => settingsRadioChange(event, option().value, props)}
-                  onKeyDown={settingsRadioKeyDown}
-                />
-                {option().label}
-              </label>
-            )}
+            {(option) => {
+              let input: HTMLInputElement;
+              onCleanup(() => inputs.delete(input.value));
+              return (
+                <label
+                  class={[
+                    "settings-segmented__btn",
+                    { "settings-segmented__btn--active": option().value === props.value },
+                  ]}
+                  title={option().title}
+                  data-test-id={option().testId}
+                >
+                  <input
+                    ref={(element) => {
+                      input = element;
+                      inputs.set(option().value, element);
+                      props.inputRef?.(option().value, element);
+                    }}
+                    class="settings-segmented__input"
+                    type="radio"
+                    name={name}
+                    value={option().value}
+                    checked={option().value === props.value}
+                    disabled={props.disabled || option().disabled}
+                    aria-label={option().ariaLabel}
+                    onClick={(event) => settingsRadioClick(event, option().value, props)}
+                    onChange={(event) =>
+                      settingsRadioChange(event, option().value, props, radios())
+                    }
+                    onKeyDown={(event) => settingsRadioKeyDown(event, radios())}
+                  />
+                  {option().label}
+                </label>
+              );
+            }}
           </For>
         </div>
       }

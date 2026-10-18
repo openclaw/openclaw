@@ -17,6 +17,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -60,8 +61,6 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
     equality: "revision",
   });
   const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
-  const previousDocumentTitle = document.title;
-  let activeDocumentTitle: string | undefined;
   // Gateway receipts retire question operations and rebind the prompt client synchronously before reconnect.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   const stopGatewayEvents = context.gateway.subscribeEvents((event) => {
@@ -76,9 +75,6 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
     operationGeneration += 1;
     clientOwner = null;
     disposeQuestionPromptState(questionState);
-    if (!activeDocumentTitle || document.title === activeDocumentTitle) {
-      document.title = previousDocumentTitle;
-    }
   });
   // Gateway requests, browser title, and return focus follow the current question ID.
   createEffect(
@@ -96,16 +92,13 @@ function createQuestionPage(context: ApplicationContext, props: QuestionPageProp
       }
     },
   );
-  createEffect(
-    () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`,
-    (title) => {
-      document.title = title;
-      activeDocumentTitle = title;
-      if (questionPanelHadFocus && !questionPanel?.isConnected) {
-        heading?.focus({ preventScroll: true });
-      }
-    },
-  );
+  const title = () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`;
+  createDocumentTitle(title);
+  createEffect(title, () => {
+    if (questionPanelHadFocus && !questionPanel?.isConnected) {
+      heading?.focus({ preventScroll: true });
+    }
+  });
 
   function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {
     rememberPanelFocus();

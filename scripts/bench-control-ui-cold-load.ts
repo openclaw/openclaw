@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../src/gateway/mcp-app-sandbox-http.js";
+import { captureSessionRowGeneration } from "../src/gateway/session-row-identity.js";
 import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
 import {
@@ -369,7 +370,9 @@ try {
             ...shareSidebarSessionRows(
               result.sessions,
               typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-              runTransfer === "delta" && previousRows ? [previousRows] : undefined,
+              runTransfer === "delta" && previousRows
+                ? [captureSessionRowGeneration(previousRows)]
+                : undefined,
             ),
           }
         : result;

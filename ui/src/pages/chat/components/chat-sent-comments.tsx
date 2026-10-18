@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { parseCommentAttachment, type CommentPreview } from "./chat-comment-preview.ts";
@@ -65,20 +65,24 @@ function SentComments(props: {
   scope: string;
   admission?: AttachmentAdmission;
 }) {
-  const sources = createMemo(() => props.sources);
+  const sources = () => props.sources;
   const [revealed, setRevealed] = createSignal(false);
   // Ignore fallback JSX identity: sibling cards must not restart these reads.
-  const key = createMemo(() =>
-    JSON.stringify([props.scope, sources().map(({ fallback: _fallback, ...source }) => source)]),
+  const request = createMemo(
+    () => ({
+      key: JSON.stringify([
+        props.scope,
+        sources().map(({ fallback: _fallback, ...source }) => source),
+      ]),
+      sources: sources(),
+    }),
+    { equals: (previous, next) => previous.key === next.key },
   );
-  const [comments, setComments] = createSignal<Array<CommentPreview | null | undefined>>(() => {
-    key();
-    return untrack(() =>
-      sources().map((source) => (!source.src && !source.pending ? null : undefined)),
-    );
-  });
+  const [comments, setComments] = createSignal<Array<CommentPreview | null | undefined>>(() =>
+    request().sources.map((source) => (!source.src && !source.pending ? null : undefined)),
+  );
   createEffect(
-    () => ({ key: key(), revealed: revealed(), current: untrack(sources) }),
+    () => ({ revealed: revealed(), current: request().sources }),
     ({ revealed: wasRevealed, current: requestSources }) => {
       if (!wasRevealed) {
         return undefined;

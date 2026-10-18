@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import type { SshResolvedConfig } from "../infra/ssh-config.js";
@@ -54,13 +56,15 @@ const mocks = vi.hoisted(() => {
   };
   return {
     successfulProbe,
-    readBestEffortConfig: vi.fn(async () => ({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://remote.example:18789", token: "rtok" },
-        auth: { token: "ltok" },
-      },
-    })),
+    readBestEffortConfig: vi.fn<typeof import("../config/config.js").readBestEffortConfig>(
+      async () => ({
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://remote.example:18789", token: "rtok" },
+          auth: { token: "ltok" },
+        },
+      }),
+    ),
     resolveGatewayPort: vi.fn((_cfg?: unknown) => 18789),
     discoverGatewayBeacons: vi.fn(async (_opts?: unknown): Promise<GatewayBonjourBeacon[]> => []),
     pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
@@ -175,7 +179,7 @@ function requireSshForwardCall(index = 0): Record<string, unknown> {
   return call as Record<string, unknown>;
 }
 
-function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok") {
+function makeRemoteGatewayConfig(url: string, token = "rtok", localToken = "ltok"): OpenClawConfig {
   return {
     gateway: {
       mode: "remote",
@@ -223,7 +227,7 @@ function requireUnresolvedSecretRefWarning(runtimeLogs: string[]) {
   );
 }
 
-const localGatewayConfig = (token = "ltok", tls = false) => ({
+const localGatewayConfig = (token = "ltok", tls = false): OpenClawConfig => ({
   gateway: {
     mode: "local",
     auth: { mode: "token", token },
@@ -672,5 +676,116 @@ describe("gateway-status command", () => {
 
     const call = requireSshForwardCall();
     expect(call.identity).toBe("/tmp/explicit_id");
+  });
+
+  it("derives summary capability from reachable probes only in json output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ...(url.includes("127.0.0.1") ? {} : { ok: false, connectLatencyMs: null, error: "timeout" }),
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000", json: true });
+
+    expect(runtimeLogs).toHaveLength(1);
+    const payload = JSON.parse(runtimeLogs.join("\n")) as { ok?: unknown; capability?: unknown };
+    expect(payload?.ok).toBe(true);
+    expect(payload?.capability).toBe("read_only");
+  });
+
+  it("derives summary capability from reachable probes only in text output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ok: false,
+      ...(url.includes("127.0.0.1")
+        ? { gatewayReached: true, error: "missing scope: operator.read" }
+        : { connectLatencyMs: null, error: "timeout" }),
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000" });
+
+    expect(runtimeLogs.map(stripAnsi)).toContain("Capability: read-only");
+  });
+
+  it("reports post-connect detail failures as reachable but degraded in json output", async () => {
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig());
+    probeGateway.mockImplementation(async ({ url }) => ({
+      ...mocks.successfulProbe(url),
+      ok: false,
+      gatewayReached: true,
+      connectLatencyMs: 40,
+      error: "timeout",
+      server: { version: "2026.4.24", buildId: "build-test", connId: "conn-test" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    }));
+
+    await runGatewayStatus(runtime, { timeout: "5000", json: true });
+
+    expect(runtimeLogs).toHaveLength(1);
+    const payload: unknown = JSON.parse(runtimeLogs.join("\n"));
+    expect(payload).toStrictEqual({
+      ok: true,
+      degraded: true,
+      capability: "read_only",
+      ts: expect.any(Number),
+      durationMs: expect.any(Number),
+      timeoutMs: 5_000,
+      primaryTargetId: "localLoopback",
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["localLoopback"],
+        },
+      ],
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: "ws://100.64.0.10:18789",
+        tailnetIPv4: "100.64.0.10",
+      },
+      discovery: {
+        timeoutMs: 1200,
+        count: 0,
+        beacons: [],
+      },
+      targets: [
+        {
+          id: "localLoopback",
+          kind: "localLoopback",
+          url: "ws://127.0.0.1:18789",
+          active: true,
+          tunnel: null,
+          connect: {
+            ok: true,
+            rpcOk: false,
+            scopeLimited: false,
+            latencyMs: 40,
+            error: "timeout",
+            close: null,
+          },
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
+          server: {
+            version: "2026.4.24",
+            buildId: "build-test",
+            connId: "conn-test",
+          },
+          self: null,
+          config: null,
+          health: null,
+          summary: null,
+          presence: null,
+        },
+      ],
+    });
   });
 });

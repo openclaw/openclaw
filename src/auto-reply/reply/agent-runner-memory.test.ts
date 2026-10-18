@@ -55,6 +55,11 @@ import {
 } from "../../plugins/memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  waitForReplyRunSuccessorAdmission,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { refreshSessionEntryFromStore } from "./agent-runner-core.js";
 import {
@@ -75,8 +80,6 @@ import {
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
-import { waitForReplyRunSuccessorAdmission, type ReplyOperation } from "./reply-run-registry.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 import { createMockReplyOperation } from "./test-helpers.js";

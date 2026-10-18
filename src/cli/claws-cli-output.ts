@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ClawAddPlan, ClawDiagnostic } from "../claws/types.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -18,9 +19,10 @@ export function emitClawFailure(
 
 export function formatClawDiagnostics(diagnostics: readonly ClawDiagnostic[]): string {
   return diagnostics
-    .map(
-      (diagnostic) =>
+    .map((diagnostic) =>
+      sanitizeTerminalText(
         `${diagnostic.level.toUpperCase()} ${diagnostic.code} ${diagnostic.path}: ${diagnostic.message}`,
+      ),
     )
     .join("\n");
 }

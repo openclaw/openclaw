@@ -13,11 +13,14 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import type { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { hasRetryableConnectionErrorCode } from "../infra/retryable-network-errors.js";
-import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  isGatewayRestartDraining,
+} from "../process/gateway-work-admission.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
@@ -118,10 +121,12 @@ const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
 
 function normalizeAgentWaitError(cause: unknown): AgentWaitResult {
   const error = formatErrorMessage(cause);
+  // A rejected observation during drain carries no terminal fact about the run.
   const unavailable =
-    cause instanceof GatewayClientRequestError &&
-    cause.gatewayCode === "UNAVAILABLE" &&
-    cause.retryable;
+    isGatewayRestartDraining() ||
+    (cause instanceof GatewayProtocolRequestError &&
+      cause.gatewayCode === "UNAVAILABLE" &&
+      cause.retryable);
   const timedOut =
     !unavailable &&
     (error.includes("gateway timeout") || error.includes("gateway request timeout"));

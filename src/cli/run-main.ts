@@ -834,8 +834,8 @@ async function runCliWithPreparedOutputMode(
           normalizedInvocation.commandPath[1] === "worker")))
   ) {
     // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
-    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-    await initializeSqliteRuntimeCapabilities();
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
   }
 
   if (

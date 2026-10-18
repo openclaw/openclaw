@@ -4553,6 +4553,14 @@ jobs:
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
 
+      - name: Check AGENTS.md bootstrap size
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        run: |
+          # Historical release targets predate this guard.
+          if node -e 'process.exit(require("./package.json").scripts?.["check:agents-md-size"] ? 0 : 1)'; then
+            pnpm check:agents-md-size
+          fi
+
       - name: Check config docs baseline
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check

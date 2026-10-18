@@ -480,7 +480,7 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-export function parseFirecrawlScrapePayload(params: {
+function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
@@ -615,9 +615,3 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
     maxChars,
   });
 }
-
-export const testing = {
-  parseFirecrawlScrapePayload,
-  resolveEndpoint,
-  resolveSearchItems,
-};

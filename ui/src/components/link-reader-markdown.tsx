@@ -4,6 +4,7 @@ import { createEffect, createMemo } from "solid-js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { i18n, t as translate } from "../i18n/index.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { installMarkdownEmoji } from "./markdown-emoji.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
@@ -145,7 +146,7 @@ function prepareImage(
       status.textContent = translate("linkReader.imageUnavailable", { title: label });
       status.setAttribute("role", "status");
     };
-    image.addEventListener("error", unavailable, { once: true, signal });
+    listen(image, "error", unavailable, { once: true, signal });
     if (linkedImage) {
       wrapper.append(image);
     } else {

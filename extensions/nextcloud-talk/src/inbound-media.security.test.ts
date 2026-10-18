@@ -224,6 +224,7 @@ describe("nextcloud-talk inbound media security", () => {
 
   it.each([
     { label: "explicit sender match", mediaAllowFrom: ["user-1"] },
+    { label: "normalized sender match", mediaAllowFrom: ["NC-TALK:User-1"] },
     { label: "wildcard", mediaAllowFrom: ["*"] },
   ])(
     "stages admitted media for a $label and passes only returned local facts",

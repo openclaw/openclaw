@@ -58,6 +58,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   presenceKey?: string;
   /** Last projected roster handed to this transport; absent after a drop or reset request. */
   presenceSnapshot?: PresenceDeliverySnapshot;
+  /** Connection-local override for clients that opt out of roster message bodies. */
+  includeSessionMessageBodies?: boolean;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
   /** Accepted interaction on this exact connection, never copied from another client. */

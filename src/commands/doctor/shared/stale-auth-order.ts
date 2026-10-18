@@ -358,7 +358,6 @@ function loadConfiguredAgentAuthStores(
         agentDir: entry.agentDir,
         env,
         externalCli: {
-          allowKeychainPrompt: false,
           config: cfg,
           externalCliProviderIds: providerIds,
           externalCliProfileIds: profileIds,

@@ -52,10 +52,6 @@ vi.mock("./local/gateway-config.js", () => ({
   applyNonInteractiveGatewayConfig: mocks.applyGatewayConfig,
 }));
 
-vi.mock("./local/skills-config.js", () => ({
-  applyNonInteractiveSkillsConfig: ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig,
-}));
-
 import { runNonInteractiveSetup } from "../onboard-non-interactive.js";
 import { runNonInteractiveLocalSetup } from "./local.js";
 
@@ -106,6 +102,133 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       }),
     );
     mocks.inferAuthChoice.mockReturnValue({ matches: [] });
+  });
+
+  it.each([
+    {
+      label: "default state",
+      customState: false,
+      workspaceOverride: undefined,
+      blankOptions: false,
+    },
+    {
+      label: "workspace override",
+      customState: true,
+      workspaceOverride: "explicit",
+      blankOptions: false,
+    },
+    {
+      label: "blank workspace override",
+      customState: true,
+      workspaceOverride: "blank",
+      blankOptions: false,
+    },
+    {
+      label: "blank CLI and config",
+      customState: true,
+      workspaceOverride: undefined,
+      blankOptions: true,
+    },
+  ] as const)("provisions and records the workspace with $label", async (testCase) => {
+    await withTempHome(
+      async (home) => {
+        const expectedWorkspace =
+          testCase.workspaceOverride === "explicit"
+            ? path.join(home, "explicit-workspace")
+            : testCase.customState
+              ? path.join(home, "scratch-state", "workspace")
+              : "/tmp/default-workspace";
+        await runNonInteractiveLocalSetup({
+          opts: {
+            ...localOptions,
+            ...(testCase.blankOptions ? { workspace: "   " } : {}),
+            json: true,
+          },
+          runtime,
+          baseConfig: {
+            agents: {
+              entries: { ops: {} },
+              ...(testCase.blankOptions ? { defaults: { workspace: "\t" } } : {}),
+            },
+          },
+          sourceConfigBeforeMigrations: {},
+        });
+
+        expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
+          expectedWorkspace,
+          runtime,
+          expect.objectContaining({ agentId: "ops" }),
+        );
+        expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.agents.defaults.workspace).toBe(
+          expectedWorkspace,
+        );
+        expect(JSON.parse(String(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]))).toMatchObject({
+          ok: true,
+          workspace: expectedWorkspace,
+        });
+      },
+      {
+        env: {
+          OPENCLAW_HOME: (home) => home,
+          OPENCLAW_STATE_DIR: (home) =>
+            path.join(home, testCase.customState ? "scratch-state" : ".openclaw"),
+          OPENCLAW_WORKSPACE_DIR: (home) =>
+            testCase.workspaceOverride === "explicit"
+              ? path.join(home, "explicit-workspace")
+              : testCase.workspaceOverride === "blank"
+                ? "   "
+                : undefined,
+        },
+      },
+    );
+  });
+
+  it.each([
+    { saved: undefined, requested: undefined, expected: "npm" },
+    { saved: "yarn", requested: undefined, expected: "yarn" },
+    { saved: "yarn", requested: "npm", expected: "npm" },
+    { saved: "bun", requested: "pnpm", expected: "pnpm" },
+    { saved: "pnpm", requested: "bun", expected: "bun" },
+  ] as const)(
+    "records saved $saved and requested $requested skills manager as $expected",
+    async ({ saved, requested, expected }) => {
+      await withTempHome(async () => {
+        const baseConfig: OpenClawConfig = {
+          agents: { entries: { ops: {} } },
+          skills: { install: { nodeManager: saved, preferBrew: false } },
+        };
+        await runNonInteractiveLocalSetup({
+          opts: { ...localOptions, skipSkills: false, nodeManager: requested },
+          runtime,
+          baseConfig,
+          sourceConfigBeforeMigrations: baseConfig,
+        });
+
+        expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills.install).toEqual({
+          nodeManager: expected,
+          preferBrew: false,
+        });
+        expect(baseConfig.skills?.install?.nodeManager).toBe(saved);
+      });
+    },
+  );
+
+  it("leaves skills untouched when setup is skipped, even with an explicit manager", async () => {
+    await withTempHome(async () => {
+      const baseConfig: OpenClawConfig = {
+        agents: { entries: { ops: {} } },
+        skills: { install: { nodeManager: "yarn", preferBrew: false } },
+      };
+      await runNonInteractiveLocalSetup({
+        opts: { ...localOptions, nodeManager: "npm" },
+        runtime,
+        baseConfig,
+        sourceConfigBeforeMigrations: baseConfig,
+      });
+
+      expect(mocks.commitConfig.mock.calls[0]?.[0].nextConfig.skills).toBe(baseConfig.skills);
+      expect(baseConfig.skills?.install).toEqual({ nodeManager: "yarn", preferBrew: false });
+    });
   });
 
   it.each([false, true])(

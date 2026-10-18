@@ -23,7 +23,7 @@ export type TabsProps = TabsOptions & {
   items: readonly TabOption[];
   ariaLabel: string;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
-  ref?: (element: HTMLDivElement) => void;
+  ref?: (element: HTMLDivElement, tab: (value: string) => HTMLElement | undefined) => void;
   shadowStyles?: readonly string[];
 };
 
@@ -50,7 +50,7 @@ export function Tabs(props: TabsProps) {
     <div
       ref={(node) => {
         element = node;
-        props.ref?.(node);
+        props.ref?.(node, tabs.element);
       }}
       id={props.id}
       class={["oc-tabs", props.class]}

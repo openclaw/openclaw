@@ -10,11 +10,11 @@ import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
 } from "./embedded-agent-error-observation.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/error-text.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasAttemptTerminalState,

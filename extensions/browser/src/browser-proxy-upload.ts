@@ -53,11 +53,6 @@ type StagedBrowserProxyUploadRequest = {
   directory?: string;
 };
 
-type StagedUploadLimits = {
-  maxRetainedBytes: number;
-  maxRetainedDirectories: number;
-};
-
 type OwnedStagedUpload = {
   bytes: number;
   directory: string;
@@ -297,17 +292,12 @@ function scheduleCleanup(directory: string, delayMs: number): void {
   timer.unref?.();
 }
 
-async function recoverStagedUploads(params: {
-  uploadDir: string;
-  retentionMs: number;
-  nowMs: number;
-  limits: StagedUploadLimits;
-}): Promise<void> {
-  const { uploadDir, retentionMs, nowMs, limits } = params;
+async function recoverStagedUploads(uploadDir: string): Promise<void> {
+  const nowMs = Date.now();
   const stagingRoot = path.join(uploadDir, BROWSER_PROXY_UPLOAD_ROOT_NAME);
   const retained: OwnedStagedUpload[] = [];
   for (const upload of await readOwnedStagedUploads(stagingRoot)) {
-    if (retentionMs - Math.max(0, nowMs - upload.mtimeMs) <= 0) {
+    if (BROWSER_PROXY_UPLOAD_RETENTION_MS - Math.max(0, nowMs - upload.mtimeMs) <= 0) {
       await removeStagedUpload(upload.directory);
     } else {
       retained.push(upload);
@@ -318,7 +308,10 @@ async function recoverStagedUploads(params: {
   // copies, so oldest-first eviction safely restores the bounded retention budget.
   retained.sort((left, right) => left.mtimeMs - right.mtimeMs);
   let totalBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
-  while (retained.length > limits.maxRetainedDirectories || totalBytes > limits.maxRetainedBytes) {
+  while (
+    retained.length > BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES ||
+    totalBytes > BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES
+  ) {
     const oldest = retained.shift();
     if (!oldest) {
       break;
@@ -327,23 +320,18 @@ async function recoverStagedUploads(params: {
     await removeStagedUpload(oldest.directory);
   }
   for (const upload of retained) {
-    const remaining = retentionMs - Math.max(0, nowMs - upload.mtimeMs);
+    const remaining = BROWSER_PROXY_UPLOAD_RETENTION_MS - Math.max(0, nowMs - upload.mtimeMs);
     scheduleCleanup(upload.directory, remaining);
   }
 }
 
-async function runRecovery(params: {
-  uploadDir: string;
-  retentionMs: number;
-  nowMs: number;
-  limits: StagedUploadLimits;
-}): Promise<void> {
+async function runRecovery(uploadDir: string): Promise<void> {
   activeRecovery += 1;
   try {
-    await recoverStagedUploads(params);
-    failedRecoveries.delete(params.uploadDir);
+    await recoverStagedUploads(uploadDir);
+    failedRecoveries.delete(uploadDir);
   } catch (error) {
-    failedRecoveries.add(params.uploadDir);
+    failedRecoveries.add(uploadDir);
     logger.warn(`browser proxy upload recovery failed; retry on the next upload: ${String(error)}`);
   } finally {
     activeRecovery -= 1;
@@ -351,34 +339,13 @@ async function runRecovery(params: {
 }
 
 /** Restores cleanup timers for staged uploads left by a previous node process. */
-export function ensureBrowserProxyUploadCleanup(options?: {
-  uploadDir?: string;
-  retentionMs?: number;
-  nowMs?: number;
-  maxRetainedBytes?: number;
-  maxRetainedDirectories?: number;
-}): Promise<void> {
+export function ensureBrowserProxyUploadCleanup(options?: { uploadDir?: string }): Promise<void> {
   const uploadDir = options?.uploadDir ?? DEFAULT_UPLOAD_DIR;
-  const retentionMs = options?.retentionMs ?? BROWSER_PROXY_UPLOAD_RETENTION_MS;
-  const nowMs = options?.nowMs ?? Date.now();
-  const limits = {
-    maxRetainedBytes: options?.maxRetainedBytes ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES,
-    maxRetainedDirectories:
-      options?.maxRetainedDirectories ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES,
-  };
-  if (
-    options?.retentionMs !== undefined ||
-    options?.nowMs !== undefined ||
-    options?.maxRetainedBytes !== undefined ||
-    options?.maxRetainedDirectories !== undefined
-  ) {
-    return runRecovery({ uploadDir, retentionMs, nowMs, limits });
-  }
   const existing = recoveryPromises.get(uploadDir);
   if (existing) {
     return existing;
   }
-  const recovery = runRecovery({ uploadDir, retentionMs, nowMs, limits });
+  const recovery = runRecovery(uploadDir);
   recoveryPromises.set(uploadDir, recovery);
   return recovery;
 }
@@ -431,8 +398,6 @@ export async function stageBrowserProxyUploadRequest(params: {
   body: unknown;
   upload?: BrowserProxyUploadV1;
   uploadDir?: string;
-  maxRetainedBytes?: number;
-  maxRetainedDirectories?: number;
   signal?: AbortSignal;
 }): Promise<StagedBrowserProxyUploadRequest> {
   params.signal?.throwIfAborted();
@@ -466,11 +431,6 @@ export async function stageBrowserProxyUploadRequest(params: {
     decodedFiles.push({ buffer, name: file.name });
   }
   const retainedRequestBytes = fileBytes + Buffer.byteLength(BROWSER_PROXY_UPLOAD_MARKER_CONTENT);
-  const limits = {
-    maxRetainedBytes: params.maxRetainedBytes ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES,
-    maxRetainedDirectories:
-      params.maxRetainedDirectories ?? BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES,
-  };
   return await withStagingLock(
     uploadDir,
     async () => {
@@ -478,8 +438,8 @@ export async function stageBrowserProxyUploadRequest(params: {
       const retained = await readOwnedStagedUploads(stagingRoot, params.signal);
       const retainedBytes = retained.reduce((total, upload) => total + upload.bytes, 0);
       if (
-        retained.length >= limits.maxRetainedDirectories ||
-        retainedBytes + retainedRequestBytes > limits.maxRetainedBytes
+        retained.length >= BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES ||
+        retainedBytes + retainedRequestBytes > BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES
       ) {
         throw new Error("RESOURCE_EXHAUSTED: browser proxy upload staging limit reached");
       }

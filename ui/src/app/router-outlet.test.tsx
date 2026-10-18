@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { SolidRouteProps } from "../app-route-types.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 import {
   disposeRouterOutlets,
@@ -42,6 +43,55 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 describe("openclaw-router-outlet", () => {
+  it("publishes native and Solid route hosts and retires their references with the route", async () => {
+    const Bridge = defineSolidBridge<{ label: string }>(
+      "openclaw-route-ref-test",
+      (props) => <span>{props.label}</span>,
+      { properties: { label: { default: "native" } } },
+    );
+    const native = new Bridge.Element();
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            renderSolid: () => (
+              <>
+                {native}
+                <Bridge label="Solid" />
+              </>
+            ),
+          }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ renderSolid: () => <p>Next</p> }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      const hosts = outlet.renderedElements?.("openclaw-route-ref-test");
+      expect(hosts).toHaveLength(2);
+      expect(hosts).toContain(native);
+      expect(hosts?.map((host) => host.textContent)).toEqual(["native", "Solid"]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBe(native);
+
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(outlet.renderedElements?.("openclaw-route-ref-test")).toEqual([]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBeUndefined();
+    } finally {
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
   it("settles the active route when a parked descendant's update fails", async () => {
     const parked = document.createElement("test-parked-surface");
     const ParkedRoute = () => <section>{parked}</section>;

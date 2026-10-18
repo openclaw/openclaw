@@ -1625,6 +1625,7 @@ describe("openclaw state database", () => {
       { kind: "task-run-indexes-v24", path: fixture.databasePath },
       { kind: "subagent-operator-recovery-v25", path: fixture.databasePath },
       { kind: "state-write-indexes-v27", path: fixture.databasePath },
+      { kind: "github-publication-draft-v28", path: fixture.databasePath },
       { kind: "audit-events-v2", path: fixture.databasePath },
       { kind: "strict-tables-v3", path: fixture.databasePath },
     ]);
@@ -1848,6 +1849,7 @@ describe("openclaw state database", () => {
       { kind: "subagent-operator-recovery-v25", path: seeded.databasePath },
       { kind: "session-state-head-layout-v26", path: seeded.databasePath },
       { kind: "state-write-indexes-v27", path: seeded.databasePath },
+      { kind: "github-publication-draft-v28", path: seeded.databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: seeded.databasePath },
     ]);
     expectRepair(options, [
@@ -2074,6 +2076,7 @@ describe("openclaw state database", () => {
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "subagent-operator-recovery-v25", path: databasePath },
       { kind: "state-write-indexes-v27", path: databasePath },
+      { kind: "github-publication-draft-v28", path: databasePath },
     ]);
 
     openOpenClawStateDatabase(options);

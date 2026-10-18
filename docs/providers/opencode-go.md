@@ -110,8 +110,17 @@ model, because provider policy can change independently of OpenClaw.
 
 <AccordionGroup>
   <Accordion title="Routing behavior">
-    OpenClaw routes any `opencode-go/...` model ref automatically. No extra
-    provider config is required.
+    OpenClaw selects each model’s API family and endpoint automatically; no extra
+    provider config is required. Chat Completions and Responses use
+    `https://opencode.ai/inference/go/openai/v1`, Anthropic Messages uses
+    `https://opencode.ai/inference/go/anthropic` (the transport appends `/v1/messages`),
+    and Gemini uses `https://opencode.ai/inference/go/google/v1beta`.
+
+    Model discovery uses the separate
+    `https://opencode.ai/inference/go/v1/models` inventory endpoint, not the
+    inference base plus `/models`. Saved native Go URLs are normalized by each
+    model’s API family; custom proxy URLs are left unchanged.
+
   </Accordion>
 
   <Accordion title="Runtime ref convention">

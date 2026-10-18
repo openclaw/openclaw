@@ -10,9 +10,10 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  collectActiveSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  collectSessionControllerTargets,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import {
   openOpenClawAgentDatabase,
@@ -174,7 +175,7 @@ export function collectAdmissionProtectedSessionIds(params: {
   return collectSessionAdmissionReferences({
     database: params.database,
     admissionIdentities: [
-      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+      ...(collectSessionControllerTargets(undefined, params.storePath).get(params.storePath) ?? []),
       ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
     ],
   });
@@ -188,7 +189,7 @@ async function readHistoricalSessionIds(params: {
 }): Promise<string[]> {
   const input = {
     admissionIdentities: [
-      ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+      ...(collectSessionControllerTargets(undefined, params.storePath).get(params.storePath) ?? []),
       ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
     ],
     preserveRecentMs: params.preserveRecentMs,
@@ -245,7 +246,7 @@ function assertSessionHistoryIdle(sessionKey: string | null): void {
 function isSessionHistoryAdmitted(storePath: string, sessionId: string, sessionKey: string | null) {
   const ownerKey = sessionKey === null ? null : normalizeStoreSessionKey(sessionKey);
   return [
-    ...(collectActiveSessionWorkAdmissions().get(storePath) ?? []),
+    ...(collectSessionControllerTargets(undefined, storePath).get(storePath) ?? []),
     ...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex()),
   ].some(
     (identity) =>
@@ -300,7 +301,10 @@ export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBud
     mode: maintenance.mode,
     maintenance,
   };
-  void runSessionHistoryDiskBudgetMaintenance(budgetParams, true)
+  // Store-wide cleanup must not inherit the kicking turn's cancellation or custody.
+  void runWithSessionControllerCleanup(() =>
+    runSessionHistoryDiskBudgetMaintenance(budgetParams, true),
+  )
     .catch((error: unknown) => {
       // Best-effort: budget pressure is retried on the next throttled kick,
       // but a persistently failing sweep must stay operator-visible — silent
@@ -506,7 +510,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
     if (usage.totalBytes <= highWaterBytes) {
       break;
     }
-    const eviction = await runExclusiveSessionLifecycleMutation("history-evict", {
+    const eviction = await runSessionMutation({
+      diagnosticLabel: "history-evict",
       scope: params.storePath,
       identities: [sessionId],
       run: async () => {
@@ -631,7 +636,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         if (usage.totalBytes <= highWaterBytes) {
           break;
         }
-        const deletion = await runExclusiveSessionLifecycleMutation("archived-delete", {
+        const deletion = await runSessionMutation({
+          diagnosticLabel: "archived-delete",
           scope: params.storePath,
           identities: [candidate.sessionKey, candidate.entry.sessionId],
           run: async () => {

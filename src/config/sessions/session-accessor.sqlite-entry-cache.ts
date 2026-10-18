@@ -239,18 +239,19 @@ export function readSessionEntryCache(
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
     const projection = options.projection;
+    const validityToken =
+      options.cache &&
+      !options.deferParticipants &&
+      !options.latest &&
+      projection !== "full" &&
+      !database.db.isTransaction &&
+      getAdmittedSqliteSchemaFacts(database.db)
+        ? readSessionEntryCacheValidityToken(database.db)
+        : undefined;
     const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
-    if (
-      !options.cache ||
-      options.deferParticipants ||
-      options.latest ||
-      projection === "full" ||
-      database.db.isTransaction ||
-      !getAdmittedSqliteSchemaFacts(database.db)
-    ) {
+    if (!validityToken) {
       return loadSessionEntrySnapshot(database, projection, prepared, options.deferParticipants);
     }
-    const validityToken = readSessionEntryCacheValidityToken(database.db);
     const cached = sessionEntryCaches.get(database.db);
     if (cached && cacheValidityTokensEqual(cached.validityToken, validityToken)) {
       return cached;
@@ -262,11 +263,7 @@ export function readSessionEntryCache(
       freezeJsonSnapshot(entry);
     }
     const next = { ...loaded, validityToken };
-    if (cacheValidityTokensEqual(validityToken, readSessionEntryCacheValidityToken(database.db))) {
-      sessionEntryCaches.set(database.db, next);
-    } else {
-      sessionEntryCaches.delete(database.db);
-    }
+    sessionEntryCaches.set(database.db, next);
     return next;
   });
 }

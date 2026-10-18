@@ -6,6 +6,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { ConsoleMessage, Frame, Locator, Page } from "playwright";
 import { expect } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -175,13 +177,26 @@ export async function mountControlUiHost(
       contentType: "text/html",
       body: `<!doctype html><main id="mount"></main>
 <script type="module">
-import { GatewayBrowserClient } from "/src/api/gateway.ts";
+import { createApplicationGateway } from "/src/app/gateway-store.ts";
+import { waitForGatewayClient } from "/src/app/gateway-readiness.ts";
+import { loadSettings } from "/src/app/settings.ts";
 import "/src/components/mcp-app-view-registration.ts";
 import { applicationContext } from "/src/app/context.ts";
 window.mcpConformanceApplicationContext = applicationContext;
 import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
 import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
-window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
+window.mcpConformanceConnect = async ({ gatewayUrl, authValue, sessionKey }) => {
+  const gateway = createApplicationGateway(
+    { ...loadSettings(), gatewayUrl, token: authValue, sessionKey },
+    "",
+    "",
+    undefined,
+    { persistDefaultConnectionSettings: false, ownsWarmBoot: false },
+  );
+  gateway.start();
+  const client = await waitForGatewayClient(gateway, AbortSignal.timeout(60_000));
+  return { gateway, client };
+};
 document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
   event.preventDefault();
   window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
@@ -202,42 +217,18 @@ window.mcpConformanceUnmount = async () => {
   });
   await page.goto(`${baseUrl}mcp-conformance`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
-    () => Reflect.get(window, "mcpConformanceGatewayBrowserClient") !== undefined,
+    () => Reflect.get(window, "mcpConformanceConnect") !== undefined,
     undefined,
     { timeout: 30_000 },
   );
   await page.evaluate(
     async (params) => {
-      const GatewayBrowserClient = Reflect.get(
-        window,
-        "mcpConformanceGatewayBrowserClient",
-      ) as new (options: Record<string, unknown>) => {
-        start(): void;
-        request(method: string, params: unknown): Promise<unknown>;
-      };
-      let resolveHello!: () => void;
-      let rejectHello!: (error: Error) => void;
-      const connected = new Promise<void>((resolve, reject) => {
-        resolveHello = resolve;
-        rejectHello = reject;
-      });
-      const client = new GatewayBrowserClient({
-        url: params.gatewayUrl,
-        token: params.authValue,
-        onHello: () => resolveHello(),
-        onClose: (info: { code: number; reason: string; error?: unknown; willRetry: boolean }) => {
-          if (!info.willRetry) {
-            rejectHello(new Error(`Gateway connection closed: ${JSON.stringify(info)}`));
-          }
-        },
-      });
-      client.start();
-      await Promise.race([
-        connected,
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error("Gateway connection timed out")), 60_000);
-        }),
-      ]);
+      const connect = Reflect.get(window, "mcpConformanceConnect") as (connection: {
+        gatewayUrl: string;
+        authValue: string;
+        sessionKey: string;
+      }) => Promise<{ gateway: ApplicationGateway; client: GatewayBrowserClient }>;
+      const { gateway, client } = await connect(params);
       const view = document.createElement("mcp-app-view");
       const root = document.documentElement;
       const themeListeners = new Set<() => void>();
@@ -251,11 +242,7 @@ window.mcpConformanceUnmount = async () => {
       };
       setTheme("dark");
       const context = {
-        gateway: {
-          snapshot: { client, phase: "connected" },
-          connection: { gatewayUrl: params.gatewayUrl },
-          subscribe: () => () => {},
-        },
+        gateway,
         theme: {
           subscribe(listener: () => void) {
             themeListeners.add(listener);

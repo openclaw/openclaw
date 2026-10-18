@@ -15,7 +15,6 @@ import {
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
 import { prepareSandboxSessionTools } from "../../agents/tools/sessions-operator-authority.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { withVisibleWorkSessionReporter } from "../../auto-reply/reply/visible-work-sessions.js";
 import {
   bindChildSessionPublication,
@@ -39,7 +38,12 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../../plugins/types.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkEmail, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -350,7 +354,14 @@ async function createHostedChildFixture(
     const drains = childKeys.map((key) => {
       const row = loadSessionEntry({ sessionKey: key, storePath });
       return row
-        ? getSessionWorkAdmissionRelease({ scope: storePath, identities: [key, row.sessionId] })
+        ? captureSessionControllerSettlement({
+            target: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: key,
+              incarnation: row.sessionId,
+              agentId: "main",
+            }),
+          })
         : undefined;
     });
     releaseDispatch.resolve();
@@ -647,7 +658,7 @@ describe("hosted creation transfers accepted child input", () => {
       }
       expect(userMessages(scope)).toHaveLength(1);
       expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
-      expect(fixture.context.chatAbortControllers.has(accepted.runId)).toBe(false);
+      expect(rpcSourceTesting.has(accepted.runId)).toBe(false);
     },
   );
 
@@ -669,6 +680,31 @@ describe("hosted creation transfers accepted child input", () => {
       expect(userMessages(fixture.scope())).toEqual([]);
       expect(fixture.provider).not.toHaveBeenCalled();
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "continues after the admitted parent closes (system=%s)",
+    async (system) => {
+      const fixture = await createHostedChildFixture(system);
+      try {
+        const accepted = await fixture.send();
+        expect(accepted.runStarted).toBe(true);
+        const scope = fixture.scope();
+        expect(accepted.sessionId).toBe(scope.sessionId);
+        await fixture.dispatchEntered;
+        const pending = await listSessionPendingInputs(scope);
+        expect(pending).toMatchObject({ total: 1, items: [{ state: "queued" }] });
+        expect(userMessages(scope)).toEqual([]);
+        fixture.closeParent();
+        await fixture.finish();
+        expect(fixture.provider).toHaveBeenCalledOnce();
+        expect(userMessages(scope)).toHaveLength(1);
+        expect(await listSessionPendingInputs(scope)).toEqual({ items: [], total: 0 });
+        expect(rpcSourceTesting.has(accepted.runId)).toBe(false);
+      } finally {
+        await fixture[Symbol.asyncDispose]();
+      }
     },
   );
 
