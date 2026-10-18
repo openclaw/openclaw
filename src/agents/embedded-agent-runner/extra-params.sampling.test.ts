@@ -1,4 +1,3 @@
-// Coverage for sampling, token, and response-format extra parameter precedence.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
@@ -10,8 +9,6 @@ import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-param
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
 vi.mock("./logger.js", () => ({
-  // Sampling tests assert call options only; silence warning/debug output from
-  // invalid or provider-specific extra params.
   log: {
     isEnabled: () => false,
     debug: vi.fn(),
@@ -69,12 +66,13 @@ function sample(
 }
 
 describe("createStreamFnWithExtraParams sampling overrides", () => {
-  it("forwards temperature, topP, and maxTokens from override into the underlying streamFn options", () => {
-    expect(sample({ temperature: 0.4, topP: 0.7, maxTokens: 512 })).toMatchObject({
-      temperature: 0.4,
-      topP: 0.7,
-      maxTokens: 512,
-    });
+  it.each([
+    { temperature: 0.4, topP: 0.7, maxTokens: 512 },
+    { frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 },
+    { stop: ["User:", "Assistant:"] },
+  ])("forwards request overrides to stream options: %j", (override) => {
+    const expected = structuredClone(override);
+    expect(sample(override)).toMatchObject(expected);
   });
 
   it.each([
@@ -147,16 +145,6 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     );
 
     expect(callOptions?.responseFormat).toEqual(responseFormat);
-  });
-
-  it("forwards frequency_penalty, presence_penalty, and seed from override into stream options", () => {
-    const callOptions = sample({ frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 });
-    expect(callOptions).toMatchObject({ frequencyPenalty: 0.8, presencePenalty: 0.3, seed: 12345 });
-  });
-
-  it("forwards stop sequences from override into stream options", () => {
-    const callOptions = sample({ stop: ["User:", "Assistant:"] });
-    expect(callOptions?.stop).toEqual(["User:", "Assistant:"]);
   });
 
   it("preserves configured cache retention with an own undefined request option", () => {

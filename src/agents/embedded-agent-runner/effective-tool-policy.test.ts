@@ -1,4 +1,3 @@
-// Coverage for final bundled-tool policy filtering in embedded runs.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,7 +22,6 @@ function makeTool(name: string): AnyAgentTool {
   };
 }
 
-// Resolve server-verified inputs before the final bundled pass.
 async function applyFinalPolicy(
   params: {
     bundledTools: AnyAgentTool[];
@@ -125,29 +123,20 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered).toStrictEqual([]);
   });
 
-  it("drops caller-provided groupId when it disagrees with session-derived group context", async () => {
-    const warnings = await warningsFor({
-      sessionKey: "agent:alice:discord:group:111",
-      groupId: "222",
-      groupChannel: "#different",
-    });
+  it.each(["agent:alice:discord:group:111", "agent:alice:main"])(
+    "drops caller-provided group metadata absent from session %s (fail-closed)",
+    async (sessionKey) => {
+      const warnings = await warningsFor({
+        sessionKey,
+        groupId: "admin-group",
+        groupChannel: "#admin",
+      });
 
-    expect(warnings).toContain(
-      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
-    );
-  });
-
-  it("drops caller-provided groupId when session encodes no group context (fail-closed)", async () => {
-    const warnings = await warningsFor({
-      sessionKey: "agent:alice:main",
-      groupId: "admin-group",
-      groupChannel: "#admin",
-    });
-
-    expect(warnings).toContain(
-      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
-    );
-  });
+      expect(warnings).toContain(
+        "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+      );
+    },
+  );
 
   it("does not emit unknown-entry warnings for core tool allowlists in the bundled pass", async () => {
     const warnings = await warningsFor({
@@ -165,21 +154,15 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
   });
 
-  it("keeps bundle MCP tools in the coding profile via plugin metadata", async () => {
+  it.each([
+    { deny: undefined, expected: ["bundleProbe__bundle_probe"] },
+    { deny: ["bundle-mcp"], expected: [] },
+  ])("applies the coding profile plugin allowlist with deny=$deny", async ({ deny, expected }) => {
     const filtered = await applyFinalPolicy({
       bundledTools: [pluginTool()],
-      config: { tools: { profile: "coding" } },
+      config: { tools: { profile: "coding", deny } },
     });
 
-    expect(filtered.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-  });
-
-  it("lets explicit deny entries override the profile bundle MCP allowlist", async () => {
-    const filtered = await applyFinalPolicy({
-      bundledTools: [pluginTool()],
-      config: { tools: { profile: "coding", deny: ["bundle-mcp"] } },
-    });
-
-    expect(filtered).toStrictEqual([]);
+    expect(filtered.map((tool) => tool.name)).toEqual(expected);
   });
 });
