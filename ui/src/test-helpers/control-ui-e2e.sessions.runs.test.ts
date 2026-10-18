@@ -60,39 +60,26 @@ it("commits targeted and session-wide aborts without replacing session edits or 
   expect(
     (await request("chat.abort", { sessionKey: active.key, runId: "run-a" })).payload,
   ).toMatchObject({ aborted: true, runIds: ["run-a"] });
-  expect((await request("sessions.list")).payload.sessions).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        key: active.key,
-        label: "Renamed onboarding",
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-b"],
-      }),
-    ]),
-  );
+  const expectRows = async (...rows: Record<string, unknown>[]) => {
+    expect((await request("sessions.list")).payload.sessions).toEqual(
+      expect.arrayContaining(rows.map((row) => expect.objectContaining(row))),
+    );
+  };
+  await expectRows({ ...active, label: "Renamed onboarding", activeRunIds: ["run-b"] });
   expect((await request("chat.abort", { sessionKey: active.key })).payload).toMatchObject({
     aborted: true,
     runIds: ["run-b"],
   });
-  expect((await request("sessions.list")).payload.sessions).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        key: active.key,
-        label: "Renamed onboarding",
-        status: "killed",
-        hasActiveRun: false,
-        activeRunIds: [],
-        abortedLastRun: true,
-      }),
-      expect.objectContaining({
-        key: other.key,
-        pinned: true,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["other-run"],
-      }),
-    ]),
+  await expectRows(
+    {
+      ...active,
+      label: "Renamed onboarding",
+      status: "killed",
+      hasActiveRun: false,
+      activeRunIds: [],
+      abortedLastRun: true,
+    },
+    { ...other, pinned: true },
   );
   expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
     expect.objectContaining({ sessionKey: active.key, runId: "run-a", state: "aborted" }),
@@ -150,12 +137,12 @@ it.for(["direct", "descendant", "targeted"] as const)(
       activeRunIds: [],
       updatedAt: expect.toSatisfy((value: number) => value > active.updatedAt),
     };
-    expect((await request("sessions.describe", { key: active.key })).payload.session).toEqual(
-      expect.objectContaining(settled),
+    expect((await request("sessions.describe", { key: active.key })).payload.session).toMatchObject(
+      settled,
     );
     for (const method of ["chat.history", "chat.startup"]) {
-      expect((await request(method, { sessionKey: active.key })).payload.sessionInfo).toEqual(
-        expect.objectContaining(settled),
+      expect((await request(method, { sessionKey: active.key })).payload.sessionInfo).toMatchObject(
+        settled,
       );
     }
     expect((await request("sessions.list")).payload.sessions).toEqual(
@@ -184,16 +171,16 @@ it("registers a started send for targeted abort without cancelling another run o
     runId: "new-run",
     status: "started",
   });
-  expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ activeRunIds: ["other-run", "new-run"], hasActiveRun: true }),
+  expect((await request("sessions.list")).payload.sessions).toMatchObject([
+    { activeRunIds: ["other-run", "new-run"], hasActiveRun: true },
   ]);
   expect((await request("chat.abort", { sessionKey: key, runId: "new-run" })).payload).toEqual({
     aborted: true,
     runIds: ["new-run"],
   });
   await request("chat.send", params);
-  expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ activeRunIds: ["other-run"], hasActiveRun: true, status: "running" }),
+  expect((await request("sessions.list")).payload.sessions).toMatchObject([
+    { activeRunIds: ["other-run"], hasActiveRun: true, status: "running" },
   ]);
   expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
     expect.objectContaining({ sessionKey: key, runId: "new-run", state: "aborted" }),
@@ -236,9 +223,7 @@ it.for([
       state: event,
       ...(event === "error" ? { errorMessage: diagnostic } : {}),
     });
-    expect((await request("sessions.list")).payload.sessions).toEqual([
-      expect.objectContaining(initial),
-    ]);
+    expect((await request("sessions.list")).payload.sessions).toMatchObject([initial]);
     let newerCompletion: unknown;
     if (newerEvent) {
       if (newerEvent === "abort receipt") {
@@ -272,15 +257,15 @@ it.for([
       expect((await request("sessions.list")).payload.sessions).toEqual([newerCompletion]);
       return;
     }
-    expect((await request("sessions.list")).payload.sessions).toEqual([
-      expect.objectContaining({
+    expect((await request("sessions.list")).payload.sessions).toMatchObject([
+      {
         key,
         status: otherRun ? "running" : outcome,
         hasActiveRun: otherRun,
         activeRunIds: otherRun ? ["other-run"] : [],
         abortedLastRun: !otherRun && outcome === "killed",
         ...(!otherRun && outcome === "failed" ? { lastRunError: diagnostic } : {}),
-      }),
+      },
     ]);
     if (!otherRun && outcome === "failed") {
       await request("sessions.patch", { key, unread: false });
@@ -301,8 +286,8 @@ it.for([
     }
     const beforeReplay = (await request("sessions.list")).payload.sessions;
     if (otherRun) {
-      expect(beforeReplay).toEqual([
-        expect.objectContaining({ status: "failed", hasActiveRun: false, activeRunIds: [] }),
+      expect(beforeReplay).toMatchObject([
+        { status: "failed", hasActiveRun: false, activeRunIds: [] },
       ]);
     }
     controls.deferNext("chat.send");
@@ -360,13 +345,13 @@ it.for([
     }
     controls.resolveDeferred("chat.send");
     await flush();
-    expect((await request("sessions.list")).payload.sessions).toEqual([
-      expect.objectContaining({
+    expect((await request("sessions.list")).payload.sessions).toMatchObject([
+      {
         key,
         status: aborted ? "killed" : "running",
         hasActiveRun: !aborted,
         activeRunIds: aborted ? [] : [runId],
-      }),
+      },
     ]);
     expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual(
       aborted ? [expect.objectContaining({ sessionKey: key, runId, state: "aborted" })] : [],

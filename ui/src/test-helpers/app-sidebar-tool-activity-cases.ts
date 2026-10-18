@@ -22,6 +22,14 @@ function chatDelta(text?: string, deltaText?: string, replace?: boolean): Gatewa
   });
 }
 
+const toolItem = (data: Record<string, unknown>): Record<string, unknown> => ({
+  kind: "tool",
+  name: "read",
+  title: "Read",
+  phase: "update",
+  ...data,
+});
+
 function createToolNarration() {
   const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
   const source = {
@@ -45,37 +53,25 @@ function createToolNarration() {
     rows: [runningRow("agent:main:run")],
     agentId: "main",
   });
-  return { narration, tools };
+  const emit = (stream: string, data: Record<string, unknown>, runId = "run-1") =>
+    narration.handleEvent(
+      gatewayEvent("session.tool", { sessionKey: "agent:main:run", runId, stream, data }),
+    );
+  const emitItem = (
+    itemId: string,
+    data: Record<string, unknown>,
+    runId = "run-2",
+    stream = "item",
+  ) => emit(stream, toolItem({ itemId, ...data }), runId);
+  return { narration, tools, source, emit, emitItem };
 }
 describe("Sidebar tool activity", () => {
   it("keeps tool identity separate from commentary and clears it with its run", async () => {
-    const subscribeMessages = vi.fn(() =>
-      Promise.resolve({ key: "agent:main:run", agentId: null }),
-    );
-    const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages };
-    const narration = createSidebarNarration();
-    const connectionIdentity = {};
-    narration.sync({
-      enabled: true,
-      connected: true,
-      connectionIdentity,
-      source,
-      openSessionKey: "",
-      rows: [runningRow("agent:main:run")],
-      agentId: "main",
-    });
+    const { narration, source, emit } = createToolNarration();
     await Promise.resolve();
 
     narration.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
-    narration.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-1",
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      }),
-    );
+    emit("tool", { phase: "start", name: "read" });
 
     expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
     await vi.advanceTimersByTimeAsync(1_999);
@@ -97,18 +93,11 @@ describe("Sidebar tool activity", () => {
       }),
     );
     expect(narration.read().tools.size).toBe(0);
-    narration.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-2",
-        stream: "tool",
-        data: { name: "plugin.custom_tool" },
-      }),
-    );
+    emit("tool", { name: "plugin.custom_tool" }, "run-2");
     expect(narration.read().tools.get("agent:main:run")?.name).toBe("plugin.custom_tool");
 
     narration.disconnect();
-    expect(unsubscribeMessages).toHaveBeenCalledWith({
+    expect(source.unsubscribeMessages).toHaveBeenCalledWith({
       key: "agent:main:run",
       agentId: null,
     });
@@ -129,16 +118,7 @@ describe("Sidebar tool activity", () => {
     vi.restoreAllMocks();
   });
   it("projects public tool progress without exposing raw output or unrelated items", () => {
-    const { narration, tools } = createToolNarration();
-    const emit = (stream: string, data: Record<string, unknown>) =>
-      narration.handleEvent(
-        gatewayEvent("session.tool", {
-          sessionKey: "agent:main:run",
-          runId: "run-1",
-          stream,
-          data,
-        }),
-      );
+    const { narration, tools, emit } = createToolNarration();
     emit("tool", {
       name: "exec",
       toolCallId: "call-1",
@@ -210,36 +190,25 @@ describe("Sidebar tool activity", () => {
   ])(
     "withdraws matching $stream progress with $metadata metadata when $flag changes",
     ({ stream, flag, metadata }) => {
-      const { narration, tools } = createToolNarration();
+      const { narration, tools, emit: emitTool } = createToolNarration();
       const emit = (
         runId: string,
         toolCallId: string,
         data: Record<string, unknown>,
         eventStream = "item",
       ) => {
-        const payload: Record<string, unknown> = {
-          kind: "tool",
+        const payload = toolItem({
           itemId: "tool:" + toolCallId,
-          name: "read",
           toolCallId,
-          phase: "update",
-          title: "Read",
           ...data,
-        };
+        });
         if (eventStream === "tool" && metadata === "omitted") {
           delete payload.name;
           delete payload.phase;
         } else if (eventStream === "tool" && metadata === "contradictory") {
           payload.name = "other-tool";
         }
-        narration.handleEvent(
-          gatewayEvent("session.tool", {
-            sessionKey: "agent:main:run",
-            runId,
-            stream: eventStream,
-            data: payload,
-          }),
-        );
+        emitTool(eventStream, payload, runId);
       };
       emit("run-2", "current", { progressText: "Public progress" });
       expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public progress");
@@ -264,24 +233,9 @@ describe("Sidebar tool activity", () => {
     { flag: "hideFromChannelProgress", toolCallId: "" },
     { flag: "suppressChannelProgress", toolCallId: "" },
   ])("withdraws the matching item with $flag and call ID $toolCallId", ({ flag, toolCallId }) => {
-    const { narration, tools } = createToolNarration();
+    const { tools, emitItem } = createToolNarration();
     const emit = (itemId: string, runId: string, data: Record<string, unknown>, stream = "item") =>
-      narration.handleEvent(
-        gatewayEvent("session.tool", {
-          sessionKey: "agent:main:run",
-          runId,
-          stream,
-          data: {
-            kind: "tool",
-            itemId,
-            name: "read",
-            title: "Read",
-            phase: "update",
-            toolCallId,
-            ...data,
-          },
-        }),
-      );
+      emitItem(itemId, { toolCallId, ...data }, runId, stream);
     emit("current-item", "run-2", { progressText: "Public item progress" });
     expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public item progress");
     const count = tools.length;
@@ -303,25 +257,9 @@ describe("Sidebar tool activity", () => {
   ])(
     "keeps replacement item identity with call ID $toolCallId and $flag",
     ({ toolCallId, flag }) => {
-      const { narration, tools } = createToolNarration();
+      const { tools, emitItem } = createToolNarration();
       const emit = (itemId: string, hidden = false) =>
-        narration.handleEvent(
-          gatewayEvent("session.tool", {
-            sessionKey: "agent:main:run",
-            runId: "run-2",
-            stream: "item",
-            data: {
-              kind: "tool",
-              itemId,
-              name: "read",
-              title: "Read",
-              phase: "update",
-              toolCallId,
-              progressText: "Public progress",
-              [flag]: hidden,
-            },
-          }),
-        );
+        emitItem(itemId, { toolCallId, progressText: "Public progress", [flag]: hidden });
       emit("old-item");
       emit("new-item");
       emit("old-item", true);
@@ -332,17 +270,9 @@ describe("Sidebar tool activity", () => {
   );
 
   it("retains prepared item and call identity across matching item and raw-tool frames", () => {
-    const { narration, tools } = createToolNarration();
-    const emit = (stream: string, data: Record<string, unknown>) =>
-      narration.handleEvent(
-        gatewayEvent("session.tool", {
-          sessionKey: "agent:main:run",
-          runId: "run-2",
-          stream,
-          data,
-        }),
-      );
-    const item = { kind: "tool", itemId: "item", name: "read", title: "Read", phase: "update" };
+    const { tools, emit: emitTool } = createToolNarration();
+    const emit = (stream: string, data: Record<string, unknown>) => emitTool(stream, data, "run-2");
+    const item = toolItem({ itemId: "item" });
     emit("item", { ...item, toolCallId: "call", progressText: "Public progress" });
     emit("tool", { name: "read", toolCallId: "call", phase: "update" });
     const count = tools.length;
@@ -357,40 +287,27 @@ describe("Sidebar tool activity", () => {
   });
 
   it.each(["tool", "item"])("retains the identified tool name after a %s start", (stream) => {
-    const { narration, tools } = createToolNarration();
+    const { tools, emit } = createToolNarration();
     const toolCallId = stream === "tool" ? "call" : undefined;
     const item = { kind: "tool", itemId: "known-item", title: "Read", phase: "update", toolCallId };
-    narration.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-2",
-        stream,
-        data: { ...item, phase: "start", name: "read", progressText: "Earlier public progress" },
-      }),
+    emit(
+      stream,
+      { ...item, phase: "start", name: "read", progressText: "Earlier public progress" },
+      "run-2",
     );
     const count = tools.length;
-    narration.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-2",
-        stream: "item",
-        data: {
-          ...item,
-          itemId: "other-item",
-          toolCallId: undefined,
-          progressText: "Unrelated unnamed progress",
-        },
-      }),
+    emit(
+      "item",
+      {
+        ...item,
+        itemId: "other-item",
+        toolCallId: undefined,
+        progressText: "Unrelated unnamed progress",
+      },
+      "run-2",
     );
     expect(tools).toHaveLength(count);
-    narration.handleEvent(
-      gatewayEvent("session.tool", {
-        sessionKey: "agent:main:run",
-        runId: "run-2",
-        stream: "item",
-        data: { ...item, progressText: "Updated public progress" },
-      }),
-    );
+    emit("item", { ...item, progressText: "Updated public progress" }, "run-2");
     expect(tools.at(-1)?.get("agent:main:run")).toMatchObject({
       name: "read",
       text: "Updated public progress",

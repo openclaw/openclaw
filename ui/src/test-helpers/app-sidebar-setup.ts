@@ -9,9 +9,10 @@ import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle
 import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
-  let originalLocalStorage: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
   let frameChannel: MessageChannel | undefined;
+  const defineGlobal = (name: string, value: unknown) =>
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
 
   beforeEach(() => {
     layoutGlobals = [
@@ -20,6 +21,7 @@ export function setupSidebarTest() {
       "IntersectionObserver",
       "requestAnimationFrame",
       "cancelAnimationFrame",
+      "localStorage",
     ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
     // JSDOM has no paint cycle. Settle ordinary frames in microtasks, but yield
     // recursive frames so overlay positioning cannot starve the test runner.
@@ -60,42 +62,32 @@ export function setupSidebarTest() {
         runFrame(event.data),
       );
       channel.port1.start();
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        writable: true,
-        value: (callback: FrameRequestCallback) => {
-          const id = ++nextFrame;
-          frames.set(id, callback);
-          if (inFrame) {
-            channel.port2.postMessage(id);
-          } else {
-            queueMicrotask(() => runFrame(id));
-          }
-          return id;
-        },
+      defineGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        const id = ++nextFrame;
+        frames.set(id, callback);
+        if (inFrame) {
+          channel.port2.postMessage(id);
+        } else {
+          queueMicrotask(() => runFrame(id));
+        }
+        return id;
       });
-      Object.defineProperty(globalThis, "cancelAnimationFrame", {
-        configurable: true,
-        writable: true,
-        value: (id: number) => frames.delete(id),
-      });
+      defineGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     }
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
       if (globalThis[name] !== undefined) {
         continue;
       }
-      Object.defineProperty(globalThis, name, {
-        configurable: true,
-        writable: true,
-        value: class {
+      defineGlobal(
+        name,
+        class {
           observe() {}
           unobserve() {}
           disconnect() {}
         },
-      });
+      );
     }
 
-    originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: createStorageMock(),
@@ -139,11 +131,6 @@ export function setupSidebarTest() {
       } else {
         Reflect.deleteProperty(globalThis, name);
       }
-    }
-    if (originalLocalStorage) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-    } else {
-      Reflect.deleteProperty(globalThis, "localStorage");
     }
   });
 }

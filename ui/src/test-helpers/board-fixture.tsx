@@ -6,6 +6,28 @@ import type { BoardViewCallbacks } from "../lib/board/view-types.ts";
 // The standalone fixture loads the app stylesheet for its board surfaces and menus.
 import "../styles.css";
 
+type Widget = BoardSnapshot["widgets"][number];
+function makeWidget(
+  name: string,
+  position: number,
+  sizeW: number,
+  sizeH: number,
+  overrides: Partial<Widget> = {},
+): Widget {
+  return {
+    name,
+    title: name.replaceAll("-", " ").replace(/^./, (letter) => letter.toUpperCase()),
+    position,
+    sizeW,
+    sizeH,
+    tabId: "overview",
+    contentKind: "html",
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
+
 const initialSnapshot: BoardSnapshot = {
   sessionKey: "agent:main:board-fixture",
   revision: 7,
@@ -14,98 +36,22 @@ const initialSnapshot: BoardSnapshot = {
     { tabId: "operations", title: "Operations", position: 1, chatDock: "bottom" },
   ],
   widgets: [
-    {
-      name: "service-pulse",
-      tabId: "overview",
-      title: "Service pulse",
-      contentKind: "html",
-      presentation: "full-bleed",
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none",
-      revision: 3,
-    },
-    {
-      name: "content-controls",
-      tabId: "overview",
-      title: "Content controls",
-      contentKind: "html",
-      sizeW: 6,
-      sizeH: 6,
-      position: 1,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "local-time",
-      tabId: "overview",
-      title: "Local time",
-      contentKind: "html",
-      presentation: "frameless",
-      sizeW: 6,
-      sizeH: 5,
-      position: 2,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "deploy-window",
-      tabId: "overview",
-      title: "Deploy window",
+    makeWidget("service-pulse", 0, 6, 4, { presentation: "full-bleed", revision: 3 }),
+    makeWidget("content-controls", 1, 6, 6),
+    makeWidget("local-time", 2, 6, 5, { presentation: "frameless" }),
+    makeWidget("deploy-window", 3, 6, 4, {
       contentKind: "mcp-app",
-      sizeW: 6,
-      sizeH: 4,
-      position: 3,
       grantState: "granted",
       revision: 2,
-    },
-    {
-      name: "latency-bands",
-      tabId: "overview",
-      title: "Latency bands",
-      contentKind: "html",
-      presentation: "full-bleed",
-      sizeW: 4,
-      sizeH: 5,
-      position: 4,
-      grantState: "none",
-      revision: 1,
-    },
-    {
-      name: "incident-tools",
-      tabId: "overview",
-      title: "Incident tools",
-      contentKind: "html",
-      sizeW: 4,
-      sizeH: 5,
-      position: 5,
-      grantState: "pending",
-      revision: 1,
-    },
-    {
-      name: "retired-report",
-      tabId: "overview",
-      title: "Retired report",
-      contentKind: "html",
-      sizeW: 4,
-      sizeH: 5,
-      position: 6,
-      grantState: "rejected",
-      revision: 4,
-    },
-    {
-      name: "worker-queue",
+    }),
+    makeWidget("latency-bands", 4, 4, 5, { presentation: "full-bleed" }),
+    makeWidget("incident-tools", 5, 4, 5, { grantState: "pending" }),
+    makeWidget("retired-report", 6, 4, 5, { grantState: "rejected", revision: 4 }),
+    makeWidget("worker-queue", 0, 12, 6, {
       tabId: "operations",
-      title: "Worker queue",
-      contentKind: "html",
       presentation: "full-bleed",
-      sizeW: 12,
-      sizeH: 6,
-      position: 0,
-      grantState: "none",
       revision: 5,
-    },
+    }),
   ],
 };
 
@@ -226,13 +172,6 @@ export function applyBoardFixtureOps(
         if (widget.name !== op.name) {
           return widget;
         }
-        if (
-          widget.sizeW === op.sizeW &&
-          widget.sizeH === op.sizeH &&
-          (op.heightMode === undefined || widget.heightMode === op.heightMode)
-        ) {
-          return widget;
-        }
         return {
           ...widget,
           sizeW: op.sizeW,
@@ -274,7 +213,7 @@ function BoardFixture() {
           <h1>Launch control</h1>
         </div>
         <div class="board-fixture-status">
-          <i></i> fixture online
+          <i /> fixture online
         </div>
       </header>
       <BoardView
