@@ -14,6 +14,7 @@ import type {
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import type { SessionEntry } from "./types.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -22,21 +23,34 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
+function seedEntry(f: Fixture, overrides: Partial<SessionEntry>) {
+  f.writeEntry({ ...f.nativeEntry()!, ...overrides });
+}
+
+function commandInput(snapshot: SessionActorHotState, commandId: string, phaseId: string) {
+  return { target: snapshot.target, expected: snapshot.version, commandId, phaseId };
+}
+
+function expectCommitted(outcome: ReturnType<Fixture["mutate"]>) {
+  expect(outcome.kind).toBe("committed");
+  if (outcome.kind !== "committed") {
+    throw new Error("Expected native commit");
+  }
+  return outcome;
+}
+
 function patch(snapshot: SessionActorHotState, updatedAt: number): Mutation {
   return {
     type: "session.actor.patch",
     input: {
-      target: snapshot.target,
-      expected: snapshot.version,
-      commandId: `activity-${updatedAt}`,
-      phaseId: "terminal-accounting",
+      ...commandInput(snapshot, `activity-${updatedAt}`, "terminal-accounting"),
       reducers: [{ kind: "activity", updatedAt }],
     },
   };
 }
 
-it("hydrates a cold command inside its transaction and returns a retryable preimage without rereading", async () => {
-  await withActor(async (f) => {
+it("hydrates a cold command inside its transaction and returns a retryable preimage without rereading", () =>
+  withActor(async (f) => {
     const command: Mutation = {
       type: "session.actor.patch",
       input: {
@@ -55,10 +69,7 @@ it("hydrates a cold command inside its transaction and returns a retryable preim
       return "select";
     });
     try {
-      const first = f.mutate(command);
-      if (first.kind !== "committed") {
-        throw new Error("Expected cold command to commit");
-      }
+      const first = expectCommitted(f.mutate(command));
       expect(first.receipt.postimage.entry?.updatedAt).toBe(25);
       expect(reads.counts.select).toBe(1);
       f.restartActor();
@@ -83,22 +94,17 @@ it("hydrates a cold command inside its transaction and returns a retryable preim
     } finally {
       reads.restore();
     }
-  });
-});
+  }));
 
-it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", async () => {
-  await withActor(async (f) => {
+it("installs native commits before reply, retains known commits after reply failure, and rolls back revoked authority", () =>
+  withActor(async (f) => {
     const initial = f.read();
     const command = patch(initial, 10);
     await f.prepare(command);
     f.hooks.afterTransaction = () => {
       throw new Error("synthetic reply failure after native commit");
     };
-    const committed = f.mutate(command);
-    expect(committed.kind).toBe("committed");
-    if (committed.kind !== "committed") {
-      throw new Error("Expected native commit");
-    }
+    const committed = expectCommitted(f.mutate(command));
     expect(committed.failure).toEqual({
       name: "Error",
       message: "synthetic reply failure after native commit",
@@ -135,11 +141,10 @@ it("installs native commits before reply, retains known commits after reply fail
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.admit;
     expect(f.read().entry?.updatedAt).toBe(10);
-  });
-});
+  }));
 
-it("fences a commit whose settlement is lost and rehydrates its durable state without replay", async () => {
-  await withActor(async (f) => {
+it("fences a commit whose settlement is lost and rehydrates its durable state without replay", () =>
+  withActor(async (f) => {
     const initial = f.read();
     const command = patch(initial, 30);
     await f.prepare(command);
@@ -165,15 +170,12 @@ it("fences a commit whose settlement is lost and rehydrates its durable state wi
     });
     expect(f.hooks.transactions).toBe(writesBeforeRead + 1);
     expect(f.nativeEntry()?.updatedAt).toBe(30);
-  });
-});
+  }));
 
-it("invalidates resident facts on native writes and keeps missing, replaced, and closed targets distinct", async () => {
-  await withActor((f) => {
+it("invalidates resident facts on native writes and keeps missing, replaced, and closed targets distinct", () =>
+  withActor((f) => {
     const otherKey = "agent:main:other-native-writer";
-    runSqliteImmediateTransactionSync(f.database.db, () =>
-      writeSessionEntry(f.database, otherKey, { sessionId: "other-session", updatedAt: 1 }),
-    );
+    f.writeEntry({ sessionId: "other-session", updatedAt: 1 }, otherKey);
     const reads = trackSqliteStatementExecutions(f.database.db, ["select"], (sql) =>
       /^select\b/iu.test(sql) ? "select" : null,
     );
@@ -224,11 +226,10 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
     } finally {
       reads.restore();
     }
-  });
-});
+  }));
 
-it("evicts the least recently used settled actor and hydrates a new epoch after worker loss", async () => {
-  await withActor((f) => {
+it("evicts the least recently used settled actor and hydrates a new epoch after worker loss", () =>
+  withActor((f) => {
     const initial = f.read();
     const inactive = Array.from({ length: 128 }, (_, index) => ({
       ...f.target,
@@ -254,19 +255,15 @@ it("evicts the least recently used settled actor and hydrates a new epoch after 
     expect(rehydrated.entry).toEqual(beforeLoss.entry);
     expect(rehydrated.version.epoch).not.toBe(beforeLoss.version.epoch);
     expect(f.hooks.transactions).toBe(0);
-  });
-});
+  }));
 
-it("adopts a run only under the exact lifecycle and current transaction and commit authority", async () => {
-  await withActor(async (f) => {
+it("adopts a run only under the exact lifecycle and current transaction and commit authority", () =>
+  withActor(async (f) => {
     const initial = f.read();
     const command: Mutation = {
       type: "session.actor.adoptRun",
       input: {
-        target: f.target,
-        expected: initial.version,
-        commandId: "adopt-first",
-        phaseId: "adoption",
+        ...commandInput(initial, "adopt-first", "adoption"),
         sessionId: f.scope.sessionId,
         expectedState: buildRestartRecoveryExpectedState(initial.entry!),
         runId: "current-run",
@@ -302,8 +299,7 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
       restartRecoveryBeforeAgentReplyState: "pending",
     });
     expect(f.nativeEntry()?.updatedAt).not.toBe(50);
-  });
-});
+  }));
 
 it.each([
   { phase: "acceptInput", initial: true, cold: false },
@@ -313,19 +309,13 @@ it.each([
   { phase: "adoptRun", initial: false, cold: true },
 ] as const)(
   "commits $phase transcript custody and lifecycle together (initial=$initial, cold=$cold)",
-  async (mode) => {
-    await withActor(async (f) => {
+  (mode) =>
+    withActor(async (f) => {
       const target = mode.initial
         ? { ...f.target, sessionKey: "agent:main:first-input" }
         : f.target;
       if (mode.cold) {
-        runSqliteImmediateTransactionSync(f.database.db, () =>
-          writeSessionEntry(f.database, target.sessionKey, {
-            ...f.nativeEntry()!,
-            status: "done",
-            restartRecoveryTerminalRunIds: ["previous-run"],
-          }),
-        );
+        seedEntry(f, { status: "done", restartRecoveryTerminalRunIds: ["previous-run"] });
       }
       const before = mode.cold ? undefined : f.read(target);
       const sessionId = mode.initial ? "first-input" : f.scope.sessionId;
@@ -400,30 +390,21 @@ it.each([
       if (mode.cold) {
         expect(f.nativeEntry()?.restartRecoveryTerminalRunIds).toEqual(["previous-run"]);
       }
-    });
-  },
+    }),
 );
 
 it.each([
   { stored: "current-generation", requested: null },
   { stored: undefined, requested: "old-generation" },
-])("refuses raw appends across nullable lifecycle revisions: %j", async ({ stored, requested }) => {
-  await withActor(async (f) => {
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        lifecycleRevision: stored,
-      });
-    });
+])("refuses raw appends across nullable lifecycle revisions: %j", ({ stored, requested }) =>
+  withActor(async (f) => {
+    seedEntry(f, { lifecycleRevision: stored });
     const before = f.read();
     const events = readTranscriptEventRows(f.database, f.scope.sessionId);
     const command: Mutation = {
       type: "session.actor.appendTranscriptEvent",
       input: {
-        target: f.target,
-        expected: before.version,
-        commandId: "stale-model-change",
-        phaseId: "model",
+        ...commandInput(before, "stale-model-change", "model"),
         sessionId: f.scope.sessionId,
         lifecycleRevision: requested,
         eventJson: JSON.stringify({
@@ -444,11 +425,11 @@ it.each([
     expect(f.receipt()).toBeUndefined();
     expect(f.nativeEntry()).toEqual(before.entry);
     expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(events);
-  });
-});
+  }),
+);
 
-it("stages queued custody without rewriting the active session lifecycle", async () => {
-  await withActor(async (f) => {
+it("stages queued custody without rewriting the active session lifecycle", () =>
+  withActor(async (f) => {
     const before = f.read();
     const pending = {
       kind: "stage" as const,
@@ -478,10 +459,7 @@ it("stages queued custody without rewriting the active session lifecycle", async
         f.mutate({
           type: "session.actor.acceptInput",
           input: {
-            target: f.target,
-            expected: before.version,
-            commandId: "stage-only",
-            phaseId: "input",
+            ...commandInput(before, "stage-only", "input"),
             expectedState: buildRestartRecoveryExpectedState(before.entry!),
             lifecycle: {},
             pending: { ...pending, expected },
@@ -498,12 +476,11 @@ it("stages queued custody without rewriting the active session lifecycle", async
       writes.restore();
     }
     expect(f.nativeEntry()).toEqual(before.entry);
-  });
-});
+  }));
 it.each(["assistant append", "empty append", "bookkeeping"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
-  async (mode) => {
-    await withActor(async (f) => {
+  (mode) =>
+    withActor(async (f) => {
       runSqliteImmediateTransactionSync(f.database.db, () => {
         writeSessionEntry(f.database, f.target.sessionKey, {
           ...f.nativeEntry()!,
@@ -543,10 +520,7 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
       ): Extract<Mutation, { type: "session.actor.completeTurn" }> => ({
         type: "session.actor.completeTurn",
         input: {
-          target: f.target,
-          expected: snapshot.version,
-          commandId: `complete-${expectedModel}`,
-          phaseId: "terminal",
+          ...commandInput(snapshot, `complete-${expectedModel}`, "terminal"),
           pendingFinalDelivery: pending,
           ...(mode === "bookkeeping"
             ? {
@@ -624,10 +598,7 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
         clock.mockRestore();
         native.mockRestore();
       }
-      expect(committed.kind).toBe("committed");
-      if (committed.kind !== "committed") {
-        throw new Error("Expected terminal commit");
-      }
+      committed = expectCommitted(committed);
       expect(committed.failure).toBeUndefined();
       expect(committed.receipt).toMatchObject({
         phase: "completeTurn",
@@ -684,10 +655,7 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
       const mismatch = f.mutate({
         type: "session.actor.patch",
         input: {
-          target: f.target,
-          expected: rehydrated.version,
-          commandId: "superseded-model-selection",
-          phaseId: "terminal",
+          ...commandInput(rehydrated, "superseded-model-selection", "terminal"),
           reducers: [
             {
               kind: "live-model",
@@ -703,19 +671,15 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
         receipt: { reducers: [{ kind: "live-model", changed: false }] },
       });
       expect(f.nativeEntry()?.model).toBe("fixture-after");
-    });
-  },
+    }),
 );
 
-it("keeps restart receipt custody across retries and settles only the exact provider claim", async () => {
-  await withActor((f) => {
+it("keeps restart receipt custody across retries and settles only the exact provider claim", () =>
+  withActor((f) => {
     const claim = { sessionId: f.scope.sessionId, sourceTurnId: "source", toolCallId: "tool" };
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        restartRecoveryDeliveryRunId: "run",
-        restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
-      });
+    seedEntry(f, {
+      restartRecoveryDeliveryRunId: "run",
+      restartRecoveryDeliverySourceRunId: claim.sourceTurnId,
     });
     let sequence = 0;
     const common = () => ({
@@ -764,12 +728,9 @@ it("keeps restart receipt custody across retries and settles only the exact prov
     });
     expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("delivered-terminal");
     const nextClaim = { ...claim, sourceTurnId: "next-source" };
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-      });
+    seedEntry(f, {
+      restartRecoveryDeliverySourceRunId: nextClaim.sourceTurnId,
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
     });
     for (const commandId of ["cancel", "cancel-replay"]) {
       expect(
@@ -785,11 +746,10 @@ it("keeps restart receipt custody across retries and settles only the exact prov
     }
     expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBeUndefined();
     expect(f.nativeEntry()?.restartRecoveryDeliveryToolCallId).toBeUndefined();
-  });
-});
+  }));
 
-it("publishes actual pending-final state and evidence only after live commit authority", async () => {
-  await withActor((f) => {
+it("publishes actual pending-final state and evidence only after live commit authority", () =>
+  withActor((f) => {
     const claim: HarnessCompletionRecovery = {
       taskId: "task",
       taskStatus: "succeeded",
@@ -799,29 +759,23 @@ it("publishes actual pending-final state and evidence only after live commit aut
       requesterAgentId: "main",
       sessionId: f.scope.sessionId,
     };
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
-        abortedLastRun: true,
-        mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "answer",
-          createdAt: 10,
-          intentId: "intent",
-          context: { channel: "telegram", to: "chat" },
-          deliveries: [{ id: "payload", state: "queued" }],
-        },
-      });
+    seedEntry(f, {
+      abortedLastRun: true,
+      mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "answer",
+        createdAt: 10,
+        intentId: "intent",
+        context: { channel: "telegram", to: "chat" },
+        deliveries: [{ id: "payload", state: "queued" }],
+      },
     });
     const initial = f.read();
     const command = {
       type: "session.actor.deliverySettled",
       input: {
-        target: f.target,
-        expected: initial.version,
-        commandId: "settle",
-        phaseId: "delivery",
+        ...commandInput(initial, "settle", "delivery"),
         settlement: {
           sessionId: f.scope.sessionId,
           intentId: "intent",
@@ -876,11 +830,10 @@ it("publishes actual pending-final state and evidence only after live commit aut
         },
       }),
     ).toMatchObject({ kind: "committed", value: { state: "delivered", wakeRecovery: false } });
-  });
-});
+  }));
 
-it("checks recovery provenance in the actor transaction and refuses a later unrelated input", async () => {
-  await withActor(async (f) => {
+it("checks recovery provenance in the actor transaction and refuses a later unrelated input", () =>
+  withActor(async (f) => {
     const claim: HarnessCompletionRecovery = {
       taskId: "task",
       taskStatus: "succeeded",
@@ -941,10 +894,7 @@ it("checks recovery provenance in the actor transaction and refuses a later unre
       return {
         type: "session.actor.acceptInput",
         input: {
-          target: f.target,
-          expected: current.version,
-          commandId: key,
-          phaseId: "recovery",
+          ...commandInput(current, key, "recovery"),
           expectedState: buildRestartRecoveryExpectedState(current.entry!),
           lifecycle: { restartRecoveryBeforeAgentReplyState: "admitted" },
           recovery: { expectedRunId: "recovery-run", sources: [], harnessCompletion: claim },
@@ -999,5 +949,4 @@ it("checks recovery provenance in the actor transaction and refuses a later unre
       error: { message: "Session actor recovery input no longer matches its source" },
     });
     expect(f.read().pendingInputs.map((row) => row.input_id)).toEqual(["accepted-recovery"]);
-  });
-});
+  }));

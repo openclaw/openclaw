@@ -96,8 +96,8 @@ async function withReaders(
   });
 }
 
-it("captures and revalidates existing admission without host SQL", async () => {
-  await withReaders(({ database, reader, options }) => {
+it("captures and revalidates existing admission without host SQL", () =>
+  withReaders(({ database, reader, options }) => {
     expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
     runOpenClawAgentWriteTransaction(() => {
       expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
@@ -121,13 +121,12 @@ it("captures and revalidates existing admission without host SQL", async () => {
       queries.restore();
       exec.mockRestore();
     }
-  });
-});
+  }));
 
 it.each(["release", "readiness", "post-commit release"])(
   "refuses publication when %s changes before publication",
-  async (change) => {
-    await withReaders(({ database, reader }) => {
+  (change) =>
+    withReaders(({ database, reader }) => {
       const held = capture(database);
       corrupt(database);
       try {
@@ -147,12 +146,11 @@ it.each(["release", "readiness", "post-commit release"])(
       } finally {
         held.release();
       }
-    });
-  },
+    }),
 );
 
-it("does not export a proof whose readiness changed at its admission commit", async () => {
-  await withReaders(({ database, options }) => {
+it("does not export a proof whose readiness changed at its admission commit", () =>
+  withReaders(({ database, options }) => {
     const before = capture(database);
     Atomics.store(new Int32Array(before.receipt.validation.canonicalReady), 0, 0);
     runOpenClawAgentWriteTransaction((current) => {
@@ -163,8 +161,7 @@ it("does not export a proof whose readiness changed at its admission commit", as
     assertCanonicalSqliteSessionKeysCurrent(database);
     capture(database).release();
     before.release();
-  });
-});
+  }));
 
 it.each([
   { ending: "rollback", admitted: false },
@@ -173,8 +170,8 @@ it.each([
   { ending: "rollback", admitted: true },
 ])(
   "retains only committed admission after $ending (previous admission: $admitted)",
-  async ({ ending, admitted }) => {
-    await withReaders(({ database, options }) => {
+  ({ ending, admitted }) =>
+    withReaders(({ database, options }) => {
       const held = admitted ? capture(database) : undefined;
       if (!admitted) {
         closeOpenClawAgentDatabaseByPath(database.path);
@@ -226,15 +223,14 @@ it.each([
       } finally {
         held?.release();
       }
-    });
-  },
+    }),
 );
 
 // POSIX permits replacing a pathname while both native connections remain open.
 it.runIf(process.platform !== "win32").each(["before host publication", "before worker return"])(
   "rejects physical replacement %s while the original handles remain open",
-  async (when) => {
-    await withReaders(({ database, reader }) => {
+  (when) =>
+    withReaders(({ database, reader }) => {
       const held = capture(database);
       let restore: (() => void) | undefined;
       corrupt(database);
@@ -263,6 +259,5 @@ it.runIf(process.platform !== "win32").each(["before host publication", "before 
         restore?.();
         held.release();
       }
-    });
-  },
+    }),
 );
