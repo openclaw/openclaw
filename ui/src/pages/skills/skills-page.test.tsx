@@ -115,6 +115,7 @@ function mountSkills(
 afterEach(() => {
   cleanupSolid();
   document.body.replaceChildren();
+  vi.restoreAllMocks();
 });
 
 describe("Skills discovery lifecycle", () => {
@@ -347,6 +348,7 @@ describe("Skills discovery lifecycle", () => {
   });
 
   it("keeps each selection owner when a retained page changes surface", async () => {
+    const warnings = vi.spyOn(console, "warn");
     const report = (agentId: string) => ({
       workspaceDir: "/workspace",
       managedSkillsDir: "/managed",
@@ -383,6 +385,14 @@ describe("Skills discovery lifecycle", () => {
     context.agentSelection.set("main");
     flush();
     expect(request).not.toHaveBeenCalled();
+    expect(
+      warnings.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" &&
+          message.includes("STRICT_READ_UNTRACKED") &&
+          message.includes("effect callback"),
+      ),
+    ).toEqual([]);
   });
 
   it("reloads empty-query results after a same-client reconnect and ignores the previous search", async () => {
