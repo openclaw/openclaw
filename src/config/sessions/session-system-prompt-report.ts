@@ -73,3 +73,12 @@ export type SessionSystemPromptReport = {
     }>;
   };
 };
+
+/** Layered workspaces can inject one basename from two directories; label those by source path. */
+export function formatInjectedWorkspaceFileLabel(
+  file: { name: string; path: string },
+  shownFiles: ReadonlyArray<{ name: string }>,
+): string {
+  const sameName = shownFiles.filter((other) => other.name === file.name).length;
+  return sameName > 1 ? `${file.name} (${file.path})` : file.name;
+}

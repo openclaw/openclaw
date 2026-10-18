@@ -68,6 +68,37 @@ it("subtracts embedded prompt sections once, and leaves unmeasured and inconsist
   ]);
 });
 
+it("names the source path of workspace files that share a basename", () => {
+  const layered: SessionSystemPromptReport = {
+    ...report,
+    injectedWorkspaceFiles: [
+      ...report.injectedWorkspaceFiles,
+      {
+        name: "AGENTS.md",
+        path: "/private/workspace/main/AGENTS.md",
+        missing: false,
+        rawChars: 4000,
+        injectedChars: 4000,
+        truncated: false,
+      },
+      {
+        name: "SOUL.md",
+        path: "/private/workspace/main/SOUL.md",
+        missing: false,
+        rawChars: 2000,
+        injectedChars: 2000,
+        truncated: false,
+      },
+    ],
+  };
+  const files = buildChatContextCategories(layered, 50000).find(({ id }) => id === "files");
+  expect(files?.entries).toEqual([
+    { name: "AGENTS.md (/private/workspace/AGENTS.md)", tokens: 4000 },
+    { name: "AGENTS.md (/private/workspace/main/AGENTS.md)", tokens: 1000 },
+    { name: "SOUL.md", tokens: 500 },
+  ]);
+});
+
 it("retires a pending report on session replacement and rejects a report from another incarnation", async () => {
   const first = createDeferredCore<{
     sessions: Array<{ key: string; sessionId: string; contextWeight: SessionSystemPromptReport }>;

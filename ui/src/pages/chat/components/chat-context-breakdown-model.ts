@@ -1,4 +1,7 @@
-import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
+import {
+  formatInjectedWorkspaceFileLabel,
+  type SessionSystemPromptReport,
+} from "../../../../../src/config/sessions/session-system-prompt-report.js";
 
 export type ContextCategory = {
   id: "messages" | "files" | "skills" | "tools" | "system";
@@ -13,7 +16,7 @@ export function buildChatContextCategories(
 ): ContextCategory[] {
   const estimate = (chars: number) => Math.round(chars / 4);
   const files = report.injectedWorkspaceFiles.map((file) => ({
-    name: file.name,
+    name: formatInjectedWorkspaceFileLabel(file, report.injectedWorkspaceFiles),
     tokens: file.injectedChars === null ? null : estimate(file.injectedChars),
   }));
   const fileChars = report.injectedWorkspaceFiles.some((file) => file.injectedChars === null)
