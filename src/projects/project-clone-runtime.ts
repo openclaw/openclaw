@@ -11,6 +11,7 @@ import {
 } from "../infra/git-exec.js";
 import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-network-retry.js";
 import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
@@ -163,8 +164,16 @@ export async function cloneProjectCheckout(
           },
         ),
       );
+      if (attempt.cleanup === "uncertain") {
+        throw new CommandProcessCleanupError();
+      }
       if (attempt.code !== 0 || attempt.termination !== "exit") {
-        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(input.target, { recursive: true, force: true }).catch(() => {
+          throw new ProjectCloneError(
+            "clone_failed",
+            "Git could not remove the incomplete checkout. Check Gateway filesystem access and remove the partial checkout before retrying.",
+          );
+        });
       }
       return attempt;
     },
