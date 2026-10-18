@@ -66,16 +66,8 @@ describe("cron timer outcome and failure policy regressions", () => {
       state: { sourceIdentity: "source-generation" },
     });
     apply(
-      {
-        status: "error",
-        error: "rate limit",
-        startedAt,
-        endedAt: startedAt + 1,
-      },
-      {
-        deferredNotifications: [],
-        ...(replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {}),
-      },
+      { status: "error", error: "rate limit", endedAt: startedAt + 1 },
+      replay ? { replay: true, replaySchedule: { nextRunAtMs: startedAt + 60_000 } } : {},
     );
     expect(job.enabled).toBe(true);
     expect(job.state.lastRunStatus).toBe("error");
@@ -96,7 +88,6 @@ describe("cron timer outcome and failure policy regressions", () => {
         status: "error",
         error: "Gateway restarting.",
         errorClassification: { kind: "aborted" },
-        startedAt,
         endedAt: startedAt + 1,
       });
 
@@ -222,23 +213,12 @@ describe("cron timer outcome and failure policy regressions", () => {
     );
     job.failureAlert = { after: 10, cooldownMs: 0 };
 
-    apply({ status: "error", error: "ninth failure", diagnostics });
+    apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(9);
     expect(job.state.autoDisabled).toBeUndefined();
     expect(deferredNotifications).toHaveLength(0);
-    expect(job.state.lastDiagnostics).toEqual({
-      summary: "exec stderr tail",
-      entries: [
-        {
-          ts: startedAt,
-          source: "exec",
-          severity: "error",
-          message: "exec stderr tail",
-          exitCode: 1,
-        },
-      ],
-    });
+    expect(job.state.lastDiagnostics).toEqual(diagnostics);
     expect(job.state.lastDiagnosticSummary).toBe("exec stderr tail");
     expect(log.warn).toHaveBeenCalledWith(
       {
@@ -401,17 +381,13 @@ describe("cron timer outcome and failure policy regressions", () => {
         ? undefined
         : vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
       try {
-        const shouldDelete = apply(
-          {
-            status,
-            ...(status === "ok"
-              ? { delivered: true }
-              : { error: throws ? "synthetic failure" : "429 rate limit exceeded" }),
-            startedAt,
-            endedAt,
-          },
-          { deferredNotifications: [] },
-        );
+        const shouldDelete = apply({
+          status,
+          ...(status === "ok"
+            ? { delivered: true }
+            : { error: throws ? "synthetic failure" : "429 rate limit exceeded" }),
+          endedAt,
+        });
         expect(shouldDelete).toBe(false);
         expect(job.state.runningAtMs).toBeUndefined();
         expect(job.state.lastRunAtMs).toBe(startedAt);
@@ -478,7 +454,6 @@ describe("cron timer outcome and failure policy regressions", () => {
         provider,
         ...(errorClassification ? { errorClassification } : {}),
         executionStarted: true,
-        startedAt,
         endedAt,
       });
 
@@ -527,7 +502,6 @@ describe("cron timer outcome and failure policy regressions", () => {
       {
         status,
         ...(status === "error" ? { error: "429 rate limit exceeded" } : {}),
-        startedAt,
         endedAt,
       },
       { scheduleMode: "preserve" },

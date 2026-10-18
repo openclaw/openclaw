@@ -259,52 +259,102 @@ describe("cron execution watchdogs", () => {
     }
   });
 
-  it("restarts the heartbeat watchdog from the effective heartbeat timeout at handoff", async () => {
-    const job = heartbeatJob("heartbeat-handoff-heartbeat", {
-      payload: { kind: "heartbeat" },
-      agentId: "   ",
-      sessionKey: "agent:ops:main",
-    });
-    const started = createDeferred<AbortSignal | undefined>();
-    const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-    const requestHeartbeatAndWait = vi.fn<NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>>(
-      async (_wake, { abortSignal, onAttemptStarted }) => {
+  it.each(["finite", "unlimited", "trigger evaluating"] as const)(
+    "keeps the correct heartbeat deadline: %s",
+    async (mode) => {
+      const finite = mode === "finite";
+      const unlimited = mode === "unlimited";
+      const job = unlimited
+        ? dueJob("unlimited-systemEvent", {
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: "check heartbeat work" },
+          })
+        : heartbeatJob(
+            finite ? "heartbeat-handoff-heartbeat" : "heartbeat-trigger-watchdog",
+            finite
+              ? { payload: { kind: "heartbeat" }, agentId: "   ", sessionKey: "agent:ops:main" }
+              : { trigger: { script: "return { fire: true };" } },
+          );
+      const started = createDeferred<AbortSignal | undefined>();
+      const release = createDeferred();
+      const resolveHeartbeatTimeoutMs = vi.fn(() => (unlimited ? undefined : 15 * 60_000));
+      const requestHeartbeatAndWait = vi.fn<
+        NonNullable<CronServiceDeps["requestHeartbeatAndWait"]>
+      >(async (_wake, { abortSignal, onQueued, onAttemptStarted }) => {
+        if (!finite && !unlimited) {
+          return { status: "ran", durationMs: 1 };
+        }
+        if (unlimited) {
+          onQueued?.();
+        }
         onAttemptStarted?.();
         started.resolve(abortSignal);
-        await new Promise<void>((resolve) => {
-          if (abortSignal?.aborted) {
-            resolve();
-          } else {
-            abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-          }
-        });
-        return { status: "failed", reason: "aborted" };
-      },
-    );
-    const { state, advance } = await fixture(job, {
-      nowMs: Date.now,
-      defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs,
-      requestHeartbeatAndWait,
-    });
-    const timer = onTimer(state);
-    let settled = false;
-    void timer.then(() => {
-      settled = true;
-    });
-    const signal = await started.promise;
-    await advance(10 * 60_000 + 1);
-    expect(signal?.aborted).toBe(false);
-    expect(settled).toBe(false);
-    await advance(5 * 60_000);
-    await timer;
-    expect(signal?.aborted).toBe(true);
-    expect(settled).toBe(true);
-    expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
-    );
-    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
-  });
+        if (unlimited) {
+          await release.promise;
+        } else {
+          await new Promise<void>((resolve) => {
+            if (abortSignal?.aborted) {
+              resolve();
+            } else {
+              abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+            }
+          });
+        }
+        return finite ? { status: "failed", reason: "aborted" } : { status: "ran", durationMs: 1 };
+      });
+      const { state, advance } = await fixture(job, {
+        nowMs: Date.now,
+        defaultAgentId: "main",
+        resolveHeartbeatTimeoutMs,
+        requestHeartbeatAndWait,
+        ...(!finite && !unlimited
+          ? {
+              evaluateCronTrigger: vi.fn(async () => {
+                started.resolve(undefined);
+                return await new Promise<never>(() => {});
+              }),
+            }
+          : {}),
+      });
+      const timer = onTimer(state);
+      let settled = false;
+      void timer.then(() => {
+        settled = true;
+      });
+      try {
+        const signal = await started.promise;
+        await advance(unlimited ? 20 * 60_000 : 10 * 60_000 + 1);
+        if (finite) {
+          expect(signal?.aborted).toBe(false);
+          expect(settled).toBe(false);
+          await advance(5 * 60_000);
+          await timer;
+          expect(signal?.aborted).toBe(true);
+          expect(settled).toBe(true);
+          expect(resolveHeartbeatTimeoutMs).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ source: "interval", intent: "scheduled", agentId: "ops" }),
+          );
+        } else if (unlimited) {
+          expect(settled).toBe(false);
+          release.resolve();
+          await timer;
+          expect(requireJob(state, job.id).state.lastStatus).toBe("ok");
+          return;
+        } else {
+          await timer;
+          expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
+          expect(requestHeartbeatAndWait).not.toHaveBeenCalled();
+        }
+        expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
+      } finally {
+        if (unlimited) {
+          release.resolve();
+          await timer;
+        }
+      }
+    },
+  );
 
   it("does not spend setup or execution timeout while waiting for cron-nested admission (#41783)", async () => {
     const job = agentJob("isolated-setup-timeout-lane-wait", 1);
@@ -464,68 +514,5 @@ describe("cron execution watchdogs", () => {
       inheritSessionThread: false,
       onDeliverySettled: expect.any(Function),
     });
-  });
-
-  it("disables the outer watchdog for an unlimited main system-event heartbeat", async () => {
-    const job = dueJob("unlimited-systemEvent", {
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "check heartbeat work" },
-    });
-    const started = createDeferred();
-    const release = createDeferred();
-    const { state, advance } = await fixture(job, {
-      nowMs: Date.now,
-      defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs: vi.fn(() => undefined),
-      requestHeartbeatAndWait: vi.fn(async (_wake, { onQueued, onAttemptStarted }) => {
-        onQueued?.();
-        onAttemptStarted?.();
-        started.resolve();
-        await release.promise;
-        return { status: "ran" as const, durationMs: 1 };
-      }),
-    });
-    const timer = onTimer(state);
-    let settled = false;
-    void timer.then(() => {
-      settled = true;
-    });
-    try {
-      await started.promise;
-      await advance(20 * 60_000);
-      expect(settled).toBe(false);
-      release.resolve();
-      await timer;
-      expect(requireJob(state, job.id).state.lastStatus).toBe("ok");
-    } finally {
-      release.resolve();
-      await timer;
-    }
-  });
-
-  it("keeps the cron deadline while a heartbeat-backed trigger is still evaluating", async () => {
-    const job = heartbeatJob("heartbeat-trigger-watchdog", {
-      trigger: { script: "return { fire: true };" },
-    });
-    const started = createDeferred();
-    const resolveHeartbeatTimeoutMs = vi.fn(() => 15 * 60_000);
-    const { state, advance } = await fixture(job, {
-      nowMs: Date.now,
-      defaultAgentId: "main",
-      resolveHeartbeatTimeoutMs,
-      requestHeartbeatAndWait: vi.fn(async () => ({ status: "ran" as const, durationMs: 1 })),
-      evaluateCronTrigger: vi.fn(async () => {
-        started.resolve();
-        return await new Promise<never>(() => {});
-      }),
-    });
-    const timer = onTimer(state);
-    await started.promise;
-    await advance(10 * 60_000 + 1);
-    await timer;
-    expect(resolveHeartbeatTimeoutMs).not.toHaveBeenCalled();
-    expect(state.deps.requestHeartbeatAndWait).not.toHaveBeenCalled();
-    expect(requireJob(state, job.id).state.lastError).toContain("job execution timed out");
   });
 });

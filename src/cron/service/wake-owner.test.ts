@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -13,9 +14,6 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import type { CronJob } from "../types.js";
-import { createCronServiceState } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,17 +33,12 @@ function retryHandler(reason: string, delay: number) {
 }
 
 function observe<T>(promise: Promise<T>) {
-  let finished = false;
-  const pending = promise.then((result) => {
-    finished = true;
+  const observed = { finished: false, pending: promise };
+  observed.pending = promise.then((result) => {
+    observed.finished = true;
     return result;
   });
-  return {
-    pending,
-    get finished() {
-      return finished;
-    },
-  };
+  return observed;
 }
 
 beforeEach(() => {
@@ -63,11 +56,8 @@ afterEach(async () => {
 function createHarness(handler: HeartbeatWakeHandler) {
   setHeartbeatWakeHandler(handler);
   const wakeQueued = createDeferred();
-  const state = createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
-    cronEnabled: true,
+  const state = createCronRegressionState({
     storePath: path.join(tempDirs.make("cron-wake-owner-"), "jobs.json"),
-    log: { debug() {}, info() {}, warn() {}, error() {} },
     nowMs: () => Date.now(),
     enqueueSystemEvent: (text, opts) => {
       const remove = enqueueSystemEventWithReceipt(text, {
@@ -90,21 +80,23 @@ function createHarness(handler: HeartbeatWakeHandler) {
       ),
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
-  const run = (id = "reminder", signal?: AbortSignal) => {
-    const job: CronJob = {
-      id,
-      name: id,
-      enabled: true,
-      createdAtMs: Date.now(),
-      updatedAtMs: Date.now(),
-      schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-      payload: { kind: "systemEvent", text: id },
-      sessionTarget: "main",
-      wakeMode: "now",
-      state: {},
-    };
-    return executeJobCore(state, job, signal);
-  };
+  const run = (id = "reminder", signal?: AbortSignal) =>
+    executeJobCore(
+      state,
+      {
+        id,
+        name: id,
+        enabled: true,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
+        payload: { kind: "systemEvent", text: id },
+        sessionTarget: "main",
+        wakeMode: "now",
+        state: {},
+      },
+      signal,
+    );
   return { state, run, wakeQueued };
 }
 
