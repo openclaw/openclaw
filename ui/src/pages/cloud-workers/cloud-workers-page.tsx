@@ -56,8 +56,26 @@ export function CloudWorkersPage() {
     value?: Map<string, ProfileSummary>;
     error?: string;
   }>({ pending: false });
+  function clearPresentation() {
+    setView((state) => {
+      state.editor = null;
+      state.draft = createCloudWorkerDraft();
+    });
+    setCatalog({ pending: false });
+  }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
+      ) {
+        gateway.invalidate();
+        configSave.update({ busy: false, error: null, notice: null });
+        clearPresentation();
+      }
+    },
     invalidateRequests: () => configSave.update({ busy: false }),
   });
   void context.runtimeConfig.ensureLoaded();
@@ -85,10 +103,14 @@ export function CloudWorkersPage() {
         !scope ||
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
-        setCatalog({ pending: false });
+        if (gateway.connected) {
+          setCatalog({ pending: false });
+        } else {
+          setCatalog((previous) => ({ ...previous, pending: false }));
+        }
         return;
       }
-      setCatalog({ pending: true });
+      setCatalog((previous) => ({ ...previous, pending: true }));
       void scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
@@ -110,7 +132,11 @@ export function CloudWorkersPage() {
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog({ pending: false, error: formatUiError(error) });
+              setCatalog((previous) => ({
+                ...previous,
+                pending: false,
+                error: formatUiError(error),
+              }));
             }
           },
         );
@@ -277,7 +303,7 @@ export function CloudWorkersPage() {
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
     const statusControl = () =>
-      catalog().pending ? (
+      catalog().pending && !catalog().value ? (
         <SettingsStatus kind={"muted"} label={t("common.loading")} />
       ) : catalog().value?.has(profile.id) ? (
         <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />

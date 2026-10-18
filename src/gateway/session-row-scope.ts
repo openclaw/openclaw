@@ -8,6 +8,8 @@ import { projectionLane } from "../config/sessions/session-transcript-worker-res
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physical-facts.js";
+import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -253,6 +255,25 @@ export function prepareSessionRowScopes(
   const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
+  const admittedIdentity = (pathname: string) => {
+    const identity = getSqliteDatabaseAdmissionIdentityForPath(pathname);
+    if (!identity) {
+      return undefined;
+    }
+    const postgres = getPostgresPhysicalFactsForPath(pathname);
+    return JSON.stringify(
+      postgres
+        ? ["postgres", postgres.namespace, postgres.storeId]
+        : ["sqlite", identity.key, identity.birthtime],
+    );
+  };
+  const admittedPaths = new Map<string, string>();
+  for (const [filename, locator] of residentPaths) {
+    const identity = admittedIdentity(filename);
+    if (identity) {
+      admittedPaths.set(identity, locator);
+    }
+  }
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     try {
@@ -326,7 +347,11 @@ export function prepareSessionRowScopes(
     select,
     physicalPaths(this: void, locator: string, agentId?: string) {
       // Resident physical locators were normalized when the topology was prepared.
-      const normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
+      let normalized = filenames.has(locator) ? locator : residentPath(path.resolve(locator));
+      if (!filenames.has(normalized) && !aliases.has(normalized)) {
+        const identity = admittedIdentity(normalized);
+        normalized = (identity && admittedPaths.get(identity)) || normalized;
+      }
       const owners = aliases.get(normalized);
       return agentId
         ? [owners?.get(normalizeAgentId(agentId)) ?? normalized]
@@ -344,6 +369,7 @@ type SessionRowEntrySelection = {
   byParent: ReadonlyMap<string, ReadonlySet<string>>;
   rows: ReadonlyMap<string, records.Row>;
   dirty: ReadonlySet<string>;
+  hasUnresolvedCategories: boolean;
   matching: (query: records.Query, kind?: string) => records.Row[];
   acquire: (row: records.Row) => records.Row | undefined;
   referenced: (reference: string) => records.Row | undefined;
@@ -425,19 +451,20 @@ function selectSessionRowEntries(params: SessionRowEntrySelection, query: record
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
     : matching(query);
-  const pending: records.Lookup[] = [];
-  for (const row of candidates) {
-    if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
-      pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
-      if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
-        break;
+  // The facts owner tracks category uncertainty even when display rows are evicted.
+  if (params.hasUnresolvedCategories) {
+    const pending: records.Lookup[] = [];
+    for (const row of candidates) {
+      if (row.unresolvedDatabaseFacts === "category" && matches(row)) {
+        pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
+        if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
+          break;
+        }
       }
     }
-  }
-  // Synchronous selection cannot consume unresolved categories, even when a
-  // metadata-only caller omits dirty rows. Exact preparation remains bounded.
-  if (pending.length > 0) {
-    throw new SessionRowFactsPending(pending);
+    if (pending.length > 0) {
+      throw new SessionRowFactsPending(pending);
+    }
   }
   const acquired =
     sessionIdOrKey || dirty.size === 0

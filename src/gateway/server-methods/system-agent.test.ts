@@ -341,16 +341,14 @@ describe("openclaw.chat", () => {
           }),
         );
         const before = fs.readFileSync(configPath, "utf8");
-        const detectInferenceBackends = vi.fn(async () => []);
+        const backends = await import("../../commands/onboard-inference.js");
+        const providerChoices = await import("../../plugins/provider-auth-choices.js");
+        const detectInferenceBackends = vi
+          .spyOn(backends, "detectInferenceBackends")
+          .mockResolvedValue([]);
+        vi.spyOn(providerChoices, "resolveManifestProviderAuthChoices").mockReturnValue([]);
         setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(
-          async (params) =>
-            detectSetupInference(
-              {
-                detectInferenceBackends,
-                resolveManifestProviderAuthChoices: () => [],
-              },
-              params?.agentId,
-            ),
+          async (params) => detectSetupInference(params?.agentId),
         );
         const { calls, respond } = makeRespond();
         await systemAgentHandler("openclaw.setup.detect")({

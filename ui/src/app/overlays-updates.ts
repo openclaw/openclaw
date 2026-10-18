@@ -33,7 +33,6 @@ import {
   type UpdateTriageAdmission,
 } from "./update-overlay-helpers.ts";
 import { createUpdateRunReceipts } from "./update-run-receipts.ts";
-import { readUpdateScheduleValue } from "./update-schedule-dto.ts";
 import {
   projectConnectedUpdateSnapshot,
   projectUpdateAvailableEvent,
@@ -459,7 +458,8 @@ export function createApplicationUpdateOverlays(
       } else if (!next.client) {
         connectedEpoch = 0;
         snapshot = { ...snapshot, controlUiRefreshRequired: false };
-      } else if (next.hello) {
+      } else if (next.hello && helloChanged) {
+        // Only a newly fenced hello means build skew; transport loss retains the old one.
         snapshot = { ...snapshot, controlUiRefreshRequired: true };
       }
       publish();
@@ -662,7 +662,7 @@ export function createApplicationUpdateOverlays(
         if (!isCurrent()) {
           return false;
         }
-        const updateSchedule = response.schedule && readUpdateScheduleValue(response.schedule);
+        const updateSchedule = response.schedule;
         // Installation owns its interlock; other same-campaign display updates
         // settle in completion order and converge on the next status refresh.
         if (canPublish() && (updateSchedule !== undefined || response.ok)) {

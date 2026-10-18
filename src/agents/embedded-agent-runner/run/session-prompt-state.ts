@@ -227,7 +227,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
               run,
             )
           : runWithoutOwnedSessionTranscriptWrites(run);
-      return initialOwner ? initialOwner.run(withContext) : withContext();
+      return initialOwner && !initialWriter?.committedFence
+        ? initialOwner.run(withContext)
+        : withContext();
     },
     recordOutputLimitNotice: async (toolCallId: string | undefined) => {
       const note: CustomMessage = {

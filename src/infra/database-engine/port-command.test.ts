@@ -38,17 +38,33 @@ async function hash(file: string) {
     .digest("hex");
 }
 
-it("preserves Doctor guidance when the port worker inspects an older shared-state schema", async () => {
+it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", async (version) => {
   const directory = tempDirs.make("state-port-legacy-");
   const sourcePath = path.join(directory, "openclaw.sqlite");
-  const legacy = await loadStatePortDescriptor(25);
+  const legacy = await loadStatePortDescriptor(version);
   {
     using db = openNodeSqliteDatabase(sourcePath);
     db.exec(legacy.sqlite);
     for (const fragment of legacy.fragments ?? []) {
       db.exec(fragment.sqlite);
     }
-    db.exec("PRAGMA user_version = 25");
+    db.exec(`PRAGMA user_version = ${version}`);
+    for (const table of [
+      "github_publication_requests",
+      "github_personal_publication_requests",
+      "github_repository_publication_requests",
+    ]) {
+      expect(
+        db
+          .prepare(`PRAGMA table_info(${table})`)
+          .all()
+          .some((column) => column.name === "draft"),
+      ).toBe(false);
+      const definition = [legacy, ...(legacy.fragments ?? [])]
+        .flatMap((part) => part.tables)
+        .find((entry) => entry.name === table);
+      expect(definition?.columns.some((column) => column.name === "draft")).toBe(false);
+    }
   }
   const original = await hash(sourcePath);
   await expect(

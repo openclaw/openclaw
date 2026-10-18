@@ -739,8 +739,7 @@ export async function prepareBundledAiRuntimePackage(
 
 async function normalizeOpenClawTarballModes(tarballPath: string) {
   // npm can retain restrictive source read bits. Normalize those for non-root
-  // installers while preserving the archive's executable intent. pnpm derives
-  // that intent from bin and publishConfig.executableFiles, not source modes.
+  // installers while preserving the archive's executable intent.
   const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
   try {
     await runPackageTar("extract", tarballPath, stageDir);
@@ -1011,7 +1010,11 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
-    await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
+    // pnpm already writes portable file modes. Keep its archive intact instead
+    // of extracting and recompressing it; npm still needs source-mode repair.
+    if (!packageOptions.pnpmPack) {
+      await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
+    }
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
       // dry-run preserves the archive while npm owns hashes, modes, and inventory.

@@ -115,6 +115,18 @@ export function mutateLocalWorkspaceProjection(
 }
 
 export const localWorkspaceReadOperations = {
+  "localWorkspace.reviewBase": (input: { id: string }, db: EngineConnection) => ({
+    type: "localWorkspace.reviewBase" as const,
+    row: tableExists(db, table)
+      ? executeSqliteQueryTakeFirstSync(
+          db,
+          query(db)
+            .selectFrom(table)
+            .select(["worktree_id", "agent_id", "session_key", "session_id", "base_commit"])
+            .where("worktree_id", "=", input.id),
+        )
+      : undefined,
+  }),
   "localWorkspace.exists": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.exists" as const,
     exists: hasLocalWorkspaceProjectionInDatabase(db, input.id),

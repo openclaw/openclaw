@@ -1,15 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -104,6 +107,106 @@ function listEntries(env: NodeJS.ProcessEnv, agentId = "main", clone?: boolean) 
 }
 
 describe("doctor canonical session delivery state", () => {
+  it.each([undefined, "full"] as const)(
+    "uses requested integrity coverage for delivery repairs (%s)",
+    (integrityCheck) => {
+      const env = makeEnv("openclaw-delivery-integrity-");
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const sessionKey = "agent:main:delivery-integrity";
+      const entry = {
+        sessionId: "delivery-integrity-session",
+        updatedAt: 10,
+        displayName: "Retained title",
+        channel: "slack",
+        deliveryContext: { channel: "telegram", to: "recipient", accountId: "current-bot" },
+        lastAccountId: "stale-slack-bot",
+      };
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      {
+        using database = new DatabaseSync(databasePath);
+        database.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        database
+          .prepare(
+            `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+             VALUES ('primary', 'agent', ?, 'main', 1, 1)`,
+          )
+          .run(OPENCLAW_AGENT_SCHEMA_VERSION);
+        database
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES (?, ?, ?, ?, 1)",
+          )
+          .run(sessionKey, entry.sessionId, JSON.stringify(entry), entry.updatedAt);
+        database
+          .prepare(
+            "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at, channel, account_id) VALUES (?, ?, 'conversation', 10, 10, 'slack', 'stale-slack-bot')",
+          )
+          .run(entry.sessionId, sessionKey);
+        database.exec(`
+          DROP INDEX idx_agent_cache_updated;
+          CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, key, updated_at);
+          INSERT INTO cache_entries (scope, key, value_json, updated_at)
+          VALUES ('retained', 'history', '"untouched"', 1);
+        `);
+        // An untouched index defect distinguishes QUICK from whole-database FULL.
+        database.enableDefensive?.(false);
+        database.exec("PRAGMA writable_schema = ON");
+        database
+          .prepare("UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_agent_cache_updated'")
+          .run(
+            "CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, updated_at DESC, key)",
+          );
+        database.exec("PRAGMA writable_schema = OFF");
+      }
+
+      const repair = () =>
+        repairCanonicalSessionDeliveryStates({
+          apply: true,
+          cfg: {},
+          env,
+          integrityCheck,
+          targets: [{ agentId: "main", storePath: databasePath, sqlitePath: databasePath }],
+        });
+      if (integrityCheck === "full") {
+        expect(repair).toThrow(/integrity_check.*idx_agent_cache_updated/su);
+      } else {
+        expectReport(repair(), 1);
+      }
+      {
+        using database = new DatabaseSync(databasePath, { readOnly: true });
+        const repairedEntry = JSON.parse(
+          database
+            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+            .get(sessionKey)?.entry_json as string,
+        );
+        if (integrityCheck === "full") {
+          expect(repairedEntry).toEqual(entry);
+        } else {
+          expect(repairedEntry).toMatchObject({
+            sessionId: entry.sessionId,
+            updatedAt: 10,
+            displayName: "Retained title",
+            delivery: {
+              context: { channel: "telegram", to: "recipient", accountId: "current-bot" },
+            },
+          });
+          expect(repairedEntry).not.toHaveProperty("lastAccountId");
+          expect(
+            database.prepare("SELECT updated_at, account_id FROM session_windows").get(),
+          ).toEqual({ updated_at: 10, account_id: "current-bot" });
+        }
+        expect(database.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
+          '"untouched"',
+        );
+      }
+      if (integrityCheck !== "full") {
+        expect(() => openOpenClawAgentDatabase({ agentId: "main", env })).toThrow(
+          /integrity_check.*idx_agent_cache_updated/su,
+        );
+      }
+    },
+  );
+
   it("warns and skips an unmigrated agent database", () => {
     const env = makeEnv("openclaw-delivery-legacy-schema-");
     const database = openOpenClawAgentDatabase({ agentId: "main", env });

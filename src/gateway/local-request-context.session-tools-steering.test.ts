@@ -1,9 +1,9 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -73,10 +73,13 @@ describe("sessions_send steering custody", () => {
               targetDisposition: "steered",
             });
             expect(receiver.pendingCount()).toBe(1);
-            turn.complete();
+            await turn.complete();
             if (!reportSettlement) {
               await setImmediate();
-              const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
+              const receiverLeases = turn.authorityLeases.filter(
+                (lease) => lease.profileId === bob.profileId && lease.releases === 0,
+              );
+              expect(receiverLeases.length).toBeGreaterThan(0);
               if (outcome === "abort") {
                 expect(receiver.abort()).toBe(true);
               } else {
@@ -87,7 +90,14 @@ describe("sessions_send steering custody", () => {
               }
               // Join the already-resolved custody continuation, without a timed wait or polling.
               await setImmediate();
-              expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
+              for (const lease of receiverLeases) {
+                expect(lease.releases).toBe(1);
+              }
+              expect(
+                turn.authorityLeases.filter(
+                  (lease) => lease.profileId === bob.profileId && lease.releases === 0,
+                ),
+              ).toHaveLength(0);
               return;
             }
             if (outcome === "source revoked") {
@@ -159,7 +169,7 @@ describe("runtime-only session authority", () => {
       };
       try {
         await withGatewayToolCallerIdentity(caller, () =>
-          setActiveEmbeddedRun(sessionId, handle, REQUESTER, undefined, "main"),
+          registerTestEmbeddedRun(sessionId, handle, REQUESTER, undefined, "main"),
         );
         await withoutGatewayToolCallerIdentity(async () => {
           const request = async (method: string, params: Record<string, unknown>) => {
@@ -194,7 +204,7 @@ describe("runtime-only session authority", () => {
           ]);
         });
       } finally {
-        clearActiveEmbeddedRun(sessionId, handle, REQUESTER);
+        clearTestEmbeddedRun(sessionId, handle, REQUESTER);
         releaseAgentRunDelegatedAuthority(delegatedAuthority);
       }
     });

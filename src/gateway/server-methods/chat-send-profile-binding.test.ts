@@ -11,6 +11,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
@@ -156,7 +158,7 @@ describe("native profile-bound input admission", () => {
             }),
           );
           expect(fixture.context.dedupe.size).toBe(0);
-          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();
           expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -273,8 +275,7 @@ describe("native profile-bound input admission", () => {
         expect(loadSessionEntry(fixture.scope)).toEqual(before);
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-        expect(fixture.context.chatAbortControllers.size).toBe(0);
-        expect(fixture.context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         const cached = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect(cached?.payload).toBeUndefined();
@@ -343,8 +344,7 @@ describe("native profile-bound input admission", () => {
         }),
         expect.anything(),
       );
-      expect.soft(fixture.context.chatAbortControllers.size).toBe(0);
-      expect.soft(fixture.context.chatQueuedTurns.size).toBe(0);
+      expect.soft(rpcSourceTesting.size).toBe(0);
       expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
       await fixture.cleanup();
@@ -380,9 +380,9 @@ describe("native profile-bound input admission", () => {
         expect(accepted.at(-1)).toMatchObject({
           message: { content: fixture.approvedContent },
         });
-        const owner = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+        const owner = rpcSourceTesting.get(fixture.params.idempotencyKey);
         expect(owner).toBeDefined();
-        const ownerConnId = owner?.ownerConnId;
+        const ownerConnId = owner?.adapter.requester?.connectionId;
         const cached = structuredClone(
           fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
         );
@@ -406,9 +406,9 @@ describe("native profile-bound input admission", () => {
         } else {
           expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "in_flight" });
         }
-        expect(fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey)).toBe(owner);
-        expect(owner?.ownerConnId).toBe(ownerConnId);
-        expect(owner?.controller.signal.aborted).toBe(false);
+        expect(rpcSourceTesting.get(fixture.params.idempotencyKey)).toBe(owner);
+        expect(owner?.adapter.requester?.connectionId).toBe(ownerConnId);
+        expect(owner?.input.abortSignal.aborted).toBe(false);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(accepted);
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
         expect(fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)).toEqual(cached);
@@ -511,8 +511,7 @@ describe("native profile-bound input admission", () => {
           }),
         );
         expect(fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)).toEqual(cached);
-        expect(fixture.context.chatAbortControllers.size).toBe(0);
-        expect(fixture.context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
       } finally {
         await fixture.cleanup();
       }

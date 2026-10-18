@@ -4,6 +4,7 @@ import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { invalidateChatAvatarCache, refreshSenderAgentAvatars } from "./chat-avatar.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
@@ -39,21 +40,23 @@ describe("forwarded avatar publication", () => {
         senderSession: { agentId, sessionKey: `agent:${agentId}:source` },
         __openclaw: { id: `report-${agentId}` },
       }));
-      const host = {
-        ...makeChatHost({
-          sessionKey: "agent:main:main",
-          chatMessages: messages,
-          requestHandlers: {
-            "agent.identity.get": ({ agentId }: { agentId: string }) => ({
-              agentId,
-              avatar: `/avatar/${agentId}?v=${avatarRevision}`,
-            }),
-          },
-        }),
-        agentsList: { agents: [{ id: "main" }, { id: "research" }, { id: "planner" }] },
-        senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
-        requestUpdate: vi.fn(),
-      };
+      const host = projectChatFields(
+        {
+          ...makeChatHost({
+            sessionKey: "agent:main:main",
+            chatMessages: messages,
+            requestHandlers: {
+              "agent.identity.get": ({ agentId }: { agentId: string }) => ({
+                agentId,
+                avatar: `/avatar/${agentId}?v=${avatarRevision}`,
+              }),
+            },
+          }),
+          agentsList: { agents: [{ id: "main" }, { id: "research" }, { id: "planner" }] },
+          senderAgentAvatars: undefined as ReadonlyMap<string, string | null> | undefined,
+        },
+        ["senderAgentAvatars"],
+      );
       const identities = createAgentIdentityCapability({
         snapshot: { client: host.client, phase: "connected" },
         subscribe: () => () => undefined,
@@ -62,16 +65,16 @@ describe("forwarded avatar publication", () => {
         ...threadProps(`avatar-${change}`, host.sessionKey, host.chatMessages),
         currentAgentId: "main",
         agents: host.agentsList.agents,
-        senderAgentAvatars: host.senderAgentAvatars,
+        get senderAgentAvatars() {
+          return host.senderAgentAvatars;
+        },
       };
       const transcript = createTestTranscript();
       await refreshSenderAgentAvatars(host);
-      props.senderAgentAvatars = host.senderAgentAvatars;
       const view = mountChatThread(props, transcript);
       const { container } = view;
       const rerender = () => {
         props.messages = host.chatMessages;
-        props.senderAgentAvatars = host.senderAgentAvatars;
         view.update(props);
         transcript.start();
         transcript.update();
@@ -99,11 +102,9 @@ describe("forwarded avatar publication", () => {
         }
         // Commit the transcript first, just as the pane does before its avatar refresh.
         rerender();
-        host.requestUpdate.mockClear();
         await refreshSenderAgentAvatars(host);
-        rerender();
+        flush();
 
-        expect(host.requestUpdate).not.toHaveBeenCalled();
         expect(container.querySelector('[data-entry-id="report-research"]')).toBe(researchRow);
         expect(researchRow.closest(".chat-group")?.querySelector("img")).toBe(image);
         expect(image.getAttribute("src")).toBe("blob:avatar-0");
@@ -115,13 +116,12 @@ describe("forwarded avatar publication", () => {
         host.chatMessages = [...host.chatMessages];
         rerender();
         await refreshSenderAgentAvatars(host);
-        rerender();
+        flush();
         await waitForSolid(() =>
           expect(image.getAttribute("src")).toBe(host.senderAgentAvatars?.get("research")),
         );
         expect(researchRow.closest(".chat-group")?.querySelector("img")).toBe(image);
         expect(image.getAttribute("src")).not.toBe("blob:avatar-0");
-        expect(host.requestUpdate).toHaveBeenCalledOnce();
       } finally {
         view.unmount();
         transcript.dispose();

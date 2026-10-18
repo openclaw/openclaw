@@ -19,11 +19,12 @@ import {
 } from "../../agents/run-termination.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { deriveGatewaySessionLifecycleProjectionPatch } from "../../gateway/session-lifecycle-state.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -48,7 +49,6 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
@@ -216,47 +216,41 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
   });
 
-  it("surfaces restart text when fallback exhaustion wraps a cleared lane error, keeping fail bookkeeping", async () => {
-    const { replyOperation, failMock } = createMockReplyOperation();
-    state.runWithModelFallbackMock.mockRejectedValueOnce(
-      createTestFallbackSummaryError({
+  it("preserves controller restart cancellation when fallback exhaustion wraps its abort", async () => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:wrapped-restart-abort",
+      sessionId: "wrapped-restart-abort",
+      resetTriggered: false,
+    });
+    replyOperation.setPhase("running");
+    const failMock = vi.spyOn(replyOperation, "fail");
+    state.runWithModelFallbackMock.mockImplementationOnce(async () => {
+      const reason = createAgentRunRestartAbortError();
+      expect(replyOperation.abortForRestart()).toBe(true);
+      throw createTestFallbackSummaryError({
         message: "fallback exhausted",
         attempts: [
           {
             provider: "anthropic",
             model: "claude",
-            error: "command lane cleared",
+            error: "agent run aborted for restart",
             reason: "unknown",
           },
         ],
         soonestCooldownExpiry: null,
-        cause: new CommandLaneClearedError("session:main"),
-      }),
-    );
-
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      replyOperation,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
+        cause: reason,
+      });
     });
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-      );
+    try {
+      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
+      expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+      expect(failMock).not.toHaveBeenCalled();
+    } finally {
+      replyOperation.complete();
     }
-    const failCall = requireMockCall(failMock, 0, "reply operation fail");
-    expect(failCall[0]).toBe("command_lane_cleared");
-    expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
   it("retains automatic recovery when restart admission refuses an active turn", async () => {

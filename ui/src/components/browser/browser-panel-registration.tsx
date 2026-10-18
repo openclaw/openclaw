@@ -1,4 +1,8 @@
+import { createEffect, onSettled } from "solid-js";
+import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativePanelTabStripCss as tabStyles } from "../panel-tab-strip-styles.ts";
 import {
   createBrowserPanelPresentation,
@@ -6,7 +10,7 @@ import {
   type BrowserPanelMethods,
   type BrowserPanelPresentation,
 } from "./browser-panel-presentation.ts";
-import { BrowserPanelContent } from "./browser-panel-solid.tsx";
+import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 import dockStyles from "../dock-panel-solid.css?inline";
 import browserStyles from "./browser-panel.css?inline";
 
@@ -36,12 +40,15 @@ function ownerFor(host: Host) {
 
 export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPanelMethods>(
   "openclaw-browser-panel",
-  (_props, host) => (
-    <>
-      <style>{`${dockStyles}\n${tabStyles}\n${browserStyles}`}</style>
-      <BrowserPanelContent owner={ownerFor(host)} />
-    </>
-  ),
+  (_props, host) => {
+    const content = browserPanelContent(ownerFor(host));
+    return (
+      <>
+        <style>{`${dockStyles}\n${tabStyles}\n${browserStyles}`}</style>
+        {content}
+      </>
+    );
+  },
   {
     properties: {
       client: { default: null, attribute: false },
@@ -70,3 +77,52 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
     },
   },
 );
+
+function browserPanelContent(owner: BrowserPanelPresentation) {
+  const state = projectOwner(owner, (current) => current);
+  // Native presentation and viewport geometry follow the committed DOM.
+  createEffect(state.revision, () => owner.rendered());
+  onSettled(() => {
+    let disposed = false;
+    let detach: (() => void) | undefined;
+    const connect = () => {
+      if (!disposed && owner.inputs.isConnected) {
+        detach = owner.attach();
+      }
+    };
+    // Direct Solid hosts settle before their parent inserts them.
+    if (owner.inputs.isConnected) {
+      connect();
+    } else {
+      queueMicrotask(connect);
+    }
+    return () => {
+      disposed = true;
+      detach?.();
+    };
+  });
+  const panel = state.read;
+  return (
+    <>
+      {panel().inputs.available && (panel().inputs.embedded || panel().dockLayout.open) ? (
+        <BrowserPanelChrome
+          controller={panel().browser}
+          dock={panel().dockLayout.dock}
+          height={panel().dockLayout.height}
+          width={panel().dockLayout.width}
+          onDockChange={(dock) => panel().dockLayout.setDock(dock)}
+          onClose={() => panel().closePanel()}
+          resizer={
+            <DockResizer
+              controller={panel().dockLayout}
+              classPrefix="bp"
+              label={t("browser.resize")}
+            />
+          }
+          embedded={panel().inputs.embedded}
+          tabsInHeader={panel().inputs.tabsInHeader}
+        />
+      ) : null}
+    </>
+  );
+}

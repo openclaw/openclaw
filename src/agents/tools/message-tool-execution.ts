@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { isScheduledMessageWriteAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
@@ -69,7 +68,6 @@ import {
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
   resolveSourceReplySinkDeliveryMode,
-  SOURCE_REPLY_ONLY_MESSAGE_SCHEMA,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
 import {
@@ -154,27 +152,26 @@ function* createMessageToolSteps(
     getConfig: () => options?.config ?? (options?.getRuntimeConfig ?? getRuntimeConfig)(),
     admitScheduledInvocation: options?.admitScheduledInvocation,
   });
-  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined =
-    options?.config && !options.sourceReplyOnly
-      ? {
-          cfg: options.config,
-          currentChatType: inferredCurrentChannel.currentChatType,
-          currentChannelProvider: inferredCurrentChannel.currentChannelProvider,
-          currentChannelId: inferredCurrentChannel.currentChannelId,
-          currentThreadTs,
-          currentMessageId: options.currentMessageId,
-          supportsPromptReactions,
-          currentAccountId: agentAccountId,
-          isScheduledRun: turnAuthority.isScheduledRun,
-          scheduledAccountScope: turnAuthority.scheduledAccountScope,
-          sessionKey: options.agentSessionKey,
-          sessionId: options.sessionId,
-          agentId: resolvedAgentId,
-          requesterSenderId: options.requesterSenderId,
-          senderIsOwner: options.senderIsOwner,
-          preparedMessageToolCatalog,
-        }
-      : undefined;
+  const messageToolDiscoveryParams: MessageToolDiscoveryParams | undefined = options?.config
+    ? {
+        cfg: options.config,
+        currentChatType: inferredCurrentChannel.currentChatType,
+        currentChannelProvider: inferredCurrentChannel.currentChannelProvider,
+        currentChannelId: inferredCurrentChannel.currentChannelId,
+        currentThreadTs,
+        currentMessageId: options.currentMessageId,
+        supportsPromptReactions,
+        currentAccountId: agentAccountId,
+        isScheduledRun: turnAuthority.isScheduledRun,
+        scheduledAccountScope: turnAuthority.scheduledAccountScope,
+        sessionKey: options.agentSessionKey,
+        sessionId: options.sessionId,
+        agentId: resolvedAgentId,
+        requesterSenderId: options.requesterSenderId,
+        senderIsOwner: options.senderIsOwner,
+        preparedMessageToolCatalog,
+      }
+    : undefined;
   // Model-supplied channel text is untrusted until routing resolves it. Early
   // denials retain only the host-prepared source provider.
   const decisionChannel = resolveTrustedDecisionChannel(
@@ -192,15 +189,14 @@ function* createMessageToolSteps(
   // across plugin hooks while needlessly loading channel action metadata twice.
   const discovered = messageToolDiscoveryParams ? yield messageToolDiscoveryParams : undefined;
   const actions = discovered?.actions;
-  const baseSchema = options?.sourceReplyOnly
-    ? SOURCE_REPLY_ONLY_MESSAGE_SCHEMA
-    : (discovered?.schema ?? MessageToolSchema);
-  const description = options?.sourceReplyOnly
-    ? "Send a message to the current source conversation. Supports actions: send."
-    : buildMessageToolDescription(actions) +
-      (supportsPromptReactions && (!actions || actions.includes("react"))
-        ? " When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions."
-        : "");
+  // A source-bound completion keeps the session's message definition so its
+  // prompt prefix stays cached; the source-reply policy is enforced per call.
+  const baseSchema = discovered?.schema ?? MessageToolSchema;
+  const description =
+    buildMessageToolDescription(actions) +
+    (supportsPromptReactions && (!actions || actions.includes("react"))
+      ? " When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions."
+      : "");
   const sandboxRoot = options?.sandboxRoot?.trim();
   const sandboxWorkspaceMediaAccess =
     sandboxRoot && options?.sandboxFsBridge && options.sandboxWorkspaceMediaReadAllowed === true
@@ -235,6 +231,7 @@ function* createMessageToolSteps(
       const {
         authorization: trustedTurnContext,
         currentPromptReaction,
+        sourceReplyOperation,
         config: rawConfig,
         scheduledRead,
         assertDashboardReadCurrent,
@@ -373,8 +370,8 @@ function* createMessageToolSteps(
         assertActionCurrent();
         const sourceReplyDelivered =
           requestedSourceReplyFinal === true && result.changed && !remove && !dryRun;
-        if (sourceReplyDelivered && options?.sessionId) {
-          resolveActiveReplyOperationForSessionId(options.sessionId)?.markSourceReplyDelivered();
+        if (sourceReplyDelivered) {
+          sourceReplyOperation?.markSourceReplyDelivered();
         }
         return embeddedMessageDelivery.attachEmbeddedMessageDeliveryFact(
           jsonResult({ ok: true, channel: "webchat", ...result, remove, dryRun }),
@@ -706,11 +703,7 @@ function* createMessageToolSteps(
           ) {
             messageDelivery.sourceReplyDelivered = true;
             // A later stall cannot erase this answer; recovery and its notice read it.
-            if (options?.sessionId) {
-              resolveActiveReplyOperationForSessionId(
-                options.sessionId,
-              )?.markSourceReplyDelivered();
-            }
+            sourceReplyOperation?.markSourceReplyDelivered();
           }
           if (action === "poll-vote" && pollVoteEchoRoute && pollEchoSessionKey) {
             const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;

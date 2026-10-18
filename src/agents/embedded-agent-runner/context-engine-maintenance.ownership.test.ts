@@ -1,6 +1,7 @@
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -14,24 +15,19 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/index.js";
+import { createMaintenanceEngine } from "./context-engine-maintenance.fixtures.test-support.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import type { ContextEngineMaintenanceParams } from "./context-engine-maintenance.types.js";
 
 vi.mock("./context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: () => ({}),
 }));
 
-const modes = [undefined, "background"] as const;
-const replacement = { role: "user" as const, content: "rewritten memory", timestamp: 1 };
-
-function createEngine(maintain: NonNullable<ContextEngine["maintain"]>): ContextEngine {
-  return {
-    info: { id: "ownership-test", name: "Ownership test", turnMaintenanceMode: "background" },
-    ingest: async () => ({ ingested: true }),
-    assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-    compact: async () => ({ ok: true, compacted: false }),
-    maintain,
-  };
-}
+const user = (content: string, timestamp = 1) => ({ role: "user" as const, content, timestamp });
+const replacement = user("rewritten memory");
+const tail = user("memory tail", 2);
+const unchanged = { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+type Maintain = NonNullable<ContextEngine["maintain"]>;
 
 async function withTranscriptOwners(
   run: (owners: Awaited<ReturnType<typeof createTranscriptOwners>>) => Promise<void>,
@@ -42,7 +38,11 @@ async function withTranscriptOwners(
     try {
       await run(owners);
     } finally {
+      owners.release.resolve();
+      await Promise.allSettled([...owners.runs, ...owners.deferred]);
       await waitForSessionMaintenance(owners.target.sessionKey);
+      owners.openAsync.mockRestore();
+      owners.unsubscribe();
       resetCommandQueueStateForTest();
     }
   });
@@ -51,70 +51,80 @@ async function withTranscriptOwners(
 async function createTranscriptOwners(stateDir: string) {
   const memory = SessionManager.inMemory(stateDir);
   const entryId = expectDefined(
-    await memory.appendMessageAsync({
-      role: "user",
-      content: "memory ".repeat(40),
-      timestamp: 1,
-    }),
+    await memory.appendMessageAsync(user("memory ".repeat(40))),
     "memory owner entry id",
   );
-  await memory.appendMessageAsync({ role: "user", content: "memory tail", timestamp: 2 });
-  const target = {
+  await memory.appendMessageAsync(tail);
+  const identity = {
     agentId: "main",
     sessionId: memory.getSessionId(),
     sessionKey: "agent:main:maintenance-owner",
-    storePath: path.join(stateDir, "sessions.json"),
   };
+  const target = { ...identity, storePath: path.join(stateDir, "sessions.json") };
   await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
   // Matching IDs model copied history; ownership must not be inferred from identity.
   const durableEntries = structuredClone(memory.getEntries());
   for (const entry of durableEntries) {
     if (entry.type === "message") {
-      entry.message = { role: "user", content: "durable-only sentinel", timestamp: 1 };
+      entry.message = user("durable-only sentinel");
     }
   }
   await replaceTranscriptEvents(target, [memory.getHeader(), ...durableEntries]);
   const durable = await SessionManager.openAsync(target, stateDir);
   const durableBefore = await loadTranscriptEvents(target);
+  const deferred: Promise<void>[] = [];
+  const runs: Promise<unknown>[] = [];
+  const published = vi.fn();
+  const unsubscribe = onSessionTranscriptUpdate(published);
   return {
     memory,
     durable,
     durableBefore,
-    entryId,
+    identity,
     target,
-    params: {
-      ...target,
-      sessionTarget: target,
-      sessionFile: `in-memory:${memory.getSessionId()}`,
-      reason: "turn" as const,
+    release: createDeferredCore(),
+    deferred,
+    runs,
+    published,
+    unsubscribe,
+    openAsync: vi.spyOn(SessionManager, "openAsync"),
+    runMaintenance(maintain: Maintain, overrides: Partial<ContextEngineMaintenanceParams> = {}) {
+      const run = runContextEngineMaintenance({
+        ...target,
+        sessionTarget: target,
+        sessionFile: `in-memory:${memory.getSessionId()}`,
+        reason: "turn",
+        contextEngine: createMaintenanceEngine(maintain, {
+          info: { id: "ownership-test", name: "Ownership test", turnMaintenanceMode: "background" },
+        }),
+        onDeferredMaintenance: (promise) => deferred.push(promise),
+        ...overrides,
+      });
+      runs.push(run);
+      return run;
     },
+    rewrite: (({ runtimeContext }) =>
+      runtimeContext!.rewriteTranscriptEntries!({
+        replacements: [{ entryId, message: replacement }],
+      })) satisfies Maintain,
   };
 }
 
-describe("context-engine maintenance transcript ownership", () => {
-  it("joins caller memory rewrite despite an explicit background request", async () => {
-    await withTranscriptOwners(async ({ memory, durableBefore, entryId, target, params }) => {
-      const manager = SessionManager.fromEntries(memory.getPersistedEntries());
-      const release = createDeferredCore();
-      const deferred: Promise<void>[] = [];
-      const events: string[] = [];
-      const published = vi.fn();
-      const unsubscribe = onSessionTranscriptUpdate(published);
-      const openAsync = vi.spyOn(SessionManager, "openAsync");
-      const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async ({ runtimeContext }) => {
-        await release.promise;
-        expect.soft(runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
-        const result = await runtimeContext!.rewriteTranscriptEntries!({
-          replacements: [{ entryId, message: replacement }],
-        });
-        events.push("maintained");
-        return result;
-      });
-      const run = runContextEngineMaintenance({
-        ...params,
+it("joins caller memory rewrite despite an explicit background request", async () => {
+  await withTranscriptOwners(async (owner) => {
+    const manager = SessionManager.fromEntries(owner.memory.getPersistedEntries());
+    const events: string[] = [];
+    const maintain = vi.fn<Maintain>(async (params) => {
+      await owner.release.promise;
+      expect.soft(params.runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
+      const result = await owner.rewrite(params);
+      events.push("maintained");
+      return result;
+    });
+    const run = owner
+      .runMaintenance(maintain, {
         executionMode: "background",
         sessionManager: manager,
-        contextEngine: createEngine(maintain),
         withSessionManagerRewriteLock: async (operation) => {
           events.push("locked");
           try {
@@ -123,153 +133,108 @@ describe("context-engine maintenance transcript ownership", () => {
             events.push("unlocked");
           }
         },
-        onDeferredMaintenance: (promise) => deferred.push(promise),
-      }).then((result) => {
+      })
+      .then((result) => {
         events.push("returned");
         return result;
       });
-      try {
-        await vi.waitFor(() => expect(maintain).toHaveBeenCalledOnce());
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect.soft(events).not.toContain("returned");
-        release.resolve();
-        const result = await run;
-        await Promise.all(deferred);
-        expect.soft(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
-        expect
-          .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
-          .toEqual([replacement, { role: "user", content: "memory tail", timestamp: 2 }]);
-        expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
-        expect.soft(openAsync).not.toHaveBeenCalled();
-        expect.soft(published).not.toHaveBeenCalled();
-        expect.soft(await loadTranscriptEvents(target)).toEqual(durableBefore);
-        expect.soft(deferred).toHaveLength(0);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([run, ...deferred]);
-        openAsync.mockRestore();
-        unsubscribe();
-      }
-    });
+    await vi.waitFor(() => expect(maintain).toHaveBeenCalledOnce());
+    await setImmediate();
+    expect.soft(events).not.toContain("returned");
+    owner.release.resolve();
+    const result = await run;
+    await Promise.all(owner.deferred);
+    expect.soft(result).toMatchObject({ changed: true, rewrittenEntries: 1 });
+    expect
+      .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
+      .toEqual([replacement, tail]);
+    expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
+    expect.soft(owner.openAsync).not.toHaveBeenCalled();
+    expect.soft(owner.published).not.toHaveBeenCalled();
+    expect.soft(await loadTranscriptEvents(owner.target)).toEqual(owner.durableBefore);
+    expect.soft(owner.deferred).toHaveLength(0);
   });
+});
 
-  it.each(modes)(
-    "reopens and publishes durable background rewrites with executionMode=%s",
-    async (executionMode) => {
-      await withTranscriptOwners(async ({ durable, entryId, target, params }) => {
-        const deferred: Promise<void>[] = [];
-        const published = vi.fn();
-        const unsubscribe = onSessionTranscriptUpdate(published);
-        const openAsync = vi.spyOn(SessionManager, "openAsync");
-        const lock = vi.fn();
-        const run = runContextEngineMaintenance({
-          ...params,
+it.each([undefined, "background"] as const)(
+  "reopens and publishes durable background rewrites with executionMode=%s",
+  async (executionMode) => {
+    await withTranscriptOwners(async (owner) => {
+      const lock = vi.fn();
+      await owner.runMaintenance(
+        async (params) => {
+          expect(params.runtimeContext?.allowDeferredCompactionExecution).toBe(true);
+          return await owner.rewrite(params);
+        },
+        {
           executionMode,
-          sessionManager: durable,
+          sessionManager: owner.durable,
           withSessionManagerRewriteLock: async (operation) => {
             lock();
             return await operation();
           },
-          contextEngine: createEngine(async ({ runtimeContext }) => {
-            expect(runtimeContext?.allowDeferredCompactionExecution).toBe(true);
-            return await runtimeContext!.rewriteTranscriptEntries!({
-              replacements: [{ entryId, message: replacement }],
-            });
-          }),
-          onDeferredMaintenance: (promise) => deferred.push(promise),
-        });
-        try {
-          await run;
-          await Promise.all(deferred);
-          expect(openAsync).toHaveBeenCalledOnce();
-          expect(lock).not.toHaveBeenCalled();
-          expect(published).toHaveBeenCalledExactlyOnceWith({
-            agentId: target.agentId,
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            target: {
-              agentId: target.agentId,
-              sessionId: target.sessionId,
-              sessionKey: target.sessionKey,
-            },
-          });
-          expect((await SessionManager.openAsync(target)).getBranch()[0]).toMatchObject({
-            message: replacement,
-          });
-          expect(durable.getBranch()[0]).toMatchObject({
-            message: { content: "durable-only sentinel" },
-          });
-          expect(deferred).toHaveLength(executionMode ? 0 : 1);
-        } finally {
-          await Promise.allSettled([run, ...deferred]);
-          openAsync.mockRestore();
-          unsubscribe();
-        }
+        },
+      );
+      await Promise.all(owner.deferred);
+      expect(owner.openAsync).toHaveBeenCalledOnce();
+      expect(lock).not.toHaveBeenCalled();
+      expect(owner.published).toHaveBeenCalledExactlyOnceWith({
+        ...owner.identity,
+        target: owner.identity,
       });
-    },
-  );
-
-  it("does not coalesce or wait for foreign durable work despite an explicit background request", async ({
-    signal,
-  }) => {
-    await withTranscriptOwners(async ({ memory, durable, params }) => {
-      const release = createDeferredCore();
-      const foreignStarted = createDeferredCore();
-      const foreignMaintain = vi.fn(async () => {
-        foreignStarted.resolve();
-        await release.promise;
-        return { changed: false, rewrittenEntries: 0, bytesFreed: 0 };
+      expect((await SessionManager.openAsync(owner.target)).getBranch()[0]).toMatchObject({
+        message: replacement,
       });
-      const deferred: Promise<void>[] = [];
-      await runContextEngineMaintenance({
-        ...params,
-        sessionManager: durable,
-        contextEngine: createEngine(foreignMaintain),
-        onDeferredMaintenance: (promise) => deferred.push(promise),
+      expect(owner.durable.getBranch()[0]).toMatchObject({
+        message: { content: "durable-only sentinel" },
       });
-      let run: Promise<unknown> | undefined;
-      try {
-        await racePromiseWithAbortSignal(
-          Promise.race([foreignStarted.promise, ...deferred]),
-          signal,
-        );
-        expect(foreignMaintain).toHaveBeenCalledOnce();
-        const maintain = vi.fn(async () => ({
-          changed: false,
-          rewrittenEntries: 0,
-          bytesFreed: 0,
-        }));
-        run = runContextEngineMaintenance({
-          ...params,
-          executionMode: "background",
-          sessionManager: memory,
-          contextEngine: createEngine(maintain),
-          onDeferredMaintenance: (promise) => deferred.push(promise),
-        });
-        await expect(run).resolves.toMatchObject({ changed: false });
-        expect(maintain).toHaveBeenCalledOnce();
-        expect(deferred).toHaveLength(1);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([...(run ? [run] : []), ...deferred]);
-      }
+      expect(owner.deferred).toHaveLength(executionMode ? 0 : 1);
     });
-  });
+  },
+);
 
-  it("checks caller memory authority before rewriting after the awaited lock", async () => {
-    await withTranscriptOwners(async ({ memory, durableBefore, target, entryId, params }) => {
-      const before = structuredClone(memory.getPersistedEntries());
-      const entered = vi.fn();
-      const release = createDeferredCore();
-      const controller = new AbortController();
-      const closed = new Error("caller maintenance owner closed");
-      let active = true;
-      const run = runContextEngineMaintenance({
-        ...params,
+it("does not coalesce or wait for foreign durable work despite an explicit background request", async ({
+  signal,
+}) => {
+  await withTranscriptOwners(async (owner) => {
+    const foreignStarted = createDeferredCore();
+    const foreignMaintain = vi.fn(async () => {
+      foreignStarted.resolve();
+      await owner.release.promise;
+      return unchanged;
+    });
+    await owner.runMaintenance(foreignMaintain, { sessionManager: owner.durable });
+    await racePromiseWithAbortSignal(
+      Promise.race([foreignStarted.promise, ...owner.deferred]),
+      signal,
+    );
+    expect(foreignMaintain).toHaveBeenCalledOnce();
+    const maintain = vi.fn(async () => unchanged);
+    const run = owner.runMaintenance(maintain, {
+      executionMode: "background",
+      sessionManager: owner.memory,
+    });
+    await expect(run).resolves.toMatchObject({ changed: false });
+    expect(maintain).toHaveBeenCalledOnce();
+    expect(owner.deferred).toHaveLength(1);
+  });
+});
+
+it("checks caller memory authority before rewriting after the awaited lock", async () => {
+  await withTranscriptOwners(async (owner) => {
+    const before = structuredClone(owner.memory.getPersistedEntries());
+    const entered = vi.fn();
+    const controller = new AbortController();
+    const closed = new Error("caller maintenance owner closed");
+    let active = true;
+    const run = owner.runMaintenance(
+      async (params) => {
+        expect(params.abortSignal).toBe(controller.signal);
+        return await owner.rewrite(params);
+      },
+      {
         executionMode: "background",
-        sessionManager: memory,
+        sessionManager: owner.memory,
         abortSignal: controller.signal,
         assertActive: () => {
           controller.signal.throwIfAborted();
@@ -279,31 +244,17 @@ describe("context-engine maintenance transcript ownership", () => {
         },
         withSessionManagerRewriteLock: async (operation) => {
           entered();
-          await release.promise;
+          await owner.release.promise;
           return await operation();
         },
-        contextEngine: createEngine(async ({ runtimeContext, abortSignal }) => {
-          expect(abortSignal).toBe(controller.signal);
-          return await runtimeContext!.rewriteTranscriptEntries!({
-            replacements: [{ entryId, message: replacement }],
-          });
-        }),
-      });
-      const outcome = run.then(
-        (result) => result,
-        (error: unknown) => error,
-      );
-      try {
-        await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
-        active = false;
-        release.resolve();
-        expect(await outcome).toBe(closed);
-        expect(memory.getPersistedEntries()).toEqual(before);
-        expect(await loadTranscriptEvents(target)).toEqual(durableBefore);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([run, outcome]);
-      }
-    });
+      },
+    );
+    const outcome = run.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+    active = false;
+    owner.release.resolve();
+    expect(await outcome).toBe(closed);
+    expect(owner.memory.getPersistedEntries()).toEqual(before);
+    expect(await loadTranscriptEvents(owner.target)).toEqual(owner.durableBefore);
   });
 });

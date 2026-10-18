@@ -149,11 +149,8 @@ jobs:
 
       - name: Build native inline browser candidate
         working-directory: apps/linux/src-tauri
-        env:
-          # Cold Linux declarations also exceed the package builder's 45-minute default.
-          OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS: "3600000"
         run: |
-          node ../scripts/stage-runtime.mjs
+          node ../scripts/stage-runtime.mjs --runtime-only
           # The native fixture supplies its CLI at the same build-time boundary.
           python3 ../tests/stage_onboarding_runtime.py target/desktop-runtime
           cargo +stable build --locked

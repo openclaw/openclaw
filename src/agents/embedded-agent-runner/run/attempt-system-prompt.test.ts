@@ -17,8 +17,10 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 // Prompt assembly consumes a prepared provider handle; discovery belongs to attempt setup.
@@ -77,6 +79,7 @@ async function preparePermissionPrompt(
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
   webSearchUnconfigured?: () => boolean,
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
+  toolSearchCatalogRef?: ToolSearchCatalogRef,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -116,6 +119,7 @@ async function preparePermissionPrompt(
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
+    requireExplicitMessageTarget,
     ...attemptOverrides,
   } as EmbeddedRunAttemptParams;
   const capabilityToolNames = new Set(tools.map(({ name }) => name));
@@ -131,7 +135,6 @@ async function preparePermissionPrompt(
       workspaceNotes: [],
     },
     capabilityToolNames,
-    requireExplicitMessageTarget,
     effectiveTools: skills?.initialToolNames
       ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
       : tools,
@@ -151,6 +154,7 @@ async function preparePermissionPrompt(
     webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
+    toolSearchCatalogRef,
   });
   if (!prepared.prepareToolPrompt) {
     throw new Error("Expected a refreshable attempt prompt");
@@ -167,6 +171,56 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("refreshes deferred reporting only when the prepared catalog is accepted", async () => {
+    const deferred: AgentTool = {
+      name: "deferred",
+      label: "Deferred",
+      description: "Deferred",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const catalogRef: ToolSearchCatalogRef = {
+      current: {
+        counterScope: "test",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+        entries: [
+          {
+            id: "openclaw:core:deferred",
+            name: deferred.name,
+            source: "openclaw",
+            sourceName: "core",
+            description: deferred.description,
+            parameters: deferred.parameters,
+            tool: deferred,
+          },
+        ],
+      },
+    };
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      catalogRef,
+    );
+    expect(prepared.systemPromptReport?.tools.deferred?.entries.map((entry) => entry.name)).toEqual(
+      ["deferred"],
+    );
+    catalogRef.current!.entries = [];
+    const refresh = await prepared.prepareToolPrompt!();
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toHaveLength(1);
+    refresh(prepared.systemPromptText);
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toEqual([]);
+    expect(
+      prepared.systemPromptReport?.tools.entries.some((entry) => entry.name === "deferred"),
+    ).toBe(false);
+  });
+
   it("carries the prepared missing-search fact into the actual initial prompt and tool refresh", async () => {
     let missing = true;
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
@@ -561,14 +615,55 @@ describe("buildAttemptSystemPrompt", () => {
   });
 });
 
-describe("embedded prepared message-target guidance", () => {
-  it.each([false, true])(
-    "carries the prepared target requirement (%s) through prompt assembly",
-    async (required) => {
-      const { prepared } = await preparePermissionPrompt(false, undefined, required);
-      expect(prepared.systemPromptText).toContain(
-        required ? "target required this turn" : "current source is default target",
-      );
-    },
-  );
+describe("embedded session prompt delivery", () => {
+  // Provider prefix caches need one system prompt per session; turn delivery rules
+  // that differ (heartbeats, completions) travel in the turn's runtime context.
+  it.each([
+    [
+      "source-only completion",
+      {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
+        requireExplicitMessageTarget: false,
+      },
+    ],
+    [
+      "explicit-target heartbeat",
+      { sourceReplyDeliveryMode: "message_tool_only" as const, requireExplicitMessageTarget: true },
+    ],
+  ])("keeps the user turn's system prompt on a %s turn", async (_kind, turn) => {
+    const user = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      {
+        sourceReplyDeliveryMode: "automatic",
+      },
+    );
+    const synthetic = await preparePermissionPrompt(
+      false,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      turn,
+    );
+    expect(synthetic.prepared.systemPromptText).toBe(user.prepared.systemPromptText);
+    expect(
+      buildTurnDeliveryContextFragments({
+        sessionKey: synthetic.attempt.sessionKey,
+        sourceReplyDeliveryMode: turn.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget: turn.requireExplicitMessageTarget,
+      })
+        .map((fragment) => fragment.text)
+        .join("\n"),
+    ).toMatch(
+      turn.requireExplicitMessageTarget
+        ? /final text is private[\s\S]*target required this turn/u
+        : /final text is private/u,
+    );
+  });
 });

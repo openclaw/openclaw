@@ -77,7 +77,6 @@ export function SessionsCard(props: {
           <SettingsSegmented
             mode="buttons"
             variant="accent"
-            ariaPressed={false}
             class="small"
             value={props.usage.display.sessionsTab}
             onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}

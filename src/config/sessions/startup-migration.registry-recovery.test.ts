@@ -35,6 +35,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadCombinedSessionStoreForGatewayCore } from "./combined-store-gateway.native.js";
+import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import {
   readCanonicalSessionMainKey,
@@ -43,11 +44,13 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { reconcileSessionTranscriptIndexes } from "./session-transcript-reconcile.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
+import * as sessionTargets from "./targets.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
@@ -120,23 +123,23 @@ it("does not create a missing configured agent database during startup maintenan
     env,
   }).path;
 
+  vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys").mockResolvedValue({
+    armed: false,
+    changes: [],
+    complete: false,
+    ledgerComplete: false,
+    legacyAgentId: "main",
+    mainKey: "main",
+    outcomes: [{ kind: "not-armed" as const }],
+    warnings: [],
+  });
+  vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsSync").mockReturnValue([
+    { agentId: "idle", storePath },
+  ]);
   await runSessionStartupMigration({
     cfg,
     env,
     log: { info: vi.fn(), warn: vi.fn() },
-    deps: {
-      migrateLegacyMainSessionKeys: vi.fn(async () => ({
-        armed: false,
-        changes: [],
-        complete: false,
-        ledgerComplete: false,
-        legacyAgentId: "main",
-        mainKey: "main",
-        outcomes: [{ kind: "not-armed" as const }],
-        warnings: [],
-      })),
-      resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
-    },
   });
 
   expect(fs.existsSync(sqlitePath)).toBe(false);
@@ -367,22 +370,20 @@ it("re-registers durable lineage children before configured-only runtime reads",
       ),
     ).toBe(false);
 
+    vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys").mockResolvedValue({
+      armed: false,
+      changes: [],
+      complete: false,
+      ledgerComplete: false,
+      legacyAgentId: "main",
+      mainKey: "main",
+      outcomes: [{ kind: "not-armed" as const }],
+      warnings: [],
+    });
     await runSessionStartupMigration({
       cfg,
       env,
       log: { info: vi.fn(), warn: vi.fn() },
-      deps: {
-        migrateLegacyMainSessionKeys: vi.fn(async () => ({
-          armed: false,
-          changes: [],
-          complete: false,
-          ledgerComplete: false,
-          legacyAgentId: "main",
-          mainKey: "main",
-          outcomes: [{ kind: "not-armed" as const }],
-          warnings: [],
-        })),
-      },
     });
 
     expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(

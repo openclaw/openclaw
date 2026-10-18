@@ -15,7 +15,7 @@ import type {
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionInfoDefaults } from "./tui-session-info.js";
-import type { SessionInfo } from "./tui-types.js";
+import type { SessionInfo, TuiSessionRow } from "./tui-types.js";
 
 export type ChatSendOptions = {
   sessionKey: string;
@@ -91,32 +91,7 @@ export type TuiSessionList = {
   limitApplied?: number;
   hasMore?: boolean;
   defaults?: SessionInfoDefaults;
-  sessions: Array<
-    Omit<SessionInfo, "effectiveResponseUsage"> & {
-      key: string;
-      sessionId?: string;
-      archived?: boolean;
-      incognito?: boolean;
-      sendPolicy?: string;
-      label?: string;
-      provider?: string;
-      groupChannel?: string;
-      space?: string;
-      subject?: string;
-      chatType?: string;
-      origin?: {
-        label?: string;
-        provider?: string;
-        surface?: string;
-      };
-      lastChannel?: string;
-      lastProvider?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      derivedTitle?: string;
-      lastMessagePreview?: string;
-    }
-  >;
+  sessions: TuiSessionRow[];
 };
 
 export type TuiSessionDescription = {

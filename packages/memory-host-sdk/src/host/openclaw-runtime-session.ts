@@ -16,6 +16,7 @@ import {
 } from "../../../../src/config/sessions/session-actor-storage-binding.js";
 import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecation.js";
 import { getAsyncWorkSignal } from "../../../../src/shared/async-work-scope.js";
+import { createLazyRuntimeMethodBinder } from "../../../../src/shared/lazy-runtime.js";
 import { IncognitoSessionSyncAccessError } from "../../../../src/state/incognito-session-error.js";
 
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
@@ -149,45 +150,28 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
-export async function prepareSessionEntriesInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
-  >
-) {
-  const { prepareSessionEntriesInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
+const bindTranscriptRead = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js"),
+);
+const bindTranscriptInventory = createLazyRuntimeMethodBinder(
+  () => import("../../../../src/config/sessions/session-transcript-inventory-runtime.js"),
+);
 
-export async function prepareSessionEntryInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
-  >
-) {
-  const { prepareSessionEntryInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
+export const prepareSessionEntriesInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntriesInWorker,
+);
 
-export async function readSessionEntrySnapshotInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
-  >
-) {
-  const { readSessionEntrySnapshotInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const prepareSessionEntryInWorker = bindTranscriptRead(
+  (runtime) => runtime.prepareSessionEntryInWorker,
+);
 
-export async function readSessionTranscriptCorpusInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-inventory-runtime.js").readSessionTranscriptCorpusInWorker
-  >
-) {
-  const { readSessionTranscriptCorpusInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-inventory-runtime.js");
-  return read(...args);
-}
+export const readSessionEntrySnapshotInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionEntrySnapshotInWorker,
+);
+
+export const readSessionTranscriptCorpusInWorker = bindTranscriptInventory(
+  (runtime) => runtime.readSessionTranscriptCorpusInWorker,
+);
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
@@ -300,12 +284,6 @@ export {
   isDreamingNarrativeSessionStoreKey,
 } from "./openclaw-runtime-paths.js";
 
-export async function readSessionResetRecallCutoffInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionResetRecallCutoffInWorker
-  >
-) {
-  const { readSessionResetRecallCutoffInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
-}
+export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
+  (runtime) => runtime.readSessionResetRecallCutoffInWorker,
+);

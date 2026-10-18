@@ -71,6 +71,8 @@ export type SourceDeliveryPlan = {
     force: boolean;
     requireExplicitTarget: boolean;
     requireExplicitTargetEvidence: boolean;
+    /** Whether a delivered source send that omits `final` ends the run's turn. */
+    finalByDefault: boolean;
   };
   fallback: {
     directDelivery: boolean;

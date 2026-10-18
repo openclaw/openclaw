@@ -5,8 +5,15 @@ import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
 
 export type ProcessCommand =
-  | { argv: string[]; executable?: string; serviceMarker?: string; uid?: number }
-  | { argvUnavailable: true; uid: number };
+  | {
+      argv: string[];
+      executable?: string;
+      serviceMarker?: string;
+      uid?: number;
+      owner?: "same" | "different" | "unknown";
+    }
+  | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
+  | { argvUnavailable: true; uid?: never; owner: "different" };
 
 type GroupMember = {
   pid: number;
@@ -83,11 +90,14 @@ export function killOwnedProcessGroupMembers(): void {
   }
 }
 
-/** The caller supplies native command inspection; the standalone group worker stays dependency-free. */
+/** The caller supplies command inspection; group cleanup only reads native topology. */
 export function* readProcessGroupMembers(
   timeoutMs: number,
   commandInspection?: {
-    readDarwinCommand: (pid: number, uid: number) => ProcessCommand | undefined;
+    readDarwinCommand: (
+      pid: number,
+      owner: "same" | "different" | "unknown",
+    ) => ProcessCommand | undefined;
   },
 ): Generator<GroupMember> {
   const includeCommand = commandInspection !== undefined;
@@ -177,7 +187,7 @@ export function* readProcessGroupMembers(
       const command = includeCommand
         ? member.state.startsWith("Z") || member.pid === 0
           ? { argv: [] }
-          : commandInspection?.readDarwinCommand(member.pid, member.uid)
+          : commandInspection?.readDarwinCommand(member.pid, member.owner)
         : undefined;
       if (includeCommand && !command) {
         continue;
@@ -186,7 +196,7 @@ export function* readProcessGroupMembers(
         pid: member.pid,
         pgid: member.pgid,
         state: member.state,
-        ...(command ? { command: { ppid: member.ppid, ...command, uid: member.uid } } : {}),
+        ...(command ? { command: { ppid: member.ppid, owner: member.owner, ...command } } : {}),
       };
     }
     return;

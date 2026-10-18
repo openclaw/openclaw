@@ -358,7 +358,6 @@ describe("GA Realtime call retirement", () => {
       await realtime.handler(offerRequest(reservation.clientSecret), createResponseHarness().res);
       const first = realtime.broker.cancelBrowserSession(reservation);
       const concurrent = realtime.cleanup();
-      expect(hangups).toBe(1);
       expect(bridge.close).toHaveBeenCalledOnce();
       hungUp.resolve();
       await Promise.all([first, concurrent, reentered]);

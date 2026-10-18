@@ -9,7 +9,7 @@ import {
   resolveSessionProgressCardTarget,
   sessionProgressCardsForGateway,
 } from "../../session-progress-cards.ts";
-import { isSessionRunActive } from "../../session-run-state.ts";
+import { isSessionRunStateActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
@@ -64,16 +64,17 @@ function SessionProgressWidgetContent(
         hello: snapshot?.hello,
         options: {
           // Read live admission facts even before the scope effect catches up.
-          admitAutomaticRead: () =>
-            untrack(
-              () =>
-                host.isConnected &&
-                props.active &&
-                target().sessionKey === staticTarget.sessionKey &&
-                target().agentId === staticTarget.agentId &&
-                context?.gateway.snapshot.client === snapshot?.client &&
-                context?.gateway.snapshot.hello === snapshot?.hello,
-            ),
+          admitAutomaticRead: () => {
+            const currentTarget = resolveSessionTarget(host.widget, host.session);
+            return (
+              host.isConnected &&
+              host.active &&
+              currentTarget.sessionKey === staticTarget.sessionKey &&
+              currentTarget.agentId === staticTarget.agentId &&
+              context?.gateway.snapshot.client === snapshot?.client &&
+              context?.gateway.snapshot.hello === snapshot?.hello
+            );
+          },
         },
       };
     },
@@ -86,11 +87,10 @@ function SessionProgressWidgetContent(
         a.target.agentId === b.target.agentId,
     },
   );
-  // Initial source identity is a one-time snapshot; the effect owns replacements.
-  const progress = projectProgressCard(untrack(progressScope));
+  const initialProgressScope = untrack(progressScope);
+  const progress = projectProgressCard(initialProgressScope);
   // Bind the imperative store watch only while the widget is active.
   createEffect(progressScope, (next) => progress.replaceSource(next));
-  const [sessionRevision, setSessionRevision] = createSignal(0, { ownedWrite: true });
   const rosterScope = createMemo(
     () => {
       return [
@@ -104,32 +104,34 @@ function SessionProgressWidgetContent(
         previous[0] === next[0] && previous[1] === next[1] && previous[2] === next[2],
     },
   );
-  // The session roster's imperative subscription and reads follow the visible widget scope.
-  createEffect(rosterScope, ([agentId, active, connected]) => {
-    if (!connected || !context || !active) {
-      return undefined;
-    }
-    const query = sessionProgressTargetQuery(agentId);
-    const release = context.sessions.subscribeList(query, () =>
-      setSessionRevision((value) => value + 1),
-    );
-    const snapshot = context.sessions.listSnapshot(query);
-    if (
-      !snapshot.result &&
-      !snapshot.loading &&
-      !snapshot.error &&
-      context.gateway.snapshot.phase === "connected"
-    ) {
-      void context.sessions.refreshList(query);
-    }
-    return release;
-  });
+  const roster = createMemo(() =>
+    projectSource(rosterScope(), {
+      read: ([agentId]) => context?.sessions.listSnapshot(sessionProgressTargetQuery(agentId)),
+      subscribe: ([agentId, active, connected], notify) => {
+        if (!connected || !context || !active) {
+          return () => {};
+        }
+        const query = sessionProgressTargetQuery(agentId);
+        const release = context.sessions.subscribeList(query, notify);
+        const snapshot = context.sessions.listSnapshot(query);
+        if (
+          !snapshot.result &&
+          !snapshot.loading &&
+          !snapshot.error &&
+          context.gateway.snapshot.phase === "connected"
+        ) {
+          void context.sessions.refreshList(query);
+        }
+        return release;
+      },
+      equality: "revision",
+    }),
+  );
   const row = createMemo(() => {
-    sessionRevision();
     const current = identity();
-    return context?.sessions
-      .listSnapshot(sessionProgressTargetQuery(current.agentId))
-      .result?.sessions.find(
+    return roster()
+      .read()
+      ?.result?.sessions.find(
         (entry) =>
           entry.key === current.sessionKey &&
           (entry.agentId ?? parseAgentSessionKey(entry.key)?.agentId) === current.agentId,
@@ -191,7 +193,7 @@ function SessionProgressWidgetContent(
                 sessionStatus={row()?.status}
                 startedAt={row()?.startedAt}
                 endedAt={row()?.endedAt}
-                hasActiveRun={isSessionRunActive(row() ?? {})}
+                hasActiveRun={isSessionRunStateActive(row() ?? {})}
               />
             )}
           </Show>

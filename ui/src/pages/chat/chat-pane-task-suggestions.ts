@@ -138,7 +138,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
     this.tasks.activeId = next.id;
     this.tasks.swapDirection = direction;
     this.tasks.swapGeneration += 1;
-    void this.updateComplete.then(() => {
+    void this.awaitDomCommit().then(() => {
       // The suggestion renderer owns the active card and its navigation controls.
       const activeCard = [...this.element.querySelectorAll<HTMLElement>(".task-suggestion")].find(
         (card) => card.dataset.taskId === next.id,

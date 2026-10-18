@@ -17,7 +17,6 @@ export type BackupCommandCreateOptions = BackupCreateOptions &
     claimNamespace?: boolean;
   };
 
-/** Create a backup archive, optionally verify it, and emit text or JSON output. */
 export async function backupCreateCommand(
   runtime: RuntimeEnv,
   opts: BackupCommandCreateOptions = {},

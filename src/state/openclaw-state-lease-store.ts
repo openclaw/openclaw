@@ -199,6 +199,30 @@ export function renewOpenClawStateLeaseInTransaction(
   return result.numAffectedRows === 1n ? expiresAt : undefined;
 }
 
+/** Renew an unchanged grant while its owner excludes takeover with SQLite's writer lock. */
+export function renewOpenClawStateLeaseUnderWriteFence(
+  db: EngineConnection,
+  identity: OpenClawStateLeaseIdentity,
+  acquiredAt: number,
+  leaseMs: number,
+): number | undefined {
+  const now = Date.now();
+  const expiresAt = now + leaseMs;
+  // Only the owner retaining SQLite's writer across a native COMMIT may renew
+  // past expiry. Both the owner token and the original grant must still match.
+  const result = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<LeaseDatabase>(db)
+      .updateTable("state_leases")
+      .set({ expires_at: expiresAt, heartbeat_at: now, updated_at: now })
+      .where("scope", "=", identity.scope)
+      .where("lease_key", "=", identity.key)
+      .where("owner", "=", identity.owner)
+      .where("created_at", "=", acquiredAt),
+  );
+  return result.numAffectedRows === 1n ? expiresAt : undefined;
+}
+
 /** The caller owns the write transaction; a replaced owner cannot release its successor. */
 export function releaseOpenClawStateLeaseInTransaction(
   db: EngineConnection,

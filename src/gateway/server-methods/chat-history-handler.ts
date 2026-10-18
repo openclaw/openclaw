@@ -22,9 +22,8 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
-import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
+import { resolveInFlightRunSnapshot } from "../chat-inflight-snapshot.runtime.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
@@ -48,7 +47,10 @@ import {
   reportOmittedChatHistory,
 } from "./chat-history-budget.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
-import { decodeChatHistoryPageCursor } from "./chat-history-page-cursor.js";
+import {
+  decodeChatHistoryPageCursor,
+  resolveChatHistorySelectorError,
+} from "./chat-history-page-cursor.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
@@ -58,7 +60,7 @@ import {
 import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
-import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { prepareChatStartupRequester } from "./chat-startup-requester.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
@@ -108,18 +110,7 @@ export async function handleChatHistoryRequest({
   const deltaCursor = pageCursor ? undefined : cursor;
   const retainedSessionId = retainedTranscript?.sessionId;
   const requestedSessionId = retainedSessionId ?? pageCursor?.sessionId ?? wireSessionId;
-  let selectorError: string | undefined;
-  if (pageCursor === null) {
-    selectorError = "invalid history page cursor";
-  } else if (offset !== undefined && wireMessageId !== undefined) {
-    selectorError = "offset and messageId cannot be used together";
-  } else if (cursor !== undefined && (offset !== undefined || wireMessageId !== undefined)) {
-    selectorError = "cursor cannot be used with offset or messageId";
-  } else if (wireSessionId !== undefined && wireMessageId === undefined) {
-    selectorError = "sessionId requires messageId";
-  } else if (pageCursor && retainedSessionId && pageCursor.sessionId !== retainedSessionId) {
-    selectorError = "history page cursor does not belong to retained transcript";
-  }
+  const selectorError = resolveChatHistorySelectorError(params, pageCursor, retainedSessionId);
   if (selectorError) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectorError));
     return;
@@ -188,6 +179,19 @@ export async function handleChatHistoryRequest({
       ? readStartupProjection()
       : undefined;
     const sessionId = requestedSessionId ?? entry?.sessionId;
+    const runtimeScope = {
+      storePath,
+      physicalPaths: rowProjection.physicalPaths,
+      resolveGatewayContext: context.resolveGatewayContext,
+    };
+    const queuedRunIds = sessionId
+      ? captureQueuedChatInputRunIds({
+          ...runtimeScope,
+          sessionKey: canonicalKey,
+          sessionId,
+          agentId: sessionAgentId,
+        })
+      : undefined;
     const historyEntry =
       requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
@@ -212,7 +216,7 @@ export async function handleChatHistoryRequest({
               before: pendingBefore,
               limit: max,
               maxChars: effectiveMaxChars,
-              queuedTurns: context.chatQueuedTurns,
+              queuedRunIds,
               cronStorePath: context.cronStorePath,
             },
           )
@@ -226,13 +230,7 @@ export async function handleChatHistoryRequest({
               { runIds: inputRunIds },
             )
           ).map((receipt) =>
-            receipt.state === "pending" &&
-            !receipt.cancelled &&
-            isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
-              agentId: sessionAgentId,
-              sessionKey: canonicalKey,
-              sessionId,
-            })
+            receipt.state === "pending" && !receipt.cancelled && queuedRunIds?.has(receipt.runId)
               ? { runId: receipt.runId, state: receipt.state, queued: true as const }
               : receipt,
           )
@@ -341,6 +339,7 @@ export async function handleChatHistoryRequest({
       }
       // Hash the authorized wire projection: receipts never skip current-state reads or policy.
       const stateRevision = {
+        commands: startupMetadata ? startupProjection?.commandsRevision : undefined,
         pendingInputs: sha256StableValue(projected.pendingInputs).digest,
         sessionInfo: projected.sessionInfo
           ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest
@@ -349,6 +348,9 @@ export async function handleChatHistoryRequest({
       return {
         ...projected,
         stateRevision,
+        ...(stateRevision.commands && knownState.commands === stateRevision.commands
+          ? { metadata: { ...projected.metadata, commands: undefined } }
+          : {}),
         ...(deltaCursor !== undefined && knownState?.pendingInputs === stateRevision.pendingInputs
           ? { pendingInputs: undefined }
           : {}),
@@ -357,11 +359,6 @@ export async function handleChatHistoryRequest({
           : {}),
       };
     };
-    const query = {
-      key: canonicalKey,
-      agentId: sessionAgentId,
-      storePath,
-    };
     const [unsavedAcpMeta] = entry
       ? []
       : await readAcpSessionMetaForEntries({
@@ -369,6 +366,7 @@ export async function handleChatHistoryRequest({
           entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry: undefined }],
         });
     const publishDelta = await withReadySessionRows(rowProjection, queries, (read) => {
+      const scopedRuntime = { ...runtimeScope, physicalPaths: read.physicalPaths };
       const currentSharing = readCurrentSharing(read);
       if (!currentSharing) {
         return undefined;
@@ -376,7 +374,11 @@ export async function handleChatHistoryRequest({
       const sessionInfo = measureDiagnosticsTimelineSpanSync(
         `gateway.${method}.session_info`,
         () =>
-          prepareProjectedSessionPresentation(read, client).snapshot(query).row ??
+          prepareProjectedSessionPresentation(read, client).snapshot({
+            key: canonicalKey,
+            agentId: sessionAgentId,
+            storePath,
+          }).row ??
           (entry
             ? undefined
             : buildGatewaySessionRow({
@@ -404,11 +406,8 @@ export async function handleChatHistoryRequest({
         );
         return undefined;
       }
-      if (sessionInfo) {
-        Object.assign(sessionInfo, currentSharing);
-      }
       const activeRunState = resolveVisibleActiveSessionRunState({
-        context,
+        ...scopedRuntime,
         requestedKey: sessionKey,
         canonicalKey,
         sessionId,
@@ -418,6 +417,7 @@ export async function handleChatHistoryRequest({
         includeTerminalPersistence: true,
       });
       if (sessionInfo) {
+        Object.assign(sessionInfo, currentSharing);
         sessionInfo.hasActiveRun = activeRunState.active;
         if (activeRunState.runIds !== undefined) {
           sessionInfo.activeRunIds = activeRunState.runIds;
@@ -426,12 +426,12 @@ export async function handleChatHistoryRequest({
           sessionInfo.status = activeRunState.status ?? "running";
         }
       }
-      // An active embedded run can be owned by the embedded registry while absent
-      // from the visible chat-abort controllers. The activeRunIds field stays
-      // omitted to preserve the exact-chat-send identity contract (coordination
+      // A native controller turn may have no visible chat RPC source. Omit
+      // activeRunIds to preserve the exact-chat-send identity contract (coordination
       // gates such as suggestion send-now rely on it being a complete set); the
       // scoped inFlightRun snapshot below drives UI adoption instead.
       const embeddedRecovery = resolveEmbeddedAgentRunRecoverySnapshot({
+        ...scopedRuntime,
         chatRunState: context.chatRunState,
         requestedSessionKey: sessionKey,
         canonicalSessionKey: canonicalKey,
@@ -467,8 +467,7 @@ export async function handleChatHistoryRequest({
         if (!projection) {
           continue;
         }
-        const provider = projection.modelProvider;
-        const model = projection.model;
+        const { modelProvider: provider, model } = projection;
         const catalogEntry =
           catalog && provider && model
             ? findModelCatalogEntry(catalog, { provider, modelId: model })
@@ -510,7 +509,7 @@ export async function handleChatHistoryRequest({
       // can restore the in-flight assistant text on switch-back.
       const inFlightRun =
         resolveInFlightRunSnapshot({
-          chatAbortControllers: context.chatAbortControllers,
+          ...scopedRuntime,
           chatRunState: context.chatRunState,
           requestedSessionKey: sessionKey,
           // The agent-scoped canonical key from session load: an unscoped re-resolve

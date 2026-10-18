@@ -7,7 +7,6 @@ import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "../../json-output-mode.js";
-import { registerMessageSendCommand } from "./register.send.js";
 
 const messageCommandMock = vi.fn(async (): Promise<unknown> => undefined);
 vi.mock("../../../commands/message.js", () => ({
@@ -226,8 +225,11 @@ describe("runMessageAction", () => {
         dryRun: Boolean(dryRun),
       });
       const program = new Command();
-      const message = program.command("message");
-      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+      registerMessageCommands(program, {
+        programVersion: "test",
+        messageChannelOptions: "discord",
+        agentChannelOptions: "last|discord",
+      });
 
       await expect(
         program.parseAsync(
@@ -254,8 +256,11 @@ describe("runMessageAction", () => {
     "rejects an explicitly blank message channel before command startup (%j)",
     async (channel) => {
       const program = new Command().exitOverride().configureOutput({ writeErr: () => undefined });
-      const message = program.command("message");
-      registerMessageSendCommand(message, createMessageCliHelpers("discord"));
+      registerMessageCommands(program, {
+        programVersion: "test",
+        messageChannelOptions: "discord",
+        agentChannelOptions: "last|discord",
+      });
 
       await expect(
         program.parseAsync(

@@ -50,9 +50,26 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 26      | Session state heads stored directly by their composite primary key                                                                                                                                                                                                                                                                             | Unreleased          |
 | 27      | Redundant ACP replay and skill-usage indexes removed; lease-owner index no longer includes the renewal timestamp                                                                                                                                                                                                                               | Unreleased          |
 
+| 28 | GitHub publication requests retain their explicit draft choice across execution and recovery | Unreleased |
+
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 28
+
+Schema 28 adds a nullable `draft` field to the existing shared, personal, and
+repository-checkpoint GitHub publication request tables. New requests record
+open or draft creation explicitly. Previously accepted requests retain null,
+their original request digest, and their original draft behavior after recovery.
+Updating an existing PR does not change its state.
+
+SQLite and PostgreSQL add the field transactionally without rewriting retained
+requests. Absent first-use tables remain absent. The declared backup scope is
+these three request tables plus the schema and content-version metadata supplied
+by the backup owner. No credentials, retention policy, or publication authority
+changes. Older builds refuse the new version; rollback restores the verified
+pre-upgrade backup with its matching build.
 
 ### State schema 27
 

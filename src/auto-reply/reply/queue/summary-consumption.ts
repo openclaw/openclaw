@@ -1,12 +1,10 @@
+import type { SessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
-import type { FOLLOWUP_QUEUES } from "./state.js";
 import type { FollowupRun } from "./types.js";
-
-type FollowupQueueState = NonNullable<ReturnType<typeof FOLLOWUP_QUEUES.get>>;
 
 export function consumeQueueSummaryDelivery(
   queue: Pick<
-    FollowupQueueState,
+    SessionControllerMailbox,
     "summarySources" | "summaryLines" | "summaryElisions" | "droppedCount"
   >,
   delivery: { droppedCount: number; sources: readonly FollowupRun[] },
@@ -30,8 +28,16 @@ export function consumeQueueSummaryDelivery(
         (entry?.summaryLines ?? queue.summaryLines).splice(index, 1);
       }
       consumedCount += 1;
-      if (entry && entry.sources.length === 0) {
-        queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
+      if (entry) {
+        for (const [original, compact] of entry.sourceRefs) {
+          if (compact === source || original === source) {
+            entry.sourceRefs.delete(original);
+          }
+        }
+        entry.count = entry.sources.length;
+        if (entry.sources.length === 0) {
+          queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
+        }
       }
     }
     if (completeLifecycles) {

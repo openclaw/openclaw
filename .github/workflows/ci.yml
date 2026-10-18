@@ -23,7 +23,7 @@ on:
         type: choice
         options: [default, main]
       test_runtime_policy:
-        description: Opt-in Linux test runtime trial (bun-all or dual-all); empty preserves the current event policy.
+        description: Linux test runtime override (node, bun-all, or dual-all); empty uses Bun for daily CI and both runtimes for full validation.
         required: false
         default: ""
         type: string
@@ -2347,7 +2347,7 @@ jobs:
 
       - name: Setup pinned Bun test runtime
         id: ui_bun
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-compatible","dual","bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Lint Control UI window.open usage
@@ -4512,13 +4512,12 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
-    # Full port/recovery coverage exceeds 30 minutes on the hosted infra runner.
-    timeout-minutes: ${{ matrix.shard == 'infra' && 60 || 30 }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 3
       matrix:
-        shard: [infra, integrations]
+        shard: [1/3, 2/3, 3/3]
     steps:
       - *linux_node_checkout_step
       - *linux_node_setup_step
@@ -4553,6 +4552,14 @@ jobs:
       - name: Check formatting
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
+
+      - name: Check AGENTS.md bootstrap size
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        run: |
+          # Historical release targets predate this guard.
+          if node -e 'process.exit(require("./package.json").scripts?.["check:agents-md-size"] ? 0 : 1)'; then
+            pnpm check:agents-md-size
+          fi
 
       - name: Check config docs baseline
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}

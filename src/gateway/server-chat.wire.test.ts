@@ -9,6 +9,7 @@ import { createCliToolTracking } from "../agents/cli-runner/execute-tool-trackin
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { type AgentEventRuntimePayload, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -968,26 +969,33 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       });
       chatRunState.clearRun(runId);
     } else {
-      const chatAbortControllers = new Map();
-      registerChatAbortController({
-        chatAbortControllers,
+      const registration = registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: "/synthetic/chat-wire/" + runId,
+          sessionKey,
+          incarnation: runId,
+        }),
         runId,
         sessionId: runId,
         sessionKey,
         timeoutMs: 60_000,
       });
-      expect(
-        abortChatRunById(
-          {
-            ...harness,
-            ...broadcaster,
-            chatAbortControllers,
-            removeChatRun: (sourceRunId, clientRunId, key) =>
-              chatRunState.registry.remove(sourceRunId, clientRunId, key),
-          },
-          { runId, sessionKey },
-        ).aborted,
-      ).toBe(true);
+      try {
+        expect(registration.registered).toBe(true);
+        expect(
+          abortChatRunById(
+            {
+              ...harness,
+              ...broadcaster,
+              removeChatRun: (sourceRunId, clientRunId, key) =>
+                chatRunState.registry.remove(sourceRunId, clientRunId, key),
+            },
+            { runId, sessionKey },
+          ).aborted,
+        ).toBe(true);
+      } finally {
+        registration.cleanup();
+      }
     }
     const beforeDrain = frames.length;
     while (callbacks.length) {

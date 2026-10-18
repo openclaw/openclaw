@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
@@ -337,6 +337,9 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         return await waitResult.promise;
       });
     }
+    const { holdLiveRequesterTurns } =
+      await import("./subagent-requester-turn-liveness.test-support.js");
+    onTestFinished(holdLiveRequesterTurns("held-parent-turn").restore);
     await registerSubagentRun({
       ...registrationDefaults,
       runId,

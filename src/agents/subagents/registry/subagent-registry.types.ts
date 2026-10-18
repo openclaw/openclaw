@@ -128,9 +128,11 @@ export type RequesterSettleWakeState = {
   status: "pending" | "dispatching";
   /** Number of delivery attempts already admitted. */
   attemptCount: number;
+  /** Raw private input retained with its exact dispatch identity until this wake settles. */
+  privateInput?: { runId: string; message: string };
   /** Ambiguous transport replays made with the current idempotency key. */
   replayCount?: number;
-  /** Persisted retry deadline; restore waits until this instant. */
+  /** Retained retry receipt from an admitted attempt; mailbox admission owns scheduling. */
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];

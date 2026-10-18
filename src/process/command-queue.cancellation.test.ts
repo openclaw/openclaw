@@ -2,10 +2,9 @@ import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  clearCommandLane as clear,
-  CommandLaneClearedError,
   enqueueCommandInLane as enqueue,
   getCommandLaneSnapshot as snapshot,
+  getQueueSize,
   setCommandLaneConcurrency as setConcurrency,
 } from "./command-queue.js";
 import {
@@ -201,7 +200,7 @@ it("does not search a shared signal for once-listeners that already fired", asyn
   await expect(enqueue(lane, async () => "refilled")).resolves.toBe("refilled");
 });
 
-it("detaches queued cancellation on admission and clear without cancelling active work", async () => {
+it("detaches queued cancellation on admission and abort without cancelling active work", async () => {
   const lane = "cancellation-admission";
   const controller = new AbortController();
   const gate = createDeferred<string>();
@@ -212,32 +211,52 @@ it("detaches queued cancellation on admission and clear without cancelling activ
   const queued = enqueue(lane, async () => "unexpected", {
     abortSignal: controller.signal,
   });
-  const rejection = expect(queued).rejects.toBeInstanceOf(CommandLaneClearedError);
+  const reason = new Error("owner stopped queued work");
+  const rejection = expect(queued).rejects.toBe(reason);
   expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
-  expect(clear(lane)).toBe(1);
+  controller.abort(reason);
+  expect(snapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
   expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-  controller.abort(new Error("too late to cancel admission"));
   gate.resolve("active finished");
   await rejection;
   await expect(active).resolves.toBe("active finished");
 });
 
-it("clears selected session work while unrelated queued work keeps its order", async () => {
-  const lane = "session:selective-clear";
-  setConcurrency(lane, 0);
-  const started: string[] = [];
-  const enqueueSession = (sessionId: string) =>
-    enqueue(lane, async () => started.push(sessionId), {
-      sessionTarget: { sessionId },
-    });
-  const [before, selected, after] = ["before", "selected", "after"].map(enqueueSession);
-  const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
-  expect(clear(lane, (target) => target?.sessionId === "selected")).toBe(1);
-  expect(snapshot(lane).queuedCount).toBe(2);
+it("owner cancellation retains active capacity until raw settlement without disturbing siblings", async () => {
+  const lane = "owner-cancellation";
+  const otherLane = "owner-cancellation-sibling";
   setConcurrency(lane, 1);
-  await rejection;
-  await Promise.all([before, after]);
-  expect(started).toEqual(["before", "after"]);
+  setConcurrency(otherLane, 1);
+  const blocker = createDeferred();
+  const otherBlocker = createDeferred();
+  const cancellation = new AbortController();
+  const first = enqueue(
+    lane,
+    async () => {
+      await blocker.promise;
+      return "first";
+    },
+    { abortSignal: cancellation.signal },
+  );
+  const other = enqueue(otherLane, async () => {
+    await otherBlocker.promise;
+    return "other";
+  });
+  const next = vi.fn(async () => "second");
+  const second = enqueue(lane, next);
+  expect(next).not.toHaveBeenCalled();
+  expect(snapshot(lane).activeCount + snapshot(otherLane).activeCount).toBe(2);
+  cancellation.abort(new Error("owner requested stop"));
+  expect(snapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+  expect(next).not.toHaveBeenCalled();
+  blocker.resolve();
+  await expect(first).resolves.toBe("first");
+  await expect(second).resolves.toBe("second");
+  expect(next).toHaveBeenCalledOnce();
+  expect(getQueueSize(lane)).toBe(0);
+  expect(getQueueSize(otherLane)).toBe(1);
+  otherBlocker.resolve();
+  await expect(other).resolves.toBe("other");
 });
 
 it("releases entry references before reentrant cancellation cleanup", () => {

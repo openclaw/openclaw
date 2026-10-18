@@ -110,7 +110,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const placement = selectedSession?.placement;
     const visibleWorkspaceConflict =
       workspaceConflict &&
-      this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
+      this.workspaceConflicts.dismissedRefs.get(selectedSession?.key ?? state.sessionKey) !==
         workspaceConflict.stagedResultRef
         ? workspaceConflict
         : undefined;
@@ -247,7 +247,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const setReply = (target: ChatProps["replyTarget"]) => {
       state.chatReplyTarget = target;
       state.handleChatDraftChange(state.chatMessage);
-      state.requestUpdate?.();
     };
     const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
     const composerControls = catalogKey
@@ -387,7 +386,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       routeLoadingSkeleton: this.routeLoadingSkeleton && initialHistoryUnavailable,
       sending:
         state.chatSending ||
-        this.recoveringSession ||
+        this.sessionCreation.recovering ||
         this.collaboration.addOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
       onRetrySessionPlacementStartup: placementStartup?.retryable
@@ -525,11 +524,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession
           ? () => {
-              this.dismissedWorkspaceConflictRefs.set(
-                selectedSession.key,
-                visibleWorkspaceConflict.stagedResultRef,
-              );
-              this.invalidate();
+              this.workspaceConflicts.dismissedRefs = new Map(
+                this.workspaceConflicts.dismissedRefs,
+              ).set(selectedSession.key, visibleWorkspaceConflict.stagedResultRef);
             }
           : undefined,
       sessions: state.sessionsResult,
@@ -609,7 +606,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSwitchRealtimeCamera: () => void state.switchRealtimeTalkCamera(),
       onDismissError: () => {
         dismissChatError(state);
-        state.requestUpdate?.();
       },
       onDismissRealtimeTalkError: () => {
         dismissRealtimeTalkError(state);

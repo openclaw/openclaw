@@ -178,12 +178,20 @@ async function capturePostgresBackupInWorker(params: {
   gitIdentity?: GitBackupIdentity;
 }): Promise<PostgresExportEnvelope> {
   const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
-  const anchor = readBackupEngine(params.sourcePath);
+  params.assertCurrent();
+  await fs.mkdir(params.directory, { mode: 0o700 });
+  await fs.writeFile(path.join(params.directory, ".pending"), "", { flag: "wx", mode: 0o600 });
+  const anchorPath = path.join(params.directory, "anchor.sqlite");
+  await createVerifiedSqliteSnapshot({
+    sourcePath: params.sourcePath,
+    targetPath: anchorPath,
+    preserveRowIds: true,
+  });
+  // Identify the captured bytes; reacquiring the live anchor adds another isolated copy.
+  const anchor = readBackupEngineImage(anchorPath, params.sourcePath);
   if (anchor.engine !== "postgres") {
     throw new Error("A PostgreSQL backup requires its original anchor.");
   }
-  await fs.mkdir(params.directory, { mode: 0o700 });
-  await fs.writeFile(path.join(params.directory, ".pending"), "", { flag: "wx", mode: 0o600 });
   return await withDatabasePortPostgres(
     params.config,
     anchor,
@@ -193,11 +201,6 @@ async function capturePostgresBackupInWorker(params: {
         baseDescriptor,
       );
       params.assertCurrent();
-      await createVerifiedSqliteSnapshot({
-        sourcePath: params.sourcePath,
-        targetPath: path.join(params.directory, "anchor.sqlite"),
-        preserveRowIds: true,
-      });
       const manifest = await exportPostgresBackup({ ...params, client, descriptor, anchor });
       await verifyPostgresExportEnvelope(
         params.directory,

@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import { snapshotReaderSlot } from "../plugins/plugin-metadata-snapshot-readers.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -33,6 +34,7 @@ import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/typ
 import { upsertAuthProfileWithLockOrThrow } from "./auth-profiles/upsert-with-lock.js";
 import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   configFor,
   configForProviders,
@@ -79,6 +81,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
   },
 }));
 
+// mock-isolation: Auth precedence fixtures define every provider credential source.
 vi.mock("./model-auth-env-vars.js", () => {
   const candidates = {
     anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -102,7 +105,6 @@ vi.mock("./model-auth-env-vars.js", () => {
     ],
   } satisfies Record<string, readonly unknown[]>;
   return {
-    listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvAuthLookupMaps: () => ({
       aliasMap: {},
       envCandidateMap: candidates,
@@ -152,7 +154,14 @@ const cliCredentialMocks = vi.hoisted(() => ({
 
 vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
+let previousEnvNameReader: typeof snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore;
 beforeEach(() => {
+  previousEnvNameReader = snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore;
+  // Marker classification must use the same invented provider policy as auth lookup.
+  const { envCandidateMap } = resolveProviderEnvAuthLookupMaps();
+  snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore = () => [
+    ...new Set(Object.values(envCandidateMap).flat()),
+  ];
   prepareSharedAuthStoreOwnershipForNative();
   clearRuntimeAuthProfileStoreSnapshots();
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -160,6 +169,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  snapshotReaderSlot.listKnownProviderAuthEnvVarNamesCore = previousEnvNameReader;
   clearRuntimeAuthProfileStoreSnapshots();
   clearRuntimeConfigSnapshot();
 });

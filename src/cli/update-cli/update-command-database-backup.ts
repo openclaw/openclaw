@@ -110,6 +110,13 @@ export async function captureUpdateDatabases(params: {
         // source open would rebuild an exited writer's WAL index, changing the
         // recorded generation and disabling automatic restoration.
         preserveSourceArtifacts: maintenance !== null && unavailable === undefined,
+        // Confirmed custody can authorize automatic rollback, which keeps FULL validation.
+        integrityCheck:
+          maintenance !== null && unavailable === undefined
+            ? undefined
+            : execution.opts.fullIntegrityCheck
+              ? "full"
+              : "quick",
         timeoutMs: execution.updateStepTimeoutMs,
         nodeRunner: execution.packageUpdateNodeRunner,
         postgresOffline: maintenance !== null && unavailable === undefined,

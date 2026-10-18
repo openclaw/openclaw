@@ -1,12 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createReplyOperation,
-  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { isReplyRunEvidenceStale } from "../../auto-reply/reply/reply-run-registry.state.js";
-import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import {
   onDiagnosticEvent,
@@ -18,6 +10,17 @@ import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js"
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import {
+  createReplyOperation,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import {
+  assertSessionControllerOperation,
+  isReplyRunEvidenceStale,
+} from "../../sessions/session-controller.state.js";
+import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
+import * as controllerWait from "../../sessions/session-controller.wait.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -28,13 +31,13 @@ import {
   withGatewayToolCallerIdentity,
 } from "../tools/gateway-caller-context.js";
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "./run-state.js";
+import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "./runs.js";
-import { testing } from "./runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing,
+  steerTestSessionTurn,
+} from "./runs.test-support.js";
 
 const sessionId = "runtime-liveness-session";
 const sessionKey = "agent:main:runtime-liveness";
@@ -63,6 +66,14 @@ beforeEach(async () => {
     kind: "embedded" as const,
     runId,
     queueMessage,
+    messageInjectionV2: {
+      version: 2 as const,
+      isAvailable: () => true,
+      queueMessage: async (_text: string, _options: unknown, assertCurrent: () => void) => {
+        assertCurrent();
+        return queueMessage();
+      },
+    },
     isStreaming: () => true,
     isCompacting: () => false,
     ownsLiveness: () => runtimeOwnsLiveness,
@@ -72,12 +83,35 @@ beforeEach(async () => {
   handle = backend;
   operation.attachBackend(backend);
   operation.setPhase("running");
+  const caller = createAdmittedGatewayToolCallerIdentity({
+    admittedRunContext: admitted,
+    agentId: "main",
+    sessionKey,
+  });
+  if (!caller) {
+    throw new Error("liveness fixture requires an admitted Gateway caller");
+  }
+  const watchdogAttempt = operation.watchdog.attachAttempt({
+    assertCurrent: () => assertSessionControllerOperation(operation),
+  });
   await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: admitted,
-      agentId: "main",
-      sessionKey,
-    }),
+    {
+      ...caller,
+      watchdogAttempt,
+      embeddedRunToolAuthorityBinding: (registration) => ({
+        source: "reply",
+        operation,
+        watchdogAttempt,
+        project: () => undefined,
+        projectAsync: async () => undefined,
+        assertActive: () => {
+          assertSessionControllerOperation(operation);
+          if (registration.handle !== handle) {
+            throw new Error("liveness fixture handle changed");
+          }
+        },
+      }),
+    },
     () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
   );
 });
@@ -86,7 +120,7 @@ afterEach(() => {
   resetDiagnosticStateForTest();
   admission.close();
   testing.resetActiveEmbeddedRuns();
-  replyTesting.resetReplyRunRegistry();
+  replyTesting.resetSessionControllerForTest();
   resetDiagnosticEventsForTest();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -97,29 +131,31 @@ describe("runtime-owned embedded liveness", () => {
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
 
     expect(isReplyRunEvidenceStale(operation)).toBe(false);
-    await expect(
-      queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, "continue"),
-    ).resolves.toMatchObject({
-      queued: true,
-      target: "embedded_run",
+    await expect(steerTestSessionTurn(sessionId, "continue")).resolves.toMatchObject({
+      status: "accepted",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
     await expect(
       recoverStuckDiagnosticSession({
         sessionId,
         sessionKey,
+        operation,
         ageMs: RUN_STALE_TAKEOVER_MS + 1,
         queueDepth: 1,
         allowActiveAbort: true,
       }),
-    ).resolves.toMatchObject({ status: "skipped", reason: "runtime_owned_wait" });
+    ).resolves.toMatchObject({ status: "skipped", reason: "active_reply_work" });
     expect(abort).not.toHaveBeenCalled();
   });
 
   it("reports quiet runtime waits without scheduling abort", async () => {
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
-    const recover = vi.fn(recoverStuckDiagnosticSession);
+    let recoveryAtDiagnosticTick: ReturnType<typeof operation.watchdog.snapshot>["recovery"];
+    const recover = vi.fn((request: Parameters<typeof recoverStuckDiagnosticSession>[0]) => {
+      recoveryAtDiagnosticTick = request.operation?.watchdog.snapshot().recovery;
+      return recoverStuckDiagnosticSession(request);
+    });
     try {
       startGatewayDiagnosticHeartbeat(
         createTestGatewayScheduler("fake-timers"),
@@ -139,16 +175,47 @@ describe("runtime-owned embedded liveness", () => {
 
       runtimeOwnsLiveness = false;
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(recover).toHaveBeenCalled();
-      expect(abort).toHaveBeenCalled();
+      // Diagnostics request a tick from the captured controller once the runtime wait ends.
+      expect(recover).toHaveBeenCalledOnce();
+      expect(recover.mock.calls[0]?.[0].operation).toBe(operation);
+      expect(recoveryAtDiagnosticTick).toMatchObject({ status: "pending" });
+      await expect(recover.mock.results[0]?.value).resolves.toMatchObject({
+        status: "skipped",
+        reason: "active_reply_work",
+      });
+      // The controller timer started recovery before the diagnostic projection observed it.
+      await operation.ownerSettlement;
+      expect(abort).toHaveBeenCalledOnce();
+      expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
     } finally {
       unsubscribe();
     }
   });
 
-  it("waits in bounded slices before reclaiming host work", async () => {
-    await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
-    const waitForIdle = vi.spyOn(replyRunRegistry, "waitForIdle");
+  it("waits in bounded slices, then reclaims host-owned work without a millisecond spin", async () => {
+    vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
+    await Promise.resolve();
+    const waitForIdleImpl = controllerWait.waitForSessionRunIdle;
+    let resolveFirstWait!: () => void;
+    let resolveSecondWait!: () => void;
+    const firstWait = new Promise<void>((resolve) => {
+      resolveFirstWait = resolve;
+    });
+    const secondWait = new Promise<void>((resolve) => {
+      resolveSecondWait = resolve;
+    });
+    const waitForIdle = vi
+      .spyOn(controllerWait, "waitForSessionRunIdle")
+      .mockImplementation((...args) => {
+        const result = waitForIdleImpl(...args);
+        if (waitForIdle.mock.calls.length === 1) {
+          resolveFirstWait();
+        } else if (waitForIdle.mock.calls.length === 2) {
+          resolveSecondWait();
+        }
+        return result;
+      });
+
     const callerAbort = new AbortController();
     let settled = false;
     const waiting = admitReplyTurn({
@@ -162,10 +229,12 @@ describe("runtime-owned embedded liveness", () => {
       return result;
     });
     try {
-      await vi.advanceTimersByTimeAsync(2 * REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      await firstWait;
+      vi.advanceTimersByTime(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      await secondWait;
       expect(settled).toBe(false);
       expect(abort).not.toHaveBeenCalled();
-      expect(waitForIdle.mock.calls.length).toBeGreaterThan(0);
+      expect(waitForIdle.mock.calls.length).toBeGreaterThan(1);
       expect(
         waitForIdle.mock.calls.every(
           ([, timeoutMs]) => timeoutMs === REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -173,7 +242,7 @@ describe("runtime-owned embedded liveness", () => {
       ).toBe(true);
 
       runtimeOwnsLiveness = false;
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
+      vi.advanceTimersByTime(1_000);
       const result = await waiting;
       expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
       expect(result.status).toBe("owned");
@@ -205,10 +274,8 @@ describe("runtime-owned embedded liveness", () => {
       return true;
     };
     await vi.advanceTimersByTimeAsync(RUN_STALE_TAKEOVER_MS + 1);
-    await expect(
-      queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, "continue"),
-    ).resolves.toMatchObject({
-      queued: false,
+    await expect(steerTestSessionTurn(sessionId, "continue")).resolves.toMatchObject({
+      status: "rejected",
       reason: "no_active_run",
     });
     expect(queueMessage).not.toHaveBeenCalled();

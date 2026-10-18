@@ -13,6 +13,7 @@ import { readPendingInputSource } from "../config/sessions/session-pending-input
 import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
@@ -20,8 +21,14 @@ import { isTransientRestartRecoveryError } from "../infra/restart-recovery-error
 import { getRetryAttemptErrors } from "../infra/retry-attempt-errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { CommunicationEndpoint } from "../sessions/communication-admission.js";
-import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  listAgentDatabaseAdmissionRefusals,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
+import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
@@ -70,11 +77,48 @@ export async function recoverSessionSendDeliveries(
   signal: AbortSignal,
   startupTrace?: GatewayStartupTrace,
 ): Promise<void> {
+  if (!context.recoveryRuntime) {
+    return;
+  }
+  const config = context.getRuntimeConfig();
+  const pendingAgents = listAgentDatabaseAdmissionRefusals()
+    .filter((refusal) => refusal.code === "agent-database-inspection-pending")
+    .map((refusal) => refusal.agentId);
+  await recoverSessionSendDeliveriesForAgents(context, config, signal, startupTrace);
+  // Discovery skips pending stores. Join their existing admission owner before rescanning.
+  const rescans = await Promise.allSettled(
+    pendingAgents.map(async (agentId) => {
+      await waitForAgentDatabasePreparation(agentId, { signal });
+      signal.throwIfAborted();
+      if (!readAgentDatabaseAdmissionRefusal(agentId)) {
+        await recoverSessionSendDeliveriesForAgents(
+          context,
+          context.getRuntimeConfig(),
+          signal,
+          startupTrace,
+          new Set([agentId]),
+        );
+      }
+    }),
+  );
+  for (const result of rescans) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
+
+async function recoverSessionSendDeliveriesForAgents(
+  context: GatewayRequestContext,
+  config: OpenClawConfig,
+  signal: AbortSignal,
+  startupTrace?: GatewayStartupTrace,
+  agentIds?: ReadonlySet<string>,
+): Promise<void> {
   const runtime = context.recoveryRuntime;
   if (!runtime) {
     return;
   }
-  const config = context.getRuntimeConfig();
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (context.getRuntimeConfig() !== config) {
@@ -111,6 +155,7 @@ export async function recoverSessionSendDeliveries(
     () =>
       discoverRestartRecoveryStoreTargets({
         cfg: config,
+        agentIds,
         shouldContinue: () => !signal.aborted,
       }),
     "sidecars.delivery-discovery",
@@ -126,6 +171,7 @@ export async function recoverSessionSendDeliveries(
     for (const { sessionKey, entry } of entries) {
       const scope = {
         ...target,
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
         sessionKey,
         sessionId: entry.sessionId,
         expectedLifecycleRevision: entry.lifecycleRevision,
@@ -214,7 +260,7 @@ export async function recoverSessionSendDeliveries(
               if (
                 destination.sessionKey !== sessionKey ||
                 destination.entry?.sessionId !== entry.sessionId ||
-                destination.agentId !== target.agentId
+                destination.agentId !== scope.agentId
               ) {
                 throw new SessionSendEndpointChangedError(
                   "target",

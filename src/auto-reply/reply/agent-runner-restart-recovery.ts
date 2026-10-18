@@ -1,19 +1,21 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  bindSessionControllerSourceTurnId,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "../../sessions/session-controller.state.js";
 import {
   resolveReplyRunDeliveryContext,
   resolveSourceReplyPolicy,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { resolveReplySourceTurnId } from "./source-turn-id.js";
+import { resolveReplyAdmissionRunId, resolveReplySourceTurnId } from "./source-turn-id.js";
 
 export function createReplyAgentRestartRecoveryController(
   context: Pick<
@@ -50,9 +52,7 @@ export function createReplyAgentRestartRecoveryController(
         hasRepliedRef: undefined,
       }).sameChannelThreadRequired
     : undefined;
-  const admissionRunId =
-    normalizeOptionalString(sessionCtx.MessageSid) ??
-    normalizeOptionalString(sessionCtx.MessageSidFull);
+  const admissionRunId = resolveReplyAdmissionRunId(sessionCtx);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
     acquireSessionActor: async () => {
@@ -142,7 +142,7 @@ export function createReplyAgentRestartRecoveryController(
           entry: getActiveSessionEntry(),
         });
         if (sourceTurnId) {
-          replyRunRegistry.bindSourceTurnId(replyOperation, sourceTurnId);
+          bindSessionControllerSourceTurnId(replyOperation, sourceTurnId);
         }
       }
       return result;

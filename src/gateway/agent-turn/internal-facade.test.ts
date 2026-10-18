@@ -1,18 +1,22 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatRunState } from "../server-chat-state.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
+import { createRpcSourceForTest, claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { createInternalAgentTurnFacade } from "./internal-facade.js";
 import type { AgentTurnStartOwner } from "./internal-facade.types.js";
+import { setTestRpcSourceIdentity } from "./rpc-source.test-support.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
@@ -50,7 +54,6 @@ function createContext() {
     trackExecution: trackAsyncWork,
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
-    chatAbortControllers: new Map(),
     chatRunState: createChatRunState(),
     dedupe: new Map(),
     getRuntimeConfig: () => ({}),
@@ -442,28 +445,73 @@ describe("createInternalAgentTurnFacade", () => {
     },
   );
 
-  it("returns acceptance metadata without a final and retains the execution-start observer", async () => {
+  it("preserves post-acceptance Error identity", async () => {
+    let rejectTurn!: (error: Error) => void;
+    startTurn.mockImplementation(
+      ({ io }) =>
+        new Promise<void>((_resolve, reject) => {
+          io.emitAcceptance([true, { runId: "run-error", status: "accepted" }, undefined]);
+          rejectTurn = reject;
+        }),
+    );
+    const dispatchError = Object.assign(new Error("turn failed"), { code: "ETURN" });
+    const result = createFacade().dispatchRaw(
+      { message: "test", idempotencyKey: "run-error" },
+      { expectFinal: true },
+    );
+    await vi.waitFor(() => expect(rejectTurn).toBeTypeOf("function"));
+
+    rejectTurn(dispatchError);
+
+    await expect(result).rejects.toBe(dispatchError);
+  });
+
+  it.each([false, true])(
+    "returns cached acceptance and only reports actual execution (executing=%s)",
+    async (executing) => {
+      const context = createContext();
+      const source = createRpcSourceForTest({}, { runId: "run-2" });
+      rpcSourceTesting.set("run-2", source);
+      if (executing) {
+        await claimRpcSourceForTest(source);
+      }
+      const onExecutionStarted = vi.fn();
+      startTurn.mockImplementation(async ({ io }) => {
+        io.emitAcceptance([true, { runId: "run-2", status: "in_flight" }, undefined], {
+          cached: true,
+          runId: "run-2",
+        });
+      });
+
+      await expect(
+        createFacade(context).dispatchRaw(
+          { message: "test", idempotencyKey: "run-2" },
+          { onExecutionStarted },
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        payload: { runId: "run-2", status: "in_flight" },
+        error: undefined,
+        meta: { cached: true, runId: "run-2" },
+      });
+      expect(onExecutionStarted).toHaveBeenCalledTimes(executing ? 1 : 0);
+    },
+  );
+
+  it("passes the exact internal execution-start observer to the turn", async () => {
     const onExecutionStarted = vi.fn();
     startTurn.mockImplementation(async ({ io }) => {
       expect(io.emitExecutionStarted).toBe(onExecutionStarted);
-      io.emitAcceptance([true, { runId: "run-2", status: "in_flight" }, undefined], {
-        cached: true,
-        runId: "run-2",
-      });
+      io.emitAcceptance([true, { runId: "run-started", status: "accepted" }, undefined]);
       io.emitExecutionStarted?.();
     });
 
     await expect(
       createFacade().dispatchRaw(
-        { message: "test", idempotencyKey: "run-2" },
+        { message: "test", idempotencyKey: "run-started" },
         { onExecutionStarted },
       ),
-    ).resolves.toEqual({
-      ok: true,
-      payload: { runId: "run-2", status: "in_flight" },
-      error: undefined,
-      meta: { cached: true, runId: "run-2" },
-    });
+    ).resolves.toMatchObject({ ok: true });
     expect(onExecutionStarted).toHaveBeenCalledOnce();
   });
 
@@ -491,11 +539,15 @@ describe("createInternalAgentTurnFacade", () => {
     };
     const register = () =>
       registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
         agentId: request.agentId,
         runId: request.idempotencyKey,
         sessionId: request.expectedExistingSessionId,
         sessionKey: request.sessionKey,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/facade.db",
+          sessionKey: request.sessionKey,
+          incarnation: request.expectedExistingSessionId,
+        }),
         kind: "agent",
         timeoutMs: 60_000,
       });
@@ -522,10 +574,17 @@ describe("createInternalAgentTurnFacade", () => {
     if (!owner) {
       throw new Error("expected captured startup owner");
     }
-    expect(owner.observe()).toEqual({
+    const observation = owner.observe();
+    expect(observation).toEqual({
       executionStarted: false,
-      expiresAtMs: registration.entry.expiresAtMs,
     });
+    expect(() => Reflect.get(observation ?? {}, "expiresAtMs")).toThrowError(
+      expect.objectContaining({
+        code: "PLUGIN_CAPABILITY_REMOVED",
+        capability: "startOwner.observe().expiresAtMs",
+        message: expect.stringContaining("startDeadlineAtMs"),
+      }),
+    );
     let replacement: ReturnType<typeof register> | undefined;
     switch (change) {
       case "aborted":
@@ -539,10 +598,10 @@ describe("createInternalAgentTurnFacade", () => {
         rotateAgentEventLifecycleGeneration();
         break;
       case "agent changed":
-        registration.entry.agentId = "other-agent";
+        setTestRpcSourceIdentity(registration.entry, { agentId: "other-agent" });
         break;
       case "session changed":
-        registration.entry.sessionId = "replacement-session";
+        setTestRpcSourceIdentity(registration.entry, { sessionId: "replacement-session" });
         break;
       case "gateway closed":
         gatewayCurrent = false;
@@ -576,23 +635,33 @@ describe("createInternalAgentTurnFacade", () => {
       const acceptanceGate = createDeferred();
       const acceptanceReached = createDeferred();
       const unrelated = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
         runId: "unrelated-run",
         sessionId: "unrelated-session",
         sessionKey: "agent:main:unrelated",
+        target: captureSessionTarget({
+          storeScope: "/synthetic/facade.db",
+          sessionKey: "agent:main:unrelated",
+        }),
         timeoutMs: 60_000,
         kind: "agent",
       });
       let accepted: ReturnType<typeof registerChatAbortController> | undefined;
+      onTestFinished(() => {
+        accepted?.cleanup();
+        unrelated.cleanup();
+      });
       startTurn.mockImplementation(async ({ io }) => {
         if (lateAcceptance) {
           await acceptanceGate.promise;
         }
         const registration = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
           runId: "deadline-run",
           sessionId: "deadline-session",
           sessionKey: "agent:main:deadline",
+          target: captureSessionTarget({
+            storeScope: "/synthetic/facade.db",
+            sessionKey: "agent:main:deadline",
+          }),
           timeoutMs: 60_000,
           kind: "agent",
         });

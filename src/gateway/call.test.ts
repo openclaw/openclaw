@@ -18,10 +18,6 @@ import { registerGatewayCallDispatchPreparationTests } from "./call-dispatch-pre
 import { registerGatewayCallLocalBackendAuthTests } from "./call-local-backend-auth.test-support.js";
 import type { GatewayClientOptions, GatewayClientRequestOptions } from "./client.js";
 import { waitForFast } from "./client.test-support.js";
-import {
-  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
-  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
-} from "./gateway-connection.test-mocks.js";
 import { createExpectedBroadOperatorScopes } from "./scope-expectations.test-support.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
@@ -29,12 +25,7 @@ const TLS_FINGERPRINT = "ab".repeat(32);
 const gatewayConfigMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   inspectGatewayTlsCertificate: vi.fn(),
-  resolveConfigPath: vi.fn(
-    (env: NodeJS.ProcessEnv, stateDir = env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw") =>
-      env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
-  ),
   resolveGatewayPort: vi.fn(),
-  resolveStateDir: vi.fn((env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw"),
   useActualDispatchConfig: false,
 }));
 const getRuntimeConfig = gatewayConfigMocks.getRuntimeConfig;
@@ -113,9 +104,7 @@ vi.mock("../config/paths.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/paths.js")>();
   return {
     ...actual,
-    resolveConfigPath: gatewayConfigMocks.resolveConfigPath,
     resolveGatewayPort: gatewayConfigMocks.resolveGatewayPort,
-    resolveStateDir: gatewayConfigMocks.resolveStateDir,
   };
 });
 
@@ -291,14 +280,10 @@ function deviceAuth(token = "paired-device-token", scopes = ["operator.read"]): 
 function resetGatewayCallMocks() {
   getRuntimeConfig.mockReset().mockReturnValue({});
   resolveGatewayPort.mockReset().mockReturnValue(18789);
-  gatewayConfigMocks.resolveConfigPath.mockClear();
-  gatewayConfigMocks.resolveStateDir.mockClear();
   gatewayConfigMocks.inspectGatewayTlsCertificate
     .mockReset()
     .mockResolvedValue({ ok: false, error: "gateway tls is disabled" });
   gatewayConfigMocks.useActualDispatchConfig = false;
-  pickPrimaryTailnetIPv4.mockClear();
-  pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
   lastRequestOptions = null;
   eventLoopReadyState.calls = [];
@@ -336,7 +321,6 @@ function resetGatewayCallMocks() {
 
 function setGatewayNetworkDefaults(port = 18789) {
   resolveGatewayPort.mockReturnValue(port);
-  pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 }
 
 function setGatewayConfig(gateway: NonNullable<OpenClawConfig["gateway"]>) {
@@ -573,7 +557,6 @@ describe("callGateway url resolution", () => {
       remote: { url: "wss://gateway.example/ws", token: "remote-token" },
     });
     resolveGatewayPort.mockReturnValue(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
     await callGateway({
       method: "health",
@@ -594,7 +577,6 @@ describe("callGateway url resolution", () => {
       },
     });
     setGatewayNetworkDefaults(18789);
-    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     process.env.OPENCLAW_GATEWAY_URL = "wss://gateway-in-container.internal:9443/ws";
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
 

@@ -4,6 +4,7 @@ import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
@@ -224,11 +225,10 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       ),
     projectAddAvailable:
       !view().nativeTerminal &&
-      canCallGatewayMethod(
-        props.params.context?.gateway.snapshot,
-        props.params.place.remotePlacement ? "sessions.create" : "projects.add",
-        "operator.write",
-      ),
+      readSessionMethodAccess(props.params.context?.gateway.snapshot, {
+        method: "sessions.create",
+        sessionScope: true,
+      }).allowed,
     remoteProjects: view().browser.projectSearchResult?.projects ?? [],
     selectedRemoteProject: view().browser.remoteProject,
     projectSearchCredentialMissing: view().browser.projectSearchResult?.credential === "missing",

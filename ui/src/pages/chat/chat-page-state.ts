@@ -597,6 +597,7 @@ export function createChatPageState(
         mergedChrome: mergeChatPageChrome(state.webNavigation, onboarding),
         narrow: state.narrow,
         navDrawerOpen: props.navDrawerOpen,
+        gatewayStatus: props.gatewayStatus,
         onboarding,
         onClosePane: splitMode ? handleClosePane : undefined,
         onFaceChange: handlePaneFaceChange,

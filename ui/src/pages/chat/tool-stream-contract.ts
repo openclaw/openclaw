@@ -120,6 +120,15 @@ export type ToolStreamHost = {
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
 
-export type LiveToolStreamState = Partial<
-  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">
->;
+export type LiveToolStreamState = Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">;
+
+export type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+> & { toolStreamSyncTimer?: number | null };

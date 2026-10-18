@@ -1,4 +1,4 @@
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import type { SessionCapability, SessionRowObservation } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 
@@ -37,6 +37,16 @@ export function createSessionCapabilityFixture(
     captureConnectionScope: () => null,
     isConnectionScopeCurrent: () => false,
     subscribe: () => () => undefined,
+    // Synthetic capabilities have no supplemental roster unless the test supplies one.
+    observeRow: (): SessionRowObservation => ({
+      row: null,
+      sessionId: null,
+      hasObserved: false,
+      isCurrent: () => true,
+      captureReconcile: () => () => ({ status: "current", row: null }),
+      dispose: () => {},
+    }),
+    observeList: () => ({ refresh: async () => {}, dispose: () => {} }),
     deletionState: () => undefined,
     think: () => undefined,
     settingsPreview: () => undefined,

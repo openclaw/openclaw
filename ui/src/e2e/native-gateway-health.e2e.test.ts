@@ -145,7 +145,8 @@ suite.define(() => {
         await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         const identity = page.locator(".sidebar-identity-card");
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
+        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
         await assertSelectionUnchanged(page);
         await page.mouse.move(1100, 850);
         if (proof) {
@@ -160,6 +161,13 @@ suite.define(() => {
         await expect.poll(() => teamHealth.getAttribute("data-health")).toBe("error");
         expect(await teamHealth.getAttribute("aria-label")).toBe("Unreachable");
         await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("error");
+        await expect
+          .poll(() => identity.getAttribute("data-connection-status"))
+          .toBe("reconnecting");
+        await page
+          .locator(".sidebar-shell__footer .gateway-status")
+          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
+          .waitFor();
         await assertSelectionUnchanged(page);
         if (proof) {
           await page.screenshot({
@@ -176,7 +184,8 @@ suite.define(() => {
         await expect.poll(() => currentHealth.getAttribute("data-health")).toBe("ok");
         await assertSelectionUnchanged(page);
         expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.locator(".gateway-status__label").count()).toBe(0);
+        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
+        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
           return reports.map((report) => report.health);

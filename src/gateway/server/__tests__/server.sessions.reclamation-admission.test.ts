@@ -7,7 +7,7 @@ import {
   loadSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -259,7 +259,7 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
       }
     };
     const admission = validation.own(
-      beginSessionWorkAdmission({
+      beginSessionEffect({
         scope: storePath,
         identities: [targetKey, "validation-delete"],
         assertAllowed: assertTargetExists,

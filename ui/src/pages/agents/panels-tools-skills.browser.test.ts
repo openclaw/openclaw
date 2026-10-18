@@ -345,6 +345,7 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
+      permissionsReady: true,
       target: {
         kind: "shared",
         scope: "agent",
@@ -423,6 +424,7 @@ describe("agents tools panel (browser)", () => {
     githubIdentity.sync({
       client,
       connected: true,
+      permissionsReady: true,
       target: {
         kind: "shared",
         scope: "agent",

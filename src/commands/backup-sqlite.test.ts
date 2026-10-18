@@ -195,6 +195,17 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(missingSnapshotMessage);
   });
 
+  it("reports a repository-format mismatch when listing a Git backup as SQLite", async () => {
+    const repositoryPath = path.join(state.root, "git-backup");
+    await fs.mkdir(path.join(repositoryPath, ".git"), { recursive: true });
+    await fs.writeFile(path.join(repositoryPath, ".git", "COMMIT_EDITMSG"), "snapshot commit\n");
+
+    const runtime = createRuntimeCapture();
+    await expect(
+      backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+    ).rejects.toThrow("Git backup repository is not a SQLite snapshot repository");
+  });
+
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();
 

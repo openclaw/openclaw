@@ -7,6 +7,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
@@ -27,7 +28,7 @@ import {
 import { readUnindexedHistoryControls } from "./session-accessor.sqlite-reset-window.js";
 import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { transcriptEventJsonSql, transcriptPredicateSql } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Select display slots without loading custom content or details into history metadata. */
@@ -44,9 +45,10 @@ export function isVisibleHistoryNonMessageEventSql(
     ELSE FALSE END)`;
 }
 
-export const historyNavigationValidSql =
-  /* kysely-allow-raw: only custom-message visibility needs navigation parsing. */
-  sql<number>`CASE WHEN identity.event_type = 'custom_message' THEN event.navigation_valid ELSE 1 END`;
+export function historyNavigationValidSql(database: EngineConnection): RawBuilder<number> {
+  return /* kysely-allow-raw: only custom-message visibility needs navigation parsing. */ sql<number>`CASE WHEN identity.event_type = 'custom_message'
+    THEN ${transcriptPredicateSql(database, "navigation_valid", "event")} ELSE 1 END`;
+}
 
 export function parseStoredTranscriptEvent(eventJson: string): TranscriptEvent {
   // SAFETY: The active projection indexes serialized TranscriptEvent rows.
@@ -102,9 +104,9 @@ function selectHistoricalDisplayEvents(
         eb("active.message_position", "is not", null),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          eb.ref("event.navigation_display"),
-          eb.ref("event.navigation_custom_type"),
-          eb.ref("event.navigation_valid"),
+          transcriptPredicateSql(projection.database.db, "navigation_display", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_custom_type", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
         ),
         ...(unindexedControls.length > 0
           ? [
@@ -142,7 +144,7 @@ function selectDisplayableActiveEventById(
       "active.active_position",
       "active.message_position",
       "identity.event_type",
-      historyNavigationValidSql.as("navigation_valid"),
+      historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     ])
     .where("identity.session_id", "=", projection.resolved.sessionId)
     .where("identity.event_id", "=", eventId)
@@ -151,9 +153,9 @@ function selectDisplayableActiveEventById(
         eb("active.message_position", "is not", null),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          eb.ref("event.navigation_display"),
-          eb.ref("event.navigation_custom_type"),
-          eb.ref("event.navigation_valid"),
+          transcriptPredicateSql(projection.database.db, "navigation_display", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_custom_type", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
         ),
       ]),
     );
@@ -247,7 +249,7 @@ function countHistoricalDisplayEvents(
   const query = selectHistoricalDisplayEvents(projection, interval)
     .select((eb) => [
       eb.fn.countAll<number>().as("event_count"),
-      eb.fn.min(historyNavigationValidSql).as("navigation_valid"),
+      eb.fn.min(historyNavigationValidSql(projection.database.db)).as("navigation_valid"),
     ])
     .where("active.active_position", "<", beforeActivePosition);
   const row = executeSqliteQueryTakeFirstSync(projection.database.db, query);
@@ -269,7 +271,7 @@ function readHistoricalDisplayEventRange(
   }
   const query = selectHistoricalDisplayEvents(projection, interval).select((eb) => [
     "active.event_seq",
-    historyNavigationValidSql.as("navigation_valid"),
+    historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
   const olderCount = anchor.displayPosition - start;
@@ -409,7 +411,7 @@ export function readHistoricalHistoryAnchorPage(
     projection.database.db,
     selectHistoricalDisplayEvents(projection, interval).select((eb) => [
       eb.fn.countAll<number>().as("total"),
-      eb.fn.min(historyNavigationValidSql).as("navigation_valid"),
+      eb.fn.min(historyNavigationValidSql(projection.database.db)).as("navigation_valid"),
       eb.fn
         .countAll<number>()
         .filterWhere("active.active_position", "<", row.active_position)

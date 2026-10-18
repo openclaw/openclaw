@@ -7,7 +7,7 @@ import type {
 
 type PublicReplyOptions<T> = T extends undefined
   ? undefined
-  : Omit<T, "internalEventExecution" | "onReplyOperationOwned">;
+  : Omit<T, "internalEventExecution" | "onReplyOperationAdmitted" | "onReplyOperationOwned">;
 
 type PublicReplyFunction<T> = T extends (params: infer P) => infer R
   ? (params: PublicReplyParams<P>) => R
@@ -54,6 +54,7 @@ export function publicReplyOptions(
   }
   const publicOptions = { ...options };
   Reflect.deleteProperty(publicOptions, "internalEventExecution");
+  Reflect.deleteProperty(publicOptions, "onReplyOperationAdmitted");
   Reflect.deleteProperty(publicOptions, "onReplyOperationOwned");
   return publicOptions;
 }
