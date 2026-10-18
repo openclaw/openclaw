@@ -135,6 +135,25 @@ describe("claws inspect extensions", () => {
     expect(agentLine).not.toMatch(/\p{Cc}/u);
   });
 
+  it("strips terminal controls from reported manifest diagnostics", async () => {
+    const { root, runtime } = await createInspectFixture("claude");
+    await writeFile(
+      join(root, "openclaw.claw.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "demo-agent" },
+        metadata: { "key\u001b]0;INJECTED_TITLE\u0007DIAG_MARKER": 1 },
+      }),
+      "utf8",
+    );
+
+    await runClawsInspectCommand(root, {}, runtime);
+
+    const output = String(runtime.error.mock.calls[0]?.[0]);
+    expect(output).toContain("DIAG_MARKER");
+    expect(output).not.toMatch(/\p{Cc}/u);
+  });
+
   it("rejects a plugin declared by both the portable manifest and OpenClaw profile", async () => {
     const { root, values, runtime } = await createInspectFixture("openclaw", [
       { kind: "plugin", source: "clawhub", ref: "@owner/audit", version: "2.0.1" },
