@@ -78,20 +78,19 @@ function syncAssistantBuffer(state: SessionActivityNoteState, at = Date.now()): 
     state.assistantRawBuffer,
     ASSISTANT_BUFFER_MAX_CHARS,
   );
+  state.assistantRawBuffer = "";
   state.assistantBufferDirty = false;
   state.lastAssistantBufferAt = at;
 }
 
 function keepUtf16SafeTail(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  let start = value.length - maxChars;
+  let start = Math.max(0, value.length - maxChars);
   const lead = value.charCodeAt(start);
-  if (lead >= 0xdc00 && lead <= 0xdfff) {
+  if (start > 0 && lead >= 0xdc00 && lead <= 0xdfff) {
     start += 1;
   }
-  return value.slice(start);
+  // A retained V8 slice otherwise keeps the complete assistant snapshot alive.
+  return Buffer.from(value.slice(start), "utf16le").toString("utf16le");
 }
 
 function sanitizeActivityText(value: string, maxChars: number): string {
@@ -294,7 +293,6 @@ export function noteSessionActivityEvent(
           state.assistantBuffer + delta,
           ASSISTANT_BUFFER_MAX_CHARS,
         );
-        state.assistantRawBuffer = state.assistantBuffer;
         state.lastAssistantBufferAt = event.ts;
         return;
       } else {
