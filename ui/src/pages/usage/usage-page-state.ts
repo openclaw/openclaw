@@ -14,11 +14,11 @@ import { createPageRequest } from "../../lib/page-request.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
 import { createUsageExportRequest } from "./export.ts";
 import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
+import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
+import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageProps, UsageRouteData } from "./types.ts";
 import { createUsageDetails } from "./usage-details.ts";
 
@@ -52,10 +52,8 @@ export function createUsagePage(context: ApplicationContext) {
     result: SessionsUsageResult | null;
     costSummary: CostUsageSummary | null;
   } | null = null;
-  let providerUsageSummary: ProviderUsageSummary | null = null;
-  let providerUsageUnavailable = false;
-  let providerUsageIncomplete = false;
   let usageError: string | null = null;
+  let sessionLoadedAtMs: number | null = null;
   let filters: Omit<UsageProps["filters"], "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
@@ -109,6 +107,10 @@ export function createUsagePage(context: ApplicationContext) {
   const refreshPolicy = new UsageRefreshPolicy({
     isLoading: usageLoading,
     reload: (reason) => {
+      // Retries exist for incomplete provider plans; they never re-read session usage.
+      if (reason === "poll") {
+        return providerUsage.load();
+      }
       if (reason === "manual") {
         usageUpdatedAt = usagePublication().updatedAt;
       }
@@ -117,7 +119,7 @@ export function createUsagePage(context: ApplicationContext) {
         reason === "manual" && usageSelectedSessions.length === 1
           ? usageSelectedSessions[0]
           : undefined;
-      return loadUsage(sessionKey);
+      return loadAll(sessionKey);
     },
     onIncompleteUsageExhausted: notify,
   });
@@ -130,6 +132,7 @@ export function createUsagePage(context: ApplicationContext) {
       }
       refreshPolicy.interrupt();
       usageRequest.reset();
+      providerUsage.cancel();
       details.cancel();
     },
     onSnapshot: handleGatewaySnapshot,
@@ -182,16 +185,12 @@ export function createUsagePage(context: ApplicationContext) {
       } else if (current && !snapshot.ok) {
         applyUsageError(snapshot.error.cause);
       }
-      applyUsageLoadState(
-        snapshot.ok ? snapshot.value.providerUsage : snapshot.error.providerUsage,
-        value.epoch,
-        current && snapshot.ok ? undefined : null,
-      );
+      markUsageLoaded(value.epoch, current && snapshot.ok ? Date.now() : null);
       refreshPolicy.flushPending();
     },
     onError: (error) => {
       applyUsageError(error);
-      applyUsageLoadState({ state: "pending" }, connectionEpoch, null);
+      markUsageLoaded(connectionEpoch, null);
       refreshPolicy.flushPending();
     },
   });
@@ -223,7 +222,7 @@ export function createUsagePage(context: ApplicationContext) {
       gateway.connected &&
       !usageLoading()
     ) {
-      void loadUsage();
+      void loadAll();
     }
     notify();
   }
@@ -257,7 +256,8 @@ export function createUsagePage(context: ApplicationContext) {
       result: data.result,
       costSummary: data.costSummary,
     };
-    applyUsageLoadState(data.providerUsage, connectionEpoch, data.loadedAtMs);
+    markUsageLoaded(connectionEpoch, data.loadedAtMs);
+    void providerUsage.load();
     usageError = data.error;
     const preloadUpdatedAt = resolveUsagePublication(
       data.gatewaySnapshot.usagePublications,
@@ -276,6 +276,7 @@ export function createUsagePage(context: ApplicationContext) {
       routeDataEnabled = false;
     }
     usageSnapshot = null;
+    providerUsage.cancel();
     resetProviderUsage();
     usageError = null;
     usageAgentId = context.agentSelection.state.scopeId;
@@ -284,31 +285,32 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function resetProviderUsage() {
-    providerUsageSummary = null;
-    providerUsageUnavailable = false;
-    providerUsageIncomplete = false;
+    sessionLoadedAtMs = null;
+    providerUsage.reset();
     refreshPolicy.resetPayload();
   }
 
-  function applyUsageLoadState(
-    snapshot: ProviderUsageSnapshot,
-    connection: unknown,
-    loadedAtMs: number | null = Date.now(),
-  ): void {
-    if (snapshot.state === "settled") {
-      const result = snapshot.result;
-      providerUsageUnavailable = !result.ok;
-      providerUsageIncomplete = !result.ok || result.value.refreshing === true;
-      if (result.ok && !providerUsageIncomplete) {
-        providerUsageSummary = result.value;
-      }
-    }
-    // Session rollups converge on publication; only provider usage needs timed retries.
-    refreshPolicy.setLastLoadedAtMs(
-      snapshot.state === "pending" || usageCacheIncomplete() ? null : loadedAtMs,
-      { incomplete: providerUsageIncomplete, connection },
-    );
+  // Only the session read owns freshness: a provider result reuses the last session timestamp,
+  // so provider plans add their retry state and never make a failed session read look fresh.
+  // Session rollups converge on publication; only provider usage needs timed retries.
+  function markUsageLoaded(connection: unknown, loadedAtMs = sessionLoadedAtMs): void {
+    sessionLoadedAtMs = loadedAtMs;
+    refreshPolicy.setLastLoadedAtMs(usageCacheIncomplete() ? null : loadedAtMs, {
+      incomplete: providerUsage.incomplete,
+      connection,
+    });
   }
+
+  const providerUsage = createProviderUsageLoader({
+    client: () => (gateway.connected ? gateway.client : null),
+    epoch: () => connectionEpoch,
+    isCurrent: (epoch) => epoch === connectionEpoch,
+    onResult: (epoch) => markUsageLoaded(epoch),
+    onSettled: () => {
+      refreshPolicy.flushPending();
+      notify();
+    },
+  });
 
   function usagePublication() {
     return resolveUsagePublication(gateway.snapshot?.usagePublications, currentQuery().agentId);
@@ -406,6 +408,10 @@ export function createUsagePage(context: ApplicationContext) {
     return !routeDataInitialized || timers.dateDebounceTimer !== null || usageRequest.pending;
   }
 
+  function loadAll(refreshSessionKey?: string): Promise<void> {
+    return Promise.all([loadUsage(refreshSessionKey), providerUsage.load()]).then(() => undefined);
+  }
+
   function loadUsage(refreshSessionKey?: string): Promise<void> {
     const client = gateway.client;
     if (!client || !gateway.connected) {
@@ -465,7 +471,7 @@ export function createUsagePage(context: ApplicationContext) {
     if (change.identityChanged || change.becameConnected) {
       connectionEpoch = {};
       if (routeDataInitialized) {
-        void refreshPolicy.request("reconnect");
+        void refreshPolicy.request("reconnect").then(() => providerUsage.resume());
       }
     } else if (usageCommitted && routeDataInitialized) {
       void refreshPolicy.request("publication");
@@ -538,9 +544,9 @@ export function createUsagePage(context: ApplicationContext) {
             ? "failed"
             : "retrying"
           : "complete",
-        providerUsage: providerUsageSummary?.providers ?? [],
-        providerUsageStalled: providerUsageIncomplete && refreshPolicy.incompleteUsageExhausted,
-        providerUsageUnavailable,
+        providerUsage: providerUsage.summary?.providers ?? [],
+        providerUsageStalled: providerUsage.incomplete && refreshPolicy.incompleteUsageExhausted,
+        providerUsageUnavailable: providerUsage.unavailable,
       },
       filters: { ...filters, selectedSessions: usageSelectedSessions },
       display,

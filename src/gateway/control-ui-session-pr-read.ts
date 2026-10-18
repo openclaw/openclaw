@@ -158,14 +158,14 @@ export async function prepareControlUiSessionPrServiceTarget(
 }
 
 /** A watcher may follow a replaced target, but never a replacement person or access grant. */
-export async function prepareControlUiSessionPrRead(params: {
+export function createControlUiSessionPrRead(params: {
   client: GatewayClient;
   sessionKey: string;
   agentId?: string;
   getRuntimeConfig: () => OpenClawConfig;
   getSessionRowProjection: () => SessionRowProjection | undefined;
   isCurrentClient: () => boolean;
-}): Promise<ControlUiSessionPrRead | undefined> {
+}): ControlUiSessionPrRead | undefined {
   const {
     client,
     sessionKey,
@@ -268,7 +268,7 @@ export async function prepareControlUiSessionPrRead(params: {
       return undefined;
     }
   };
-  const readCurrent: ControlUiSessionPrRead = async () => {
+  return async () => {
     try {
       if (getSessionRowProjection() !== projection) {
         return undefined;
@@ -317,11 +317,7 @@ export async function prepareControlUiSessionPrRead(params: {
                 throw new Error("Session pull-request target changed");
               }
               if (!original) {
-                if (
-                  current.selected !== target.captured ||
-                  !target.captured ||
-                  !projection.isCurrent(target.captured)
-                ) {
+                if (current.selected !== target.captured) {
                   throw new Error("Session pull-request target changed");
                 }
                 return;
@@ -359,5 +355,4 @@ export async function prepareControlUiSessionPrRead(params: {
       return undefined;
     }
   };
-  return (await readCurrent()) ? readCurrent : undefined;
 }

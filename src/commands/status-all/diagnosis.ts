@@ -115,7 +115,32 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
   return latestTs > 0 ? Date.now() - latestTs : null;
 }
 
-export async function appendStatusAllDiagnosis(params: {
+export async function readStatusAllLogTails() {
+  const logPaths = (() => {
+    try {
+      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
+      return process.platform === "darwin"
+        ? resolveGatewaySupervisorLogPaths(process.env)
+        : resolveGatewayLogPaths(process.env);
+    } catch {
+      return null;
+    }
+  })();
+  if (logPaths) {
+    const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const readStderr = process.platform !== "darwin";
+    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
+      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
+      readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
+      readFileTailLines(restartLogPath, 30).catch(() => []),
+    ]);
+    return { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail };
+  }
+  return null;
+}
+
+export function appendStatusAllDiagnosis(params: {
+  logTails: Awaited<ReturnType<typeof readStatusAllLogTails>>;
   lines: string[];
   progress: ProgressReporter;
   muted: (text: string) => string;
@@ -387,26 +412,9 @@ export async function appendStatusAllDiagnosis(params: {
     }
   }
 
-  params.progress.setLabel("Reading logs…");
-  const logPaths = (() => {
-    try {
-      // macOS supervised installs write stdout/stderr differently than node-managed gateway logs.
-      return process.platform === "darwin"
-        ? resolveGatewaySupervisorLogPaths(process.env)
-        : resolveGatewayLogPaths(process.env);
-    } catch {
-      return null;
-    }
-  })();
-  if (logPaths) {
-    params.progress.setLabel("Reading logs…");
-    const restartLogPath = resolveGatewayRestartLogPath(process.env);
-    const readStderr = process.platform !== "darwin";
-    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
-      readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
-      readFileTailLines(restartLogPath, 30).catch(() => []),
-    ]);
+  if (params.logTails) {
+    const { logPaths, restartLogPath, readStderr, stderrTail, stdoutTail, restartTail } =
+      params.logTails;
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));

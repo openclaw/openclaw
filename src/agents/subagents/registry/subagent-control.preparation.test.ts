@@ -12,7 +12,10 @@ import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers
 import { prepareReplyAgentTurn } from "../../../auto-reply/reply/reply-agent-turn-preparation.js";
 import { createTypingController } from "../../../auto-reply/reply/typing.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { releaseSessionControllerClaim } from "../../../sessions/session-controller.mailbox.js";
+import {
+  releaseSessionControllerClaim,
+  submitSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -50,6 +53,15 @@ it("cancels a selected preparation source and retains its actual return before c
   const queued = createQueueTestRun({ prompt: "do not execute after Stop" });
   queued.abortSignal = upstream.signal;
   queued.run = { ...queued.run, config: cfg, agentId: "main", sessionKey, sessionId };
+  submitSessionControllerInput(
+    sessionKey,
+    queued,
+    { mode: "followup" },
+    {
+      protocolRunId: runId,
+      storePath,
+    },
+  );
   const entered = createDeferred();
   const finishPreparation = createDeferred();
   vi.spyOn(replyConfig, "resolveQueuedReplyExecutionConfig").mockImplementation(async (config) => {

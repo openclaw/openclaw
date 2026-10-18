@@ -29,8 +29,26 @@ test("exports trusted WebSocket event totals and the current operator socket cou
   const { service, ctx } = await startOtelService({ metrics: true });
   try {
     emit({ type: "gateway.ws.connections", operators: 2 });
-    emit({ type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 });
+    emit({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 2,
+      bytes: 256,
+      frameBytes: {
+        "256": 2,
+        "512": 2,
+        "1024": 2,
+        "2048": 2,
+        "4096": 2,
+        "8192": 2,
+        "16384": 2,
+        "65536": 2,
+        "+Inf": 2,
+      },
+    });
     emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+    emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 100 });
+    emit({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 50 });
     emit({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
     emit({ type: "gateway.ws.connections", operators: 0 });
     for (const emitUntrusted of [emitDiagnosticEvent, emitInternalDiagnosticEventForTest]) {
@@ -39,6 +57,8 @@ test("exports trusted WebSocket event totals and the current operator socket cou
         event: "private-untrusted",
         count: 99,
         bytes: 999,
+        wireBytes: 999,
+        frameBytes: { "256": 99 },
       });
       emitUntrusted({ type: "gateway.ws.connections", operators: 99 });
     }
@@ -147,6 +167,16 @@ test("exports trusted WebSocket event totals and the current operator socket cou
           { attributes: { "openclaw.gateway.ws.event": "session.message" }, value: 768 },
           { attributes: { "openclaw.gateway.ws.event": "presence" }, value: 1152 },
         ],
+      },
+      "openclaw.gateway.ws.event_wire_bytes": {
+        unit: "By",
+        points: [{ attributes: { "openclaw.gateway.ws.event": "chat" }, value: 150 }],
+      },
+      "openclaw.gateway.ws.event_frame_bytes": {
+        unit: "1",
+        points: ["256", "512", "1024", "2048", "4096", "8192", "16384", "65536", "+Inf"].map(
+          (le) => ({ attributes: { "openclaw.gateway.ws.event": "chat", le }, value: 2 }),
+        ),
       },
       "openclaw.gateway.ws.operator_connections": {
         unit: "1",

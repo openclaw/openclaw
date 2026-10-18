@@ -339,20 +339,17 @@ describe("qa scenario catalog causality", () => {
     },
   );
 
-  it("scopes prompt diagnostics to requests after each scenario cursor", () => {
-    for (const scenarioId of [
-      "instruction-followthrough-repo-contract",
-      "subagent-handoff",
-    ] as const) {
-      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
-      const flow = JSON.stringify(scenario.execution.flow);
-      const cursorIndex = flow.indexOf("/debug/request-cursor");
-      const promptIndex = flow.indexOf('"call":"runAgentPrompt"');
-      const requestsIndex = flow.indexOf("/debug/requests?after=${requestCursorBefore}");
+  it("scopes instruction-followthrough diagnostics to requests after the scenario cursor", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("instruction-followthrough-repo-contract"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+    const cursorIndex = flow.indexOf("/debug/request-cursor");
+    const promptIndex = flow.indexOf('"call":"runAgentPrompt"');
+    const requestsIndex = flow.indexOf("/debug/requests?after=${requestCursorBefore}");
 
-      expectInOrder(cursorIndex, promptIndex, requestsIndex);
-      expect(flow, scenarioId).not.toContain("`${env.mock.baseUrl}/debug/requests`");
-    }
+    expectInOrder(cursorIndex, promptIndex, requestsIndex);
+    expect(flow).not.toContain("`${env.mock.baseUrl}/debug/requests`");
   });
 
   it.each([

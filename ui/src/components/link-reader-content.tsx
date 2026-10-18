@@ -358,10 +358,10 @@ function DeferredSection(props: {
   onLoad: () => void;
   sectionRef: (element: HTMLElement) => void;
 }) {
-  let element!: HTMLElement;
+  let element: HTMLElement | undefined;
   const label = () => t("linkReader." + props.section);
   createIntersectionObserver(
-    () => (props.section === "files" && props.state === "idle" ? [element] : []),
+    () => (props.section === "files" && props.state === "idle" && element ? [element] : []),
     (entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
         props.onLoad();

@@ -17,7 +17,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -71,6 +71,8 @@ type TrajectoryRuntimeAppendResult = {
 type TrajectoryRuntimeWriter = (
   label: string,
   write: (database: OpenClawAgentDatabase) => TrajectoryRuntimeAppendResult,
+  /** Present only when write executes one terminal INSERT with no post-statement work. */
+  receipt?: TrajectoryRuntimeAppendResult["receipt"],
 ) => TrajectoryRuntimeAppendResult;
 
 export function appendSqliteTrajectoryRuntimeEventsWithWriter(
@@ -101,10 +103,56 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
     }
     retainedBytes += rowBytes;
   }
+  const postgres = isPostgresSqlConnection(sourceDatabase.db);
+  const preparedRetention = postgres
+    ? undefined
+    : captureTrajectoryRuntimeRetentionMutation(sourceDatabase.db);
+  const known = input.windowFacts;
+  if (
+    !postgres &&
+    known &&
+    rows.length > 0 &&
+    rows.length <= TRAJECTORY_RUNTIME_INSERT_BATCH_SIZE &&
+    !input.discardPrevious &&
+    expiredThroughIndex < 0 &&
+    known.retainedBytes + retainedBytes <= maxRuntimeBytes &&
+    !preparedRetention
+  ) {
+    for (const [index, row] of rows.entries()) {
+      row.seq = known.nextSeq + index;
+    }
+    const result: TrajectoryRuntimeAppendResult = {
+      database: sourceDatabase,
+      receipt: {
+        kind: "trajectory-runtime-append",
+        sessionId,
+        appendedRange: { firstSeq: known.nextSeq, lastSeq: known.nextSeq + rows.length - 1 },
+        removedThroughSeq: undefined,
+        windowFacts: {
+          nextSeq: known.nextSeq + rows.length,
+          retainedBytes: known.retainedBytes + retainedBytes,
+        },
+      },
+    };
+    const insert = getTrajectoryKysely(sourceDatabase.db)
+      .insertInto("trajectory_runtime_events")
+      .values(rows);
+    return write(
+      "trajectory.runtime.append",
+      (database) =>
+        withSqliteDatabaseWriteScope(database.db, [], () => {
+          executeSqliteQuerySync(database.db, insert);
+          return result;
+        }),
+      result.receipt,
+    );
+  }
   return write("trajectory.runtime.append", (database) =>
     // Runtime event rows do not change session entries or transcript projections.
     withSqliteDatabaseWriteScope(database.db, [], () => {
-      const publishRetention = captureTrajectoryRuntimeRetentionMutation(database.db);
+      const publishRetention = postgres
+        ? captureTrajectoryRuntimeRetentionMutation(database.db)
+        : preparedRetention;
       const db = getTrajectoryKysely(database.db);
       const window = prepareSqliteTrajectoryRuntimeWindow(database, sessionId, {
         maxRuntimeBytes,
