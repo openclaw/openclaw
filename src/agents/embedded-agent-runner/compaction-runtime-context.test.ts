@@ -52,6 +52,16 @@ function configuredOpenAI(
     models: { providers: { openai: { ...options, models: models.map((id) => ({ id })) } } },
   };
 }
+function literalConfig(model: string, providers: string[]) {
+  const configured: Record<string, { models: { id: string }[] }> = {};
+  for (const provider of providers) {
+    configured[provider] = { models: [{ id: model }] };
+  }
+  return {
+    ...compactionConfig(model),
+    models: { providers: configured },
+  };
+}
 
 describe("resolveCompactionContextTokenBudget", () => {
   const cfg = {} as OpenClawConfig;
@@ -209,7 +219,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 
   it("normalizes nullable compaction routing fields to undefined", () => {
-    const result = runtimeContext({
+    const nullable = {
       sessionKey: null,
       messageChannel: null,
       messageProvider: null,
@@ -221,23 +231,13 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       authProfileId: null,
       senderId: null,
       provider: null,
-      modelId: null,
-    });
+    };
+    const result = runtimeContext({ ...nullable, modelId: null });
     expect(result).toMatchObject({
-      sessionKey: undefined,
-      messageChannel: undefined,
-      messageProvider: undefined,
-      chatType: undefined,
-      agentAccountId: undefined,
-      currentChannelId: undefined,
-      currentThreadTs: undefined,
-      currentMessageId: undefined,
-      authProfileId: undefined,
-      senderId: undefined,
-      provider: undefined,
+      ...Object.fromEntries(Object.keys(nullable).map((key) => [key, undefined])),
       model: undefined,
+      activeProcessSessions: undefined,
     });
-    expect(result.activeProcessSessions).toBeUndefined();
   });
 
   it("applies compaction.model override with provider/model format", () => {
@@ -388,10 +388,12 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       harnessRuntime: "codex",
       modelSelectionLocked: true,
     });
-    expect(result.agentHarnessId).toBe("codex");
-    expect(result.modelSelectionLocked).toBe(true);
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-5.5");
+    expect(result).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      provider: "openai",
+      model: "gpt-5.5",
+    });
   });
 
   it("carries only a target-matching prepared auth plan into compaction context", () => {
@@ -553,65 +555,41 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expectTarget(result, "openai", "gpt-5.4-mini", "openai:default");
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    config: ReturnType<typeof compactionConfig> | ReturnType<typeof literalConfig>;
+    provider: string;
+    expected: [provider: string, model: string, authProfileId?: string];
+  }>([
     {
       name: "infers a different provider for a uniquely configured bare literal",
-      config: {
-        models: {
-          providers: {
-            anthropic: { models: [{ id: "compact-model" }] },
-          },
-        },
-        agents: { defaults: { compaction: { model: "compact-model" } } },
-      },
+      config: literalConfig("compact-model", ["anthropic"]),
       provider: "openai",
-      authProfileId: "openai:default",
-      expectedProvider: "anthropic",
-      expectedModel: "compact-model",
-      expectedAuthProfileId: undefined,
+      expected: ["anthropic", "compact-model"],
     },
     {
       name: "keeps an ambiguous configured bare literal on the current provider",
-      config: {
-        models: {
-          providers: {
-            openai: { models: [{ id: "shared-model" }] },
-            anthropic: { models: [{ id: "shared-model" }] },
-          },
-        },
-        agents: { defaults: { compaction: { model: "shared-model" } } },
-      },
+      config: literalConfig("shared-model", ["openai", "anthropic"]),
       provider: "google",
-      authProfileId: "google:default",
-      expectedProvider: "google",
-      expectedModel: "shared-model",
-      expectedAuthProfileId: "google:default",
+      expected: ["google", "shared-model", "google:default"],
     },
     {
       name: "preserves a multi-segment model id and trailing profile suffix",
       config: compactionConfig("openrouter/meta-llama/llama-3.3-70b:free@work"),
       provider: "openrouter",
-      authProfileId: "openrouter:default",
-      expectedProvider: "openrouter",
-      expectedModel: "meta-llama/llama-3.3-70b:free@work",
-      expectedAuthProfileId: "openrouter:default",
+      expected: ["openrouter", "meta-llama/llama-3.3-70b:free@work", "openrouter:default"],
     },
   ])("$name", (fixture) => {
     const result = resolveEmbeddedCompactionTarget({
       config: fixture.config as unknown as OpenClawConfig,
       provider: fixture.provider,
       modelId: "current-model",
-      authProfileId: fixture.authProfileId,
+      authProfileId: `${fixture.provider}:default`,
       defaultProvider: fixture.provider,
       defaultModel: "current-model",
     });
 
-    expectTarget(
-      result,
-      fixture.expectedProvider,
-      fixture.expectedModel,
-      fixture.expectedAuthProfileId,
-    );
+    expectTarget(result, ...fixture.expected);
   });
 });
 

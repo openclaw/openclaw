@@ -1,8 +1,5 @@
-// Direct compaction caller coverage; existing provider/model/Docker boundaries remain stubbed.
 import { join } from "node:path";
-import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { SandboxContext } from "../sandbox/types.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
   buildConfiguredAgentSystemPromptMock,
   loadCompactHooksHarness,
@@ -12,99 +9,81 @@ import {
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let TEST_WORKSPACE_DIR: string;
+let sessionTarget: { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+let reporting: Awaited<ReturnType<typeof loadSandboxReporting>>;
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    const databases = await import("../../state/openclaw-agent-db.js");
-    const state = await import("../../state/openclaw-state-db.js");
-    const settled = await Promise.allSettled([
-      databases.closeOpenClawAgentDatabasesAsync(),
-      state.closeOpenClawStateDatabaseAsync(),
-    ]);
-    const failures = settled.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length > 0) {
-      throw new AggregateError(failures, "Compaction reporting fixture cleanup failed");
-    }
-    cleanup();
-  }),
-);
+let tempDirs: ReturnType<
+  typeof import("../../test-utils/session-state-cleanup.js").useSessionStoreTempDirs
+>;
+let cleanup: () => Promise<void>;
+afterEach(() => cleanup());
 
 beforeAll(async () => {
   ({ compactEmbeddedAgentSessionDirect } = await loadCompactHooksHarness());
+  reporting = await loadSandboxReporting();
+  const { useSessionStoreTempDirs } = await import("../../test-utils/session-state-cleanup.js");
+  tempDirs = useSessionStoreTempDirs((close) => {
+    cleanup = close;
+  }, "openclaw-compact-elevation-");
+});
+afterAll(() => {
+  reporting.policyRead.mockReset();
+  reporting.buildInfo.mockReset();
 });
 
 beforeEach(async () => {
-  TEST_WORKSPACE_DIR = tempDirs.make("openclaw-compact-elevation-");
+  TEST_WORKSPACE_DIR = tempDirs.make();
   resetCompactHooksHarnessMocks(TEST_WORKSPACE_DIR);
+  reporting.policyRead.mockClear();
+  reporting.buildInfo.mockClear();
+  sessionTarget = {
+    agentId: "main",
+    sessionId: TEST_SESSION_ID,
+    sessionKey: TEST_SESSION_KEY,
+    storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
+  };
   const { upsertSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
-  await upsertSessionEntryCore(
-    {
-      agentId: "main",
-      sessionKey: TEST_SESSION_KEY,
-      storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
-    },
-    { sessionId: TEST_SESSION_ID, updatedAt: 1 },
-  );
+  await upsertSessionEntryCore(sessionTarget, { sessionId: TEST_SESSION_ID, updatedAt: 1 });
 });
 
-async function prepareSandboxReporting(required = false) {
-  const reporting = await import("./sandbox-info.js");
+async function loadSandboxReporting() {
+  const mocked = await import("./sandbox-info.js");
   const realReporting =
     await vi.importActual<typeof import("./sandbox-info.js")>("./sandbox-info.js");
+  return {
+    policyRead: vi
+      .mocked(mocked.resolveEmbeddedSandboxInfoExecPolicy)
+      .mockImplementation(realReporting.resolveEmbeddedSandboxInfoExecPolicy),
+    buildInfo: vi
+      .mocked(mocked.buildEmbeddedSandboxInfo)
+      .mockImplementation(realReporting.buildEmbeddedSandboxInfo),
+  };
+}
+
+async function prepareSandboxReporting(required = false) {
   const { createSandboxTestContext } = await import("../sandbox/test-fixtures.js");
-  const policyRead = vi.mocked(reporting.resolveEmbeddedSandboxInfoExecPolicy);
-  const buildInfo = vi.mocked(reporting.buildEmbeddedSandboxInfo);
-  const originalPolicy = policyRead.getMockImplementation();
-  const originalBuildInfo = buildInfo.getMockImplementation();
-  policyRead.mockClear().mockImplementation(realReporting.resolveEmbeddedSandboxInfoExecPolicy);
-  buildInfo.mockClear().mockImplementation(realReporting.buildEmbeddedSandboxInfo);
   resolveSandboxContextMock.mockResolvedValue(
     createSandboxTestContext({
       overrides: {
         sessionKey: TEST_SESSION_KEY,
         workspaceDir: TEST_WORKSPACE_DIR,
         agentWorkspaceDir: TEST_WORKSPACE_DIR,
-        ...(required ? ({ required: true } satisfies Pick<SandboxContext, "required">) : {}),
+        ...(required ? { required } : {}),
       },
     }),
   );
-  return {
-    policyRead,
-    buildInfo,
-    restore() {
-      if (originalPolicy) {
-        policyRead.mockImplementation(originalPolicy);
-      } else {
-        policyRead.mockReset();
-      }
-      if (originalBuildInfo) {
-        buildInfo.mockImplementation(originalBuildInfo);
-      } else {
-        buildInfo.mockReset();
-      }
-    },
-  };
 }
 
 function compactionParams() {
-  const sessionTarget = {
-    agentId: "main",
-    sessionId: TEST_SESSION_ID,
-    sessionKey: TEST_SESSION_KEY,
-    storePath: join(TEST_WORKSPACE_DIR, "sessions.json"),
-  };
+  const { storePath, ...session } = sessionTarget;
   return {
-    agentId: sessionTarget.agentId,
-    sessionId: sessionTarget.sessionId,
-    sessionKey: sessionTarget.sessionKey,
+    ...session,
     sessionTarget,
     workspaceDir: TEST_WORKSPACE_DIR,
     config: {
       agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
-      session: { store: sessionTarget.storePath },
+      session: { store: storePath },
       tools: { exec: { host: "gateway", mode: "full" } },
     },
   } satisfies Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
@@ -115,7 +94,7 @@ it.each([
   { name: "enabled but disallowed", enabled: true, allowed: false, required: false },
   { name: "required and enabled", enabled: true, allowed: true, required: true },
 ])("reads compaction elevation policy only when configured ($name)", async (testCase) => {
-  const reporting = await prepareSandboxReporting(testCase.required);
+  await prepareSandboxReporting(testCase.required);
   const { policyRead } = reporting;
   const approvalStore = await import("../../infra/exec-approvals-store.js");
   const { patchSessionEntryCore } = await import("../../config/sessions/session-accessor.js");
@@ -154,7 +133,6 @@ it.each([
     }
   } finally {
     approvalRead.mockRestore();
-    reporting.restore();
   }
 });
 
@@ -162,7 +140,7 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
   const { createDeferred } = await import("../../../test/helpers/promise.js");
   const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
   const machineNames = await import("../../infra/machine-name.js");
-  const reporting = await prepareSandboxReporting();
+  await prepareSandboxReporting();
   const machineName = vi.mocked(machineNames.getMachineDisplayName);
   const originalMachineName = machineName.getMockImplementation();
   if (!originalMachineName) {
@@ -208,6 +186,5 @@ it("refuses sandbox metadata publication after cancellation during machine-name 
     await Promise.allSettled(pending ? [pending] : []);
     await owner.drain();
     machineName.mockReset().mockImplementation(originalMachineName);
-    reporting.restore();
   }
 });

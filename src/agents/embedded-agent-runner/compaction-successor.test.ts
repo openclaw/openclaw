@@ -131,20 +131,14 @@ async function withAcceptanceFixture(
         const successorId = randomUUID();
         const input: AcceptanceInput = {
           currentTarget: target,
-          expectedEntry: {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            activeWriterRunId: entry.activeWriterRunId,
-          },
+          expectedEntry: entry,
           assertActive,
           config,
           result: {
             ok: true,
             compacted: true,
             result: {
-              summary: "Engine-owned successor context",
               tokensBefore: 4_097,
-              tokensAfter: 3_000,
               sessionTarget: { sessionId: successorId, threadId: "thread-hint" },
             },
           },
@@ -204,8 +198,7 @@ async function withAcceptanceFixture(
             );
           },
           writeLegacyArtifact: async () => {
-            // Named tagged-upgrade artifact contract: session_end may identify a
-            // still-existing legacy export, while live state remains canonical SQLite.
+            // Tagged-upgrade exports remain valid session_end locators.
             const artifactDir = resolveSessionArtifactDirectory(target.storePath);
             const artifact = path.join(artifactDir, `${target.sessionId}.jsonl`);
             const events = await loadTranscriptEvents(target);
@@ -253,6 +246,12 @@ function enableLifecycleHooks() {
   hooks.hasHooks.mockImplementation((name) => name === "session_end" || name === "session_start");
 }
 
+function expectNotificationCount(count: number) {
+  for (const hook of [hooks.runSessionEnd, hooks.runSessionStart]) {
+    expect(hook).toHaveBeenCalledTimes(count);
+  }
+}
+
 describe("acceptCompactionSuccessor", () => {
   it.each(["rotation", "unchanged", "cancel-after-commit"] as const)(
     "owns MCP predecessor cleanup after %s",
@@ -278,12 +277,22 @@ describe("acceptCompactionSuccessor", () => {
           const original = await create(fixture.target.sessionId);
           const release = original.acquireLease?.();
           const successor = await create(fixture.successorId);
+          let factAtObserver: AcceptedCompactionSuccessor | undefined;
           if (kind === "cancel-after-commit") {
-            fixture.observeIdentity(fixture.stop);
+            fixture.observeIdentity(() => {
+              factAtObserver = fixture.facts[0];
+              fixture.stop();
+            });
           }
           const accepted = await fixture.accept(
             kind === "unchanged" ? { result: { ok: true, compacted: true } } : {},
           );
+          if (kind === "cancel-after-commit") {
+            expect(factAtObserver).toBe(accepted);
+            expect(accepted.entry.sessionId).toBe(fixture.successorId);
+            expect(fixture.loadEntry()).toEqual(accepted.entry);
+            expect(fixture.assertActive).toThrow(fixture.callerError);
+          }
           if (kind !== "unchanged") {
             await create(original.sessionId);
           }
@@ -297,11 +306,7 @@ describe("acceptCompactionSuccessor", () => {
             const latest = await create(randomUUID());
             await fixture.accept({
               currentTarget: accepted.sessionTarget,
-              expectedEntry: {
-                sessionId: accepted.entry.sessionId,
-                lifecycleRevision: accepted.entry.lifecycleRevision,
-                activeWriterRunId: accepted.entry.activeWriterRunId,
-              },
+              expectedEntry: accepted.entry,
               result: {
                 ok: true,
                 compacted: true,
@@ -357,8 +362,7 @@ describe("acceptCompactionSuccessor", () => {
         expect(fixture.loadEntry()).toEqual(before);
         expect(fixture.facts).toEqual([]);
         expect(identity).not.toHaveBeenCalled();
-        expect(hooks.runSessionEnd).not.toHaveBeenCalled();
-        expect(hooks.runSessionStart).not.toHaveBeenCalled();
+        expectNotificationCount(0);
       });
     },
   );
@@ -380,15 +384,23 @@ describe("acceptCompactionSuccessor", () => {
       ).rejects.toThrow("without a successful completed compaction");
       expect(fixture.loadEntry()).toEqual(before);
       expect(fixture.facts).toEqual([]);
-      expect(hooks.runSessionEnd).not.toHaveBeenCalled();
-      expect(hooks.runSessionStart).not.toHaveBeenCalled();
+      expectNotificationCount(0);
     });
   });
 
-  it.each(["writer", "lifecycle", "session", "deleted"] as const)(
-    "rejects a stale predecessor after %s replacement",
-    async (change) => {
-      await withAcceptanceFixture({}, async (fixture) => {
+  it.each([
+    ["writer", true],
+    ["writer", false],
+    ["lifecycle", true],
+    ["session", true],
+    ["deleted", true],
+  ] as const)(
+    "rejects a stale predecessor after %s replacement (claimed=%s)",
+    async (change, claimWriter) => {
+      await withAcceptanceFixture({ claimWriter }, async (fixture) => {
+        if (!claimWriter) {
+          expect(fixture.entry.activeWriterRunId).toBeUndefined();
+        }
         if (change === "writer") {
           await fixture.replaceWriter();
         } else if (change === "lifecycle") {
@@ -405,17 +417,6 @@ describe("acceptCompactionSuccessor", () => {
       });
     },
   );
-
-  it("treats a captured absent writer as exact absence rather than a wildcard", async () => {
-    await withAcceptanceFixture({ claimWriter: false }, async (fixture) => {
-      expect(fixture.entry.activeWriterRunId).toBeUndefined();
-      await fixture.replaceWriter();
-      const before = fixture.loadEntry();
-      await expect(fixture.accept()).rejects.toThrow("session writer claim changed");
-      expect(fixture.loadEntry()).toEqual(before);
-      expect(fixture.facts).toEqual([]);
-    });
-  });
 
   it("does not recreate a removed predecessor store during successor validation", async () => {
     await withAcceptanceFixture({}, async (fixture) => {
@@ -448,21 +449,6 @@ describe("acceptCompactionSuccessor", () => {
     });
   });
 
-  it("captures a real commit before an identity observer cancels the caller", async () => {
-    await withAcceptanceFixture({}, async (fixture) => {
-      let factAtObserver: AcceptedCompactionSuccessor | undefined;
-      fixture.observeIdentity(() => {
-        factAtObserver = fixture.facts[0];
-        fixture.stop();
-      });
-      const accepted = await fixture.accept();
-      expect(factAtObserver).toBe(accepted);
-      expect(accepted.entry.sessionId).toBe(fixture.successorId);
-      expect(fixture.loadEntry()).toEqual(accepted.entry);
-      expect(fixture.assertActive).toThrow(fixture.callerError);
-    });
-  });
-
   it("returns the known commit after a fact observer throws, without repeating notifications", async () => {
     await withAcceptanceFixture({}, async (fixture) => {
       const identity = vi.fn();
@@ -476,8 +462,7 @@ describe("acceptCompactionSuccessor", () => {
       expect(fixture.facts).toEqual([accepted]);
       expect(fixture.loadEntry()).toEqual(accepted.entry);
       expect(identity).toHaveBeenCalledOnce();
-      expect(hooks.runSessionEnd).toHaveBeenCalledOnce();
-      expect(hooks.runSessionStart).toHaveBeenCalledOnce();
+      expectNotificationCount(1);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     });
   });
@@ -493,8 +478,7 @@ describe("accepted successor lifecycle notifications", () => {
           ? await fixture.writeLegacyArtifact()
           : `sqlite:${fixture.target.agentId}:${fixture.target.sessionId}:${fixture.target.storePath}`;
         await fixture.accept();
-        expect(hooks.runSessionEnd).toHaveBeenCalledOnce();
-        expect(hooks.runSessionStart).toHaveBeenCalledOnce();
+        expectNotificationCount(1);
         const [end, endContext] = hooks.runSessionEnd.mock.calls[0]!;
         const [start, startContext] = hooks.runSessionStart.mock.calls[0]!;
         expect(end).toMatchObject({
@@ -559,8 +543,7 @@ describe("accepted successor lifecycle notifications", () => {
             await fixture.accept();
           }
           await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
-          expect(hooks.runSessionEnd).toHaveBeenCalledOnce();
-          expect(hooks.runSessionStart).toHaveBeenCalledOnce();
+          expectNotificationCount(1);
           endGate.resolve();
           await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
           startGate.resolve();

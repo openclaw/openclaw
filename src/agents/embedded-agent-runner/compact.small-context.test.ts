@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Model } from "@openclaw/llm-core";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { testing } from "../openai-transport-stream.test-support.js";
 import {
@@ -9,6 +9,7 @@ import {
   streamMocks,
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
+import { extractTextContent } from "../sessions/agent-session-utils.js";
 import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { SettingsManager } from "../sessions/settings-manager.js";
@@ -39,6 +40,15 @@ let compact: Awaited<
 >["compactEmbeddedAgentSessionDirect"];
 let storePath: string;
 let prepared: Awaited<ReturnType<typeof fixture.prepareSession>>;
+let manager: SessionManager;
+let model: Model;
+let settingsManager: SettingsManager;
+let systemPrompt: string | undefined;
+let args: Parameters<typeof compact>[0];
+const summary = "The code word is copper.";
+const summaryStream = vi.fn((activeModel: Model) =>
+  createAssistantResultStream(createAssistant(activeModel, [{ type: "text", text: summary }])),
+);
 registerAgentSessionLoopTestLifecycle();
 
 beforeAll(async () => {
@@ -46,45 +56,36 @@ beforeAll(async () => {
   storePath = await fixture.prepare();
 });
 beforeEach(async () => {
-  prepared = await fixture.prepareSession();
-  compactEndpoint.mockReset();
-});
-
-it("summarizes with the model window instead of a smaller session token budget", async () => {
   const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
   const { createAgentSession } = await import("../sessions/sdk.js");
   const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
-  const model = { ...testModel, contextWindow: 32_768, maxTokens: 1_024 };
-  const manager = SessionManager.inMemory(prepared.workspaceDir);
-  for (let turn = 0; turn < 8; turn++) {
-    manager.appendMessage({
-      role: "user",
-      content: `Remember code word copper. Document ${turn}. ${"older context ".repeat(200)}`,
-      timestamp: turn * 2 + 1,
-    });
-    manager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
-  }
-  const settingsManager = SettingsManager.inMemory({
+  prepared = await fixture.prepareSession();
+  compactEndpoint.mockReset();
+  summaryStream.mockClear();
+  model = { ...testModel, contextWindow: 32_768, maxTokens: 1_024 };
+  manager = SessionManager.inMemory(prepared.workspaceDir);
+  systemPrompt = undefined;
+  settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false, keepRecentTokens: 300, reserveTokens: 1_024 },
     retry: { enabled: false },
   });
-  resolveContextWindowInfoMock.mockReturnValue({ tokens: model.contextWindow });
+  resolveContextWindowInfoMock.mockImplementation(() => ({ tokens: model.contextWindow }));
   resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
   limitHistoryTurnsMock.mockImplementation((messages) => messages);
-  vi.mocked(guardSessionManager).mockReturnValue(manager);
+  vi.mocked(guardSessionManager).mockImplementation(() => manager);
   vi.mocked(createAgentSession).mockImplementation((options) =>
-    createTestSession({ model: options.model, sessionManager: manager, settingsManager }),
-  );
-  const summary = "The code word is copper. Eight source documents were acknowledged.";
-  const summaryStream = vi.fn((activeModel: Model) =>
-    createAssistantResultStream(createAssistant(activeModel, [{ type: "text", text: summary }])),
+    createTestSession({
+      model: options.model,
+      systemPrompt,
+      sessionManager: manager,
+      settingsManager,
+    }),
   );
   vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
     streamFn: summaryStream,
     strategy: "session-custom",
   });
-
-  const result = await compact({
+  args = {
     agentId: "main",
     sessionId: prepared.sessionId,
     sessionKey,
@@ -94,6 +95,24 @@ it("summarizes with the model window instead of a smaller session token budget",
     config: {},
     provider: model.provider,
     model: model.id,
+  };
+});
+
+function appendDocuments(count: number, source: string) {
+  for (let turn = 0; turn < count; turn++) {
+    manager.appendMessage({
+      role: "user",
+      content: `Remember code word copper. Document ${turn}.\n${source}`,
+      timestamp: turn * 2 + 1,
+    });
+    manager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
+  }
+}
+
+it("summarizes with the model window instead of a smaller session token budget", async () => {
+  appendDocuments(8, "older context ".repeat(200));
+  const result = await compact({
+    ...args,
     trigger: "manual",
     force: true,
     tokenBudget: 512,
@@ -107,15 +126,12 @@ it("summarizes with the model window instead of a smaller session token budget",
 });
 
 it("reclaims retained source turns when the endpoint cannot fit a small foreground window", async () => {
-  const { guardSessionManager } = await import("../session-tool-result-guard-wrapper.js");
-  const { createAgentSession } = await import("../sessions/sdk.js");
-  const { resolveEmbeddedAgentStream } = await import("./stream-resolution.js");
   const { attachCompactionAccountingRecorder } =
     await import("./run/compaction-accounting-bridge.js");
   const { attemptServerEndpointCompaction } = await vi.importActual<
     typeof import("./server-endpoint-compaction.js")
   >("./server-endpoint-compaction.js");
-  const model: Model = {
+  model = {
     ...testModel,
     provider: "openai",
     id: "gpt-5.6-sol",
@@ -124,30 +140,15 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
     maxTokens: 1_024,
   };
   const contextTokens = 40_000;
-  const systemPrompt = "Follow the project rules and preserve the code word.\n".repeat(1_100);
-  let manager = SessionManager.inMemory(prepared.workspaceDir);
-  const source = "The module implements a deterministic source transform.\n".repeat(600);
-  for (let turn = 0; turn < 3; turn++) {
-    manager.appendMessage({
-      role: "user",
-      content: `Remember code word copper. Document ${turn}.\n${source}`,
-      timestamp: turn * 2 + 1,
-    });
-    manager.appendMessage(createAssistant(model, [{ type: "text", text: "ACK" }]));
-  }
+  systemPrompt = "Follow the project rules and preserve the code word.\n".repeat(1_100);
+  appendDocuments(3, "The module implements a deterministic source transform.\n".repeat(600));
   const original = structuredClone(manager.getBranch());
-  const settingsManager = SettingsManager.inMemory({
+  settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false, keepRecentTokens: 20_000, reserveTokens: 10_000 },
     retry: { enabled: false },
   });
   resolveContextWindowInfoMock.mockReturnValue({ tokens: contextTokens });
-  resolveModelMock.mockImplementation(() => ({ ...createCompactHooksResolvedModel(), model }));
   buildConfiguredAgentSystemPromptMock.mockReturnValue(systemPrompt);
-  limitHistoryTurnsMock.mockImplementation((messages) => messages);
-  vi.mocked(guardSessionManager).mockReturnValue(manager);
-  vi.mocked(createAgentSession).mockImplementation(() =>
-    createTestSession({ model, systemPrompt, sessionManager: manager, settingsManager }),
-  );
   attemptServerEndpointCompactionMock.mockImplementation(attemptServerEndpointCompaction);
   compactEndpoint.mockImplementation(async (_stream, endpointModel: Model, context, options) => {
     const item = { type: "compaction" as const, id: "cmp_retained", encrypted_content: "opaque" };
@@ -162,13 +163,7 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
             content: [
               {
                 type: "input_text" as const,
-                text:
-                  typeof message.content === "string"
-                    ? message.content
-                    : message.content
-                        .filter((block) => block.type === "text")
-                        .map((block) => block.text)
-                        .join(""),
+                text: extractTextContent(message.content),
               },
             ],
           })),
@@ -180,14 +175,6 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
       replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(endpointModel, options),
     };
   });
-  const summary = "The code word is copper. Three source documents were acknowledged.";
-  const summaryStream = vi.fn((activeModel: Model) =>
-    createAssistantResultStream(createAssistant(activeModel, [{ type: "text", text: summary }])),
-  );
-  vi.mocked(resolveEmbeddedAgentStream).mockReturnValue({
-    streamFn: summaryStream,
-    strategy: "session-custom",
-  });
   const requestBudget = createCompactionRequestBudget({
     contextWindow: contextTokens,
     reserveTokens: 10_000,
@@ -196,32 +183,17 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   });
   const contextEngineRuntimeContext = {};
   attachCompactionAccountingRecorder(contextEngineRuntimeContext, { requestBudget });
-  const args: Parameters<typeof compact>[0] = {
-    agentId: "main",
-    sessionId: prepared.sessionId,
-    sessionKey,
-    sessionFile: sessionKey,
-    sessionTarget: { agentId: "main", sessionId: prepared.sessionId, sessionKey, storePath },
-    workspaceDir: prepared.workspaceDir,
+  const { provider: _provider, api: _api, baseUrl, ...configuredModel } = model;
+  args = {
+    ...args,
     provider: model.provider,
     model: model.id,
     config: {
       models: {
         providers: {
           openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: model.id,
-                name: model.name,
-                contextWindow: model.contextWindow,
-                contextTokens,
-                maxTokens: model.maxTokens,
-                reasoning: false,
-                input: ["text"],
-                cost: model.cost,
-              },
-            ],
+            baseUrl,
+            models: [{ ...configuredModel, contextTokens, reasoning: false, input: ["text"] }],
           },
         },
       },
@@ -238,7 +210,6 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   expect(compactEndpoint).not.toHaveBeenCalled();
   expect(summaryStream).toHaveBeenCalled();
   manager = SessionManager.fromEntries([manager.getHeader(), ...original], prepared.workspaceDir);
-  vi.mocked(guardSessionManager).mockReturnValue(manager);
   summaryStream.mockClear();
 
   const result = await compact({ ...args, trigger: "budget", contextEngineRuntimeContext });
@@ -251,7 +222,7 @@ it("reclaims retained source turns when the endpoint cannot fit a small foregrou
   ).toBeLessThan(3);
 
   const requests: number[] = [];
-  streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+  streamMocks.streamSimple.mockImplementation((activeModel, context) => {
     const tokens = Math.ceil(
       JSON.stringify({ system: context.systemPrompt, messages: context.messages }).length / 4,
     );
