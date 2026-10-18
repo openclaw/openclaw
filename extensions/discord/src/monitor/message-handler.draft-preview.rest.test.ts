@@ -267,7 +267,12 @@ describe("Discord draft preview REST lifecycle", () => {
       await advancePreview(controller, 1_200);
       expectCard(visible, ["Checking the invitation history."]);
       await controller.pushItemEvent(
-        projectAgentToolActivity({ name: "sessions_search", toolCallId: "search", phase: "end" }),
+        projectAgentToolActivity({
+          name: "sessions_search",
+          toolCallId: "search",
+          phase: "result",
+          status: "completed",
+        }),
       );
       await controller.pushNarrationProgress("Comparing the results with the pending invitations.");
       await advancePreview(controller, 20_000);
