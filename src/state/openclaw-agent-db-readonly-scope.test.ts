@@ -15,7 +15,10 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -42,13 +45,27 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   },
 }));
 
+async function closedDatabase(state: OpenClawTestState) {
+  const options = { agentId: "main", env: state.env };
+  const { path } = openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(path);
+  return { options, path };
+}
+
+function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[0]) {
+  const result = retainOpenClawAgentDatabaseReadOnly(options);
+  expect(result.found).toBe(true);
+  if (!result.found) {
+    throw new Error("Missing synthetic agent database");
+  }
+  return result;
+}
+
 it.each([false, true])(
   "reuses admitted metadata and reads in-process writes without probes (snapshot=%s)",
   async (snapshot) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const { path } = openOpenClawAgentDatabase(options);
-      await closeOpenClawAgentDatabaseByPathAsync(path);
+      const { options, path } = await closedDatabase(state);
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       const writer = nodeSqlite.openNodeSqliteDatabase(path);
       try {
@@ -111,9 +128,7 @@ it.each([false, true])(
 
 it("keeps a multi-statement snapshot stable until the next read after an in-process write", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const { options, path } = await closedDatabase(state);
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = nodeSqlite.openNodeSqliteDatabase(path);
     const readStamp = (db: EngineConnection) =>
@@ -146,9 +161,7 @@ it("keeps a multi-statement snapshot stable until the next read after an in-proc
 
 it("keeps one connection while nested reads retain independent committed snapshots", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const { options, path } = await closedDatabase(state);
     const target = { agentId: "main", path };
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     const writer = new (requireNodeSqlite().DatabaseSync)(path);
@@ -196,62 +209,51 @@ it("keeps one connection while nested reads retain independent committed snapsho
   });
 });
 
-it.each([
-  {
-    sql: "UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'",
-  },
-])(
-  "reuses admitted format while observing fresh rows after a foreign commit: $sql",
-  async ({ sql }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const options = { agentId: "main", env: state.env };
-      const { path } = openOpenClawAgentDatabase(options);
-      await closeOpenClawAgentDatabaseByPathAsync(path);
-      const target = { agentId: "main", path };
-      const scope = new OpenClawAgentDatabaseReadOnlyScope();
-      const read = () =>
-        scope.run(target, () =>
-          withOpenClawAgentDatabaseReadOnly(
-            ({ db }) =>
-              db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()
-                ?.updated_at,
-            options,
-          ),
-        );
+it("reuses admitted format while observing fresh rows after a foreign commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { options, path } = await closedDatabase(state);
+    const target = { agentId: "main", path };
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    const read = () =>
+      scope.run(target, () =>
+        withOpenClawAgentDatabaseReadOnly(
+          ({ db }) =>
+            db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()
+              ?.updated_at,
+          options,
+        ),
+      );
+    try {
+      expect(read()).toEqual({ found: true, value: expect.any(Number) });
+      const writer = new (requireNodeSqlite().DatabaseSync)(path);
       try {
-        expect(read()).toEqual({ found: true, value: expect.any(Number) });
-        const writer = new (requireNodeSqlite().DatabaseSync)(path);
-        try {
-          writer.exec(sql);
-          writer.exec("UPDATE schema_meta SET updated_at = 42 WHERE meta_key = 'primary'");
-        } finally {
-          writer.close();
-        }
-        const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-        try {
-          expect(read()).toEqual({ found: true, value: 42 });
-          expect(
-            observation.queries.filter((query) =>
-              /sqlite_schema|sqlite_master|PRAGMA\s+(?:user_version|schema_version|integrity_check|foreign_key_check)|^SELECT role, schema_version, agent_id/iu.test(
-                query,
-              ),
-            ),
-          ).toEqual([]);
-        } finally {
-          observation.restore();
-        }
+        writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
+        writer.exec("UPDATE schema_meta SET updated_at = 42 WHERE meta_key = 'primary'");
       } finally {
-        scope.close();
+        writer.close();
       }
-    });
-  },
-);
+      const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      try {
+        expect(read()).toEqual({ found: true, value: 42 });
+        expect(
+          observation.queries.filter((query) =>
+            /sqlite_schema|sqlite_master|PRAGMA\s+(?:user_version|schema_version|integrity_check|foreign_key_check)|^SELECT role, schema_version, agent_id/iu.test(
+              query,
+            ),
+          ),
+        ).toEqual([]);
+      } finally {
+        observation.restore();
+      }
+    } finally {
+      scope.close();
+    }
+  });
+});
 
 it("reuses ordinary readers until idle expiry and reopens after lifecycle invalidation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const { options, path } = await closedDatabase(state);
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
@@ -296,16 +298,10 @@ it("reuses ordinary readers until idle expiry and reopens after lifecycle invali
 
 it("pins retained readers through idle expiry but revokes them before database removal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const { options, path } = await closedDatabase(state);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const retained = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(retained.found).toBe(true);
-      if (!retained.found) {
-        throw new Error("Missing synthetic agent database");
-      }
+      const retained = retain(options);
       expect(() =>
         withOpenClawAgentDatabaseReadOnly(() => "wrong owner", {
           ...options,
@@ -316,36 +312,25 @@ it("pins retained readers through idle expiry but revokes them before database r
       expect(retained.claim.isCurrent()).toBe(true);
       vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
       expect(retained.claim.isCurrent()).toBe(true);
-      const other = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(other.found && other.database.db).toBe(retained.database.db);
-      if (other.found) {
-        other.claim.release();
-      }
+      const other = retain(options);
+      expect(other.database.db).toBe(retained.database.db);
+      other.claim.release();
       retained.claim.release();
       vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
       expect(retained.database.db.isOpen).toBe(true);
       vi.advanceTimersByTime(1);
       expect(retained.database.db.isOpen).toBe(false);
-      const stale = retainOpenClawAgentDatabaseReadOnly(options);
-      if (!stale.found) {
-        throw new Error("Missing synthetic agent database");
-      }
+      const stale = retain(options);
       stale.database.db.close();
-      const next = retainOpenClawAgentDatabaseReadOnly(options);
-      if (!next.found) {
-        throw new Error("Missing synthetic replacement reader");
-      }
+      const next = retain(options);
       next.claim.release();
       vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
       expect(next.database.db.isOpen).toBe(false);
       stale.claim.release();
-      const reopened = retainOpenClawAgentDatabaseReadOnly(options);
-      expect(reopened.found).toBe(true);
+      const reopened = retain(options);
       await closeOpenClawAgentDatabaseByPathAsync(path);
-      expect(reopened.found && reopened.claim.isCurrent()).toBe(false);
-      if (reopened.found) {
-        reopened.claim.release();
-      }
+      expect(reopened.claim.isCurrent()).toBe(false);
+      reopened.claim.release();
     } finally {
       vi.useRealTimers();
     }
@@ -354,9 +339,7 @@ it("pins retained readers through idle expiry but revokes them before database r
 
 it("promotes a reused reader beyond the maintenance scope that first opened it", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const options = { agentId: "main", env: state.env };
-    const { path } = openOpenClawAgentDatabase(options);
-    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const { options } = await closedDatabase(state);
     const parent = createOpenClawDatabaseMaintenanceScope();
     const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
     const read = () => withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);

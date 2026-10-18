@@ -57,7 +57,11 @@ function fixture(repair = false) {
   revokeSqliteDatabaseAdmissionsForPath(pathname);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
-  return { options, pathname, state, leases };
+  const run = <T>(
+    operation: Parameters<typeof withOpenClawAgentDatabaseAsync<T>>[1],
+    guard?: () => void,
+  ) => own(withOpenClawAgentDatabaseAsync(options, operation, guard));
+  return { options, pathname, state, leases, run };
 }
 
 function indexSql(pathname: string) {
@@ -140,16 +144,14 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
     }
     let allowed = true;
     const operation = vi.fn();
-    const first = own(
-      withOpenClawAgentDatabaseAsync(f.options, operation, () => {
-        if (!allowed) {
-          // oxlint-disable-next-line typescript/only-throw-error -- This fixture deliberately verifies a falsy non-Error refusal.
-          throw refused;
-        }
-      }),
-    );
+    const first = f.run(operation, () => {
+      if (!allowed) {
+        // oxlint-disable-next-line typescript/only-throw-error -- This fixture deliberately verifies a falsy non-Error refusal.
+        throw refused;
+      }
+    });
     await gate.entered.promise;
-    const peer = own(withOpenClawAgentDatabaseAsync(f.options, operation, () => {}));
+    const peer = f.run(operation, () => {});
     allowed = false;
     gate.release.resolve();
     await expect(first).rejects.toBe(refused);
@@ -170,12 +172,9 @@ it.each(["integrity-shaped", "falsy", "native-failure"] as const)(
     }
     // Refusal neither quarantines the file nor lends stale authority to a fresh caller.
     await expect(
-      own(
-        withOpenClawAgentDatabaseAsync(
-          f.options,
-          () => "fresh",
-          () => {},
-        ),
+      f.run(
+        () => "fresh",
+        () => {},
       ),
     ).resolves.toBe("fresh");
     expect(indexSql(f.pathname)).not.toBe(wrongIndex);
@@ -189,36 +188,29 @@ it("keeps a coalesced peer's authority and async context separate", async () => 
   const observations: Array<{ caller: string; context: string | undefined }> = [];
   const refused = new Error("peer retired");
   let peerAllowed = true;
-  const first = own(
-    context.run("initiator", () =>
-      withOpenClawAgentDatabaseAsync(
-        f.options,
-        () => context.getStore(),
-        () => {
-          observations.push({ caller: "initiator", context: context.getStore() });
-        },
-      ),
+  const first = context.run("initiator", () =>
+    f.run(
+      () => context.getStore(),
+      () => {
+        observations.push({ caller: "initiator", context: context.getStore() });
+      },
     ),
   );
   await gate.entered.promise;
   const deniedOperation = vi.fn();
-  const initiallyDenied = own(
-    withOpenClawAgentDatabaseAsync(f.options, deniedOperation, () => {
-      throw refused;
-    }),
-  );
+  const initiallyDenied = f.run(deniedOperation, () => {
+    throw refused;
+  });
   await expect(initiallyDenied).rejects.toBe(refused);
   expect(deniedOperation).not.toHaveBeenCalled();
   const peerOperation = vi.fn();
-  const peer = own(
-    context.run("peer", () =>
-      withOpenClawAgentDatabaseAsync(f.options, peerOperation, () => {
-        observations.push({ caller: "peer", context: context.getStore() });
-        if (!peerAllowed) {
-          throw refused;
-        }
-      }),
-    ),
+  const peer = context.run("peer", () =>
+    f.run(peerOperation, () => {
+      observations.push({ caller: "peer", context: context.getStore() });
+      if (!peerAllowed) {
+        throw refused;
+      }
+    }),
   );
   peerAllowed = false;
   gate.release.resolve();
@@ -236,20 +228,15 @@ it("denies an initiating operation after publication without retiring its valid 
   const gate = holdIntegrity(f.pathname);
   const refused = new Error("caller retired at publication");
   const firstOperation = vi.fn();
-  const first = own(
-    withOpenClawAgentDatabaseAsync(f.options, firstOperation, () => {
-      if (getOpenClawAgentDatabaseIfOpen(f.options)) {
-        throw refused;
-      }
-    }),
-  );
+  const first = f.run(firstOperation, () => {
+    if (getOpenClawAgentDatabaseIfOpen(f.options)) {
+      throw refused;
+    }
+  });
   await gate.entered.promise;
-  const peer = own(
-    withOpenClawAgentDatabaseAsync(
-      f.options,
-      (database) => database,
-      () => {},
-    ),
+  const peer = f.run(
+    (database) => database,
+    () => {},
   );
   gate.release.resolve();
   await expect(first).rejects.toBe(refused);
@@ -263,7 +250,7 @@ it("denies an initiating operation after publication without retiring its valid 
 it("keeps the joining caller's guard across an aborted predecessor retry", async () => {
   const f = fixture();
   const gate = holdIntegrity(f.pathname);
-  const first = own(withOpenClawAgentDatabaseAsync(f.options, () => "old"));
+  const first = f.run(() => "old");
   await gate.entered.promise;
   closeOpenClawAgentDatabaseByPath(f.pathname);
   const context = new AsyncLocalStorage<string>();
@@ -271,15 +258,13 @@ it("keeps the joining caller's guard across an aborted predecessor retry", async
   const refused = new Error("joining caller retired");
   let allowed = true;
   const operation = vi.fn();
-  const joining = own(
-    context.run("joining", () =>
-      withOpenClawAgentDatabaseAsync(f.options, operation, () => {
-        seen.push(context.getStore());
-        if (!allowed) {
-          throw refused;
-        }
-      }),
-    ),
+  const joining = context.run("joining", () =>
+    f.run(operation, () => {
+      seen.push(context.getStore());
+      if (!allowed) {
+        throw refused;
+      }
+    }),
   );
   allowed = false;
   gate.release.resolve();
@@ -297,16 +282,13 @@ it("retains both authority refusal and recoverable lease cleanup failure", async
   const gate = holdIntegrity(f.pathname);
   const refused = new Error("authority retired before cleanup");
   let allowed = true;
-  const work = own(
-    withOpenClawAgentDatabaseAsync(
-      f.options,
-      () => "forbidden",
-      () => {
-        if (!allowed) {
-          throw refused;
-        }
-      },
-    ),
+  const work = f.run(
+    () => "forbidden",
+    () => {
+      if (!allowed) {
+        throw refused;
+      }
+    },
   );
   await gate.entered.promise;
   f.state.db.exec(
@@ -336,17 +318,14 @@ it("checks lost database ownership before consulting the initiating caller again
   const gate = holdIntegrity(f.pathname);
   let ownerRetired = false;
   const forbiddenRead = vi.fn();
-  const work = own(
-    withOpenClawAgentDatabaseAsync(
-      f.options,
-      () => "forbidden",
-      () => {
-        if (ownerRetired) {
-          forbiddenRead();
-          throw new Error("caller consulted after owner retirement");
-        }
-      },
-    ),
+  const work = f.run(
+    () => "forbidden",
+    () => {
+      if (ownerRetired) {
+        forbiddenRead();
+        throw new Error("caller consulted after owner retirement");
+      }
+    },
   );
   await gate.entered.promise;
   ownerRetired = true;
@@ -365,16 +344,13 @@ it("does not treat a database-owner failure as a repairable integrity verdict", 
   failedOwner.name = "SqliteIntegrityError";
   let ownerFailed = false;
   const callerRead = vi.fn();
-  const work = own(
-    withOpenClawAgentDatabaseAsync(
-      f.options,
-      () => "forbidden",
-      () => {
-        if (ownerFailed) {
-          callerRead();
-        }
-      },
-    ),
+  const work = f.run(
+    () => "forbidden",
+    () => {
+      if (ownerFailed) {
+        callerRead();
+      }
+    },
   );
   await gate.entered.promise;
   ownerFailed = true;
@@ -399,14 +375,12 @@ it("revokes pending native writes before draining retained resources in its root
     revoke: () => {},
     close: () => resourceDrain.promise,
   });
-  const write = own(
-    withOpenClawAgentDatabaseAsync(f.options, ({ db }) => {
-      db.prepare(
-        "INSERT INTO cache_entries (scope,key,value_json,updated_at) VALUES ('close-order','write','unexpected',1)",
-      ).run();
-      return "written";
-    }),
-  );
+  const write = f.run(({ db }) => {
+    db.prepare(
+      "INSERT INTO cache_entries (scope,key,value_json,updated_at) VALUES ('close-order','write','unexpected',1)",
+    ).run();
+    return "written";
+  });
   await native.entered.promise;
   let closed = false;
   const closing = own(

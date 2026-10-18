@@ -69,46 +69,70 @@ function fixture() {
   return { env, options, state };
 }
 
-function readIndexState(pathname: string) {
-  const database = sqlite.openNodeSqliteDatabase(pathname, { readOnly: true });
+function withDatabase<T>(
+  pathname: string,
+  run: (database: ReturnType<typeof sqlite.openNodeSqliteDatabase>) => T,
+  readOnly = false,
+) {
+  const database = sqlite.openNodeSqliteDatabase(pathname, { readOnly });
   try {
-    return {
-      index: database
-        .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
-        .get(),
-      integrity: database.prepare("PRAGMA integrity_check;").all(),
-      retained: database.prepare("SELECT value_json FROM cache_entries").all(),
-    };
+    return run(database);
   } finally {
     database.close();
   }
 }
 
-function installIndexDrift(pathname: string, corrupt: boolean) {
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  try {
+function readIndexState(pathname: string) {
+  return withDatabase(
+    pathname,
+    (database) => ({
+      index: database
+        .prepare("SELECT sql FROM sqlite_schema WHERE name='idx_agent_cache_expiry'")
+        .get(),
+      integrity: database.prepare("PRAGMA integrity_check;").all(),
+      retained: database.prepare("SELECT value_json FROM cache_entries").all(),
+    }),
+    true,
+  );
+}
+
+function installIndexDrift(pathname: string) {
+  withDatabase(pathname, (database) => {
     database.exec(`
       DROP INDEX idx_agent_cache_expiry;
       CREATE INDEX idx_agent_cache_expiry ON cache_entries(key);
     `);
-    if (corrupt) {
-      // The claimed definition disagrees with the real b-tree, exercising the
-      // Worker's genuine integrity-error path before maintenance resumes.
-      database.enableDefensive?.(false);
-      database.exec("PRAGMA writable_schema=ON;");
-      database
-        .prepare("UPDATE sqlite_schema SET sql=? WHERE name='idx_agent_cache_expiry'")
-        .run(
-          "CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL",
-        );
-      database.exec("PRAGMA writable_schema=OFF;");
-      database.exec(
-        `PRAGMA schema_version=${readSqliteNumberPragma(database, "schema_version") + 1};`,
+    // The claimed definition disagrees with the b-tree, exercising genuine integrity failure.
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema=ON;");
+    database
+      .prepare("UPDATE sqlite_schema SET sql=? WHERE name='idx_agent_cache_expiry'")
+      .run(
+        "CREATE INDEX idx_agent_cache_expiry ON cache_entries(scope, expires_at, key) WHERE expires_at IS NOT NULL",
       );
+    database.exec("PRAGMA writable_schema=OFF;");
+    database.exec(
+      `PRAGMA schema_version=${readSqliteNumberPragma(database, "schema_version") + 1};`,
+    );
+  });
+}
+
+function afterFailedIntegrity(run: () => void, once = false) {
+  const check = integrityWorker.assertSqliteIntegrityInWorker;
+  const spy = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+  return spy[once ? "mockImplementationOnce" : "mockImplementation"](async (...args) => {
+    let failed = false;
+    let failure: unknown;
+    try {
+      await check(...args);
+    } catch (error) {
+      failed = true;
+      failure = error;
     }
-  } finally {
-    database.close();
-  }
+    expect(failed).toBe(true);
+    run();
+    throw failure;
+  });
 }
 
 function withAbortableMaintenance<T>(
@@ -204,7 +228,7 @@ describe("asynchronous agent database maintenance admission", () => {
       const child = expectDefined(children()[0], "reused integrity child");
       expect(child.exitCode).toBeNull();
 
-      installIndexDrift(f.options.pathname, true);
+      installIndexDrift(f.options.pathname);
       await expect(
         integrityWorker.assertSqliteIntegrityInWorker(f.options.pathname, 250, maintenance.signal),
       ).rejects.toMatchObject({ name: "SqliteIntegrityError" });
@@ -289,28 +313,14 @@ describe("asynchronous agent database maintenance admission", () => {
     }
   });
 
-  it.each(
-    [true].flatMap((corrupt) =>
-      (["expiry", "replacement", "abort"] as const).map((loss) => ({ corrupt, loss })),
-    ),
-  )("fences Worker resume after $loss (integrity failure=$corrupt)", async ({ corrupt, loss }) => {
-    const f = fixture();
-    installIndexDrift(f.options.pathname, corrupt);
-    const before = readIndexState(f.options.pathname);
-    const abort = new AbortController();
-    const check = integrityWorker.assertSqliteIntegrityInWorker;
-    const spy = vi
-      .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
-      .mockImplementation(async (...args) => {
-        let failed = false;
-        let failure: unknown;
-        try {
-          await check(...args);
-        } catch (error) {
-          failed = true;
-          failure = error;
-        }
-        expect(failed).toBe(corrupt);
+  it.each(["expiry", "replacement", "abort"] as const)(
+    "fences Worker resume after %s following integrity failure",
+    async (loss) => {
+      const f = fixture();
+      installIndexDrift(f.options.pathname);
+      const before = readIndexState(f.options.pathname);
+      const abort = new AbortController();
+      const spy = afterFailedIntegrity(() => {
         if (loss === "abort") {
           abort.abort(new Error("synthetic maintenance abort"));
         } else {
@@ -321,11 +331,7 @@ describe("asynchronous agent database maintenance admission", () => {
             )
             .run(AGENT_DATABASE_MAINTENANCE_LEASE.scope, AGENT_DATABASE_MAINTENANCE_LEASE.key);
         }
-        if (failed) {
-          throw failure;
-        }
       });
-    try {
       await expect(
         withAbortableMaintenance(f, abort.signal, (maintenance) =>
           migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance),
@@ -338,62 +344,34 @@ describe("asynchronous agent database maintenance admission", () => {
           { owner: "successor" },
         ]);
       }
-    } finally {
-      spy.mockRestore();
-    }
-  });
+    },
+  );
 
-  it.each(
-    [true].flatMap((corrupt) =>
-      (["owner", "version"] as const).map((changed) => ({ corrupt, changed })),
-    ),
-  )(
-    "refuses changed database $changed before Worker resume repairs indexes (integrity failure=$corrupt)",
-    async ({ corrupt, changed }) => {
+  it.each(["owner", "version"] as const)(
+    "refuses changed database %s before Worker resume repairs indexes after integrity failure",
+    async (changed) => {
       const f = fixture();
-      installIndexDrift(f.options.pathname, corrupt);
+      installIndexDrift(f.options.pathname);
       const before = readIndexState(f.options.pathname);
-      const check = integrityWorker.assertSqliteIntegrityInWorker;
-      const spy = vi
-        .spyOn(integrityWorker, "assertSqliteIntegrityInWorker")
-        .mockImplementationOnce(async (...args) => {
-          let failed = false;
-          let failure: unknown;
-          try {
-            await check(...args);
-          } catch (error) {
-            failed = true;
-            failure = error;
-          }
-          expect(failed).toBe(corrupt);
-          // Change the same file after the real scan, before its result is consumed.
-          const database = sqlite.openNodeSqliteDatabase(f.options.pathname);
-          try {
-            if (changed === "owner") {
-              database
-                .prepare("UPDATE schema_meta SET agent_id=? WHERE meta_key='primary'")
-                .run("other-agent");
-            } else {
-              database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-            }
-          } finally {
-            database.close();
-          }
-          if (failed) {
-            throw failure;
+      const spy = afterFailedIntegrity(() => {
+        // Change the same file after the real scan, before its result is consumed.
+        withDatabase(f.options.pathname, (database) => {
+          if (changed === "owner") {
+            database
+              .prepare("UPDATE schema_meta SET agent_id=? WHERE meta_key='primary'")
+              .run("other-agent");
+          } else {
+            database.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
           }
         });
-      try {
-        await expect(
-          withAgentDatabaseMaintenanceLease({ env: f.env }, (maintenance) =>
-            migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance),
-          ),
-        ).rejects.toThrow(changed === "owner" ? /belongs to agent other-agent/ : /newer schema/);
-        expect(spy).toHaveBeenCalledOnce();
-        expect(readIndexState(f.options.pathname)).toEqual(before);
-      } finally {
-        spy.mockRestore();
-      }
+      }, true);
+      await expect(
+        withAgentDatabaseMaintenanceLease({ env: f.env }, (maintenance) =>
+          migrateOpenClawAgentDatabaseForMaintenance(f.options, maintenance),
+        ),
+      ).rejects.toThrow(changed === "owner" ? /belongs to agent other-agent/ : /newer schema/);
+      expect(spy).toHaveBeenCalledOnce();
+      expect(readIndexState(f.options.pathname)).toEqual(before);
     },
   );
 
