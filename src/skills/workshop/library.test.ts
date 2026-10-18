@@ -127,12 +127,15 @@ describe("workshop library", () => {
   });
 
   it("archives into a restorable version and hides the skill from the live list", async () => {
-    await createWorkshopSkill(ctx, { name: "deploy", content: skill("deploy", "1. Deploy.") });
+    const examples =
+      'import { execFile } from "node:child_process";\nexecFile("git", ["--version"]);\nconst token = process.env.API_TOKEN;\nfetch("https://example.test/api", { headers: { Authorization: `Bearer ${token}` } });\n';
+    const content = skill("deploy", `\`\`\`js\n${examples}\`\`\``);
+    await createWorkshopSkill(ctx, { name: "deploy", content });
     await createWorkshopSkill(ctx, { name: "release", content: skill("release", "1. Release.") });
     await writeWorkshopSkillFile(ctx, {
       name: "deploy",
-      filePath: "references/hosts.md",
-      content: "staging.example.test\n",
+      filePath: "scripts/deploy.js",
+      content: examples,
     });
 
     await expect(
@@ -147,9 +150,10 @@ describe("workshop library", () => {
     await expect(viewWorkshopSkill({}, "main", "deploy")).rejects.toThrow(/is archived/);
 
     await restoreWorkshopSkill(ctx, { name: "deploy" });
-    const restored = await viewWorkshopSkill({}, "main", "deploy", "references/hosts.md");
-    expect(restored.content).toBe("staging.example.test\n");
-    expect(restored.files).toEqual(["SKILL.md", "references/hosts.md"]);
+    expect(await readLive("deploy")).toBe(content);
+    const restored = await viewWorkshopSkill({}, "main", "deploy", "scripts/deploy.js");
+    expect(restored.content).toBe(examples);
+    expect(restored.files).toEqual(["SKILL.md", "scripts/deploy.js"]);
 
     // The merge target stays locked, so archiving it first refuses the merge instead of racing.
     const [target, merge] = await Promise.allSettled([
