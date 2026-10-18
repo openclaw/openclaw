@@ -338,7 +338,7 @@ export async function startGatewaySidecars(
         const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
           cfg: params.cfg,
         });
-        if (result.checked === 0) {
+        if (result.checked === 0 && result.failed === 0) {
           return;
         }
         params.log.warn(
