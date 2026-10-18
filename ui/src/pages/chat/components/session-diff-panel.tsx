@@ -1,11 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import {
-  createEffect,
   createMemo,
   createSignal,
   For,
   onCleanup,
-  runWithOwner,
+  isPending,
+  latest,
   Show,
   untrack,
 } from "solid-js";
@@ -103,15 +103,85 @@ function shellArgument(value: string) {
 
 function SessionDiffContent(props: SessionDiffProps) {
   const preferences = loadSessionDiffPreferences();
-  const [collapsedPaths, setCollapsedPaths] = createSignal(new Set<string>());
   const [menu, setMenu] = createSignal<SessionDiffMenuData | null>(null);
   const [scope, setScope] = createSignal<SessionDiffScope>({ scope: "all" });
   const [split, setSplit] = createSignal(preferences.split);
   const [wrap, setWrap] = createSignal(preferences.wrap);
-  const [value, setValue] = createSignal<DiffValue | null>(null);
-  const [pending, setPending] = createSignal(false);
-  const [failure, setFailure] = createSignal<{ error: unknown } | null>(null);
   const [gapRevision, setGapRevision] = createSignal(0);
+  const requestTarget = createMemo(() => ({
+    loader: props.loader,
+    owner: props.owner,
+    scope: scope(),
+  }));
+  const [reload, setReload] = createSignal<{
+    target: ReturnType<typeof requestTarget>;
+    result?: SessionsDiffResult;
+  } | null>(null);
+  const request = createMemo(() => ({ target: requestTarget(), reload: reload() }));
+  const loaded = createMemo<{
+    target: ReturnType<typeof requestTarget>;
+    result: SessionsDiffResult | null;
+    failure: { error: unknown } | null;
+  } | null>(
+    () => {
+      const { target, reload: requestedReload } = request();
+      if (!target.loader) {
+        return { target, result: null, failure: null };
+      }
+      return (async () => {
+        try {
+          const result = await ((requestedReload?.target === target
+            ? requestedReload.result
+            : undefined) ?? target.loader!(target.scope));
+          return { target, result, failure: null };
+        } catch (error) {
+          return { target, result: null, failure: { error } };
+        }
+      })();
+    },
+    { loadingValue: null },
+  );
+  const value = createMemo<DiffValue | null>((previous) => {
+    const response = loaded();
+    if (!response?.result) {
+      return response?.failure ? (previous ?? null) : null;
+    }
+    const { result, target } = response;
+    const { owner, scope: requestedScope } = target;
+    const reusable =
+      previous?.owner === owner && JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
+        ? previous.views
+        : [];
+    const views = result.files.map((file) => ({
+      file,
+      // Retain source/presentation identity, never an old metadata snapshot.
+      source: reusable.find(
+        (view) =>
+          view.file.path === file.path &&
+          view.file.oldPath === file.oldPath &&
+          view.file.patch === file.patch &&
+          view.file.binary === file.binary &&
+          view.file.truncated === file.truncated,
+      )?.source ?? {
+        parsed: file.patch
+          ? parseSessionDiffPatch(file.patch, (count) =>
+              t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+            )
+          : null,
+      },
+    }));
+    return { owner, scope: requestedScope, result, views };
+  });
+  const loading = () => props.loader !== null && (latest(loaded) === null || isPending(loaded));
+  const failure = () => (loading() ? null : loaded()?.failure);
+  const [collapsedPaths, setCollapsedPaths] = createSignal<Set<string>>((previous) => {
+    const current = value();
+    if (!current) {
+      return previous ?? new Set();
+    }
+    const paths = new Set(current.views.map((view) => view.file.path));
+    return new Set([...(previous ?? [])].filter((path) => paths.has(path)));
+  });
   const pairedRows = createMemo(() => {
     gapRevision();
     const budget = createDiffPairingBudget();
@@ -124,87 +194,14 @@ function SessionDiffContent(props: SessionDiffProps) {
   const codePresentations = new Map<string, DiffPresentation>();
   const fileTextCache = new WeakMap<FileSource, Promise<string[] | null>>();
   const unavailableFileText = new WeakSet<FileSource>();
-  let generation = 0;
+  let disposed = false;
   const nativeGateways = nativeGatewaysCapability();
   // Dismiss the menu at native-owner replacement before another menu action can run.
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
   onCleanup(() => {
-    generation += 1;
+    disposed = true;
     unsubscribe?.();
   });
-
-  async function loadDiff(
-    prefetched?: SessionsDiffResult,
-    target = { loader: props.loader, owner: props.owner, scope: scope() },
-  ) {
-    const { loader, owner, scope: requestedScope } = target;
-    const request = ++generation;
-    setFailure(null);
-    if (!loader) {
-      setValue(null);
-      setPending(false);
-      return;
-    }
-    setPending(true);
-    try {
-      const result = prefetched ?? (await loader(requestedScope));
-      if (request !== generation) {
-        return;
-      }
-      const previous = value();
-      const reusable =
-        previous?.owner === owner &&
-        JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
-          ? previous.views
-          : [];
-      const views = result.files.map((file) => ({
-        file,
-        // Retain source/presentation identity, never an old metadata snapshot.
-        source: reusable.find(
-          (view) =>
-            view.file.path === file.path &&
-            view.file.oldPath === file.oldPath &&
-            view.file.patch === file.patch &&
-            view.file.binary === file.binary &&
-            view.file.truncated === file.truncated,
-        )?.source ?? {
-          parsed: file.patch
-            ? parseSessionDiffPatch(file.patch, (count) =>
-                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-              )
-            : null,
-        },
-      }));
-      setValue({ owner, scope: requestedScope, result, views });
-      const currentPaths = new Set(views.map((view) => view.file.path));
-      setCollapsedPaths((paths) => new Set([...paths].filter((path) => currentPaths.has(path))));
-    } catch (error) {
-      if (request === generation) {
-        setFailure({ error });
-      }
-    } finally {
-      if (request === generation) {
-        setPending(false);
-      }
-    }
-  }
-  const requestTarget = createMemo(
-    () => ({ loader: props.loader, owner: props.owner, scope: scope() }),
-    {
-      equals: (previous, next) =>
-        previous.loader === next.loader &&
-        previous.owner === next.owner &&
-        previous.scope === next.scope,
-    },
-  );
-  // Load from the external diff owner when the requested scope changes.
-  createEffect(requestTarget, (target) => {
-    // A nested bridge mount can flush this effect under its outer component owner.
-    runWithOwner(null, () => {
-      void loadDiff(undefined, target);
-    });
-  });
-  const loading = () => props.loader !== null && pending();
   function toggleFile(path: string) {
     setCollapsedPaths((paths) => {
       const next = new Set(paths);
@@ -339,7 +336,7 @@ function SessionDiffContent(props: SessionDiffProps) {
             type="button"
             aria-label={t("chat.sessionDiff.refresh")}
             disabled={loading()}
-            onClick={() => void loadDiff()}
+            onClick={() => setReload({ target: requestTarget() })}
           >
             <Icon name="refresh" />
           </button>
@@ -379,8 +376,9 @@ function SessionDiffContent(props: SessionDiffProps) {
       return;
     }
     const requestedScope = scope();
-    const request = generation;
-    const isCurrent = () => generation === request && Boolean(value()?.views.includes(view));
+    const currentRequest = request();
+    const isCurrent = () =>
+      !disposed && request() === currentRequest && Boolean(value()?.views.includes(view));
     let freshResult: SessionsDiffResult;
     try {
       freshResult = await loader(requestedScope);
@@ -395,7 +393,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     // The remaining diff-to-file fetch race is accepted without shared snapshot identity.
     if (!freshFile || freshFile.patch !== view.file.patch) {
       fileTextCache.delete(view.source);
-      await loadDiff(freshResult);
+      setReload({ target: requestTarget(), result: freshResult });
       return;
     }
     const fileLines = await loadFileLines(view);
@@ -452,7 +450,7 @@ function SessionDiffContent(props: SessionDiffProps) {
   }
   function File(fileProps: { view: FileView; result: SessionsDiffResult }) {
     // The keyed list retains this owner by source, not refreshed metadata.
-    const source = untrack(() => fileProps.view.source);
+    const initialSource = untrack(() => fileProps.view.source);
     const file = () => fileProps.view.file;
     const collapsed = () => collapsedPaths().has(file().path);
     const presentation = createDiffPresentation({
@@ -461,7 +459,7 @@ function SessionDiffContent(props: SessionDiffProps) {
       },
       get lines() {
         gapRevision();
-        return source.parsed?.lines ?? [];
+        return initialSource.parsed?.lines ?? [];
       },
       get file() {
         return fileProps.view.file;
@@ -471,17 +469,17 @@ function SessionDiffContent(props: SessionDiffProps) {
       },
     });
     // A retained source has one immutable file path across metadata refreshes.
-    const pathKey = untrack(() => fileProps.view.file.path);
-    codePresentations.set(pathKey, presentation);
+    const initialPath = untrack(() => fileProps.view.file.path);
+    codePresentations.set(initialPath, presentation);
     onCleanup(() => {
-      if (codePresentations.get(pathKey) === presentation) {
-        codePresentations.delete(pathKey);
+      if (codePresentations.get(initialPath) === presentation) {
+        codePresentations.delete(initialPath);
       }
     });
     const path = () => splitPath(file().path);
     const intrinsicSize = () => {
       gapRevision();
-      return `auto ${Math.max(80, Math.min(12_000, (source.parsed?.lines.length ?? 2) * 19))}px`;
+      return `auto ${Math.max(80, Math.min(12_000, (initialSource.parsed?.lines.length ?? 2) * 19))}px`;
     };
     const statusLabel = () => FILE_STATUS_LABELS[file().status] ?? FILE_STATUS_LABELS.modified;
     return (
@@ -549,7 +547,7 @@ function SessionDiffContent(props: SessionDiffProps) {
           >
             <SessionDiffFileBody
               file={file()}
-              parsed={source.parsed}
+              parsed={initialSource.parsed}
               unavailableReason={fileProps.result.unavailableReason}
               split={split()}
               presentation={presentation}
@@ -664,7 +662,9 @@ function SessionDiffContent(props: SessionDiffProps) {
           <Show
             when={
               loading() &&
-              (!value() || value()!.owner !== props.owner || value()!.scope !== scope())
+              (!latest(value) ||
+                latest(value)!.owner !== props.owner ||
+                latest(value)!.scope !== scope())
             }
             fallback={<Show when={value()}>{(current) => <ResultBody value={current()} />}</Show>}
           >

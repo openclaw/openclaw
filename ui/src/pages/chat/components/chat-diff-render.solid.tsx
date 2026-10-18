@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, For, latest, onCleanup, untrack } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import {
@@ -23,10 +23,6 @@ export function createDiffPresentation(props: {
   file: DiffFilePaths;
   rows?: readonly SessionSplitDiffRow[];
 }) {
-  const [highlighted, setHighlighted] = createSignal<ReadonlyMap<DiffLine, DiffHighlightToken[]>>(
-    new Map(),
-  );
-  const [syntaxFolds, setSyntaxFolds] = createSignal<readonly DiffSyntaxFold[]>([]);
   const sourceLines = createMemo(() => props.lines);
   // Gap expansion retains original line objects; preserve their manual folds,
   // while every newly discovered region starts open. A new patch has a new owner.
@@ -36,6 +32,60 @@ export function createDiffPresentation(props: {
   });
   const rows = createMemo(() => props.rows ?? pairSessionDiffLines(props.lines));
   const changes = createMemo(() => diffLineChangeRanges(rows()));
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
+  const syntaxSource = createMemo(
+    () => ({
+      lines: sourceLines(),
+      path: props.file.path,
+      oldPath: props.file.oldPath ?? props.file.path,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.lines === next.lines &&
+        previous.path === next.path &&
+        previous.oldPath === next.oldPath,
+    },
+  );
+  const syntaxRequest = createMemo(() => ({
+    source: props.active === false ? null : syntaxSource(),
+  }));
+  type PreparedSyntax = {
+    source: ReturnType<typeof syntaxSource>;
+    highlighted: ReadonlyMap<DiffLine, DiffHighlightToken[]>;
+    folds: readonly DiffSyntaxFold[];
+  };
+  const syntax = createMemo<PreparedSyntax | null>(
+    (previous) => {
+      const request = syntaxRequest();
+      const source = request.source;
+      // Disclosure parks prepared syntax and manual folds without doing hidden work.
+      if (!source || previous?.source === source) {
+        return previous;
+      }
+      return import("./chat-diff-highlight.runtime.ts")
+        .then(async ({ analyzeDiffSyntax }) => {
+          // A collapsed or replaced source must not start deferred parsing.
+          if (disposed || latest(syntaxRequest) !== request) {
+            return previous;
+          }
+          const result = await analyzeDiffSyntax(source.lines, source.path, source.oldPath);
+          return { source, ...result };
+        })
+        .catch(() => previous);
+    },
+    { loadingValue: null },
+  );
+  const prepared = createMemo(() => {
+    const result = latest(syntax);
+    return result?.source === syntaxSource() ? result : null;
+  });
+  const highlighted = createMemo(
+    () => prepared()?.highlighted ?? new Map<DiffLine, DiffHighlightToken[]>(),
+  );
+  const syntaxFolds = createMemo(() => prepared()?.folds ?? []);
   const rendered = createMemo(() => {
     const result = new Map(highlighted());
     for (const [line, ranges] of changes()) {
@@ -66,49 +116,6 @@ export function createDiffPresentation(props: {
       result.set(line, parts);
     }
     return result;
-  });
-  let generation = 0;
-  onCleanup(() => {
-    generation += 1;
-  });
-  const syntaxSource = createMemo(
-    () => ({
-      lines: sourceLines(),
-      path: props.file.path,
-      oldPath: props.file.oldPath ?? props.file.path,
-    }),
-    {
-      equals: (previous, next) =>
-        previous.lines === next.lines &&
-        previous.path === next.path &&
-        previous.oldPath === next.oldPath,
-    },
-  );
-  const syntaxTarget = createMemo(() => (props.active === false ? null : syntaxSource()));
-  let prepared: ReturnType<typeof syntaxSource> | null = null;
-  createEffect(syntaxTarget, (target) => {
-    const request = ++generation;
-    // Disclosure parks prepared syntax and manual folds without doing hidden work.
-    if (!target || prepared === target) {
-      return;
-    }
-    const { lines, path, oldPath } = target;
-    setHighlighted(new Map());
-    setSyntaxFolds([]);
-    void import("./chat-diff-highlight.runtime.ts")
-      .then(({ analyzeDiffSyntax }) =>
-        generation === request ? analyzeDiffSyntax(lines, path, oldPath) : null,
-      )
-      .then((result) => {
-        if (result && generation === request) {
-          prepared = target;
-          setHighlighted(result.highlighted);
-          setSyntaxFolds(result.folds);
-        }
-      })
-      .catch(() => {
-        /* Optional highlighting leaves escaped source readable. */
-      });
   });
   const folds = createMemo(() => projectDiffCodeFolds(rows(), syntaxFolds()));
   const visibility = createMemo(() => {
@@ -242,8 +249,9 @@ export function DiffBlock(props: {
   rows?: readonly SessionSplitDiffRow[];
   presentation?: DiffPresentation;
 }) {
+  const initialPresentation = untrack(() => props.presentation);
   const presentation =
-    untrack(() => props.presentation) ??
+    initialPresentation ??
     createDiffPresentation({
       get lines() {
         return props.lines;

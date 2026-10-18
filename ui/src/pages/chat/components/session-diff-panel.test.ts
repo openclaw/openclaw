@@ -530,6 +530,7 @@ describe("manual code folding", () => {
   });
 
   it("refreshes metadata when a truncated file still has no patch", async () => {
+    const refreshed = deferred<SessionsDiffResult>();
     let current: SessionsDiffResult = {
       ...result("feature/test"),
       additions: 100001,
@@ -545,7 +546,10 @@ describe("manual code folding", () => {
       ],
     };
     const panel = mountPanel();
-    panel.loader = async () => current;
+    panel.loader = vi
+      .fn<SessionDiffLoader>()
+      .mockResolvedValueOnce(current)
+      .mockImplementationOnce(() => refreshed.promise);
     await settlePanel(panel);
     expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
       "+100001",
@@ -561,6 +565,15 @@ describe("manual code folding", () => {
       ],
     };
     panel.querySelector<HTMLButtonElement>(".session-diff__refresh")!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("true"),
+    );
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff__file-toggle")).toBe(originalToggle);
+    expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
+      "+100001",
+    );
+    refreshed.resolve(current);
     await settlePanel(panel);
     expect(panel.querySelector(".session-diff__file .chat-diffstat__add")?.textContent).toBe(
       "+100008",
