@@ -115,39 +115,21 @@ describe("plugin api lifecycle", () => {
       sessionKey: injection.sessionKey,
     }));
     const api = captureRegisteredPluginApi({ enqueueNextTurnInjection });
-
-    const groupedResult = await api.session.workflow.enqueueNextTurnInjection({
-      sessionKey: "global",
-      text: "grouped",
-      agentId: "work",
-    });
-    const flatResult = await api.enqueueNextTurnInjection({
-      sessionKey: "global",
-      text: "flat",
-      agentId: "main",
-    });
-
-    expect(groupedResult).toEqual({
+    const grouped = { sessionKey: "global", text: "grouped", agentId: "work" };
+    const flat = { sessionKey: "global", text: "flat", agentId: "main" };
+    expect(await api.session.workflow.enqueueNextTurnInjection(grouped)).toEqual({
       enqueued: true,
       id: "injection-grouped",
       sessionKey: "global",
     });
-    expect(flatResult).toEqual({
+    expect(await api.enqueueNextTurnInjection(flat)).toEqual({
       enqueued: true,
       id: "injection-flat",
       sessionKey: "global",
     });
     expect(enqueueNextTurnInjection).toHaveBeenCalledTimes(2);
-    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(1, {
-      sessionKey: "global",
-      agentId: "work",
-      text: "grouped",
-    });
-    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(2, {
-      sessionKey: "global",
-      agentId: "main",
-      text: "flat",
-    });
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(1, grouped);
+    expect(enqueueNextTurnInjection).toHaveBeenNthCalledWith(2, flat);
   });
 
   it("keeps workflow steering callable after registration", async () => {
@@ -168,12 +150,12 @@ describe("plugin api lifecycle", () => {
     const registerSessionExtension = vi.fn();
     const api = captureRegisteredPluginApi({ registerSessionExtension });
 
-    const result = api.session.state.registerSessionExtension({
-      namespace: "workflow",
-      description: "workflow",
-    });
-
-    expect(result).toBeUndefined();
+    expect(
+      api.session.state.registerSessionExtension({
+        namespace: "workflow",
+        description: "workflow",
+      }),
+    ).toBeUndefined();
     expect(registerSessionExtension).not.toHaveBeenCalled();
   });
 

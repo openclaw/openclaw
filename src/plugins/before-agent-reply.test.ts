@@ -16,12 +16,16 @@ vi.mock("./hook-runner-global.js", () => ({
   getGlobalHookRunner: () => hookRunner,
 }));
 
-function runHook(runId: string) {
+function runHook(
+  runId: string,
+  overrides: Partial<Parameters<typeof runBeforeAgentReplyForTurn>[0]> = {},
+) {
   return runBeforeAgentReplyForTurn({
     runId,
     trigger: "user",
     event: { cleanedBody: runId },
     context: { runId, trigger: "user" },
+    ...overrides,
   });
 }
 
@@ -40,9 +44,7 @@ describe("before_agent_reply runner boundary", () => {
       const beforeDispatch = vi.fn(async () => undefined);
       const afterDispatch = vi.fn(async (result) => result);
       const pending = withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
-        runBeforeAgentReplyForTurn({
-          runId: `attribution-${outcome}`,
-          trigger: "user",
+        runHook(`attribution-${outcome}`, {
           event: { cleanedBody: "hello" },
           context: { trigger: "user" },
           awaitSessionDiffBaseline: async () => {
@@ -93,9 +95,7 @@ describe("before_agent_reply runner boundary", () => {
     hookRunner.hasHooks.mockReturnValue(false);
     const awaitSessionDiffBaseline = vi.fn(async () => {});
     await expect(
-      runBeforeAgentReplyForTurn({
-        runId: "attribution-no-hook",
-        trigger: "user",
+      runHook("attribution-no-hook", {
         event: { cleanedBody: "hello" },
         context: { trigger: "user" },
         awaitSessionDiffBaseline,
@@ -125,8 +125,7 @@ describe("before_agent_reply runner boundary", () => {
           },
         },
         () =>
-          runBeforeAgentReplyForTurn({
-            runId: "finalization-authority",
+          runHook("finalization-authority", {
             trigger: "cron",
             event: { cleanedBody: "hello" },
             context: { trigger: "cron" },
@@ -156,12 +155,7 @@ describe("before_agent_reply runner boundary", () => {
   it("uses the validated turn trigger when context disagrees", async () => {
     const runId = "mismatch";
     const context = { runId, trigger: "heartbeat" };
-    await runBeforeAgentReplyForTurn({
-      runId,
-      trigger: "user",
-      event: { cleanedBody: runId },
-      context,
-    });
+    await runHook(runId, { context });
 
     const expectedContext = { ...context, trigger: "user" };
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("before_agent_reply", expectedContext);
@@ -174,10 +168,8 @@ describe("before_agent_reply runner boundary", () => {
   it("does not dispatch for internal triggers", async () => {
     const trigger = "manual";
     await expect(
-      runBeforeAgentReplyForTurn({
-        runId: trigger,
+      runHook(trigger, {
         trigger,
-        event: { cleanedBody: trigger },
         context: { runId: trigger, trigger },
       }),
     ).resolves.toBeUndefined();
