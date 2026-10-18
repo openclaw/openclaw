@@ -3,9 +3,8 @@
 // OpenClaw injects only a head, a policy digest and a tail, so agents miss rules.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { resolveBootstrapMaxChars } from "../src/agents/embedded-agent-helpers/bootstrap.ts";
+import { DEFAULT_BOOTSTRAP_MAX_CHARS as maxChars } from "../src/agents/embedded-agent-helpers/bootstrap-limits.ts";
 
-const maxChars = resolveBootstrapMaxChars();
 const files = execFileSync("git", ["ls-files", "-z", "--", "AGENTS.md", "*/AGENTS.md"], {
   encoding: "utf8",
 })
