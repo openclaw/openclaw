@@ -173,7 +173,10 @@ describe("renderTable", () => {
         expect(rendered.softWrapRowsMatch).toBe(true);
       }
       expect(rendered.header).toMatch(/^([│|]) Key +\1$/u);
-      expect(rendered.lastLine).toBe(rendered.firstLine);
+      expect([
+        ["+-----+", "+-----+"],
+        ["┌─────┐", "└─────┘"],
+      ]).toContainEqual([rendered.firstLine, rendered.lastLine]);
     },
   );
 
