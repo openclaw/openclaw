@@ -57,7 +57,9 @@ async function fixture(backend: "local" | "repository" = "local") {
     sessionId: SESSION_ID,
     sessionKey: SESSION_KEY,
   });
-  const published = await f.coordinator.requestForSessionV2(f.request(randomUUID(), f.guest));
+  const published = await f.coordinator.requestForSessionV2(
+    f.request(randomUUID(), f.guest, "Publish session work"),
+  );
   expect(published.status).toBe("published");
   if (published.status !== "published") {
     throw new Error("Publication fixture did not publish");
@@ -78,7 +80,7 @@ async function fixture(backend: "local" | "repository" = "local") {
   const state = {
     body: JSON.parse(creation[1]!.input as string).body as string,
     node_id: "PR_fixture",
-    title: "Preserve the guest's work",
+    title: JSON.parse(creation[1]!.input as string).title as string,
     html_url: publication.url,
     state: "open",
     draft: true,
@@ -422,10 +424,20 @@ describe("session PR actions through the agent tool and registered Gateway metho
       const actor = backend === "repository" ? "writer" : "admin";
       const scope = { agentId: "main", sessionKey: SESSION_KEY };
       const original = loadSessionEntryReadOnly(scope);
+      if (f.local) {
+        expect(await f.local.git("rev-list", "--count", "main..HEAD")).toBe("1");
+        expect(await f.local.git("log", "-1", "--format=%s")).toBe("Publish session work");
+      }
       await expect(f.invoke("guest", { action: "ready", ...f.expected })).rejects.toThrow(
         /scope|permission/iu,
       );
       expect(f.writes).toEqual([]);
+      await f.invoke("guest", {
+        action: "edit",
+        ...f.expected,
+        expectedTitle: "Publish session work",
+        title: "fix: preserve descriptive PR titles when landing",
+      });
       expect((await f.invoke(actor, { action: "inspect" })).details).toMatchObject({
         state: "draft",
         mergeCommit: null,
@@ -434,6 +446,9 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect((await f.invoke(actor, { action: "ready", ...f.expected })).details).toMatchObject({
         state: "open",
       });
+      if (backend === "repository") {
+        f.loseResponse();
+      }
       expect(
         (await f.invoke(actor, { action: "merge", ...f.expected, mergeMethod: "squash" })).details,
       ).toMatchObject({ state: "merged", mergeCommit: "e".repeat(40) });
@@ -441,10 +456,11 @@ describe("session PR actions through the agent tool and registered Gateway metho
       await expect(
         f.invoke("guest", { action: "merge", ...f.expected, mergeMethod: "squash" }),
       ).rejects.toThrow(/scope|permission/iu);
-      expect(f.writes.map((write) => write.action)).toEqual(["ready", "merge"]);
-      expect(f.writes[1]?.input).toMatchObject({
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "merge"]);
+      expect(f.writes[2]?.input).toEqual({
         sha: f.publication.headCommit,
         merge_method: "squash",
+        commit_title: "fix: preserve descriptive PR titles when landing",
         commit_message: "Co-authored-by: alice <7+alice@users.noreply.github.com>",
       });
       expect(loadSessionEntryReadOnly(scope)).toEqual(original);
@@ -568,18 +584,25 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
-  it("reconciles a lost write response and repeated ready without another write", async () => {
-    const f = await fixture();
-    f.loseResponse();
-    expect((await f.invoke("admin", { action: "ready", ...f.expected })).details).toMatchObject({
-      state: "open",
-    });
-    await f.invoke("admin", { action: "ready", ...f.expected });
-    expect(
-      (await f.invoke("admin", { action: "merge", ...f.expected, mergeMethod: "merge" })).details,
-    ).toMatchObject({ state: "merged" });
-    expect(f.writes.map((write) => write.action)).toEqual(["ready", "merge"]);
-  });
+  it.each(["merge", "rebase"] as const)(
+    "reconciles a lost %s response and repeated ready without another write",
+    async (mergeMethod) => {
+      const f = await fixture();
+      f.loseResponse();
+      expect((await f.invoke("admin", { action: "ready", ...f.expected })).details).toMatchObject({
+        state: "open",
+      });
+      await f.invoke("admin", { action: "ready", ...f.expected });
+      expect(
+        (await f.invoke("admin", { action: "merge", ...f.expected, mergeMethod })).details,
+      ).toMatchObject({ state: "merged" });
+      expect(f.writes.map((write) => write.action)).toEqual(["ready", "merge"]);
+      expect(f.writes[1]?.input).toEqual({
+        sha: f.publication.headCommit,
+        merge_method: mergeMethod,
+      });
+    },
+  );
 
   it("reports repository-check rejection without auto-merge or deleting saved work", async () => {
     const f = await fixture();
