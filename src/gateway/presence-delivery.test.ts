@@ -49,7 +49,9 @@ describe("presence wire size", () => {
     const updated = preparePresenceDelivery(client, source, projected, 2);
     const delta = JSON.parse(`{${updated.fragment.slice(1)}}`).payload as PresenceDelta;
     expect(delta.base).toBe(1);
-    expect(delta.upsert).toEqual([{ key: "entry:wire-size-0", presence: projected[0] }]);
+    expect(delta.upsert).toEqual([
+      { key: "entry:wire-size-0", set: {}, unset: ["watchedSessions"] },
+    ]);
     expect(delta.remove).toEqual([]);
     expect(delta.order).toEqual(source.map((row) => `entry:${row.connectionId}`));
     const event = (payload: unknown) => ({
@@ -64,7 +66,7 @@ describe("presence wire size", () => {
     expect(afterBytes).toBeLessThan(beforeBytes / 10);
     console.info(`24-row presence event: full=${beforeBytes} B delta=${afterBytes} B`);
 
-    const small = preparePresenceDelivery(client, source.slice(0, 1), projected.slice(0, 1), 3);
+    const small = preparePresenceDelivery(client, source.slice(0, 1), [{ ts: 0, text: "" }], 3);
     expect(JSON.parse(`{${small.fragment.slice(1)}}`).payload).toMatchObject({ reset: true });
   });
 });

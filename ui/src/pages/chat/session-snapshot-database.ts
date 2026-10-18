@@ -91,41 +91,12 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   if (!factory) {
     return null;
   }
-  let database: IDBDatabase;
   try {
-    database = await openIndexedDb(factory);
-  } catch (error) {
-    debugSnapshotStore("resetting cache after IndexedDB open failure", error);
-    if (!(await deleteIndexedDb(factory))) {
-      return null;
-    }
-    try {
-      database = await openIndexedDb(factory);
-    } catch (retryError) {
-      debugSnapshotStore("IndexedDB cache remains unavailable", retryError);
-      return null;
-    }
-  }
-  database.addEventListener("versionchange", () => database.close());
-  if (
-    database.objectStoreNames.length === 3 &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE_NAME) &&
-    database.objectStoreNames.contains(CHAT_SNAPSHOT_METADATA_STORE_NAME) &&
-    database.objectStoreNames.contains(SIDEBAR_SNAPSHOT_STORE_NAME)
-  ) {
+    const database = await openIndexedDb(factory);
+    database.addEventListener("versionchange", () => database.close());
     return database;
-  }
-  database.close();
-  debugSnapshotStore("resetting cache after IndexedDB schema mismatch");
-  if (!(await deleteIndexedDb(factory))) {
-    return null;
-  }
-  try {
-    const fresh = await openIndexedDb(factory);
-    fresh.addEventListener("versionchange", () => fresh.close());
-    return fresh;
   } catch (error) {
-    debugSnapshotStore("IndexedDB cache reset failed", error);
+    debugSnapshotStore("IndexedDB cache is unavailable", error);
     return null;
   }
 }

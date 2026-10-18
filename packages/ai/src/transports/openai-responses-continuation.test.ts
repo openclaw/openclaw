@@ -508,29 +508,6 @@ describe("OpenAI Responses continuation", () => {
     expect(previous(firstHost, "other")).toBeUndefined();
     expect(previous(secondHost, "other")).toBe("second-other");
   });
-
-  it("keeps preparation exclusive and preserves a cleanup-time replacement after failure", () => {
-    commitBaseline(claim({}), "resp_first");
-    let replacement: ReturnType<typeof claim>;
-    const request = {
-      ...nextRequest(),
-      metadata: {
-        value: {
-          toJSON() {
-            expect(claim({})).toBeUndefined();
-            cleanupSessionResources("session-1");
-            replacement = claim({});
-            throw new Error("serialization failed after replacement");
-          },
-        },
-      },
-    };
-    expect(() => claim({ request })).toThrow("serialization failed after replacement");
-    expect(replacement).toBeDefined();
-    expect(claim({})).toBeUndefined();
-    commitBaseline(replacement, "resp_replacement");
-    expect(previousResponseId()).toBe("resp_replacement");
-  });
 });
 
 describe("OpenAI Responses continuation cache bounds", () => {

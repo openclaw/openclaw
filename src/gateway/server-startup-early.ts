@@ -1,4 +1,3 @@
-// Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, and delayed maintenance setup.
 import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { isNixMode } from "../config/paths.js";

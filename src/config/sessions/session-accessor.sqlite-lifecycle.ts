@@ -360,11 +360,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
             },
             assertSourceCurrent,
           );
-      if (preparation.operation !== "entry") {
-        throw new Error(
-          `SQLite session deletion planning returned ${preparation.operation} for entry`,
-        );
-      }
       if (preparation.value.kind === "missing") {
         await publishSessionStateArchives(resolved, []);
         return { archivedTranscripts: [], deleted: false };
@@ -421,11 +416,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
               },
               assertDeletionCurrent,
             );
-            if (planning.operation !== "history") {
-              throw new Error(
-                `SQLite session deletion planning returned ${planning.operation} for history`,
-              );
-            }
             if (planning.value.kind === "expected-entry-mismatch") {
               return expectedEntryMismatchResult(historicalArchivedTranscripts);
             }
@@ -452,11 +442,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 assertDeletionCurrent,
                 diagnostics,
               );
-              if (checked.operation !== "check") {
-                throw new Error(
-                  `SQLite session deletion planning returned ${checked.operation} for check`,
-                );
-              }
               if (checked.value.kind === "expected-entry-mismatch") {
                 return DELETE_EXPECTED_ENTRY_MISMATCH;
               }
@@ -475,11 +460,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                 onInProcessCommit: recordCommit,
                 plan: reclamationPlan,
               });
-              if (reclaimed.kind !== reclamationPlan.kind) {
-                throw new Error(
-                  `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-                );
-              }
               return reclaimed.value;
             });
             if (archivedGeneration === DELETE_EXPECTED_ENTRY_MISMATCH) {
@@ -545,11 +525,6 @@ async function deleteSqliteSessionEntryLifecycleLocked(
                     onWorkerResult,
                     plan: reclamationPlan,
                   });
-            if (reclaimed.kind !== reclamationPlan.kind) {
-              throw new Error(
-                `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-              );
-            }
             return reclaimed.value;
           });
           if (result.deleted) {

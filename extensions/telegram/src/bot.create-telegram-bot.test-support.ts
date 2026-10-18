@@ -19,6 +19,16 @@ export const telegramBotInfoForTest = {
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
 
+function fileRef(fileId: string, filePath?: string) {
+  return {
+    file_id: fileId,
+    file_unique_id: `unique-${fileId}`,
+    ...(filePath ? { file_path: filePath } : {}),
+  };
+}
+
+const photoRef = (fileId: string) => [{ ...fileRef(fileId), width: 1, height: 1 }];
+
 export function createChannelPostContext(params: {
   messageId: number;
   date: number;
@@ -38,29 +48,12 @@ export function createChannelPostContext(params: {
       ...(params.caption ? { caption: params.caption } : {}),
       ...(params.text ? { text: params.text } : {}),
       ...(params.mediaGroupId ? { media_group_id: params.mediaGroupId } : {}),
-      ...(photoFileId
-        ? {
-            photo: [
-              {
-                file_id: photoFileId,
-                file_unique_id: `unique-${photoFileId}`,
-                width: 1,
-                height: 1,
-              },
-            ],
-          }
-        : {}),
+      ...(photoFileId ? { photo: photoRef(photoFileId) } : {}),
     },
     me: { username: "openclaw_bot" },
     getFile: async () =>
       params.getFileResult ??
-      (photoFileId
-        ? {
-            file_id: photoFileId,
-            file_unique_id: `unique-${photoFileId}`,
-            file_path: `photos/${photoFileId}.jpg`,
-          }
-        : {}),
+      (photoFileId ? fileRef(photoFileId, `photos/${photoFileId}.jpg`) : {}),
   };
 }
 
@@ -70,25 +63,20 @@ export type TelegramIngestGroupForTest = {
   topics?: Record<string, { ingest: boolean }>;
 };
 
-export function telegramIngestGroupForTest(
+export const telegramIngestGroupForTest = (
   ingest?: boolean,
   topics?: Record<string, { ingest: boolean }>,
-): TelegramIngestGroupForTest {
-  return {
-    requireMention: true,
-    ...(ingest === undefined ? {} : { ingest }),
-    ...(topics ? { topics } : {}),
-  };
-}
+): TelegramIngestGroupForTest => ({
+  requireMention: true,
+  ...(ingest === undefined ? {} : { ingest }),
+  ...(topics ? { topics } : {}),
+});
 
 export async function waitForTelegramMockCalls(
   mock: { mock: { calls: unknown[] } },
   count: number,
 ) {
-  for (let index = 0; index < 80; index++) {
-    if (mock.mock.calls.length >= count) {
-      return;
-    }
+  for (let index = 0; index < 80 && mock.mock.calls.length < count; index++) {
     await delay(25);
   }
 }
@@ -100,27 +88,21 @@ export async function queueChannelPostAlbum(
     mediaGroupId: string;
     firstMessageId: number;
     secondMessageId: number;
-    firstPhotoFileId?: string;
-    secondPhotoFileId?: string;
     secondGetFileResult?: Record<string, unknown>;
   },
 ) {
   await Promise.all(
-    [
-      {
-        messageId: params.firstMessageId,
-        caption: params.caption,
-        date: 1736380800,
-        photoFileId: params.firstPhotoFileId ?? "p1",
-      },
-      {
-        messageId: params.secondMessageId,
-        date: 1736380801,
-        photoFileId: params.secondPhotoFileId ?? "p2",
-        getFileResult: params.secondGetFileResult,
-      },
-    ].map((message) =>
-      handler(createChannelPostContext({ ...message, mediaGroupId: params.mediaGroupId })),
+    [0, 1].map((index) =>
+      handler(
+        createChannelPostContext({
+          messageId: index ? params.secondMessageId : params.firstMessageId,
+          photoFileId: `p${index + 1}`,
+          caption: index ? undefined : params.caption,
+          getFileResult: index ? params.secondGetFileResult : undefined,
+          date: 1736380800 + index,
+          mediaGroupId: params.mediaGroupId,
+        }),
+      ),
     ),
   );
 }
@@ -139,76 +121,61 @@ export function createTelegramPrivateMediaContext(params: {
       message_id: params.messageId,
       date: 1736380800,
       ...(params.fileName
-        ? {
-            document: {
-              file_id: params.fileId,
-              file_unique_id: `unique-${params.fileId}`,
-              file_name: params.fileName,
-            },
-          }
-        : {
-            photo: [
-              {
-                file_id: params.fileId,
-                file_unique_id: `unique-${params.fileId}`,
-                width: 1,
-                height: 1,
-              },
-            ],
-          }),
+        ? { document: { ...fileRef(params.fileId), file_name: params.fileName } }
+        : { photo: photoRef(params.fileId) }),
       from: { id: 55, is_bot: false, first_name: "u" },
     },
     me: { username: "openclaw_bot" },
-    getFile:
-      params.getFile ??
-      (async () => ({
-        file_id: params.fileId,
-        file_unique_id: `unique-${params.fileId}`,
-        file_path: `documents/${params.fileId}`,
-      })),
+    getFile: params.getFile ?? (async () => fileRef(params.fileId, `documents/${params.fileId}`)),
   };
 }
 
-export function makePrivateTextContext(params: {
-  text: string;
+type RetryContextParams = {
   messageId?: number;
   updateId?: number;
-  date?: number;
-  chatId?: number;
   from?: Record<string, unknown>;
   message?: Record<string, unknown>;
   downloadable?: boolean;
-}): TelegramMiddlewareTestContext {
-  const from = params.from ?? { id: 42, first_name: "Ada" };
+};
+
+function middlewareContext(updateId: number | undefined, downloadable = false) {
   return {
-    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    ...(updateId === undefined ? {} : { update: { update_id: updateId } }),
+    me: { username: "openclaw_bot" },
+    getFile: async () => (downloadable ? { download: async () => new Uint8Array() } : {}),
+  };
+}
+
+export function makePrivateTextContext(
+  params: RetryContextParams & {
+    text: string;
+    date?: number;
+    chatId?: number;
+  },
+): TelegramMiddlewareTestContext {
+  return {
+    ...middlewareContext(params.updateId, params.downloadable),
     message: {
       chat: { id: params.chatId ?? 7, type: "private" },
       text: params.text,
       date: params.date ?? 1736380800,
       ...(params.messageId === undefined ? {} : { message_id: params.messageId }),
-      from,
+      from: params.from ?? { id: 42, first_name: "Ada" },
       ...params.message,
     },
-    me: { username: "openclaw_bot" },
-    getFile: params.downloadable
-      ? async () => ({ download: async () => new Uint8Array() })
-      : async () => ({}),
   };
 }
 
-export function makeCallbackRetryContext(params: {
-  updateId?: number;
-  id: string;
-  data: string;
-  messageId: number;
-  text?: string;
-  message?: Record<string, unknown>;
-  from?: Record<string, unknown>;
-  downloadable?: boolean;
-}): TelegramMiddlewareTestContext {
+export function makeCallbackRetryContext(
+  params: RetryContextParams & {
+    id: string;
+    data: string;
+    messageId: number;
+    text?: string;
+  },
+): TelegramMiddlewareTestContext {
   return {
-    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    ...middlewareContext(params.updateId, params.downloadable !== false),
     callbackQuery: {
       id: params.id,
       data: params.data,
@@ -221,10 +188,5 @@ export function makeCallbackRetryContext(params: {
         ...params.message,
       },
     },
-    me: { username: "openclaw_bot" },
-    getFile:
-      params.downloadable === false
-        ? async () => ({})
-        : async () => ({ download: async () => new Uint8Array() }),
   };
 }

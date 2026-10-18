@@ -88,12 +88,12 @@ export function ChannelsView(props: ChannelsProps) {
           actions={
             <ChannelRefresh
               updatedAt={props.channels.channelsLastSuccess}
-              disabled={props.channels.channelsLoading}
+              disabled={!props.channels.connected || props.channels.channelsLoading}
               onRefresh={() => props.onRefresh(true)}
             />
           }
         >
-          {connected().length === 0 ? (
+          {connected().length === 0 && snapshot() ? (
             <div class="channels-empty">
               {/* No configured transports is a true empty state, so Clawd rests here. */}
               <openclaw-mascot mood="sleepy" prop:size={80} />
@@ -107,7 +107,7 @@ export function ChannelsView(props: ChannelsProps) {
           title={t("channels.hub.addTitle")}
           description={t("channels.hub.addSubtitle")}
         >
-          {!props.canAdmin ? (
+          {!props.canAdmin && props.channels.connected ? (
             <div class="callout info" role="note">
               {t("channels.hub.adminRequired")}
             </div>

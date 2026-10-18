@@ -73,7 +73,7 @@ export function registerSteeringReceiptCases({
       actualQueue.scheduleFollowupDrain(key, observeFollowup(runFollowup)),
     );
     const queued = createDeferred();
-    const onDeferred = vi.fn(queued.resolve);
+    const onDeferred = vi.fn(() => queued.resolve());
     const settled = createDeferred();
     const onAdopted = vi.fn();
     const onBlockReply = vi.fn();

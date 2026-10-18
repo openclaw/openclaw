@@ -16,6 +16,8 @@ import {
   createFinalizeArgs,
   createLaterPrompter,
   createRuntime,
+  sessionGatewayTuiCases,
+  sessionGatewayTuiTarget,
   type FinalizeArgs,
   type FinalizeArgsOverrides,
 } from "./setup.finalize.fixtures.test-support.js";
@@ -150,8 +152,9 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
   >(() => false),
 );
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
-const startGatewayServer = vi.hoisted(() =>
+const startOnboardingGatewayProcess = vi.hoisted(() =>
   vi.fn(async () => ({
+    wait: new Promise<void>(() => {}),
     close: vi.fn(async () => {}),
   })),
 );
@@ -251,8 +254,9 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../gateway/server.js", () => ({
-  startGatewayServer,
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
+  startOnboardingGatewayProcess,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -377,7 +381,9 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReset().mockReturnValue([]);
     hasAuthProfileForProvider.mockReset().mockReturnValue(false);
     isContainerEnvironment.mockReset().mockReturnValue(false);
-    startGatewayServer.mockReset().mockResolvedValue({ close: vi.fn(async () => {}) });
+    startOnboardingGatewayProcess
+      .mockReset()
+      .mockResolvedValue({ wait: new Promise<void>(() => {}), close: vi.fn(async () => {}) });
     inspectWindowsGatewayFirewall.mockReset().mockResolvedValue({
       applies: false,
       severity: "info",
@@ -1069,7 +1075,7 @@ describe("finalizeSetupWizard", () => {
 
         expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
         expect(isContainerEnvironment).not.toHaveBeenCalled();
-        expect(startGatewayServer).not.toHaveBeenCalled();
+        expect(startOnboardingGatewayProcess).not.toHaveBeenCalled();
         expectNoteContains(prompter, "Use that supervisor to start the gateway.", "Gateway");
         expectNoteNotContains(prompter, "openclaw gateway run");
         expectNoteNotContains(prompter, "openclaw onboard --install-daemon");
@@ -1522,7 +1528,6 @@ describe("finalizeSetupWizard", () => {
   it("uses the setup token for health checks to avoid local env token drift", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
-    const prompter = createLaterPrompter();
 
     await finalize("quickstart", {
       opts: { skipHealth: false, skipUi: true },
@@ -1535,7 +1540,6 @@ describe("finalizeSetupWizard", () => {
           },
         },
       },
-      prompter,
     });
 
     expect(requireMockArg(healthCommand)).toMatchObject({
@@ -1564,17 +1568,22 @@ describe("finalizeSetupWizard", () => {
     expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
-  it.each(["return", "reject"] as const)(
-    "joins the temporary Gateway after TUI %s in containers without systemd",
-    async (outcome) => {
+  it.each(sessionGatewayTuiCases)(
+    "joins the temporary Gateway around TUI %s (skipHealth=%s, ready=%s)",
+    async (outcome, skipHealth, gatewayReady) => {
       await withPlatform("linux", async () => {
         isSystemdUserServiceAvailable.mockResolvedValue(false);
         isContainerEnvironment.mockReturnValue(true);
-        waitForGatewayReachable.mockResolvedValue({ ok: true });
-        probeGatewayReachable.mockResolvedValue({ ok: true });
+        const probeStarted = createDeferred();
+        const reachable = createDeferred<{ ok: boolean }>();
+        waitForGatewayReachable.mockImplementationOnce(() => {
+          probeStarted.resolve();
+          return reachable.promise;
+        });
         const closeStarted = createDeferred();
         const allowClose = createDeferred();
         const sessionGateway = {
+          wait: new Promise<void>(() => {}),
           close: vi.fn(async () => {
             closeStarted.resolve();
             await allowClose.promise;
@@ -1584,34 +1593,29 @@ describe("finalizeSetupWizard", () => {
         if (outcome === "reject") {
           runTui.mockRejectedValueOnce(tuiFailure);
         }
-        startGatewayServer.mockResolvedValueOnce(sessionGateway);
+        startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
         const prompter = createLaterPrompter();
 
         const finalizing = finalizeSetupWizard(
           createFinalizeArgs("quickstart", {
-            opts: { installDaemon: undefined, skipHealth: false },
+            opts: { installDaemon: undefined, skipHealth },
             settings: { gatewayToken: "test-token" },
-            nextConfig: {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: "test-token",
-                },
-              },
-            },
             prompter,
           }),
         );
+        await awaitGateBeforeSettlement(
+          probeStarted.promise,
+          closeStarted.promise,
+          "wizard launched the TUI before waiting for its temporary Gateway",
+        );
+        expect(runTui).not.toHaveBeenCalled();
+        reachable.resolve({ ok: gatewayReady });
 
         let finalized = false;
-        const settled = finalizing.then(
-          () => {
-            finalized = true;
-          },
-          () => {
-            finalized = true;
-          },
-        );
+        const markFinalized = () => {
+          finalized = true;
+        };
+        const settled = finalizing.then(markFinalized, markFinalized);
         try {
           await awaitGateBeforeSettlement(
             closeStarted.promise,
@@ -1619,6 +1623,9 @@ describe("finalizeSetupWizard", () => {
             "wizard returned before closing its temporary Gateway",
           );
           expect(finalized).toBe(false);
+          if (!gatewayReady) {
+            expect(runTui).not.toHaveBeenCalled();
+          }
         } finally {
           allowClose.resolve();
           await settled;
@@ -1629,29 +1636,17 @@ describe("finalizeSetupWizard", () => {
           await expect(finalizing).resolves.toEqual({ launchedTui: true });
         }
 
-        expect(startGatewayServer).toHaveBeenCalledWith(
-          18789,
-          expect.objectContaining({
-            bind: "loopback",
-            auth: expect.objectContaining({
-              mode: "token",
-              token: "test-token",
-            }),
-          }),
-        );
+        expect(startOnboardingGatewayProcess).toHaveBeenCalledOnce();
         expect(runTui).toHaveBeenCalledWith(
           expect.objectContaining({
-            boundGateway: {
-              url: "ws://127.0.0.1:18789",
-              token: "test-token",
-            },
+            ...(gatewayReady ? sessionGatewayTuiTarget : { local: true }),
             deliver: false,
             message: undefined,
             initialMessageTimeoutMs: 300_000,
           }),
         );
         expect(runTui.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
-        expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
+
         expect(sessionGateway.close).toHaveBeenCalledOnce();
         expectNoteContains(
           prompter,
@@ -1664,37 +1659,40 @@ describe("finalizeSetupWizard", () => {
     },
   );
 
-  it("closes a session gateway when finalize fails before TUI launch", async () => {
-    await withPlatform("linux", async () => {
-      isSystemdUserServiceAvailable.mockResolvedValue(false);
-      isContainerEnvironment.mockReturnValue(true);
-      waitForGatewayReachable.mockRejectedValueOnce(new Error("probe failed"));
-      const sessionGateway = { close: vi.fn(async () => {}) };
-      startGatewayServer.mockResolvedValueOnce(sessionGateway);
-      const prompter = createLaterPrompter();
+  it.each(["probe", "child"])(
+    "closes a session gateway on %s failure before TUI launch",
+    async (source) => {
+      await withPlatform("linux", async () => {
+        isSystemdUserServiceAvailable.mockResolvedValue(false);
+        isContainerEnvironment.mockReturnValue(true);
+        const failure = new Error(`${source} failed`);
+        const child = createDeferred();
+        void child.promise.catch(() => {});
+        waitForGatewayReachable.mockImplementationOnce(() => {
+          if (source === "probe") {
+            return Promise.reject(failure);
+          }
+          child.reject(failure);
+          return new Promise(() => {});
+        });
+        const sessionGateway = { wait: child.promise, close: vi.fn(async () => {}) };
+        startOnboardingGatewayProcess.mockResolvedValueOnce(sessionGateway);
+        const prompter = createLaterPrompter();
 
-      await expect(
-        finalizeSetupWizard(
-          createFinalizeArgs("quickstart", {
-            opts: { installDaemon: undefined, skipHealth: false },
-            settings: { gatewayToken: "test-token" },
-            nextConfig: {
-              gateway: {
-                auth: {
-                  mode: "token",
-                  token: "test-token",
-                },
-              },
-            },
-            prompter,
-          }),
-        ),
-      ).rejects.toThrow("probe failed");
+        await expect(
+          finalizeSetupWizard(
+            createFinalizeArgs("quickstart", {
+              opts: { installDaemon: undefined, skipHealth: false },
+              prompter,
+            }),
+          ),
+        ).rejects.toBe(failure);
 
-      expect(runTui).not.toHaveBeenCalled();
-      expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding finalize exited" });
-    });
-  });
+        expect(runTui).not.toHaveBeenCalled();
+        expect(sessionGateway.close).toHaveBeenCalledOnce();
+      });
+    },
+  );
 
   it("uses the resolved setup password for health checks", async () => {
     probeGatewayReachable.mockResolvedValue({ ok: true });

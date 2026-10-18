@@ -18,8 +18,8 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
     ...actual,
     createVitestCacheWarmGroups: vi.fn((profile: "full" | "hybrid-hosted" = "full") => {
       const hosted = actual.createVitestCacheWarmGroups("hybrid-hosted");
-      // Keep one compatible file beside a Node-required file and a tooling file.
-      // The planner suite owns the production inventory; this proves partitioning.
+      // Keep representative unit-fast and tooling files in the bounded seed.
+      // The planner suite owns the production inventory; this proves runtime coverage.
       const tooling = {
         ...hosted[0]!,
         configs: ["test/vitest/vitest.unit-fast.config.ts", "test/vitest/vitest.tooling.config.ts"],
@@ -37,7 +37,11 @@ vi.mock(import("../../scripts/lib/ci-node-test-plan.mts"), async (importOriginal
               configs: ["test/vitest/vitest.unit-fast.config.ts"],
               includePatterns: tooling.includePatterns.slice(0, 2),
             },
-            hosted[1]!,
+            {
+              configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+              includePatterns: ["test/plugins/team-reports-http.gateway.test.ts"],
+              shard_name: "cache-warm:gateway-methods",
+            },
             hosted.find((group) => group.shard_name === "cache-warm:ui-package")!,
           ];
     }),
@@ -60,7 +64,7 @@ it.each(
     [undefined, "bun-all", "dual-all"].map((policy) => ({ platform, policy })),
   ),
 )(
-  "preserves protected Node and compatible Bun seeds for $platform ($policy)",
+  "preserves protected Node and Bun seeds for $platform ($policy)",
   async ({ platform, policy }) => {
     const root = tempDirs.make("openclaw-cache-warm-test-");
     const cacheRoot = join(root, "transforms");
@@ -168,13 +172,11 @@ it.each(
         env.OPENCLAW_NODE_COMPILE_CACHE_WRITER,
       ]),
     ).toEqual([...invocations.slice(0, -1).map(() => ["0", "0"]), ["1", "1"]]);
-    expect(nonUiCollections.filter(({ runtime }) => runtime === "bun")).toEqual([
-      {
-        configs: ["test/vitest/vitest.unit-fast.config.ts"],
-        runtime: "bun",
-        files: ["packages/media-core/src/mime.test.ts"],
-      },
-    ]);
+    expect(nonUiCollections.filter(({ runtime }) => runtime === "bun")).toEqual(
+      groups
+        .filter((group) => group !== ui && (platform === "linux" || group === groups[0]))
+        .map((group) => ({ configs: group.configs, runtime: "bun", files: group.includePatterns })),
+    );
     if (platform === "linux") {
       const nonUiGroups = groups.filter((group) => group !== ui);
       expect(JSON.parse(invocations[0]!.env.OPENCLAW_NODE_TEST_GROUPS_JSON!)).toEqual(nonUiGroups);

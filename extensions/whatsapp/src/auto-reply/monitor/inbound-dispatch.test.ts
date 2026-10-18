@@ -10,9 +10,9 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
+import { resolveWhatsAppResponsePrefix } from "./response-prefix.js";
 
 const { readAgentRunTerminalOutcome, verboseLog } = vi.hoisted(() => ({
   readAgentRunTerminalOutcome: vi.fn(),

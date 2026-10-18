@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { logWarn } from "../logger.js";
+import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compareMcpCatalogTools } from "./agent-bundle-mcp-names.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
@@ -269,23 +270,16 @@ export function createSessionMcpRuntimeManagerLifecycle(
     runtimeKeys: string[],
     work: () => Promise<T>,
   ): Promise<T> => {
-    const previous = runtimeKeys
-      .map((key) => store.runtimeWorkChains.get(key))
-      .filter((pending) => pending !== undefined);
-    const run = Promise.allSettled(previous).then(work);
+    const run = enqueueKeyedTask({
+      tails: store.runtimeWorkChains,
+      keys: runtimeKeys,
+      task: work,
+    });
     const settled: Promise<unknown> = run.then(
       () => undefined,
       () => undefined,
     );
-    for (const key of runtimeKeys) {
-      store.runtimeWorkChains.set(key, settled);
-    }
     void settled.finally(() => {
-      for (const key of runtimeKeys) {
-        if (store.runtimeWorkChains.get(key) === settled) {
-          store.runtimeWorkChains.delete(key);
-        }
-      }
       // A full admission may install a requester after discarding its empty static partition.
       for (const sessionId of new Set(runtimeKeys.map(parseRuntimeCacheSessionId))) {
         if (runtimeKeysForSessionId(sessionId).length === 0) {

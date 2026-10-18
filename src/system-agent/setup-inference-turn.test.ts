@@ -33,6 +33,7 @@ import {
   runSetupInferenceTurn,
 } from "./setup-inference-turn.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
+import * as verifiedInference from "./verified-inference.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -74,7 +75,7 @@ function embeddedRoute(
 }
 
 const runProbe = (route: SystemAgentConfiguredRoute) =>
-  runSetupInferenceTurn({ route, requireExecutionOwner: false, deps: {} });
+  runSetupInferenceTurn({ route, requireExecutionOwner: false });
 
 function probeReply(route: SystemAgentConfiguredRoute, text?: string) {
   return {
@@ -93,11 +94,14 @@ function revalidateOwner(
   route: Parameters<typeof revalidateStableSetupInferenceOwner>[0]["route"] = binding.execution,
   auth: Parameters<typeof revalidateStableSetupInferenceOwner>[0]["auth"] = binding.auth,
 ) {
+  vi.spyOn(verifiedInference, "createSystemAgentVerifiedInferenceBinding").mockImplementation(
+    createBinding,
+  );
   return revalidateStableSetupInferenceOwner({
     route,
     auth,
     stagedOwnerPluginArtifacts: binding,
-    deps: { createSystemAgentVerifiedInferenceBinding: createBinding },
+    deps: {},
   });
 }
 

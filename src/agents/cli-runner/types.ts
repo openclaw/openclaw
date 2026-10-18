@@ -65,7 +65,6 @@ type CliSessionRetryParams = {
   sessionId: string;
 };
 
-/** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   /** Effective tool policy prepared by the trusted channel ingress owner. */
   conversationToolPolicy?: GroupToolPolicyConfig;
@@ -235,7 +234,6 @@ export function captureCliRunStartTime() {
   return { started: Date.now(), startedMonotonicMs: performance.now() };
 }
 
-/** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */

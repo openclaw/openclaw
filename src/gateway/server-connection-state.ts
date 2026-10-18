@@ -4,7 +4,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-// Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createEventWebPushDelivery } from "./event-web-push.js";
@@ -38,7 +37,7 @@ export function createGatewayConnectionState(params: {
   let sessionRowProjection: SessionRowProjection | undefined;
   const connectionRows = new WeakMap<GatewayClient, ConnectionSessionRows>();
   const clients = new GatewayClientRegistry(undefined, (client) => {
-    connectionRows.get(client)?.clear();
+    connectionRows.get(client)?.clear("close");
     connectionRows.delete(client);
     client.presenceSnapshot = undefined;
   });
@@ -51,7 +50,12 @@ export function createGatewayConnectionState(params: {
   };
   const clearConnectionRows = () => {
     for (const client of clients) {
-      connectionRows.get(client)?.clear();
+      connectionRows.get(client)?.clear("projection");
+    }
+  };
+  const clearAncestors = () => {
+    for (const client of clients) {
+      connectionRows.get(client)?.clearAncestors();
     }
   };
   const forgetAncestor = (key: string) => {
@@ -85,7 +89,7 @@ export function createGatewayConnectionState(params: {
     sessionMessageSubscribers,
     onSessionDeliveryLost: (client) => {
       if (hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS)) {
-        connectionRows.get(client)?.clear();
+        connectionRows.get(client)?.clear("delivery-lost");
       }
     },
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) => {
@@ -139,12 +143,9 @@ export function createGatewayConnectionState(params: {
             resolveSessionEventAgentScope(loadRuntimeConfig(), key, agentId),
           forgetAncestors: (key) => {
             if (key !== undefined) {
-              for (const client of clients) {
-                connectionRows.get(client)?.clearRows();
-              }
               forgetAncestor(key);
             } else {
-              clearConnectionRows();
+              clearAncestors();
             }
           },
           references: (client) => {
@@ -211,7 +212,7 @@ export function createGatewayConnectionState(params: {
           return;
         }
         if ("all" in change) {
-          clearConnectionRows();
+          clearAncestors();
         } else if (change.factsInvalidated || (change.facts && change.facts.kind !== "unchanged")) {
           forgetAncestor(change.sessionKey);
         }

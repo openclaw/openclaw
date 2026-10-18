@@ -172,6 +172,34 @@ describe("channel-auth", () => {
     mocks.logoutAccount.mockResolvedValue({ cleared: true, loggedOut: true });
   });
 
+  it.each([
+    ["login", runChannelLogin, mocks.login],
+    ["logout", runChannelLogout, mocks.logoutAccount],
+  ] as const)(
+    "uses source intent and the active runtime snapshot for %s",
+    async (_mode, run, action) => {
+      const sourceConfig: OpenClawConfig = { channels: { whatsapp: {} } };
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        hash: "config-1",
+        valid: true,
+        sourceConfig,
+      });
+      const runtimeConfig: OpenClawConfig = {
+        ...sourceConfig,
+        agents: { defaults: { maxConcurrent: 4 } },
+        plugins: { entries: { "memory-core": { config: {} } } },
+      };
+      mocks.loadConfig.mockReturnValue(runtimeConfig);
+      mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
+      await run({ channel: "whatsapp" }, runtime);
+
+      expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
+      expect(readFirstCallArg(action).cfg).toBe(runtimeConfig);
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
   it("awaits account preparation for inferred local logout", async () => {
     const account = { id: "prepared-account", enabled: true };
     const selectedPlugin = {
@@ -296,21 +324,72 @@ describe("channel-auth", () => {
     },
   );
 
-  it("persists auto-enabled config during logout auto-pick too", async () => {
-    const autoEnabledCfg = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
-    mocks.loadConfig.mockReturnValue({});
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledCfg, changes: ["whatsapp"] });
+  it("auto-picks from the runtime view without persisting unrelated plugin activation", async () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      channels: { whatsapp: {} },
+      plugins: { allow: ["whatsapp"] },
+    };
+    const autoEnabledCfg = {
+      ...sourceConfig,
+      channels: { whatsapp: { enabled: true } },
+      plugins: {
+        allow: ["whatsapp"],
+        entries: { codex: { enabled: true }, whatsapp: { enabled: true } },
+      },
+    };
+    const runtimeConfig = {
+      ...sourceConfig,
+      agents: { defaults: { model: "openai/gpt-5.5", maxConcurrent: 4 } },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1", valid: true, sourceConfig });
+    mocks.loadConfig.mockReturnValue(runtimeConfig);
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledCfg,
+      changes: ["codex", "whatsapp"],
+    });
+    mocks.resolveAccount.mockImplementation((cfg: OpenClawConfig) => ({
+      enabled: cfg.channels?.whatsapp?.enabled === true,
+    }));
+
+    await runChannelLogin({}, runtime);
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledTimes(1);
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: runtimeConfig,
+      env: process.env,
+    });
+    expectFields(readFirstCallArg(mocks.login), {
+      cfg: runtimeConfig,
+      channelInput: "whatsapp",
+    });
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.resolveAccount.mock.calls[0]?.[0]).toEqual(autoEnabledCfg);
+  });
+
+  it("does not persist auto-enabled config during logout auto-pick", async () => {
+    const sourceConfig = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    const autoEnabledCfg = {
+      ...sourceConfig,
+      plugins: {
+        allow: ["whatsapp"],
+        entries: { codex: { enabled: true }, whatsapp: { enabled: true } },
+      },
+    };
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1", valid: true, sourceConfig });
+    mocks.loadConfig.mockReturnValue(sourceConfig);
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledCfg,
+      changes: ["codex", "whatsapp"],
+    });
 
     await runChannelLogout({}, runtime);
 
     expectFields(readFirstCallArg(mocks.callGateway), {
-      config: autoEnabledCfg,
+      config: sourceConfig,
       method: "channels.logout",
     });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      sourceConfig: autoEnabledCfg,
-      baseHash: "config-1",
-    });
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it.each(["prototype"])("ignores %s channels when inferring login", async (kind) => {

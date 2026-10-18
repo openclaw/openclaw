@@ -41,6 +41,11 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+If the retained verifier cannot authenticate to the restarted Gateway, it stops
+retrying that rejection. Local HTTP readiness and runtime version/build identity
+can verify activation instead, with an RPC authentication warning recorded in
+the update result. This does not change Gateway authentication or pairing.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
@@ -61,8 +66,11 @@ existing foreign-key checks. This avoids checking every unrelated index against
 its table during a routine upgrade. Structural corruption anywhere in the
 database and corruption in the migration's affected tables still refuse the
 migration; quarantine and rollback behavior are unchanged.
-Historical migrations without a declared table scope, same-version Doctor
-repairs, and legacy transformed recovery archives retain full integrity checks.
+Historical upgrades use the same default even when recovery requires a full-file
+backup. Automatic original-state captures and disposable update rehearsals also
+honor the requested check, including same-version Doctor repairs. Automatic rollback
+images, restore validation, explicit Doctor recovery, and legacy transformed recovery
+archives retain full integrity checks.
 
 To request full integrity checking across every table and index during migration:
 
@@ -880,6 +888,13 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+After migration, recovery checks the installed candidate's schemas before
+restarting a Gateway stopped by the update, even when normal Doctor completion
+did not need a process-settlement receipt. A later verification error does not
+make the previous package compatible with migrated state. Obsolete package
+backup cleanup is best effort: locked files or denied renames produce warnings
+with the retained path and filesystem cause, without failing verified activation.
 
 Rollback snapshots settle local SQLite writers under maintenance ownership before
 capture, so writer shutdown during rollback is not mistaken for intervening writes.

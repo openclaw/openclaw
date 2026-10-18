@@ -1,7 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-/**
- * Builds structured observations for embedded-agent API/text failures.
- */
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";

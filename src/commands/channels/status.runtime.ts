@@ -1,4 +1,3 @@
-// Runtime-only rendering and config fallback for `openclaw channels status`.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,

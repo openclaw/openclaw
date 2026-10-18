@@ -1,4 +1,3 @@
-// Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";

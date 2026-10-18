@@ -22,7 +22,6 @@ import {
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
-  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -186,7 +185,6 @@ describe("public session sharing", () => {
       const row = sessionRow();
       setSharingAuthorization(pane, { scopes: [scope] });
       const states = pane.collaboration.sharingStates;
-      const updates = vi.spyOn(getPaneTestRuntime(pane), "invalidate");
       const workspace = createPaneHeaderWorkspaceFixture(state);
 
       pane.renderPaneHeader(workspace, row, false, undefined, false, null);
@@ -194,7 +192,6 @@ describe("public session sharing", () => {
 
       expect(pane.collaboration.sharingStates).toBe(states);
       expect(request).not.toHaveBeenCalled();
-      expect(updates).not.toHaveBeenCalled();
     },
   );
 
@@ -412,21 +409,19 @@ describe("public session sharing", () => {
 });
 
 describe("chat pane sharing authorization", () => {
-  it("does not invalidate each render when sharing cannot load, then hydrates when access arrives", async () => {
+  it("keeps denied sharing reads idle and hydrates when access arrives", async () => {
     const row = sessionRow();
     const request = vi.fn(async () => sharingResult(row));
     const { pane } = createSharingTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
     });
-    const invalidate = vi.spyOn(pane.chatState, "requestBackgroundUpdate");
     const hydration = vi.spyOn(pane, "loadSessionSharing");
     setSharingAuthorization(pane, { scopes: ["operator.sessions.write"] });
 
     pane.syncSelectedSessionSharing(row);
     pane.syncSelectedSessionSharing(row);
 
-    expect(invalidate).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
 
     setSharingAuthorization(pane, { scopes: ["operator.read"] });

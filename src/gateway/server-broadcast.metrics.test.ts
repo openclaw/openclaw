@@ -1,11 +1,13 @@
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   onInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
@@ -142,6 +144,67 @@ it("batches session frame bytes by reason and exact subscription without changin
     expect(JSON.stringify(observations)).not.toMatch(
       /private-reason|private-role|sessionKey|content/,
     );
+  } finally {
+    unsubscribe();
+    setDiagnosticsEnabledForProcess(false);
+  }
+});
+
+it("batches accepted presence frame counts and UTF-8 bytes by delivery mode", async () => {
+  const observations: DiagnosticEventPayload[] = [];
+  setDiagnosticsEnabledForProcess(true);
+  const unsubscribe = onInternalDiagnosticEvent((event) => observations.push(event), {
+    include: ["gateway.ws.event"],
+  });
+  const capable = makeClient("capable", "operator", ["operator.read"]);
+  const legacy = makeClient("legacy", "operator", ["operator.read"]);
+  capable.client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
+  for (const { client } of [capable, legacy]) {
+    client.socket.recordEventSent = recordGatewayWsEvent;
+  }
+  const { broadcast } = createGatewayBroadcaster({
+    clients: new GatewayClientRegistry([capable.client, legacy.client]),
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  try {
+    const presence = listSystemPresence();
+    for (const version of [1, 2, 3]) {
+      if (version === 3) {
+        capable.client.presenceSnapshot = undefined;
+      }
+      broadcast("presence", { presence }, { stateVersion: { presence: version } });
+    }
+    expect(observations).toEqual([]);
+    await yieldImmediate();
+    await waitForDiagnosticEventsDrained();
+    const bytes = (peer: typeof capable, indices: number[]) =>
+      indices.reduce(
+        (total, index) => total + Buffer.byteLength(peer.socket.send.mock.calls[index]![0]),
+        0,
+      );
+    expect(observations.map(({ seq: _seq, ts: _ts, ...event }) => event)).toEqual([
+      {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 2,
+        bytes: bytes(capable, [0, 2]),
+        presenceMode: "reset",
+      },
+      {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 3,
+        bytes: bytes(legacy, [0, 1, 2]),
+        presenceMode: "legacy",
+      },
+      {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 1,
+        bytes: bytes(capable, [1]),
+        presenceMode: "delta",
+      },
+    ]);
   } finally {
     unsubscribe();
     setDiagnosticsEnabledForProcess(false);

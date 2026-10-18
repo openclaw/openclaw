@@ -6,7 +6,10 @@ import { createUpdateStateInspectionReporter } from "./update-candidate-state.di
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 
 export const RetainedRuntimeFilesSchema = z.object({
-  plan: UpdateCandidatePluginTreePlanSchema,
+  relocations: UpdateCandidatePluginTreePlanSchema.shape.relocations,
+  files: z.array(z.string()),
+  entries: z.number().int().nonnegative(),
+  estimatedBytes: UpdateCandidatePluginTreePlanSchema.shape.bytes,
   inventoryMs: z.number().nonnegative(),
   materializationMs: z.number().nonnegative(),
   linked: z.number().int().nonnegative(),
@@ -55,8 +58,13 @@ export async function prepareRetainedRuntimeFiles(params: {
     // the process before cleanup, then rechecks authority before using the result.
     assertCurrent() {},
   });
+  // Admission fingerprints stay in the worker. Returning the full plan can
+  // exceed stdout's capture limit after materialization has already succeeded.
   return {
-    plan,
+    relocations: plan.relocations,
+    files: plan.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+    entries: plan.entries.length,
+    estimatedBytes: plan.bytes,
     inventoryMs,
     materializationMs: Math.round(performance.now() - materializationStartedAt),
     ...counts,

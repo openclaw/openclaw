@@ -435,7 +435,7 @@ describe("chat sidebar region", () => {
     const context = createInitializationContext();
     const state = createPageState(
       context,
-      { afterCommit: () => () => {}, invalidate: vi.fn() },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.sessionKey = "agent:main:main";

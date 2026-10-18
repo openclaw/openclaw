@@ -3,237 +3,247 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabaseByPath as closePath,
+  closeOpenClawAgentDatabaseByPathAsync as closePathAsync,
+  closeOpenClawAgentDatabasesAsync as closeDatabases,
   registerOpenClawAgentDatabaseAsyncResource as registerKnown,
 } from "./openclaw-agent-db-lifecycle.js";
 import {
-  captureAgentDatabaseCloseFence,
-  drainAgentDatabaseResources,
-  hasOpenClawAgentDatabaseAsyncResources,
+  captureAgentDatabaseCloseFence as captureFence,
+  drainAgentDatabaseResources as drainResources,
+  hasOpenClawAgentDatabaseAsyncResources as hasResources,
   registerOpenClawAgentDatabaseReadCandidateResource as registerCandidate,
-  revokeAgentDatabaseResources,
+  revokeAgentDatabaseResources as revokeResources,
 } from "./openclaw-agent-db-resources.js";
 import {
-  createOpenClawDatabaseMaintenanceScope,
-  observeOpenClawDatabaseMaintenanceResource,
+  createOpenClawDatabaseMaintenanceScope as createScope,
+  observeOpenClawDatabaseMaintenanceResource as observeResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 
 const root = path.join(os.tmpdir(), `agent-resource-lifecycle-${process.pid}`);
 
-function resource(filename: string, close: () => Promise<void> = async () => {}) {
+function resource(
+  filename: string,
+  close: () => Promise<void> = async () => {},
+  options: { agentId?: string; scope?: "sibling-family"; revoke?: () => void } = {},
+) {
+  const { revoke, ...overrides } = options;
   return {
     agentId: "worker",
     path: path.join(root, filename),
-    revoke: vi.fn(),
+    revoke: vi.fn(revoke),
     close: vi.fn(close),
+    ...overrides,
   };
 }
 
+async function duringClose(
+  closing: Promise<unknown>,
+  gate: ReturnType<typeof createDeferredCore<void>>,
+  check: () => void | Promise<void>,
+) {
+  try {
+    await check();
+  } finally {
+    gate.resolve();
+    await closing;
+  }
+}
+
+function expectClosing(register: () => unknown) {
+  expect(register).toThrow("are closing");
+}
+
+function expectCalls(count: number, ...mocks: Array<{ mock: { calls: unknown[][] } }>) {
+  for (const mock of mocks) {
+    expect(mock.mock.calls).toHaveLength(count);
+  }
+}
+
+function failingResource(filename: string, message: string, onClose?: () => void) {
+  const failure = new Error(message);
+  let failed = true;
+  return {
+    ...resource(filename, async () => {
+      onClose?.();
+      if (failed) {
+        throw failure;
+      }
+    }),
+    failure,
+    recover() {
+      failed = false;
+    },
+  };
+}
+
+function trackSettlement(promise: Promise<unknown>) {
+  const tracked = {
+    settled: false,
+    promise: promise.finally(() => {
+      tracked.settled = true;
+    }),
+  };
+  void tracked.promise.catch(() => {});
+  return tracked;
+}
+
 afterEach(async () => {
-  await closeOpenClawAgentDatabasesAsync(root);
+  await closeDatabases(root);
 });
 
 it("promotes a shared registration beyond its creating maintenance scope", async () => {
-  const parent = createOpenClawDatabaseMaintenanceScope();
-  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const parent = createScope();
+  const child = parent.run(() => createScope());
   const held = resource("shared-maintenance.sqlite");
   const unregister = child.run(() => registerCandidate(held));
-  parent.run(() => observeOpenClawDatabaseMaintenanceResource(unregister));
+  parent.run(() => observeResource(unregister));
   try {
     await child.close();
     expect(held.revoke).not.toHaveBeenCalled();
-    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
+    expect(hasResources()).toBe(true);
     await parent.close();
     expect(held.close).toHaveBeenCalledOnce();
-    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+    expect(hasResources()).toBe(false);
   } finally {
     await parent.close();
     unregister();
   }
 });
 
-it.each(["known", "unresolved"] as const)(
-  "joins exact %s retirement without retiring another owner",
-  async (ownership) => {
-    const gate = createDeferredCore();
-    const held = resource("worker.sqlite", () => gate.promise);
-    const sibling = { ...resource("kept.sqlite"), agentId: "kept" };
-    const register = ownership === "known" ? registerKnown : registerCandidate;
-    const release = register(held);
-    register(sibling);
-    if (ownership === "known") {
-      expect(closeOpenClawAgentDatabaseByPath(held.path, "kept")).toBe(false);
-      expect(held.revoke).not.toHaveBeenCalled();
-      expect(closeOpenClawAgentDatabaseByPath(held.path, "worker")).toBe(false);
+it.each([
+  "known",
+  "unresolved",
+  "known-directory",
+  "unresolved-directory",
+  "unresolved-member",
+] as const)("joins %s retirement without retiring another owner", async (selection) => {
+  const exact = selection === "known" || selection === "unresolved";
+  const gate = createDeferredCore();
+  const scope = exact ? undefined : "sibling-family";
+  const held = resource("selected/nested/candidate.sqlite", () => gate.promise, { scope });
+  const sibling = resource("selected-sibling/candidate.sqlite", undefined, {
+    scope,
+    agentId: "kept",
+  });
+  const register = selection.startsWith("known") ? registerKnown : registerCandidate;
+  const release = register(held);
+  register(sibling);
+  if (selection === "known") {
+    expect(closePath(held.path, "kept")).toBe(false);
+    expect(held.revoke).not.toHaveBeenCalled();
+    expect(closePath(held.path, "worker")).toBe(false);
+    expect(held.revoke).toHaveBeenCalledOnce();
+  }
+  const tracked = trackSettlement(
+    exact
+      ? closePathAsync(held.path, selection === "known" ? "worker" : "discovered-later")
+      : closeDatabases(
+          path.join(
+            root,
+            selection === "unresolved-member"
+              ? "selected/nested/candidate.worker.sqlite"
+              : "selected",
+          ),
+        ),
+  );
+  await duringClose(tracked.promise, gate, async () => {
+    if (selection !== "known") {
       expect(held.revoke).toHaveBeenCalledOnce();
     }
-    let settled = false;
-    const closing = closeOpenClawAgentDatabaseByPathAsync(
-      held.path,
-      ownership === "known" ? "worker" : "discovered-later",
-    ).then(() => {
-      settled = true;
-    });
-    try {
-      if (ownership === "unresolved") {
-        expect(held.revoke).toHaveBeenCalledOnce();
-        release();
-      }
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      expect(held.close).toHaveBeenCalledOnce();
-      expect(sibling.revoke).not.toHaveBeenCalled();
-      expect(() =>
-        registerKnown({ ...held, agentId: ownership === "known" ? "worker" : "other" }),
-      ).toThrow("are closing");
-    } finally {
-      gate.resolve();
-      await closing;
+    if (selection === "unresolved") {
+      release();
     }
-    expect(settled).toBe(true);
-  },
-);
-
-it.each(["known-directory", "unresolved-directory", "unresolved-member"] as const)(
-  "limits %s drainage to the selected root",
-  async (selection) => {
-    const gate = createDeferredCore();
-    const candidate = {
-      ...resource("selected/nested/candidate.sqlite", () => gate.promise),
-      scope: "sibling-family" as const,
-    };
-    const sibling = {
-      ...resource("selected-sibling/candidate.sqlite"),
-      scope: "sibling-family" as const,
-    };
-    const register = selection === "known-directory" ? registerKnown : registerCandidate;
-    register(candidate);
-    register(sibling);
-    const rootPath = path.join(
-      root,
-      selection === "unresolved-member" ? "selected/nested/candidate.worker.sqlite" : "selected",
-    );
-    const closing = closeOpenClawAgentDatabasesAsync(rootPath);
-    try {
-      expect(candidate.revoke).toHaveBeenCalledOnce();
-      expect(sibling.revoke).not.toHaveBeenCalled();
-      if (selection === "known-directory") {
-        expect(() => registerKnown(resource("selected/new.sqlite"))).toThrow("are closing");
-      }
-    } finally {
-      gate.resolve();
-      await closing;
+    await Promise.resolve();
+    expect(tracked.settled).toBe(false);
+    expect(held.close).toHaveBeenCalledOnce();
+    expect(sibling.revoke).not.toHaveBeenCalled();
+    if (exact) {
+      expectClosing(() =>
+        registerKnown({ ...held, agentId: selection === "known" ? "worker" : "other" }),
+      );
+    } else if (selection === "known-directory") {
+      expectClosing(() => registerKnown(resource("selected/new.sqlite")));
     }
-    expect(candidate.close).toHaveBeenCalledOnce();
-  },
-);
+  });
+  expect(tracked.settled).toBe(true);
+  expect(held.close).toHaveBeenCalledOnce();
+});
 
 it.each([false, true])(
   "keeps a draining root fenced through every settlement (failure: %s)",
   async (fail) => {
-    let failClose = fail;
     const gate = createDeferredCore();
-    const held = {
-      agentId: "worker",
-      path: path.join(root, "selected", "worker.sqlite"),
-      revoke: vi.fn(() => {
-        expect(() =>
-          registerKnown({
-            agentId: "reentrant",
-            path: path.join(root, "selected", "reentrant.sqlite"),
-            revoke() {},
-            close: async () => {},
-          }),
-        ).toThrow("are closing");
-      }),
-      close: () => gate.promise,
-    };
-    const sibling = {
-      agentId: "kept",
-      path: path.join(root, "sibling", "kept.sqlite"),
-      revoke: vi.fn(),
-      close: async () => {},
-    };
+    const held = resource("selected/worker.sqlite", () => gate.promise, {
+      revoke: () =>
+        expectClosing(() =>
+          registerKnown(resource("selected/reentrant.sqlite", undefined, { agentId: "reentrant" })),
+        ),
+    });
+    const sibling = resource("sibling/kept.sqlite", undefined, { agentId: "kept" });
     registerKnown(held);
     registerKnown(sibling);
-    const failure = new Error("independent resource close failed");
     const failureObserved = createDeferredCore();
-    const failedPath = path.join(root, "selected", "failed.sqlite");
-    if (fail) {
-      registerKnown({
-        agentId: "failed",
-        path: failedPath,
-        revoke() {},
-        async close() {
-          failureObserved.resolve();
-          if (failClose) {
-            throw failure;
-          }
-        },
-      });
-    }
-    let settled = false;
-    const closing = closeOpenClawAgentDatabasesAsync(path.join(root, "selected")).then(
-      () => {
-        settled = true;
-      },
-      (error: unknown) => {
-        settled = true;
-        throw error;
-      },
+    const failed = failingResource(
+      "selected/failed.sqlite",
+      "independent resource close failed",
+      () => failureObserved.resolve(),
     );
-    void closing.catch(() => {});
+    if (fail) {
+      registerKnown({ ...failed, agentId: "failed" });
+    }
+    const tracked = trackSettlement(closeDatabases(path.join(root, "selected")));
     try {
       if (fail) {
         await failureObserved.promise;
       }
-      expect(settled).toBe(false);
+      expect(tracked.settled).toBe(false);
       expect(held.revoke).toHaveBeenCalledOnce();
       expect(sibling.revoke).not.toHaveBeenCalled();
-      expect(() =>
-        registerKnown({
-          ...held,
-          path: path.join(root, "selected", "new.sqlite"),
-        }),
-      ).toThrow("are closing");
+      expectClosing(() => registerKnown({ ...held, path: path.join(root, "selected/new.sqlite") }));
     } finally {
       gate.resolve();
       if (fail) {
-        await expect(closing).rejects.toThrow("Agent database");
-        failClose = false;
-        await closeOpenClawAgentDatabaseByPathAsync(failedPath);
+        await expect(tracked.promise).rejects.toThrow("Agent database");
+        failed.recover();
+        await closePathAsync(failed.path);
       } else {
-        await closing;
+        await tracked.promise;
       }
     }
   },
 );
 
-it.each(["known", "unresolved", "maintenance"] as const)(
-  "retains failed %s custody after unregistering until retry succeeds",
-  async (owner) => {
-    const scope = createOpenClawDatabaseMaintenanceScope();
-    let fail = true;
-    const failure = new Error("native close unsettled");
-    const held = resource("retry.sqlite", async () => {
-      if (fail) {
-        throw failure;
-      }
-    });
+it.each([
+  ["known", "retry.sqlite", false, "", false],
+  ["unresolved", "retry.sqlite", false, "", false],
+  ["maintenance", "retry.sqlite", false, "", false],
+  ["unresolved", "shared.sqlite", true, "shared.child.sqlite", true],
+  ["unresolved", "shared.child.sqlite", true, "shared.sqlite", true],
+  ["known", "shared.child.sqlite", true, "shared.sqlite", true],
+  ["unresolved", "shared.sqlite", true, "shared.new.sqlite", false],
+] as const)(
+  "retains failed %s custody of %s (family=%s, incoming=%s, incoming family=%s)",
+  async (owner, filename, family, incoming, incomingFamily) => {
+    const scope = createScope();
+    const held = {
+      ...failingResource(filename, "native close unsettled"),
+      scope: family ? ("sibling-family" as const) : undefined,
+    };
+    const { failure } = held;
     const register = owner === "known" ? registerKnown : registerCandidate;
     const unregister = owner === "maintenance" ? scope.run(() => register(held)) : register(held);
     const close = () =>
-      owner === "maintenance"
-        ? scope.close()
-        : closeOpenClawAgentDatabaseByPathAsync(held.path, "worker");
+      owner === "maintenance" ? scope.close() : closePathAsync(held.path, "worker");
+    const incomingResource = { ...held, path: path.join(root, incoming), agentId: "new" };
+    const registerIncoming = () =>
+      incomingFamily ? registerCandidate(incomingResource) : registerKnown(incomingResource);
     try {
       const closing = close();
       if (owner === "maintenance") {
         await expect(closing).rejects.toBe(failure);
       } else {
-        const fence = captureAgentDatabaseCloseFence(held);
+        const fence = captureFence(held);
         expect(fence).toBeDefined();
         const [result, observed] = await Promise.allSettled([closing, fence]);
         expect(result).toMatchObject({
@@ -246,29 +256,35 @@ it.each(["known", "unresolved", "maintenance"] as const)(
         }
       }
       unregister();
-      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
-      expect(() => registerKnown(held)).toThrow("are closing");
-      expect(() => registerCandidate(held)).toThrow("are closing");
+      expect(hasResources()).toBe(true);
+      expectClosing(() => registerKnown(held));
+      expectClosing(() => registerCandidate(held));
       if (owner !== "known") {
-        expect(() => registerKnown({ ...held, agentId: "other" })).toThrow("are closing");
+        expectClosing(() => registerKnown({ ...held, agentId: "other" }));
+      }
+      if (incoming) {
+        expectClosing(registerIncoming);
       }
     } finally {
-      fail = false;
+      held.recover();
       if (owner === "maintenance") {
         await scope.close();
       } else {
-        await closeOpenClawAgentDatabaseByPathAsync(held.path);
+        await closePathAsync(held.path);
       }
     }
     expect(held.close).toHaveBeenCalledTimes(2);
-    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+    expect(hasResources()).toBe(false);
     registerKnown(held)();
     registerCandidate(held)();
+    if (incoming) {
+      registerIncoming()();
+    }
   },
 );
 
 it("reports a shared maintenance close failure to an ordinary close waiter", async () => {
-  const scope = createOpenClawDatabaseMaintenanceScope();
+  const scope = createScope();
   const gate = createDeferredCore();
   const failure = new Error("shared maintenance failure");
   const onCloseError = vi.fn();
@@ -278,9 +294,7 @@ it("reports a shared maintenance close failure to an ordinary close waiter", asy
   );
   scope.run(() => registerCandidate(held));
   const closing = scope.close();
-  const observed = Promise.allSettled(
-    revokeAgentDatabaseResources({ path: held.path }, onCloseError),
-  );
+  const observed = Promise.allSettled(revokeResources({ path: held.path }, onCloseError));
   try {
     gate.reject(failure);
     await expect(closing).rejects.toBe(failure);
@@ -295,21 +309,15 @@ it("reports a shared maintenance close failure to an ordinary close waiter", asy
 it.each(["ordinary", "maintenance"])(
   "retains unresolved custody before a %s reentrant revoke callback",
   async (owner) => {
-    const scope = createOpenClawDatabaseMaintenanceScope();
+    const scope = createScope();
     let unexpectedRelease: (() => void) | undefined;
-    let admissionError: unknown;
     const held = resource("reentrant.sqlite");
-    const register = () =>
-      registerCandidate({
-        ...held,
-        revoke() {
-          try {
-            unexpectedRelease = registerKnown({ ...held, agentId: "different-owner" });
-          } catch (error) {
-            admissionError = error;
-          }
-        },
-      });
+    const revoke = vi.fn(() =>
+      expectClosing(() => {
+        unexpectedRelease = registerKnown({ ...held, agentId: "different-owner" });
+      }),
+    );
+    const register = () => registerCandidate({ ...held, revoke });
     if (owner === "maintenance") {
       scope.run(register);
     } else {
@@ -319,9 +327,9 @@ it.each(["ordinary", "maintenance"])(
       if (owner === "maintenance") {
         await scope.close();
       } else {
-        await closeOpenClawAgentDatabaseByPathAsync(held.path, "worker");
+        await closePathAsync(held.path, "worker");
       }
-      expect(admissionError).toBeInstanceOf(Error);
+      expect(revoke).toHaveBeenCalled();
       expect(unexpectedRelease).toBeUndefined();
     } finally {
       unexpectedRelease?.();
@@ -330,71 +338,58 @@ it.each(["ordinary", "maintenance"])(
 );
 
 it("does not retain candidates refused by a closed inherited maintenance scope", async () => {
-  const scope = createOpenClawDatabaseMaintenanceScope();
+  const scope = createScope();
   const gate = createDeferredCore();
   const held = resource("late-maintenance.sqlite");
   const delayed = scope.run(() => ({ promise: gate.promise.then(() => registerCandidate(held)) }));
   await scope.close();
   gate.resolve();
   await expect(delayed.promise).rejects.toThrow("maintenance resource scope is closed");
-  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+  expect(hasResources()).toBe(false);
   expect(held.close).not.toHaveBeenCalled();
 });
 
 it.each([
-  {
-    label: "path and agent",
-    family: false,
-    selection: { path: path.join(root, "candidate.sqlite"), agentId: "worker" },
-  },
-  { label: "root and agent", family: false, selection: { rootPath: root, agentId: "worker" } },
-  { label: "agent", family: false, selection: { agentId: "worker" } },
-  {
-    label: "family member and agent",
-    family: true,
-    selection: { path: path.join(root, "candidate.late.sqlite"), agentId: "worker" },
-  },
-])(
-  "refuses unresolved admission throughout a $label close selection",
-  async ({ selection, family }) => {
+  ["path and agent", false, { path: path.join(root, "candidate.sqlite"), agentId: "worker" }],
+  ["root and agent", false, { rootPath: root, agentId: "worker" }],
+  ["agent", false, { agentId: "worker" }],
+  ["family and agent", true, { path: path.join(root, "candidate.late.sqlite"), agentId: "worker" }],
+] as const)(
+  "refuses unresolved admission throughout %s close",
+  async (_label, family, selection) => {
     const gate = createDeferredCore();
     const entered = createDeferredCore();
-    const held = {
-      ...resource("candidate.sqlite"),
-      scope: family ? ("sibling-family" as const) : undefined,
-    };
-    const closing = drainAgentDatabaseResources(selection, async () => {
+    const held = resource("candidate.sqlite", undefined, {
+      scope: family ? "sibling-family" : undefined,
+    });
+    const closing = drainResources(selection, async () => {
       entered.resolve();
       await gate.promise;
     });
-    const target = { agentId: "worker", path: selection.path ?? held.path };
-    const fence = captureAgentDatabaseCloseFence({
+    const target = { agentId: "worker", path: "path" in selection ? selection.path : held.path };
+    const fence = captureFence({
       ...target,
       agentId: "WORKER",
       path: path.relative(process.cwd(), target.path),
     });
-    const otherPathFence = captureAgentDatabaseCloseFence({
+    const otherPathFence = captureFence({
       ...target,
       path: path.join(`${root}-sibling`, "candidate.sqlite"),
     });
-    try {
+    await duringClose(closing, gate, async () => {
       expect(fence).toBeDefined();
-      expect(captureAgentDatabaseCloseFence({ ...target, agentId: "other" })).toBeUndefined();
-      if (selection.path || "rootPath" in selection) {
+      expect(captureFence({ ...target, agentId: "other" })).toBeUndefined();
+      if ("path" in selection || "rootPath" in selection) {
         expect(otherPathFence).toBeUndefined();
       } else {
         expect(otherPathFence).toBeDefined();
       }
       await entered.promise;
-      expect(() => registerCandidate(held)).toThrow("are closing");
+      expectClosing(() => registerCandidate(held));
       expect(held.revoke).not.toHaveBeenCalled();
-    } finally {
-      gate.resolve();
-      await closing;
-      await fence;
-      await otherPathFence;
-    }
-    expect(captureAgentDatabaseCloseFence(target)).toBeUndefined();
+    });
+    await Promise.all([fence, otherPathFence]);
+    expect(captureFence(target)).toBeUndefined();
     registerCandidate(held)();
   },
 );
@@ -407,7 +402,7 @@ it.each(["complete", "native-failure"] as const)(
     const nativeEntered = createDeferredCore();
     const failure = new Error("native close failed");
     const held = resource("captured-close.sqlite", () => resourceGate.promise);
-    expect(captureAgentDatabaseCloseFence(held)).toBeUndefined();
+    expect(captureFence(held)).toBeUndefined();
     registerKnown(held);
     const closeNative = vi.fn(async () => {
       nativeEntered.resolve();
@@ -418,14 +413,10 @@ it.each(["complete", "native-failure"] as const)(
       return "closed";
     });
     const selection = { agentId: held.agentId, path: held.path };
-    const closing = drainAgentDatabaseResources(selection, closeNative);
-    const fence = captureAgentDatabaseCloseFence(held);
+    const closing = drainResources(selection, closeNative);
+    const fence = captureFence(held);
     const outcomes = Promise.allSettled([closing, fence]);
-    let fenceSettled = false;
-    const settled = () => {
-      fenceSettled = true;
-    };
-    void fence?.then(settled, settled);
+    const tracked = fence && trackSettlement(fence);
     try {
       expect(fence).toBeDefined();
       expect(held.revoke).toHaveBeenCalledOnce();
@@ -434,8 +425,8 @@ it.each(["complete", "native-failure"] as const)(
       expect(closeNative).not.toHaveBeenCalled();
       resourceGate.resolve();
       await nativeEntered.promise;
-      expect(fenceSettled).toBe(false);
-      expect(() => registerKnown(held)).toThrow("are closing");
+      expect(tracked?.settled).toBe(false);
+      expectClosing(() => registerKnown(held));
     } finally {
       resourceGate.resolve();
       nativeGate.resolve();
@@ -455,25 +446,21 @@ it.each(["complete", "native-failure"] as const)(
     if (ending === "native-failure") {
       await expect(fence).rejects.toBe(failure);
     }
-    expect(captureAgentDatabaseCloseFence(held)).toBeUndefined();
+    expect(captureFence(held)).toBeUndefined();
     const successor = resource("captured-close.sqlite");
     registerKnown(successor);
     await outcomes;
-    expect(successor.revoke).not.toHaveBeenCalled();
-    expect(successor.close).not.toHaveBeenCalled();
+    expectCalls(0, successor.revoke, successor.close);
     const successorGate = createDeferredCore();
     let successorClosed = false;
-    const successorClosing = drainAgentDatabaseResources(selection, async () => {
+    const successorClosing = drainResources(selection, async () => {
       await successorGate.promise;
       successorClosed = true;
     });
-    try {
+    await duringClose(successorClosing, successorGate, async () => {
       await Promise.allSettled([fence]);
       expect(successorClosed).toBe(false);
-    } finally {
-      successorGate.resolve();
-      await successorClosing;
-    }
+    });
   },
 );
 
@@ -484,19 +471,17 @@ it.each([
   "retains the known owner through handoff (candidate released=$released, family=$family)",
   async ({ released, family }) => {
     const gate = createDeferredCore();
-    const candidate = {
-      ...resource("shared.sqlite", () => gate.promise),
-      scope: family ? ("sibling-family" as const) : undefined,
-    };
-    const known = {
-      ...resource(family ? "shared.owner.2.sqlite" : "shared.sqlite", () => gate.promise),
+    const candidate = resource("shared.sqlite", () => gate.promise, {
+      scope: family ? "sibling-family" : undefined,
+    });
+    const known = resource(family ? "shared.owner.2.sqlite" : "shared.sqlite", () => gate.promise, {
       agentId: "resolved",
-    };
+    });
     const unrelated = [
-      resource("shared-other.sqlite"),
-      resource("shared.owner.sqlite-wal"),
-      resource("sibling/shared.owner.sqlite"),
-    ];
+      "shared-other.sqlite",
+      "shared.owner.sqlite-wal",
+      "sibling/shared.owner.sqlite",
+    ].map((name) => resource(name));
     const release = registerCandidate(candidate);
     registerKnown(known);
     for (const sibling of unrelated) {
@@ -504,93 +489,32 @@ it.each([
     }
     if (released) {
       release();
-      await closeOpenClawAgentDatabaseByPathAsync(known.path, "unrelated");
+      await closePathAsync(known.path, "unrelated");
       expect(known.revoke).not.toHaveBeenCalled();
     }
-    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
-    const closing = closeOpenClawAgentDatabaseByPathAsync(known.path, "resolved");
-    try {
+    expect(hasResources()).toBe(true);
+    const closing = closePathAsync(known.path, "resolved");
+    await duringClose(closing, gate, () => {
       expect(candidate.revoke).toHaveBeenCalledTimes(released ? 0 : 1);
       expect(known.revoke).toHaveBeenCalledOnce();
-      for (const sibling of unrelated) {
-        expect(sibling.revoke).not.toHaveBeenCalled();
-      }
+      expectCalls(0, ...unrelated.map((sibling) => sibling.revoke));
       if (family) {
-        expect(() =>
-          registerKnown({
-            ...known,
-            path: path.join(root, "shared.new-owner.sqlite"),
-            agentId: "new-owner",
-          }),
-        ).toThrow("are closing");
+        expectClosing(() =>
+          registerKnown(resource("shared.new-owner.sqlite", undefined, { agentId: "new-owner" })),
+        );
         registerKnown(resource("other/shared.owner.2.sqlite"))();
         for (const sibling of unrelated) {
           registerCandidate(sibling)();
         }
       }
-    } finally {
-      gate.resolve();
-      await closing;
-    }
+    });
     expect(known.close).toHaveBeenCalledOnce();
     expect(candidate.close).toHaveBeenCalledTimes(released ? 0 : 1);
     for (const sibling of unrelated) {
       expect(sibling.close).not.toHaveBeenCalled();
-      await closeOpenClawAgentDatabaseByPathAsync(sibling.path);
+      await closePathAsync(sibling.path);
     }
-    expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+    expect(hasResources()).toBe(false);
     release();
-  },
-);
-
-it.each([
-  {
-    held: "shared.sqlite",
-    heldFamily: true,
-    incoming: "shared.child.sqlite",
-    incomingFamily: true,
-  },
-  {
-    held: "shared.child.sqlite",
-    heldFamily: true,
-    incoming: "shared.sqlite",
-    incomingFamily: true,
-  },
-  {
-    held: "shared.child.sqlite",
-    heldFamily: false,
-    incoming: "shared.sqlite",
-    incomingFamily: true,
-  },
-  { held: "shared.sqlite", heldFamily: true, incoming: "shared.new.sqlite", incomingFamily: false },
-])(
-  "retains failed sibling custody from $held to $incoming (family=$heldFamily/$incomingFamily)",
-  async ({ held, heldFamily, incoming, incomingFamily }) => {
-    let fail = true;
-    const candidate = {
-      ...resource(held, async () => {
-        if (fail) {
-          throw new Error("family close unsettled");
-        }
-      }),
-      scope: "sibling-family" as const,
-    };
-    const release = heldFamily
-      ? registerCandidate(candidate)
-      : registerKnown({ ...candidate, agentId: "held" });
-    const incomingResource = { ...candidate, path: path.join(root, incoming), agentId: "new" };
-    const registerIncoming = () =>
-      incomingFamily ? registerCandidate(incomingResource) : registerKnown(incomingResource);
-    try {
-      await expect(closeOpenClawAgentDatabaseByPathAsync(candidate.path, "held")).rejects.toThrow(
-        "resource drainage failed",
-      );
-      release();
-      expect(registerIncoming).toThrow("are closing");
-    } finally {
-      fail = false;
-      await closeOpenClawAgentDatabaseByPathAsync(candidate.path, "held");
-    }
-    registerIncoming()();
   },
 );

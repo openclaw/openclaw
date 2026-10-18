@@ -1,6 +1,9 @@
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
@@ -9,12 +12,16 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -31,7 +38,11 @@ import {
 } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  watchRowFacts as observeRowFacts,
+} from "./session-row-projection.read-fixture.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
@@ -39,6 +50,23 @@ afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
 });
+
+const cfg = { agents: { entries: { main: {} } } };
+async function seedPreview(sessionId: string, content: string, config?: OpenClawConfig) {
+  const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}`, sessionId };
+  sessions.replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+  await sessions.persistSessionTranscriptTurn(scope, {
+    ...(config ? { config } : {}),
+    messages: [{ message: { role: "user", content } }],
+    touchSessionEntry: false,
+    updateMode: "none",
+  });
+  return { scope, query: { agentId: scope.agentId, key: scope.sessionKey } };
+}
+const preview = (
+  projection: SessionRowProjection,
+  query: Parameters<SessionRowProjection["snapshot"]>[0],
+) => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview;
 
 function holdBackfillPublication(signal?: AbortSignal) {
   const backfill = transcriptBackfill.backfillSessionRowTranscriptFields;
@@ -50,15 +78,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
   const pending: Promise<unknown>[] = [];
   let first = true;
   function wait<T>(work: Promise<T>): Promise<T> {
-    if (!signal) {
-      return work;
-    }
-    signal.throwIfAborted();
-    return new Promise<T>((resolve, reject) => {
-      const abort = () => reject(new Error("Backfill wait aborted", { cause: signal.reason }));
-      signal.addEventListener("abort", abort, { once: true });
-      void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-    });
+    return signal ? withinTest(work, signal) : work;
   }
   const publishTranscriptFields = records.publishTranscriptFields;
   vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
@@ -115,37 +135,17 @@ function holdBackfillPublication(signal?: AbortSignal) {
 
 it("publishes legacy transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:preview-only-backfill",
-      sessionId: "preview-only-backfill",
-    };
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await sessions.persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "user", content: "Read-only transcript preview" } }],
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
-    const reads = vi.fn();
-    const readDatabases = history.withSessionHistoryWorkerDatabases;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-      (databases, consume) =>
-        readDatabases(databases, (owners) =>
-          consume(
-            owners.map((owner) => ({
-              ...owner,
-              async readRowFacts(input) {
-                const reply = await owner.readRowFacts(input);
-                reads();
-                return reply;
-              },
-            })),
-          ),
-        ),
+    const { scope, query } = await seedPreview(
+      "preview-only-backfill",
+      "Read-only transcript preview",
     );
+    const reads = vi.fn();
+    observeRowFacts((owner) => async (input) => {
+      const reply = await owner.readRowFacts(input);
+      reads();
+      return reply;
+    });
     clearStoredSessionRowTranscriptForTest(scope);
     const backfill = holdBackfillPublication();
     const releaseForeground = retainSessionListForegroundWork();
@@ -207,92 +207,94 @@ it("publishes legacy transcript previews without acquiring stored row facts agai
   });
 });
 
-it("retains transcript previews across metadata edits and consumes committed appends without reads", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
+it("retains transcript previews across metadata edits and consumes committed alias appends without reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:metadata-preview",
-      sessionId: "metadata-preview",
-    };
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await sessions.persistSessionTranscriptTurn(scope, {
-      config: cfg,
-      messages: [{ message: { role: "user", content: "Original preview" } }],
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
+    const { scope, query } = await seedPreview("metadata-preview", "Original preview", cfg);
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: state.env });
+    const aliasDirectory = state.path("transcript-alias");
+    symlinkSync(
+      path.dirname(storePath),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const aliasPath = path.join(aliasDirectory, path.basename(storePath));
+    openOpenClawAgentDatabase({ agentId: scope.agentId, path: aliasPath });
     const initial = observeSessionRowBackfill([scope.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+
+    await projection.ensureMaterialized();
+    projection.describe(query);
+    await initial;
+    // A user-only transcript needs one bounded read to establish assistant absence.
+    await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1));
+    await backfill.mock.results[0]?.value;
+    backfill.mockClear();
+    for (let edit = 0; edit < 10; edit++) {
+      await sessions.patchSessionEntryCore(scope, () => ({
+        displayName: `Renamed ${edit}`,
+        pinnedAt: edit % 2 === 0 ? edit + 1 : undefined,
+        sidebarRoot: edit % 2 === 0 ? true : undefined,
+        updatedAt: edit + 2,
+      }));
       await projection.ensureMaterialized();
-      projection.describe(query);
-      await initial;
-      // A user-only transcript needs one bounded read to establish assistant absence.
-      await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(1));
-      await backfill.mock.results[0]?.value;
-      backfill.mockClear();
-      for (let edit = 0; edit < 10; edit++) {
-        await sessions.patchSessionEntryCore(scope, () => ({
-          displayName: `Renamed ${edit}`,
-          pinnedAt: edit % 2 === 0 ? edit + 1 : undefined,
-          sidebarRoot: edit % 2 === 0 ? true : undefined,
-          updatedAt: edit + 2,
-        }));
-        await projection.ensureMaterialized();
-        // Let the background owner reach its next admission boundary after each edit.
-        await nextTurn();
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-          displayName: `Renamed ${edit}`,
-          sidebarRoot: edit % 2 === 0,
-          lastMessagePreview: "Original preview",
-        });
-      }
-      expect(backfill.mock.calls.length).toBe(0);
-      const appended = observeSessionRowBackfill([scope.sessionKey]);
-      await sessions.persistSessionTranscriptTurn(scope, {
-        config: cfg,
-        messages: [{ message: { role: "assistant", content: "Appended preview" } }],
-        touchSessionEntry: false,
-      });
-      await appended;
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Appended preview",
-      );
-      await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
-      await projection.ensureMaterialized();
+      // Let the background owner reach its next admission boundary after each edit.
       await nextTurn();
       expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-        displayName: "After append",
-        lastMessagePreview: "Appended preview",
+        displayName: `Renamed ${edit}`,
+        sidebarRoot: edit % 2 === 0,
+        lastMessagePreview: "Original preview",
       });
-      expect(backfill).not.toHaveBeenCalled();
-    } finally {
-      projection.dispose();
     }
+    expect(backfill.mock.calls.length).toBe(0);
+    const reads = vi.fn();
+    observeRowFacts((owner) => async (input) => {
+      reads();
+      return owner.readRowFacts(input);
+    });
+    const appended = observeSessionRowBackfill([scope.sessionKey]);
+    const append = sessions.appendTranscriptMessageSync(
+      { ...scope, storePath: aliasPath },
+      { config: cfg, message: { role: "assistant", content: "Appended preview" } },
+    );
+    expect(append).toMatchObject({ ok: true, value: { appended: true } });
+    expect(projection.capture(query)?.retainedDatabaseFacts).toMatchObject({
+      activitySummaryWatermark: { maxSeq: 2 },
+      transcriptPreview: "Appended preview",
+    });
+    const aliasQuery = { ...query, storePath: aliasPath };
+    expect(projection.capture(aliasQuery)?.retainedDatabaseFacts).toMatchObject({
+      activitySummaryWatermark: { maxSeq: 2 },
+      transcriptPreview: "Appended preview",
+    });
+    await appended;
+    expect(preview(projection, query)).toBe("Appended preview");
+    const refreshed = vi.fn();
+    projection.onFactsChange(refreshed);
+    emitSessionTranscriptUpdate({ target: { ...scope, storePath: aliasPath } });
+    await projection.ensureMaterialized();
+    await nextTurn();
+    expect(refreshed).toHaveBeenCalledWith({ kind: "row", key: scope.sessionKey });
+    expect(preview(projection, aliasQuery)).toBe("Appended preview");
+    expect(backfill).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
+    await sessions.patchSessionEntryCore(scope, () => ({ displayName: "After append" }));
+    await projection.ensureMaterialized();
+    await nextTurn();
+    expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+      displayName: "After append",
+      lastMessagePreview: "Appended preview",
+    });
+    expect(backfill).not.toHaveBeenCalled();
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 
 it("reuses an unknown preview until a committed transcript watermark changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:preview-notifications",
-      sessionId: "preview-notifications",
-    };
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await sessions.persistSessionTranscriptTurn(scope, {
-      config: cfg,
-      messages: [{ message: { role: "user", content: "Original preview" } }],
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
+    const { scope, query } = await seedPreview("preview-notifications", "Original preview", cfg);
     clearStoredSessionRowTranscriptForTest(scope);
     const initial = observeSessionRowBackfill([scope.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
@@ -314,9 +316,7 @@ it("reuses an unknown preview until a committed transcript watermark changes", a
       await projection.ensureMaterialized();
       await nextTurn();
       expect(backfill).toHaveBeenCalledTimes(1);
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Original preview",
-      );
+      expect(preview(projection, query)).toBe("Original preview");
 
       const refreshed = observeSessionRowBackfill([scope.sessionKey], projection);
       await sessions.persistSessionTranscriptTurn(scope, {
@@ -330,9 +330,7 @@ it("reuses an unknown preview until a committed transcript watermark changes", a
       await vi.advanceTimersByTimeAsync(1_000);
       await refreshed;
       expect(backfill).toHaveBeenCalledTimes(2);
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Updated preview",
-      );
+      expect(preview(projection, query)).toBe("Updated preview");
     } finally {
       projection.dispose();
       vi.useRealTimers();
@@ -342,20 +340,7 @@ it("reuses an unknown preview until a committed transcript watermark changes", a
 
 it("keeps a committed append preview when an older background read finishes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:preview-receipt",
-      sessionId: "preview-receipt",
-    };
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await sessions.persistSessionTranscriptTurn(scope, {
-      config: cfg,
-      messages: [{ message: { role: "user", content: "Older preview" } }],
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
+    const { scope, query } = await seedPreview("preview-receipt", "Older preview", cfg);
     clearStoredSessionRowTranscriptForTest(scope);
     const backfill = holdBackfillPublication();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -369,13 +354,40 @@ it("keeps a committed append preview when an older background read finishes", as
         touchSessionEntry: false,
       });
       await projection.ensureMaterialized();
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Committed preview",
-      );
+      expect(preview(projection, query)).toBe("Committed preview");
       await backfill.publish();
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Committed preview",
-      );
+      expect(preview(projection, query)).toBe("Committed preview");
+    } finally {
+      projection.dispose();
+      await backfill.close();
+    }
+  });
+});
+
+it("drops an older backfill after broad invalidation clears retained preview facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, query } = await seedPreview("preview-invalidated", "Older preview", cfg);
+    clearStoredSessionRowTranscriptForTest(scope);
+    const backfill = holdBackfillPublication();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      projection.describe(query);
+      expect(await backfill.prepared).toMatchObject({ lastMessagePreview: "Older preview" });
+      await sessions.persistSessionTranscriptTurn(scope, {
+        config: cfg,
+        messages: [{ message: { role: "assistant", content: "Committed preview" } }],
+        touchSessionEntry: false,
+      });
+      await projection.ensureMaterialized();
+      const row = projection.describe(query)!;
+      expect(row.lastMessagePreview).toBe("Committed preview");
+      sessionChanges.emit({ all: true, scope: { agentId: "main" }, factsInvalidated: true });
+      expect(row.retainedDatabaseFacts).toBeUndefined();
+      await backfill.publish();
+      expect(row.lastMessagePreview).toBe("Committed preview");
+      await projection.ensureMaterialized();
+      expect(preview(projection, query)).toBe("Committed preview");
     } finally {
       projection.dispose();
       await backfill.close();
@@ -388,13 +400,13 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = {
+    const summaryConfig = {
       agents: {
         entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
     };
-    setRuntimeConfigSnapshot(cfg);
+    setRuntimeConfigSnapshot(summaryConfig);
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:backfill-facts",
@@ -422,8 +434,8 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
     const backfill = holdBackfillPublication(signal);
     const captured = createDeferredCore();
     const release = createDeferredCore();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const projection = await createSessionRowProjection({ cfg: summaryConfig, modelCatalog: [] });
+    const context = bindSessionRowProjection(requestContext(summaryConfig), () => projection);
     const client = identifiedClient(viewer.id);
     const request = {
       agentId: scope.agentId,
@@ -438,27 +450,15 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         sharingRole: "member",
       });
       await backfill.prepared;
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
       let reads = 0;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (databases, consume) =>
-          readDatabases(databases, (owners) =>
-            consume(
-              owners.map((database) => ({
-                ...database,
-                async readRowFacts(input) {
-                  const reply = await database.readRowFacts(input);
-                  reads++;
-                  if (reads === 1) {
-                    captured.resolve();
-                    await release.promise;
-                  }
-                  return reply;
-                },
-              })),
-            ),
-          ),
-      );
+      observeRowFacts((database) => async (input) => {
+        const reply = await database.readRowFacts(input);
+        if (++reads === 1) {
+          captured.resolve();
+          await release.promise;
+        }
+        return reply;
+      });
       sessions.replaceSessionEntrySync(scope, {
         ...entry,
         updatedAt: 2,
@@ -534,20 +534,8 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
 it("gives an in-flight Gateway request priority before starting legacy preview backfill", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     resetGatewayWorkAdmission();
-    const cfg = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:foreground-backfill",
-      sessionId: "foreground-backfill",
-    };
-    const query = { agentId: scope.agentId, key: scope.sessionKey };
-    sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    await sessions.persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "user", content: "Preview the legacy session" } }],
-      touchSessionEntry: false,
-      updateMode: "none",
-    });
+    const { scope, query } = await seedPreview("foreground-backfill", "Preview the legacy session");
     clearStoredSessionRowTranscriptForTest(scope);
     const entered = createDeferredCore();
     const response = createDeferredCore();
@@ -579,23 +567,17 @@ it("gives an in-flight Gateway request priority before starting legacy preview b
     const backfilled = observeSessionRowBackfill([scope.sessionKey]);
     const projection = await createSessionRowProjection({ cfg });
     // Observe the row at completion, before a later retry can conceal a premature signal.
-    const observedPreview = backfilled.then(
-      () => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-    );
+    const observedPreview = backfilled.then(() => preview(projection, query));
     try {
       await projection.ensureMaterialized();
       projection.describe(query);
       await backgroundWaiting.promise;
       expect(sessions.loadSessionEntry(scope)).toEqual(before);
-      expect(
-        projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-      ).toBeUndefined();
+      expect(preview(projection, query)).toBeUndefined();
       response.resolve();
       await foreground;
       expect(await observedPreview).toBe("Preview the legacy session");
-      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
-        "Preview the legacy session",
-      );
+      expect(preview(projection, query)).toBe("Preview the legacy session");
       expect(sessions.loadSessionEntry(scope)).toEqual(before);
     } finally {
       response.resolve();

@@ -1,7 +1,7 @@
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 type ChatPerformanceHost = {
-  renderLifecycle?: RenderLifecycle;
+  renderLifecycle?: Pick<RenderLifecycle, "afterCommit">;
 };
 
 export function controlUiNowMs(): number {

@@ -1,76 +1,78 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { persistFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import { FirstRunSetup } from "./first-run-setup.ts";
 import {
+  waitForText,
+  runningStep,
+  authButton,
+  pageButton,
+  activated,
+  authOption,
+  mockRequests,
+  useFirstRunFixtures,
+  pendingReceipt,
+  modalButton,
+  callsFor,
+  enterManualKey,
   candidate,
   clickCandidate,
-  selectManualProvider,
   createFirstRunContext,
   detection,
-  mountPage,
+  mountDetection,
+  reconnectGateway,
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_AUTH_START_TIMEOUT_MS } from "./state.ts";
 import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
-describe("ModelSetupPage first-run activation ownership", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem(
-      "openclaw-device-identity-v1",
-      JSON.stringify({ version: 1, privateKey: "test-device-key" }),
-    );
-    await i18n.setLocale("en");
-  });
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+async function startAndCancelSignIn(
+  page: ParentNode,
+  request: ReturnType<typeof createFirstRunContext>["request"],
+) {
+  authButton(page, "provider-login")!.click();
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith(
+      "openclaw.setup.auth.start",
+      { sessionId: expect.any(String), agentId: "main", authChoice: "provider-login" },
+      { timeoutMs: null },
+    ),
+  );
+  modalButton(page, "Cancel")!.click();
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith(
+      "wizard.cancel",
+      { sessionId: expect.any(String) },
+      { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+    ),
+  );
+}
 
+describe("ModelSetupPage first-run activation ownership", () => {
+  useFirstRunFixtures("test-device-key");
   it("keeps first-run activation owned through an equivalent route-data refresh", async () => {
     const { context, client, request } = createFirstRunContext();
     const response = createDeferred<unknown>();
-    request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.detect") {
-        return detection;
-      }
-      if (method === "openclaw.setup.activate.start") {
-        return response.promise;
-      }
-      throw new Error(`Unexpected method ${method}`);
+    mockRequests(request, {
+      "openclaw.setup.detect": () => detection,
+      "openclaw.setup.activate.start": () => response.promise,
     });
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "provider/verified", true)],
-        },
-      },
-      client,
-      firstRun: true,
+    const { page } = await mountDetection(context, client, {
+      candidates: [candidate("openai-api-key", "provider/verified", true)],
     });
     expect(request).not.toHaveBeenCalled();
     await clickCandidate(page, "openai-api-key");
-    const success = {
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "provider/verified" },
-    };
+    const success = activated("provider/verified");
     try {
       await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+      const receipt = pendingReceipt();
       page.routeData = { firstRun: true };
       await page.updateComplete;
       expect(request).toHaveBeenCalledOnce();
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
+      expect(pendingReceipt()).toBe(receipt);
       response.resolve(success);
       await waitForFast(() =>
         expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
@@ -89,11 +91,9 @@ describe("ModelSetupPage first-run activation ownership", () => {
       let releaseActivation: ((value: unknown) => void) | undefined;
       const activatedMethod =
         entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
-      request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.auth.start") {
-          return { sessionId: "auth", done: false, status: "running" };
-        }
-        if (method === activatedMethod) {
+      mockRequests(request, {
+        "openclaw.setup.auth.start": () => ({ sessionId: "auth", done: false, status: "running" }),
+        [activatedMethod]: async () => {
           if (entry === "provider sign-in" && releaseActivation) {
             throw new GatewayRequestError({
               code: "INVALID_REQUEST",
@@ -104,47 +104,26 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return await new Promise((resolve) => {
             releaseActivation = resolve;
           });
-        }
-        if (method === "openclaw.setup.detect") {
-          return { ...detection, configuredModel: "provider/current", setupComplete: true };
-        }
-        if (method === "openclaw.setup.verify") {
-          return { ok: true, modelRef: "provider/current", latencyMs: 31 };
-        }
-        if (method === "wizard.cancel") {
-          // This request crossed the commit point: cancellation is unconfirmed,
-          // and the late activation response below can still report success.
-          return { status: "running" };
-        }
-        throw new Error(`Unexpected method ${method}`);
-      });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            manualProviders: [{ id: "provider-key", label: "Provider key" }],
-            authOptions: [
-              { id: "provider-login", label: "Provider login", kind: "oauth", featured: true },
-            ],
-          },
         },
-        client,
-        firstRun: true,
+        "openclaw.setup.detect": () => ({
+          ...detection,
+          configuredModel: "provider/current",
+          setupComplete: true,
+        }),
+        "openclaw.setup.verify": () => ({ ok: true, modelRef: "provider/current", latencyMs: 31 }),
+        "wizard.cancel": () => ({ status: "running" }),
+      });
+      const { page } = await mountDetection(context, client, {
+        manualProviders: [{ id: "provider-key", label: "Provider key" }],
+        authOptions: [authOption("provider-login", "Provider login")],
       });
       if (entry === "manual key") {
-        await selectManualProvider(page, "provider-key");
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-provider-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+        await enterManualKey(page, "provider-key", "test-only-provider-key");
       } else {
-        page
-          .querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
-          .click();
+        authButton(page, "provider-login")!.click();
       }
       await waitForFast(() => expect(releaseActivation).toBeTypeOf("function"));
-      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!;
+      const receipt = pendingReceipt()!;
       expect(JSON.parse(receipt).modelRef).toBeNull();
       expect(receipt).not.toContain("test-only-provider-key");
       expect(JSON.parse(receipt).wizard?.authChoice).toBe(
@@ -158,37 +137,25 @@ describe("ModelSetupPage first-run activation ownership", () => {
       publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
       if (entry === "provider sign-in") {
         // A restarted Gateway lost the wizard: recovery replaces the reconnect notice.
-        await waitForFast(() =>
-          expect(page.textContent).toContain("Gateway no longer has this setup session"),
-        );
+        await waitForText(page, "Gateway no longer has this setup session");
         expect(page.textContent).not.toContain("Waiting for it to reconnect");
-        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-          .find((button) => button.textContent?.trim() === "Close")!
-          .click();
+        modalButton(page, "Close")!.click();
         await page.updateComplete;
       }
-      await waitForFast(() => expect(page.textContent).toContain("Verify & use selected model"));
+      await waitForText(page, "Verify & use selected model");
       await waitForModelSetupDetection(page);
-      expect(
-        request.mock.calls.filter(([method]) => method === "openclaw.setup.verify"),
-      ).toHaveLength(0);
+      expect(callsFor(request, "openclaw.setup.verify")).toHaveLength(0);
       expect(context.navigate).not.toHaveBeenCalled();
-      page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn.primary")!.click();
+      pageButton(page, ".model-setup__recovery .btn.primary")!.click();
       await waitForFast(() =>
         expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" }),
       );
-      releaseActivation?.({
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: "provider/late-other" },
-      });
+      releaseActivation?.(activated("provider/late-other"));
       await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === activatedMethod)).toHaveLength(
-        entry === "provider sign-in" ? 2 : 1,
-      );
+      expect(callsFor(request, activatedMethod)).toHaveLength(entry === "provider sign-in" ? 2 : 1);
       expect(request.mock.calls.filter(([method]) => method.endsWith(".start"))).toHaveLength(1);
       expect(context.navigate).toHaveBeenCalledOnce();
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+      expect(pendingReceipt()).toBeNull();
     },
   );
 
@@ -199,8 +166,8 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const startMethod = "openclaw.setup.auth.start";
       const selector = '[data-auth-choice="provider-login"] button';
       const failure = "Provider could not finish this sign-in";
-      request.mockImplementation(async (method) => {
-        if (method === startMethod) {
+      mockRequests(request, {
+        [startMethod]: () => {
           if (outcome === "wrong-code start") {
             throw new GatewayRequestError({
               code: "INVALID_REQUEST",
@@ -210,16 +177,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
             });
           }
           return { done: false, status: "running" };
-        }
-        if (method === "wizard.next") {
-          return {
-            done: false,
-            status: "running",
-            error: failure,
-            step: { id: "login", type: "text" },
-          };
-        }
-        if (method === "wizard.cancel") {
+        },
+        "wizard.next": () => ({
+          done: false,
+          status: "running",
+          error: failure,
+          step: { id: "login", type: "text" },
+        }),
+        "wizard.cancel": () => {
           if (outcome === "validation error") {
             return { status: "running" };
           }
@@ -228,44 +193,26 @@ describe("ModelSetupPage first-run activation ownership", () => {
             message: "wizard not found",
             details: { code: "WIZARD_NOT_FOUND" },
           });
-        }
-        throw new Error(`Unexpected method ${method}`);
-      });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            authOptions: [
-              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
-            ],
-          },
         },
-        client,
-        firstRun: true,
       });
-      const signIn = () => page.querySelector<HTMLButtonElement>(selector)!;
+      const { page } = await mountDetection(context, client, {
+        authOptions: [authOption("provider-login")],
+      });
+      const signIn = () => pageButton(page, selector)!;
       signIn().click();
-      await waitForFast(() => expect(page.textContent).toContain(failure));
-      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-        .find(
-          (button) =>
-            button.textContent?.trim() === (outcome === "validation error" ? "Cancel" : "Close"),
-        )!
-        .click();
+      await waitForText(page, failure);
+      modalButton(page, outcome === "validation error" ? "Cancel" : "Close")!.click();
       await page.updateComplete;
       if (outcome === "validation error") {
-        await waitForFast(() =>
-          expect(page.textContent).toContain("Setup is finishing the current step"),
-        );
+        await waitForText(page, "Setup is finishing the current step");
         expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       } else {
         expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       }
       expect(signIn().disabled).toBe(true);
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
+      expect(pendingReceipt()).not.toBeNull();
       signIn().click();
-      expect(request.mock.calls.filter(([method]) => method === startMethod)).toHaveLength(1);
+      expect(callsFor(request, startMethod)).toHaveLength(1);
       expect(request.mock.calls.some(([method]) => method === "openclaw.setup.verify")).toBe(false);
       expect(page.textContent).not.toContain("Connection verified");
       expect(context.navigate).not.toHaveBeenCalled();
@@ -282,9 +229,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const cancelled = createDeferred<unknown>();
       const result = {
         ...detection,
-        authOptions: [
-          { id: "provider-login", label: "Provider", kind: "oauth" as const, featured: true },
-        ],
+        authOptions: [authOption("provider-login")],
       };
       let startCount = 0;
       const respond = async (method: string) => {
@@ -295,11 +240,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
           return { done: false, status: "running" };
         }
         if (method === "wizard.next") {
-          return {
-            done: false,
-            status: "running",
-            step: { id: "login", type: "text", message: "Complete login" },
-          };
+          return runningStep({ id: "login", type: "text", message: "Complete login" });
         }
         if (method === "wizard.cancel") {
           if (terminal === "busy") {
@@ -313,36 +254,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
         throw new Error(`Unexpected method ${method}`);
       };
       original.request.mockImplementation(respond);
-      let { page } = await mountPage(original.context, {
-        state: { phase: "ready", result },
-        client: original.client,
-        firstRun: true,
-      });
-      const signIn = () =>
-        page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!;
-      signIn().click();
-      await waitForFast(() =>
-        expect(original.request).toHaveBeenCalledWith(
-          "openclaw.setup.auth.start",
-          { sessionId: expect.any(String), agentId: "main", authChoice: "provider-login" },
-          { timeoutMs: null },
-        ),
-      );
-      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-        .find((button) => button.textContent?.trim() === "Cancel")!
-        .click();
-      await waitForFast(() =>
-        expect(original.request).toHaveBeenCalledWith(
-          "wizard.cancel",
-          { sessionId: expect.any(String) },
-          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
-        ),
-      );
+      let { page } = await mountDetection(original.context, original.client, result);
+      const signIn = () => authButton(page, "provider-login")!;
+      await startAndCancelSignIn(page, original.request);
       // Explicitly leaving first-run setup releases its intent. Re-entering is
       // a distinct attempt; the old cancellation acknowledgement is still pending.
       page.routeData = { ...page.routeData!, firstRun: false };
       await page.updateComplete;
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+      expect(pendingReceipt()).toBeNull();
       const next = replacement === "new authenticated context" ? createFirstRunContext() : original;
       if (next !== original) {
         next.context.gateway.connection.token = "replacement-test-auth";
@@ -351,19 +270,15 @@ describe("ModelSetupPage first-run activation ownership", () => {
       if (replacement !== "same page") {
         unmountModelSetupPage(page);
         page.remove();
-        ({ page } = await mountPage(next.context, {
-          state: { phase: "ready", result },
-          client: next.client,
-          firstRun: true,
-        }));
+        ({ page } = await mountDetection(next.context, next.client, result));
       } else {
         page.routeData = { ...page.routeData!, firstRun: true };
         await page.updateComplete;
       }
       await waitForFast(() => expect(signIn()).not.toBeNull());
       signIn().click();
-      await waitForFast(() => expect(page.textContent).toContain("Complete login"));
-      const receipt = localStorage.getItem("openclaw.modelSetup.pendingActivation.v1");
+      await waitForText(page, "Complete login");
+      const receipt = pendingReceipt();
       expect(receipt).not.toBeNull();
       if (terminal === "busy") {
         cancelled.reject(
@@ -382,7 +297,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         ).toBe(true),
       );
       await page.updateComplete;
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(receipt);
+      expect(pendingReceipt()).toBe(receipt);
       expect(page.textContent).toContain("Complete login");
       expect(original.context.navigate).not.toHaveBeenCalled();
       expect(next.context.navigate).not.toHaveBeenCalled();
@@ -391,19 +306,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
 
   it("retires an expired activation during synchronous receipt notification without reviving it", () => {
     const { context } = createFirstRunContext();
-    const routeData = {
-      firstRun: true,
-      state: { phase: "ready" as const, result: detection },
-      connection: {
-        client: context.gateway.snapshot.client,
-        hello: context.gateway.snapshot.hello,
-        agentId: "main",
-      },
-    };
     const setup = new FirstRunSetup({
       context: () => context,
-      routeData: () => routeData,
-      pageState: () => routeData.state,
+      routeData: () => ({ firstRun: true }),
+      pageState: () => ({ phase: "ready", result: detection }),
       activationState: () => ({ phase: "idle" }),
       actionsDisabled: () => false,
       canUseSetup: () => true,
@@ -422,17 +328,13 @@ describe("ModelSetupPage first-run activation ownership", () => {
       const activation = setup.beginActivation({ kind: "provider-auth" });
       expect(activation).not.toBeNull();
       vi.spyOn(Date, "now").mockReturnValue(activation!.deadlineMs + 1);
-      setup.recordActivation(activation, {
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: "synthetic/model" },
-      });
+      setup.recordActivation(activation, activated("synthetic/model"));
       expect(notify).toHaveBeenCalledOnce();
       expect(setup.unresolved).toBe(false);
       expect(setup.ownsActivation(activation)).toBe(false);
       setup.finishActivation({ ok: true, modelRef: "synthetic/model" }, "provider-auth", null);
       expect(context.navigate).not.toHaveBeenCalled();
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBeNull();
+      expect(pendingReceipt()).toBeNull();
     } finally {
       unsubscribe();
       setup.dispose();
@@ -454,54 +356,25 @@ describe("ModelSetupPage first-run activation ownership", () => {
       });
       const activatedMethod =
         entry === "manual key" ? "openclaw.setup.activate.start" : "wizard.next";
-      request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.auth.start") {
-          return { done: false, status: "running" };
-        }
-        if (method === activatedMethod) {
-          return await reply.promise;
-        }
-        if (method === "openclaw.setup.detect") {
-          return detection;
-        }
-        if (method === "wizard.cancel") {
-          return { status: "running" };
-        }
-        throw new Error(`Unexpected method ${method}`);
+      mockRequests(request, {
+        "openclaw.setup.auth.start": () => ({ done: false, status: "running" }),
+        [activatedMethod]: async () => await reply.promise,
+        "openclaw.setup.detect": () => detection,
+        "wizard.cancel": () => ({ status: "running" }),
       });
-      const { page } = await mountPage(context, {
-        state: {
-          phase: "ready",
-          result: {
-            ...detection,
-            manualProviders: [{ id: "provider", label: "Provider" }],
-            authOptions: [
-              { id: "provider-login", label: "Provider", kind: "oauth", featured: true },
-            ],
-          },
-        },
-        client,
-        firstRun: true,
+      const { page } = await mountDetection(context, client, {
+        manualProviders: [{ id: "provider", label: "Provider" }],
+        authOptions: [authOption("provider-login")],
       });
       if (entry === "manual key") {
-        await selectManualProvider(page, "provider");
-        const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-        input.value = "test-only-key";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+        await enterManualKey(page, "provider", "test-only-key");
       } else {
-        page
-          .querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!
-          .click();
+        authButton(page, "provider-login")!.click();
       }
       await waitForFast(() =>
         expect(request.mock.calls.some(([method]) => method === activatedMethod)).toBe(true),
       );
-      const success = {
-        done: true,
-        status: "done",
-        modelActivation: { modelRef: "provider/previous", latencyMs: 31 },
-      };
+      const success = activated("provider/previous");
       if (boundary === "refresh") {
         reply.resolve(success);
         await refreshing.promise;
@@ -532,22 +405,10 @@ describe("ModelSetupPage first-run activation ownership", () => {
     const { context, client, request } = createFirstRunContext();
     const rejected = createDeferred<unknown>();
     request.mockReturnValue(rejected.promise);
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          manualProviders: [{ id: "provider-key", label: "Provider key" }],
-        },
-      },
-      client,
-      firstRun: true,
+    const { page } = await mountDetection(context, client, {
+      manualProviders: [{ id: "provider-key", label: "Provider key" }],
     });
-    await selectManualProvider(page, "provider-key");
-    const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
-    input.value = "test-only-provider-key";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    page.querySelector<HTMLButtonElement>(".model-setup__manual .btn.primary")!.click();
+    await enterManualKey(page, "provider-key", "test-only-provider-key");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const replacement = persistFirstRunActivationReceipt(
       {
@@ -575,9 +436,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
     expect(page.textContent).not.toContain("Provider rejected this test key");
     expect(page.textContent).not.toContain("Cannot read properties");
     expect(page.textContent).not.toContain("Connection verified");
-    expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).toBe(
-      JSON.stringify(replacement),
-    );
+    expect(pendingReceipt()).toBe(JSON.stringify(replacement));
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
@@ -594,68 +453,33 @@ describe("ModelSetupPage first-run activation ownership", () => {
       let serverStatus: "running" | "cancelled" | "error" = "running";
       const result = {
         ...detection,
-        authOptions: [
-          { id: "provider-login", label: "Provider", kind: "oauth" as const, featured: true },
-        ],
+        authOptions: [authOption("provider-login")],
       };
-      request.mockImplementation(async (method) => {
-        if (method === "openclaw.setup.auth.start") {
-          return { sessionId: "auth", done: false, status: "running" };
-        }
-        if (method === "wizard.next") {
+      mockRequests(request, {
+        "openclaw.setup.auth.start": () => ({ sessionId: "auth", done: false, status: "running" }),
+        "wizard.next": () => {
           if (serverStatus !== "running") {
             return { done: true, status: serverStatus };
           }
-          return {
-            done: false,
-            status: "running",
-            step: { id: "login", type: "text", message: "Complete login" },
-          };
-        }
-        if (method === "wizard.cancel") {
+          return runningStep({ id: "login", type: "text", message: "Complete login" });
+        },
+        "wizard.cancel": async () => {
           // The server settles its status before sending the reply. A resumed
           // next request sees that outcome even while this transport is delayed.
           if (cancelStatus === "cancelled" || cancelStatus === "error") {
             serverStatus = cancelStatus;
           }
           return await cancelled.promise;
-        }
-        if (method === "openclaw.setup.detect") {
-          return result;
-        }
-        throw new Error(`Unexpected method ${method}`);
+        },
+        "openclaw.setup.detect": () => result,
       });
-      let { page } = await mountPage(context, {
-        state: { phase: "ready", result },
-        client,
-        firstRun: true,
-      });
-      page.querySelector<HTMLButtonElement>('[data-auth-choice="provider-login"] button')!.click();
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "openclaw.setup.auth.start",
-          { sessionId: expect.any(String), agentId: "main", authChoice: "provider-login" },
-          { timeoutMs: null },
-        ),
-      );
-      const cancel = [
-        ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
-      ].find((button) => button.textContent?.trim() === "Cancel")!;
-      cancel.click();
-      await waitForFast(() =>
-        expect(request).toHaveBeenCalledWith(
-          "wizard.cancel",
-          { sessionId: expect.any(String) },
-          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
-        ),
-      );
+      let { page } = await mountDetection(context, client, result);
+      await startAndCancelSignIn(page, request);
       await page.updateComplete;
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")).not.toBeNull();
+      expect(pendingReceipt()).not.toBeNull();
       if (lifecycle === "reconnect") {
-        publishGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-        await page.updateComplete;
-        publishGatewaySnapshot({ ...snapshot, hello: { ...snapshot.hello } });
+        await reconnectGateway(page, snapshot, publishGatewaySnapshot);
       } else if (lifecycle === "unmount") {
         unmountModelSetupPage(page);
         page.remove();
@@ -667,10 +491,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
         expect(request.mock.settledResults[cancelIndex]?.type).toBe("fulfilled");
       });
       if (lifecycle === "reconnect") {
-        const terminalClose = () =>
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-            (button) => button.textContent?.trim() === "Close",
-          );
+        const terminalClose = () => modalButton(page, "Close");
         await waitForFast(() =>
           expect(
             page.querySelector("openclaw-modal-dialog") === null || terminalClose() !== undefined,
@@ -681,22 +502,14 @@ describe("ModelSetupPage first-run activation ownership", () => {
         expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       }
       if (lifecycle === "unmount") {
-        ({ page } = await mountPage(context, {
-          state: { phase: "ready", result },
-          client,
-          firstRun: true,
-        }));
+        ({ page } = await mountDetection(context, client, result));
       }
       await waitForFast(() => {
-        const button = page.querySelector<HTMLButtonElement>(
-          '[data-auth-choice="provider-login"] button',
-        );
+        const button = authButton(page, "provider-login");
         expect(button).not.toBeNull();
         expect(button!.disabled).toBe(cancelStatus !== "cancelled");
       });
-      expect(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1") === null).toBe(
-        cancelStatus === "cancelled",
-      );
+      expect(pendingReceipt() === null).toBe(cancelStatus === "cancelled");
       expect(context.navigate).not.toHaveBeenCalled();
     },
   );

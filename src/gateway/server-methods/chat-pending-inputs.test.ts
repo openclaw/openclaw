@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -32,6 +32,7 @@ import {
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -118,6 +119,19 @@ describe("pending input read boundary", () => {
         })),
       });
       const context = await createHistoryReadContext();
+      const metadata = createChatMetadataHarness();
+      onTestFinished(metadata.runtime.stop);
+      const commands = Array.from({ length: 150 }, (_, index) => ({
+        name: `synthetic_command_${index}`,
+        description: "Synthetic skill or plugin command description. ".repeat(6),
+        source: index % 2 ? "skill" : "plugin",
+        scope: "text",
+        acceptsArgs: true,
+      }));
+      metadata.buildCommands.mockResolvedValue({ commands });
+      await metadata.refresh();
+      await metadata.read();
+      context.readChatStartupProjection = metadata.runtime.readStartup;
       const call = (params: Record<string, unknown> = {}) =>
         read(
           context,
@@ -143,6 +157,7 @@ describe("pending input read boundary", () => {
         });
       }
       const first = await call();
+      expect(first.metadata).toMatchObject({ commands });
       const legacy = await call({ cursor: first.deltaCursor, knownState: undefined });
       expect(legacy).toMatchObject({ kind: "delta", messages: [], pendingInputs: { total: 8 } });
       expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(60_000);
@@ -155,7 +170,16 @@ describe("pending input read boundary", () => {
       expect(warm.pendingInputs).toBeUndefined();
       expect(warm.sessionInfo).toBeUndefined();
       expect(warm.sessionInfoSnapshotAt).toBeTypeOf("number");
+      expect(asOptionalRecord(warm.metadata)?.commands).toBeUndefined();
       expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
+
+      metadata.setSkillsVersion(2);
+      metadata.buildCommands.mockResolvedValue({ commands: [{ name: "replacement_skill" }] });
+      await metadata.refresh();
+      await metadata.read();
+      const refreshed = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
+      expect(refreshed.metadata).toMatchObject({ commands: [{ name: "replacement_skill" }] });
+      expect(refreshed.stateRevision).not.toEqual(warm.stateRevision);
 
       const controller = new AbortController();
       registerQueuedChatTurn({

@@ -52,16 +52,14 @@ import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
 
 // Keep the actual read contracts in-process so all consumers see the
-// synthetic migration registration; retain the real reply decoder.
+// synthetic migration registration.
 const reads = vi.hoisted(() => ({
   capture: vi.fn<typeof StateReadWorker.captureOpenClawStateReadSource>(),
-  decode: vi.fn<typeof StateReadWorker.decodeOpenClawStateReadReply>(),
   retire: vi.fn<typeof StateReadWorker.retireIdleOpenClawStateReadWorkers>(),
 }));
-// mock-isolation: Install transport before cyclic state imports; load the real decoder afterward so the synthetic migration stays in-process.
+// mock-isolation: Install transport before cyclic state imports so the synthetic migration stays in-process.
 vi.mock("../../state/openclaw-state-read-worker.js", () => ({
   captureOpenClawStateReadSource: reads.capture,
-  decodeOpenClawStateReadReply: reads.decode,
   retireIdleOpenClawStateReadWorkers: reads.retire,
 }));
 
@@ -107,6 +105,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   let backup: PortDescriptor;
   let indexSql: string;
   let targetFingerprint: unknown;
+  let targetAgentCatalog: string[];
   const config = {
     database: { engine: "postgres" as const, postgres: { connection: connection! } },
   };
@@ -144,17 +143,22 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     });
   }
 
+  // Fingerprints include namespace-qualified definitions; compare catalogs after relocation.
+  const readAgentCatalog = async (schema: string) =>
+    readPostgresCatalog((await client.query(postgresCatalogQuery(schema, true))).rows[0].catalog)
+      .map((fact) => JSON.stringify(fact).replaceAll(schema, "fixture_namespace"))
+      .toSorted();
+
   beforeAll(async () => {
     const worker = await vi.importActual<typeof StateReadWorker>(
       "../../state/openclaw-state-read-worker.js",
     );
-    reads.decode.mockImplementation(worker.decodeOpenClawStateReadReply);
     reads.retire.mockImplementation(worker.retireIdleOpenClawStateReadWorkers);
     reads.capture.mockImplementation(() => ({
       own: () => () => {},
       createTransport: (command) =>
         createMockStateReadSource({
-          read: async (source) => reads.decode(await readInProcess(command, source)),
+          read: async (source) => ({ value: await readInProcess(command, source) }),
           async close() {},
         }).createTransport(command),
     }));
@@ -196,6 +200,29 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           : fact,
       ),
     };
+
+    // The reference anchor must stay outside the update backup's state inventory.
+    const referenceRoot = dirs.make("doctor-pg-agent-reference-");
+    const targetNamespace = withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(path.join(referenceRoot, "agent.sqlite"));
+      const engine = openEngineStore({
+        anchor,
+        schema: agentEngineSchema,
+        input: { connection: connection!, schemaPrefix: "doctor_fixture" },
+        inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+        prepareAnchor() {},
+        openSqlite() {
+          throw new Error("Expected PostgreSQL");
+        },
+      });
+      try {
+        return getPostgresPhysicalFacts(engine)!.namespace;
+      } finally {
+        engine.close();
+      }
+    });
+    namespaces.add(targetNamespace);
+    targetAgentCatalog = await readAgentCatalog(targetNamespace);
   });
 
   afterAll(async () => {
@@ -589,6 +616,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       }
     },
   );
+  // Green CI runs 39068774273/39071119824 measured p95 at 104s before fixture reuse.
   it.each([
     [27, false],
     [27, true],
@@ -598,6 +626,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     async (sourceVersion, foreignWrite) => {
       // The preceding foreign-write case deliberately retains the candidate state schema.
       closeOpenClawStateDatabaseForTest();
+      // Each case backs up only its own synthetic agent, never previous case registrations.
+      await client.query(`DELETE FROM "${namespace}".agent_databases WHERE agent_id = 'main'`);
       await client.query(`DROP INDEX IF EXISTS "${namespace}".idx_doctor_future`);
       await prepare();
       await runDoctor();
@@ -621,35 +651,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         postgres: migration.fromSchema.postgres,
         postgresMigrations: [],
       };
-      // The reference anchor must stay outside the update backup's state inventory.
-      const referenceRoot = dirs.make("doctor-pg-agent-reference-");
-      const targetNamespace = withEngineStoreAdmission(() => {
-        using anchor = openNodeSqliteDatabase(path.join(referenceRoot, "agent.sqlite"));
-        const engine = openEngineStore({
-          anchor,
-          schema: candidate,
-          input: { connection: connection!, schemaPrefix: "doctor_fixture" },
-          inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
-          prepareAnchor() {},
-          openSqlite() {
-            throw new Error("Expected PostgreSQL");
-          },
-        });
-        try {
-          return getPostgresPhysicalFacts(engine)!.namespace;
-        } finally {
-          engine.close();
-        }
-      });
-      namespaces.add(targetNamespace);
-      // Fingerprints include namespace-qualified definitions; compare catalogs after relocation.
-      const readAgentCatalog = async (schema: string) =>
-        readPostgresCatalog(
-          (await client.query(postgresCatalogQuery(schema, true))).rows[0].catalog,
-        )
-          .map((fact) => JSON.stringify(fact).replaceAll(schema, "fixture_namespace"))
-          .toSorted();
-      const targetAgentCatalog = await readAgentCatalog(targetNamespace);
       // Build the actual historical layout; dropping current columns would leave
       // PostgreSQL attribute-number holes and change the later migration catalog.
       let agentNamespace = withEngineStoreAdmission(() => {
@@ -961,5 +962,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         vi.unstubAllEnvs();
       }
     },
+    220_000,
   );
 });

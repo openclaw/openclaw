@@ -11,7 +11,7 @@ export function createSettingsStatus<T>(
     method: string;
     access: typeof hasOperatorReadAccess;
     configHash: "hash" | "appliedConfigHash";
-    onConnectionChange?: () => void;
+    onConnectionChange?: (identityChanged: boolean) => void;
     onStatus?: (status: T) => void;
     onError?: () => void;
   },
@@ -47,9 +47,16 @@ export function createSettingsStatus<T>(
     gatewayProjection.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {
+        const identityChanged =
+          connection[0] !== next[0] ||
+          (next[1] === "connected" && !options.access(next[3] ?? null));
         connection = next;
         request?.abort();
-        options.onConnectionChange?.();
+        if (identityChanged) {
+          setResult(undefined);
+          setError(undefined);
+        }
+        options.onConnectionChange?.(identityChanged);
         refresh();
       }
     }),

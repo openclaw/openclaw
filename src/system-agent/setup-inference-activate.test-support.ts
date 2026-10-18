@@ -15,13 +15,18 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
+import * as modelAuth from "../agents/model-auth.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
 import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
+import * as onboardInference from "../commands/onboard-inference.js";
 import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as installRecordCommit from "../plugins/install-record-commit.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
+import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
+import * as providerChoices from "../plugins/provider-auth-choices.js";
+import * as providerRuntime from "../plugins/providers.runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
@@ -32,15 +37,16 @@ import type {
 } from "./setup-inference-core.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
-import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 import {
   codexRuntimeArtifactAuth,
-  pluginArtifactDeps,
   pluginRecord,
+  mockPluginRegistry,
 } from "./verified-inference.test-support.js";
 
 // mock-isolation: Activation fixtures never initialize the embedded agent runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
+const realResolveAuth = resolveApiKeyForProviderCore;
 
 export const tempDirs = createTempDirTracker();
 export const modelRef = "openai/gpt-5.4-mini";
@@ -203,6 +209,7 @@ export async function fixture(
         label: "Codex",
         authBootstrap: "harness",
         conversationToolPolicySupport: "exact",
+        runtimeArtifact: { validate: async () => true },
         authBinding: {
           fingerprint: async (params) => {
             const profile = params.authProfileStore.profiles[params.authProfileId];
@@ -252,7 +259,7 @@ export async function fixture(
         }),
         pluginRegistry,
       },
-      () => resolveApiKeyForProviderCore(input),
+      () => realResolveAuth(input),
     );
   const readProfile = () =>
     Object.entries(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles).find(
@@ -326,25 +333,20 @@ export async function fixture(
   const readCodexCliActiveApiKey = vi
     .spyOn(cliCredentials, "readCodexCliActiveApiKey")
     .mockReturnValue(null);
+  vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
   const deps: ActivateSetupInferenceDeps = {
-    resolvePluginProviders: () => [provider],
     resolveManifestProviderAuthChoice: () => choice,
     resolveManifestProviderAuthChoices: () => [choice],
-    resolveApiKeyForProvider: resolveAuth,
   };
+  vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
   if (options.codex) {
     vi.spyOn(codexRuntimePlugin, "ensureCodexRuntimePluginForModelSelection").mockImplementation(
       async ({ cfg }) => ({ ok: true, cfg, required: false }),
     );
-    deps.loadPluginRegistrySnapshot = () => ({
-      plugins: [pluginRecord("openai"), pluginRecord("codex")],
-    });
-    deps.fingerprintPluginRuntimeArtifact = pluginArtifactDeps().fingerprintPluginRuntimeArtifact;
-    deps.createSystemAgentVerifiedInferenceBinding = (input) =>
-      createSystemAgentVerifiedInferenceBinding({
-        ...input,
-        deps: { ...input.deps, validateAgentHarnessRuntimeArtifact: async () => true },
-      });
+    mockPluginRegistry([pluginRecord("openai"), pluginRecord("codex")]);
+    vi.spyOn(pluginArtifactIdentity, "fingerprintPluginRuntimeArtifact").mockImplementation(
+      (record) => `${record.pluginId}-runtime-v1`,
+    );
   }
   const prompter = createWizardPrompter();
   if (options.restartRequired) {
@@ -390,13 +392,18 @@ export async function fixture(
       }),
     );
   const detect = () =>
-    metadata.run(() =>
-      detectSetupInference({
-        resolveManifestProviderAuthChoices: () => [choice],
-        resolvePluginProviders: () => [provider],
-        detectInferenceBackends: async () => [],
-      }),
-    );
+    metadata.run(async () => {
+      const choices = vi
+        .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
+        .mockReturnValue([choice]);
+      const backends = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
+      try {
+        return await detectSetupInference();
+      } finally {
+        backends.mockRestore();
+        choices.mockRestore();
+      }
+    });
   return {
     activate,
     detect,
@@ -416,5 +423,6 @@ export async function fixture(
     prompter,
     deps,
     pluginRegistry,
+    provider,
   };
 }

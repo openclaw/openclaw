@@ -281,6 +281,7 @@ const runtimeConsumers = [
   })),
   ...[
     "src/infra/database-engine/cli-oneshot.postgres.test.ts",
+    "src/infra/database-engine/interactive-setup.integration.test.ts",
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     "src/plugin-state/plugin-state-store.runtime.test.ts",
