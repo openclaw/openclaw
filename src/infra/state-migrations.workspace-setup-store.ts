@@ -29,6 +29,7 @@ import type { LegacyMigrationSourceSnapshot as SourceSnapshot } from "./state-mi
 import {
   createWorkspaceSetupFingerprint,
   resolveWorkspaceMigrationSourceKey,
+  type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
@@ -294,6 +295,7 @@ export function importAndRecordReceipt(params: {
   snapshot: SourceSnapshot;
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
+  previousReceipt?: MigrationReceipt;
   archivePath?: string;
 }): { sourceKey: string; imported: boolean; differences: string[] } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
@@ -312,6 +314,14 @@ export function importAndRecordReceipt(params: {
             .where("workspace_key", "=", params.source.workspaceKey),
         );
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
+      // Revalidate the observed receipt before publishing a new backup or generation.
+      if (
+        existingReceipt &&
+        (existingReceipt.sourceSha256 !== params.previousReceipt?.sha256 ||
+          existingReceipt.removedSource !== params.previousReceipt?.removedSource)
+      ) {
+        throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
+      }
 
       let imported = false;
       const differences: string[] = [];

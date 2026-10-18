@@ -589,7 +589,7 @@ export function configureSqliteWalMaintenance(
   };
 }
 
-type SqliteExitRegistration = { close: () => void };
+type SqliteExitRegistration = { close: () => void; fired: boolean };
 type SqliteExitGroup = {
   pending: Set<SqliteExitRegistration>;
   dispatch: () => void;
@@ -612,7 +612,7 @@ function detachEmptySqliteExitGroup(group: SqliteExitGroup): void {
  * runtime shutdowns do not accumulate listeners on shared worker processes.
  */
 export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
-  const registration = { close: closeAll };
+  const registration = { close: closeAll, fired: false };
   let group = lastSqliteExitGroup;
   // Preserve intervening owners, such as capture finalization before database close.
   if (!group || process.listeners("exit").at(-1) !== group.dispatch) {
@@ -622,9 +622,13 @@ export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
       dispatch: () => {
         // Snapshot this batch before callbacks; disposal cannot skip an admitted close.
         const snapshot = [...pending];
-        pending.clear();
-        detachEmptySqliteExitGroup(created);
         for (const entry of snapshot) {
+          if (entry.fired) {
+            continue;
+          }
+          entry.fired = true;
+          pending.delete(entry);
+          detachEmptySqliteExitGroup(created);
           try {
             entry.close();
           } catch {
@@ -633,6 +637,7 @@ export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
         }
       },
     };
+    // Keep the dispatcher until the last callback starts, including nested emissions.
     process.on("exit", created.dispatch);
     lastSqliteExitGroup = group = created;
   } else {

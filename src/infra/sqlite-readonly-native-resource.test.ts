@@ -87,6 +87,7 @@ function fixture() {
     onFailure(error) {
       throw error;
     },
+    onDispose() {},
   });
   const ownerPort = host.port;
   const resource = createNativeWorkerResource(port1, undefined, ownerPort);

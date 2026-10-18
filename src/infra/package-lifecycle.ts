@@ -118,8 +118,14 @@ async function assertLifecycleRoot(packageRoot: string, packageDirectory: Lifecy
   }
 }
 
-async function isPackageLifecyclePending(paths: ReturnType<typeof resolveLifecyclePaths>) {
-  return (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
+async function isPackageLifecyclePending(
+  paths: ReturnType<typeof resolveLifecyclePaths>,
+  packageDirectory: LifecycleRoot,
+) {
+  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
+  const pending = (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
+  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
+  return pending;
 }
 
 async function assertLifecycleAuthority(
@@ -380,7 +386,7 @@ export async function completePendingPackageLifecycle(params: {
   if (!packageDirectory) {
     return false;
   }
-  if (!(await isPackageLifecyclePending(paths))) {
+  if (!(await isPackageLifecyclePending(paths, packageDirectory))) {
     try {
       // Postinstall can clear its marker before its invocation settles. A lock
       // still requires admission before callers may verify or activate this package.
@@ -398,7 +404,7 @@ export async function completePendingPackageLifecycle(params: {
   const assertOwnership = () => assertLifecycleAuthority(paths, packageDirectory, lock);
   let observedPendingWork = false;
   const completeWhileHeld = async () => {
-    observedPendingWork = await isPackageLifecyclePending(paths);
+    observedPendingWork = await isPackageLifecyclePending(paths, packageDirectory);
     if (!observedPendingWork) {
       await assertOwnership();
       return false;
@@ -423,7 +429,7 @@ export async function completePendingPackageLifecycle(params: {
       // interrupted promotion, so successful retries can still finalize it.
       await fs.rm(paths.pending, { force: true });
     }
-    if (await isPackageLifecyclePending(paths)) {
+    if (await isPackageLifecyclePending(paths, packageDirectory)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");
     }
     return true;

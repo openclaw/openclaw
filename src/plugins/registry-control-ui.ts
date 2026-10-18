@@ -128,13 +128,15 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
       );
       return;
     }
-    if (requiredScopes !== undefined && !requiredScopes.every(isOperatorScope)) {
+    if (requiredScopes !== undefined) {
       const unknownScope = requiredScopes.find((scope) => !isOperatorScope(scope));
-      reportRegistrationError(
-        record,
-        `control UI descriptor requiredScopes contains unknown operator scope: ${unknownScope}`,
-      );
-      return;
+      if (unknownScope !== undefined) {
+        reportRegistrationError(
+          record,
+          `control UI descriptor requiredScopes contains unknown operator scope: ${unknownScope}`,
+        );
+        return;
+      }
     }
     if (
       placement?.startsWith("route:") &&
@@ -243,7 +245,9 @@ export function createControlUiRegistrar(state: PluginRegistryState) {
           label,
           ...(description !== undefined ? { description } : {}),
           ...(placement !== undefined ? { placement } : {}),
-          ...(requiredScopes !== undefined ? { requiredScopes } : {}),
+          ...(requiredScopes !== undefined
+            ? { requiredScopes: requiredScopes.filter(isOperatorScope) }
+            : {}),
           icon,
           path: tabPath,
           group,

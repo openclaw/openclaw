@@ -268,7 +268,9 @@ async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  const { location, archiveStorePaths, stores } = prepared;
+  const location = structuredClone(prepared.location);
+  const archiveStorePaths = [...prepared.archiveStorePaths];
+  const stores = structuredClone(prepared.stores);
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {

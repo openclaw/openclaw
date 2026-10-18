@@ -738,8 +738,8 @@ describe("plugin metadata snapshot", () => {
     plugin.providerRequest = {
       providers: {
         demo: {
-          family: "demo-family",
-          compatibilityFamily: "moonshot",
+          family: " demo-family ",
+          compatibilityFamily: " moonshot " as never,
           openAICompletions: { supportsStreamingUsage: true },
         },
       },

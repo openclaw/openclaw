@@ -114,6 +114,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
       onFailure(error) {
         unavailable ??= { error };
       },
+      onDispose() {},
     });
   }
 

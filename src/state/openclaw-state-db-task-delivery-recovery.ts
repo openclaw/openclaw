@@ -4,10 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
-import {
-  flushAndHashFileSync as syncAndHash,
-  hashFileDescriptorSync,
-} from "../infra/file-descriptor.js";
+import { hashFileDescriptorSync } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   assertSqliteIntegrity,
@@ -109,6 +106,16 @@ function assertKnownOrphanIntegrity(database: DatabaseSync): number {
       return error.repair.orphanCount;
     }
     throw error;
+  }
+}
+
+function syncAndHash(filePath: string) {
+  const descriptor = fs.openSync(filePath, "r+");
+  try {
+    fs.fsyncSync(descriptor);
+    return hashFileDescriptorSync(descriptor);
+  } finally {
+    fs.closeSync(descriptor);
   }
 }
 
