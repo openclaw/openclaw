@@ -1,5 +1,3 @@
-// Covers bound delivery routing for active bindings, requester matching,
-// ambiguous bindings, and fail-closed requester matching.
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -19,63 +17,39 @@ import {
 const TARGET_SESSION_KEY = "agent:main:subagent:child";
 
 function createRuntimeBinding(
-  targetSessionKey: string,
   conversationId: string,
-  boundAt: number,
-  parentConversationId?: string,
+  boundAt = 1,
+  conversation: Partial<SessionBindingRecord["conversation"]> = {},
 ): SessionBindingRecord {
   return {
     bindingId: `runtime:${conversationId}`,
-    targetSessionKey,
+    targetSessionKey: TARGET_SESSION_KEY,
     targetKind: "subagent",
-    conversation: {
-      channel: "richchat",
-      accountId: "runtime",
-      conversationId,
-      parentConversationId,
-    },
+    conversation: { channel: "richchat", accountId: "runtime", conversationId, ...conversation },
     status: "active",
     boundAt,
   };
 }
 
-describe("bound delivery router", () => {
-  beforeEach(() => {
-    testing.resetSessionBindingAdaptersForTests();
-  });
-
-  const resolveDestination = (params: {
-    targetSessionKey?: string;
-    bindings?: SessionBindingRecord[];
-    requesterConversationId?: string;
-  }) => {
-    const { bindings } = params;
-    if (bindings) {
-      registerSessionBindingAdapter({
-        channel: "richchat",
-        accountId: "runtime",
-        listBySession: (key) =>
-          key === (params.targetSessionKey ?? TARGET_SESSION_KEY) ? bindings : [],
-        resolveByConversation: () => null,
-      });
+async function withoutHostSql(run: () => Promise<void>) {
+  const hostSql = observeHostDataSql();
+  try {
+    await run();
+    for (const call of hostSql.calls) {
+      expect(call).not.toHaveBeenCalled();
     }
-    return resolveBoundDeliveryDestination({
-      targetSessionKey: params.targetSessionKey ?? TARGET_SESSION_KEY,
-      requester:
-        params.requesterConversationId === undefined
-          ? undefined
-          : {
-              channel: "richchat",
-              accountId: "runtime",
-              conversationId: params.requesterConversationId,
-            },
-    });
-  };
+  } finally {
+    hostSql.restore();
+  }
+}
 
+beforeEach(() => testing.resetSessionBindingAdaptersForTests());
+
+describe("bound delivery router", () => {
   it.each([
     {
       name: "resolves to a bound destination when a single active binding exists",
-      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1, "parent-1")],
+      bindings: [createRuntimeBinding("thread-1", 1, { parentConversationId: "parent-1" })],
       requesterConversationId: "parent-1",
       expectedConversationId: "thread-1",
     },
@@ -87,59 +61,56 @@ describe("bound delivery router", () => {
     },
     {
       name: "fails closed when requester signal is missing even with a single binding",
-      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
+      bindings: [createRuntimeBinding("thread-1")],
       expectedConversationId: undefined,
     },
     {
       name: "normalizes adapter binding conversations before requester matching",
       bindings: [
-        {
-          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1),
-          conversation: {
-            channel: " richchat ",
-            accountId: " runtime ",
-            conversationId: " thread-1 ",
-          },
-        },
-        {
-          ...createRuntimeBinding(TARGET_SESSION_KEY, "thread-2", 2),
-          conversation: {
-            channel: " RICHCHAT ",
-            accountId: " Runtime ",
-            conversationId: " thread-2 ",
-          },
-        },
+        createRuntimeBinding(" thread-1 ", 1, { channel: " richchat ", accountId: " runtime " }),
+        createRuntimeBinding(" thread-2 ", 2, { channel: " RICHCHAT ", accountId: " Runtime " }),
       ],
       requesterConversationId: "thread-2",
       expectedConversationId: " thread-2 ",
     },
     {
       name: "falls back for invalid requester conversation values",
-      bindings: [createRuntimeBinding(TARGET_SESSION_KEY, "thread-1", 1)],
+      bindings: [createRuntimeBinding("thread-1")],
       requesterConversationId: " ",
       expectedConversationId: undefined,
     },
-  ])(
-    "$name",
-    async ({ targetSessionKey, bindings, requesterConversationId, expectedConversationId }) => {
-      const route = await resolveDestination({
-        targetSessionKey,
-        bindings,
-        requesterConversationId,
+  ])("$name", async ({ expectedConversationId, ...params }) => {
+    const { bindings, targetSessionKey = TARGET_SESSION_KEY, requesterConversationId } = params;
+    if (bindings) {
+      registerSessionBindingAdapter({
+        channel: "richchat",
+        accountId: "runtime",
+        listBySession: (key) => (key === targetSessionKey ? bindings : []),
+        resolveByConversation: () => null,
       });
+    }
+    const route = await resolveBoundDeliveryDestination({
+      targetSessionKey,
+      requester:
+        requesterConversationId === undefined
+          ? undefined
+          : {
+              channel: "richchat",
+              accountId: "runtime",
+              conversationId: requesterConversationId,
+            },
+    });
 
-      if (expectedConversationId !== undefined) {
-        expect(route?.conversation.conversationId).toBe(expectedConversationId);
-      } else {
-        expect(route).toBeNull();
-      }
-    },
-  );
+    if (expectedConversationId !== undefined) {
+      expect(route?.conversation.conversationId).toBe(expectedConversationId);
+    } else {
+      expect(route).toBeNull();
+    }
+  });
 });
 
 it("lists account and generic destinations and prunes expiry without host SQL", async () => {
   await withOpenClawTestState({ label: "bound-destination-worker-list" }, async () => {
-    testing.resetSessionBindingAdaptersForTests();
     const manager = createAccountScopedConversationBindingManager({
       channel: "fixture",
       accountId: "owner",
@@ -170,19 +141,13 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
       );
       expect(row.get(expired.bindingId)).toBeDefined();
       const genericBefore = row.get(generic.bindingId);
-      const hostSql = observeHostDataSql();
-      try {
+      await withoutHostSql(async () => {
         const route = await resolveBoundDeliveryDestination({
           targetSessionKey: TARGET_SESSION_KEY,
           requester: { channel: "fixture", accountId: "owner", conversationId: "owned-room" },
         });
         expect(route).toMatchObject({ bindingId: "owner:owned-room" });
-        for (const call of hostSql.calls) {
-          expect(call).not.toHaveBeenCalled();
-        }
-      } finally {
-        hostSql.restore();
-      }
+      });
       expect(row.get(expired.bindingId)).toBeUndefined();
       expect(row.get(generic.bindingId)).toEqual(genericBefore);
     } finally {
@@ -192,21 +157,14 @@ it("lists account and generic destinations and prunes expiry without host SQL", 
 });
 
 it("creates the binding store on the first destination lookup without host SQL", async () => {
-  testing.resetSessionBindingAdaptersForTests();
   await withOpenClawTestState({ label: "bound-destination-cold-list" }, async () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-    const hostSql = observeHostDataSql();
-    try {
+    await withoutHostSql(async () => {
       expect(
         await resolveBoundDeliveryDestination({ targetSessionKey: TARGET_SESSION_KEY }),
       ).toBeNull();
-      for (const call of hostSql.calls) {
-        expect(call).not.toHaveBeenCalled();
-      }
-    } finally {
-      hostSql.restore();
-    }
+    });
     expect((await fs.stat(databasePath)).isFile()).toBe(true);
     const { db } = openOpenClawStateDatabase();
     expect(db.prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings").get()).toEqual(

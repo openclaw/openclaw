@@ -1,10 +1,7 @@
-// Covers agent delivery planning from explicit inputs, session history,
-// turn-source overrides, and route-aware target normalization.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
-  resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(async (params) => ({
+const { mocks, normalizedTarget } = vi.hoisted(() => {
+  const targetFixture = async (params: { input: string }) => ({
     ok: true,
     target: {
       to: params.input,
@@ -12,70 +9,23 @@ const mocks = vi.hoisted(() => ({
       source: "normalized",
       resolutionSource: "normalized",
     },
-  })),
-  resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(
-    () => ({ ok: true, to: "+1999" }),
-  ),
-  resolveOutboundSessionRoute: vi.fn<() => Promise<unknown>>(async () => null),
-  resolveSessionDeliveryTarget: vi.fn(
-    (params: {
-      entry?: {
-        delivery?: {
-          kind?: string;
-          context?: {
-            channel?: string;
-            to?: string;
-            accountId?: string;
-            threadId?: string | number;
-          };
-        };
-      };
-      requestedChannel?: string;
-      explicitTo?: string;
-      explicitThreadId?: string | number;
-      turnSourceChannel?: string;
-      turnSourceTo?: string;
-      turnSourceAccountId?: string;
-      turnSourceThreadId?: string | number;
-    }) => {
-      const sessionContext =
-        params.entry?.delivery?.kind === "external" ? (params.entry.delivery.context ?? {}) : {};
-      const lastChannel = params.turnSourceChannel ?? sessionContext.channel;
-      const lastTo = params.turnSourceChannel ? params.turnSourceTo : sessionContext.to;
-      const lastAccountId = params.turnSourceChannel
-        ? params.turnSourceAccountId
-        : sessionContext.accountId;
-      const lastThreadId = params.turnSourceChannel
-        ? params.turnSourceThreadId
-        : sessionContext.threadId;
-      const channel =
-        params.requestedChannel === "last" || params.requestedChannel == null
-          ? lastChannel
-          : params.requestedChannel;
-      const mode = params.explicitTo ? "explicit" : "implicit";
-      const resolvedTo =
-        params.explicitTo ?? (channel && channel === lastChannel ? lastTo : undefined);
-
-      return {
-        channel,
-        to: resolvedTo,
-        accountId: channel && channel === lastChannel ? lastAccountId : undefined,
-        threadId:
-          params.explicitThreadId ??
-          (channel && channel === lastChannel ? lastThreadId : undefined),
-        mode,
-        lastChannel,
-        lastTo,
-        lastAccountId,
-        lastThreadId,
-      };
+  });
+  return {
+    normalizedTarget: targetFixture,
+    mocks: {
+      resolveOutboundChannelPlugin: vi.fn<() => unknown>(() => null),
+      resolveChannelTarget: vi.fn<(params: { input: string }) => Promise<unknown>>(targetFixture),
+      resolveOutboundTarget: vi.fn<() => { ok: true; to: string } | { ok: false; error: Error }>(
+        () => ({ ok: true, to: "+1999" }),
+      ),
+      resolveOutboundSessionRoute: vi.fn<() => Promise<unknown>>(async () => null),
     },
-  ),
-}));
+  };
+});
 
-vi.mock("./targets.js", () => ({
+vi.mock("./targets.js", async () => ({
   resolveOutboundTarget: mocks.resolveOutboundTarget,
-  resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+  resolveSessionDeliveryTarget: (await import("./targets-session.js")).resolveSessionDeliveryTarget,
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -123,23 +73,10 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  mocks.resolveOutboundChannelPlugin.mockReset();
-  mocks.resolveOutboundChannelPlugin.mockReturnValue(null);
-  mocks.resolveChannelTarget.mockReset();
-  mocks.resolveChannelTarget.mockImplementation(async (params: { input: string }) => ({
-    ok: true,
-    target: {
-      to: params.input,
-      kind: "group",
-      source: "normalized",
-      resolutionSource: "normalized",
-    },
-  }));
-  mocks.resolveOutboundTarget.mockReset();
-  mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "+1999" });
-  mocks.resolveOutboundSessionRoute.mockReset();
-  mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
-  mocks.resolveSessionDeliveryTarget.mockClear();
+  mocks.resolveOutboundChannelPlugin.mockReset().mockReturnValue(null);
+  mocks.resolveChannelTarget.mockReset().mockImplementation(normalizedTarget);
+  mocks.resolveOutboundTarget.mockReset().mockReturnValue({ ok: true, to: "+1999" });
+  mocks.resolveOutboundSessionRoute.mockReset().mockResolvedValue(null);
 });
 
 async function buildDeliveryPlan(
@@ -164,6 +101,23 @@ function recipient(
     Partial<Pick<Parameters<typeof resolveAgentExplicitRecipientSession>[0], "cfg" | "agentId">>,
 ) {
   return resolveAgentExplicitRecipientSession({ cfg: {}, agentId: "ops", ...params });
+}
+
+function rejectedRoute(
+  key: string,
+  id: string,
+  from: string,
+  exact: boolean | "direct-alias" | "delivery-identity",
+) {
+  return {
+    sessionKey: key,
+    baseSessionKey: key,
+    recipientSessionExact: exact,
+    peer: { kind: "direct", id },
+    chatType: "direct",
+    from,
+    to: id,
+  };
 }
 
 describe("agent delivery helpers", () => {
@@ -212,8 +166,7 @@ describe("agent delivery helpers", () => {
     });
 
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledTimes(1);
-    expect(resolved.resolvedTarget?.ok).toBe(true);
-    expect(resolved.resolvedTo).toBe("+1999");
+    expect(resolved).toMatchObject({ resolvedTarget: { ok: true }, resolvedTo: "+1999" });
   });
 
   it("skips outbound target resolution when explicit target validation is disabled", async () => {
@@ -282,62 +235,76 @@ describe("agent delivery helpers", () => {
     });
   });
 
-  it("rejects best-effort plugin routes for explicit recipient sessions", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:main:main",
-      baseSessionKey: "agent:main:main",
-      recipientSessionExact: false,
-      peer: { kind: "direct", id: "@ambiguous" },
-      chatType: "direct",
-      from: "provider:@ambiguous",
-      to: "@ambiguous",
-    });
-
-    const result = await recipient({ agentId: "main", channel: "provider", to: "@ambiguous" });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
-  });
-
   it.each([
     {
+      name: "rejects best-effort plugin routes for explicit recipient sessions",
+      input: { agentId: "main", channel: "provider", to: "@ambiguous" },
+      route: rejectedRoute("agent:main:main", "@ambiguous", "provider:@ambiguous", false),
+    },
+    {
       name: "rejects main aliases when a channel binding isolates direct peers",
-      cfg: {
-        session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "ops",
-            match: { channel: "signal", peer: { kind: "direct", id: "+15551234567" } },
-            session: { dmScope: "per-channel-peer" },
-          },
-        ],
+      input: {
+        channel: "signal",
+        to: "username:alice.01",
+        cfg: {
+          session: { dmScope: "main" },
+          bindings: [
+            {
+              agentId: "ops",
+              match: { channel: "signal", peer: { kind: "direct", id: "+15551234567" } },
+              session: { dmScope: "per-channel-peer" },
+            },
+          ],
+        } satisfies OpenClawConfig,
       },
+      route: rejectedRoute(
+        "agent:ops:main",
+        "username:alice.01",
+        "signal:username:alice.01",
+        "direct-alias",
+      ),
     },
     {
       name: "rejects aliases outside the configured main session key",
-      cfg: { session: { mainKey: "work" } },
+      input: { channel: "signal", to: "username:alice.01", cfg: { session: { mainKey: "work" } } },
+      route: rejectedRoute(
+        "agent:ops:main",
+        "username:alice.01",
+        "signal:username:alice.01",
+        "direct-alias",
+      ),
     },
-  ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)("$name", async ({ cfg }) => {
+    {
+      name: "rejects outbound-only identities outside the real provider namespace",
+      input: { channel: "synology-chat", to: "42" },
+      normalizedTo: "42",
+      route: rejectedRoute(
+        "agent:ops:synthetic:direct:42",
+        "42",
+        "synthetic:42",
+        "delivery-identity",
+      ),
+    },
+    {
+      name: "rejects explicit recipients when no usable route can be inferred",
+      input: { channel: "provider", to: "missing" },
+      normalizedTo: "missing",
+      route: null,
+    },
+  ])("$name", async ({ input, route, normalizedTo }) => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
+      ...(route ? { messaging: { resolveOutboundSessionRoute: vi.fn() } } : {}),
     });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: "direct-alias",
-      peer: { kind: "direct", id: "username:alice.01" },
-      chatType: "direct",
-      from: "signal:username:alice.01",
-      to: "username:alice.01",
-    });
-    const result = await recipient({ cfg, channel: "signal", to: "username:alice.01" });
+    if (normalizedTo) {
+      mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: normalizedTo });
+    }
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(route);
+    const result = await recipient(input);
     expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
+    expect(result.error?.message).toBe(
+      `Unable to resolve a session route for channel "${input.channel}"`,
+    );
   });
 
   it("accepts stable outbound-only identities that stay isolated from main", async () => {
@@ -377,43 +344,6 @@ describe("agent delivery helpers", () => {
       accountId: "default",
       error: undefined,
     });
-  });
-
-  it("rejects outbound-only identities outside the real provider namespace", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "42" });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:synthetic:direct:42",
-      baseSessionKey: "agent:ops:synthetic:direct:42",
-      recipientSessionExact: "delivery-identity",
-      peer: { kind: "direct", id: "42" },
-      chatType: "direct",
-      from: "synthetic:42",
-      to: "42",
-    });
-
-    const result = await recipient({ channel: "synology-chat", to: "42" });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe(
-      'Unable to resolve a session route for channel "synology-chat"',
-    );
-  });
-
-  it("rejects explicit recipients when no usable route can be inferred", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-    });
-    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "missing" });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
-
-    const result = await recipient({ channel: "provider", to: "missing" });
-
-    expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
   });
 
   it("keeps reserved explicit target errors when directory-capable resolution misses", async () => {
@@ -485,8 +415,10 @@ describe("agent delivery helpers", () => {
       currentSessionKey: "agent:main",
       threadId: undefined,
     });
-    expect(plan.resolvedTo).toBe("telegram:-1002458651455");
-    expect(plan.targetResolutionError).toBeUndefined();
+    expect(plan).toMatchObject({
+      resolvedTo: "telegram:-1002458651455",
+      targetResolutionError: undefined,
+    });
   });
 
   it("surfaces stored explicit target errors even when explicit validation is disabled", async () => {
@@ -522,7 +454,6 @@ describe("agent delivery helpers", () => {
       explicitTo: "channel:C123",
     });
 
-    expect(plan.resolvedTo).toBe("channel:C123");
-    expect(plan.resolvedThreadId).toBeUndefined();
+    expect(plan).toMatchObject({ resolvedTo: "channel:C123", resolvedThreadId: undefined });
   });
 });

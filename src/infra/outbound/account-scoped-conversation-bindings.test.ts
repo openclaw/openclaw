@@ -7,10 +7,10 @@ import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-requ
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
-  createAccountScopedConversationBindingManager,
-  createAccountScopedConversationBindingManagerV2,
-  resetAccountScopedConversationBindingsForTests,
-  type AccountScopedConversationBindingManager,
+  createAccountScopedConversationBindingManager as createBindings,
+  createAccountScopedConversationBindingManagerV2 as createBindingsV2,
+  resetAccountScopedConversationBindingsForTests as resetBindings,
+  type AccountScopedConversationBindingManager as BindingManager,
 } from "./account-scoped-conversation-bindings.js";
 import { testing as currentConversationBindingTesting } from "./current-conversation-bindings.js";
 import { getSessionBindingService } from "./session-binding-service.js";
@@ -19,15 +19,22 @@ type TestBindingKind = "subagent" | "acp";
 
 const stateKey = Symbol("openclaw.accountScopedConversationBindingExpiry.test");
 const startedAt = 1_700_000_000_000;
+const service = getSessionBindingService();
 const baseCfg = {
   session: { threadBindings: { idleHours: 1, maxAgeHours: 0 } },
 } satisfies OpenClawConfig;
+const pluginMetadata = {
+  pluginBindingOwner: "plugin",
+  pluginId: "opaque-plugin",
+  pluginRoot: "/plugins/opaque-plugin",
+  boundBy: "operator",
+};
 
-function managerOptions(params: { accountId?: string; cfg?: OpenClawConfig } = {}) {
+function managerOptions(cfg: OpenClawConfig = baseCfg, accountId = "ttl-owner") {
   return {
     channel: "imessage",
-    cfg: params.cfg ?? baseCfg,
-    accountId: params.accountId ?? "ttl-owner",
+    cfg,
+    accountId,
     stateKey,
     toStoredTargetKind: (kind: TestBindingKind) => kind,
     toSessionBindingTargetKind: (kind: TestBindingKind): "subagent" | "session" =>
@@ -35,35 +42,44 @@ function managerOptions(params: { accountId?: string; cfg?: OpenClawConfig } = {
   } as const;
 }
 
-function createManager(params: Parameters<typeof managerOptions>[0] = {}) {
-  return createAccountScopedConversationBindingManager<TestBindingKind>(managerOptions(params));
+function createManager(cfg: OpenClawConfig = baseCfg, accountId = "ttl-owner") {
+  return createBindings<TestBindingKind>(managerOptions(cfg, accountId));
 }
 
-function conversationRef(
-  manager: AccountScopedConversationBindingManager<TestBindingKind>,
-  conversationId: string,
-) {
+function conversationRef(manager: BindingManager<TestBindingKind>, conversationId: string) {
   return { channel: "imessage", accountId: manager.accountId, conversationId };
 }
 
 function bindConversation(
-  manager: AccountScopedConversationBindingManager<TestBindingKind>,
-  params: {
-    conversationId?: string;
-    targetSessionKey?: string;
-    label?: string;
-  } = {},
+  manager: BindingManager<TestBindingKind>,
+  conversationId = "chat:ttl-owner",
 ) {
   const binding = manager.bindConversation({
-    conversationId: params.conversationId ?? "chat:ttl-owner",
+    conversationId,
     targetKind: "subagent",
-    targetSessionKey: params.targetSessionKey ?? "agent:main:subagent:ttl-owner",
-    ...(params.label ? { metadata: { label: params.label } } : {}),
+    targetSessionKey: "agent:main:subagent:ttl-owner",
   });
   if (!binding) {
     throw new Error("expected an account-scoped conversation binding");
   }
   return binding;
+}
+
+function session(conversationId: string, cfg = baseCfg) {
+  const manager = createManager(cfg);
+  const conversation = conversationRef(manager, conversationId);
+  return {
+    manager,
+    conversation,
+    bind: (targetSessionKey: string, metadata?: Record<string, unknown>) =>
+      service.bind({ targetSessionKey, targetKind: "session", conversation, metadata }),
+    resolve: () => service.resolveByConversation(conversation),
+    reopen: async () => {
+      manager.stop();
+      await closeStateDatabaseForTest();
+      createManager(cfg);
+    },
+  };
 }
 
 describe("account-scoped conversation binding expiry", () => {
@@ -72,12 +88,12 @@ describe("account-scoped conversation binding expiry", () => {
   beforeEach(async () => {
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-account-bindings-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", testStateDir);
-    resetAccountScopedConversationBindingsForTests({ stateKey });
+    resetBindings({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
   });
 
   afterEach(async () => {
-    resetAccountScopedConversationBindingsForTests({ stateKey });
+    resetBindings({ stateKey });
     currentConversationBindingTesting.clearPersistedCurrentConversationBindingsForTests();
     await closeStateDatabaseForTest();
     vi.unstubAllEnvs();
@@ -88,8 +104,7 @@ describe("account-scoped conversation binding expiry", () => {
   it("warns once for legacy construction and leaves V2 construction silent", () => {
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     withPluginRuntimePluginScope({ pluginId: "account-binding-factory-warning" }, () => {
-      const manager =
-        createAccountScopedConversationBindingManagerV2<TestBindingKind>(managerOptions());
+      const manager = createBindingsV2<TestBindingKind>(managerOptions());
       expect(manager.accountId).toBe("ttl-owner");
       expect(warning).not.toHaveBeenCalled();
       createManager();
@@ -112,41 +127,27 @@ describe("account-scoped conversation binding expiry", () => {
         ...baseCfg,
         agents: { entries: { alpha: {}, beta: {} } },
       } satisfies OpenClawConfig;
-      const manager = createManager({ cfg });
+      const { manager, conversation, bind, resolve, reopen } = session("chat:opaque-metadata", cfg);
       const metadata = {
+        ...pluginMetadata,
         ...(ownerKind === "agent" ? { agentId: "alpha" } : {}),
         label: "durable label",
-        boundBy: "operator",
-        pluginBindingOwner: "plugin",
-        pluginId: "opaque-plugin",
-        pluginRoot: "/plugins/opaque-plugin",
         nested: { ownerEpoch: 7, capabilities: ["approve", "resume"] },
       };
-      const conversation = conversationRef(manager, "chat:opaque-metadata");
-      const bound = await getSessionBindingService().bind({
-        targetSessionKey:
-          ownerKind === "agent"
-            ? "agent:alpha:acp:opaque-session"
-            : "plugin-binding:opaque-plugin:opaque-session",
-        targetKind: "session",
-        conversation,
+      const bound = await bind(
+        ownerKind === "agent"
+          ? "agent:alpha:acp:opaque-session"
+          : "plugin-binding:opaque-plugin:opaque-session",
         metadata,
-      });
+      );
 
-      expect(bound.bindingId).toBe("ttl-owner:chat:opaque-metadata");
-      expect(bound.metadata).toMatchObject(metadata);
+      expect(bound).toMatchObject({ bindingId: "ttl-owner:chat:opaque-metadata", metadata });
       expect(bound.metadata?.agentId).toBe(ownerKind === "agent" ? "alpha" : undefined);
       expect(manager.getByConversationId(conversation.conversationId)?.targetKind).toBe("acp");
-      await expect(
-        getSessionBindingService().bind({
-          conversation,
-          targetSessionKey: bound.targetSessionKey,
-          targetKind: bound.targetKind,
-        }),
-      ).resolves.toMatchObject({ metadata });
+      await expect(bind(bound.targetSessionKey)).resolves.toMatchObject({ metadata });
       if (ownerKind === "plugin") {
         await expect(
-          getSessionBindingService().bind({
+          service.bind({
             targetSessionKey: "unscoped-core-target",
             targetKind: "session",
             conversation: { ...conversation, conversationId: "chat:requires-owner" },
@@ -155,11 +156,9 @@ describe("account-scoped conversation binding expiry", () => {
         expect(manager.getByConversationId("chat:requires-owner")).toBeUndefined();
       }
 
-      manager.stop();
-      await closeStateDatabaseForTest();
-      createManager({ cfg });
+      await reopen();
 
-      expect(getSessionBindingService().resolveByConversation(conversation)).toMatchObject({
+      expect(resolve()).toMatchObject({
         bindingId: "ttl-owner:chat:opaque-metadata",
         targetKind: "session",
         metadata,
@@ -169,10 +168,7 @@ describe("account-scoped conversation binding expiry", () => {
 
   it("keeps the previously committed account binding visible when its replacement write fails", () => {
     const manager = createManager();
-    const original = bindConversation(manager, {
-      conversationId: "chat:write-failure",
-      targetSessionKey: "agent:main:subagent:committed-owner",
-    });
+    const original = bindConversation(manager, "chat:write-failure");
     const { db } = openOpenClawStateDatabase();
     db.exec("PRAGMA query_only = ON");
     try {
@@ -189,128 +185,78 @@ describe("account-scoped conversation binding expiry", () => {
     }
 
     expect(manager.getByConversationId(original.conversationId)).toEqual(original);
-    expect(
-      getSessionBindingService().resolveByConversation(
-        conversationRef(manager, original.conversationId),
-      )?.targetSessionKey,
-    ).toBe(original.targetSessionKey);
+    const resolved = service.resolveByConversation(
+      conversationRef(manager, original.conversationId),
+    );
+    expect(resolved?.targetSessionKey).toBe(original.targetSessionKey);
   });
 
   it.each([false, true])(
     "inherits runtime metadata only when refreshing the same target (replace=%s)",
     async (replace) => {
-      const manager = createManager();
-      const service = getSessionBindingService();
-      const conversation = conversationRef(manager, "chat:replacement-owner");
-      const metadata = {
-        pluginBindingOwner: "plugin",
-        pluginId: "owner-plugin",
-        pluginRoot: "/plugins/owner-plugin",
-        agentId: "previous-agent",
-        boundBy: "previous-user",
-        opaque: { runtimeId: "original" },
-      };
-      const originalTarget = "plugin-binding:owner-plugin:original";
-      await service.bind({
-        targetSessionKey: originalTarget,
-        targetKind: "session",
-        conversation,
-        metadata,
-      });
+      const { bind, resolve, reopen } = session("chat:replacement-owner");
+      const metadata = { ...pluginMetadata, opaque: { runtimeId: "original" } };
+      const originalTarget = "plugin-binding:opaque-plugin:original";
+      await bind(originalTarget, { ...metadata, agentId: "previous-agent" });
       const targetSessionKey = replace ? "agent:main:acp:replacement" : originalTarget;
 
-      await service.bind({
-        targetSessionKey,
-        targetKind: "session",
-        conversation,
-        metadata: { label: "updated" },
-      });
-      manager.stop();
-      await closeStateDatabaseForTest();
-      createManager();
+      await bind(targetSessionKey, { label: "updated" });
+      await reopen();
 
-      expect(service.resolveByConversation(conversation)).toMatchObject({
+      expect(resolve()).toMatchObject({
         targetSessionKey,
         metadata: { agentId: replace ? "main" : "previous-agent", label: "updated" },
       });
-      const resolvedMetadata = service.resolveByConversation(conversation)?.metadata;
-      for (const key of [
-        "pluginBindingOwner",
-        "pluginId",
-        "pluginRoot",
-        "boundBy",
-        "opaque",
-      ] as const) {
-        expect(resolvedMetadata?.[key]).toEqual(replace ? undefined : metadata[key]);
+      const resolvedMetadata = resolve()?.metadata;
+      for (const [key, value] of Object.entries(metadata)) {
+        expect(resolvedMetadata?.[key]).toEqual(replace ? undefined : value);
       }
     },
   );
 
-  it("enforces maximum age even when activity refreshes the idle deadline", () => {
+  it.each([
+    ["maximum age despite refreshed activity", 2, 1, 30 * 60_000, 60 * 60_000],
+    ["idle expiry cannot be revived", 1, 0, null, 60 * 60_000],
+    ["disabled expiry preserves bindings", 0, 0, null, 10 * 365 * 24 * 60 * 60_000],
+  ] as const)("enforces %s", (_name, idleHours, maxAgeHours, activity, elapsed) => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager({
-      cfg: { session: { threadBindings: { idleHours: 2, maxAgeHours: 1 } } },
-    });
+    const manager = createManager({ session: { threadBindings: { idleHours, maxAgeHours } } });
     const binding = bindConversation(manager);
-
-    now.mockReturnValue(startedAt + 30 * 60_000);
-    expect(manager.touchConversation(binding.conversationId)?.lastActivityAt).toBe(
-      startedAt + 30 * 60_000,
-    );
-    expect(
-      getSessionBindingService().resolveByConversation(
-        conversationRef(manager, binding.conversationId),
-      )?.expiresAt,
-    ).toBe(startedAt + 60 * 60_000);
-
-    now.mockReturnValue(startedAt + 60 * 60_000);
-
-    expect(manager.getByConversationId(binding.conversationId)).toBeUndefined();
-    expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);
-  });
-
-  it("does not revive an expired binding when its conversation is touched", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager();
-    const binding = bindConversation(manager);
-
-    now.mockReturnValue(startedAt + 3_600_000);
-
-    expect(manager.touchConversation(binding.conversationId, startedAt + 3_600_001)).toBeNull();
-    expect(manager.getByConversationId(binding.conversationId)).toBeUndefined();
-    expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([]);
+    const { conversationId, targetSessionKey } = binding;
+    if (activity !== null) {
+      now.mockReturnValue(startedAt + activity);
+      expect(manager.touchConversation(conversationId)?.lastActivityAt).toBe(startedAt + activity);
+      const resolved = service.resolveByConversation(conversationRef(manager, conversationId));
+      expect(resolved?.expiresAt).toBe(startedAt + 60 * 60_000);
+    }
+    now.mockReturnValue(startedAt + elapsed);
+    if (idleHours === 0) {
+      expect(manager.getByConversationId(conversationId)).toEqual(binding);
+      expect(manager.listBySessionKey(targetSessionKey)).toEqual([binding]);
+      expect(manager.touchConversation(conversationId)?.lastActivityAt).toBe(Date.now());
+      expect(manager.unbindConversation(conversationId)?.targetSessionKey).toBe(targetSessionKey);
+    } else {
+      if (activity === null) {
+        expect(manager.touchConversation(conversationId, startedAt + elapsed + 1)).toBeNull();
+      }
+      expect(manager.getByConversationId(conversationId)).toBeUndefined();
+      expect(manager.listBySessionKey(targetSessionKey)).toEqual([]);
+    }
   });
 
   it("prunes only the expired account when accounts share a conversation id", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const expiredManager = createManager({ accountId: "ttl-expired" });
-    const expired = bindConversation(expiredManager, { conversationId: "chat:shared" });
+    const expiredManager = createManager(baseCfg, "ttl-expired");
+    const expired = bindConversation(expiredManager, "chat:shared");
 
     now.mockReturnValue(startedAt + 30 * 60_000);
-    const activeManager = createManager({ accountId: "ttl-active" });
-    const active = bindConversation(activeManager, { conversationId: "chat:shared" });
+    const activeManager = createManager(baseCfg, "ttl-active");
+    const active = bindConversation(activeManager, "chat:shared");
 
     now.mockReturnValue(startedAt + 60 * 60_000);
 
     expect(expiredManager.getByConversationId(expired.conversationId)).toBeUndefined();
     expect(activeManager.getByConversationId(active.conversationId)).toEqual(active);
     expect(activeManager.listBySessionKey(active.targetSessionKey)).toEqual([active]);
-  });
-
-  it("preserves bindings with disabled idle and maximum-age expiry", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    const manager = createManager({
-      cfg: { session: { threadBindings: { idleHours: 0, maxAgeHours: 0 } } },
-    });
-    const binding = bindConversation(manager);
-
-    now.mockReturnValue(startedAt + 10 * 365 * 24 * 60 * 60_000);
-
-    expect(manager.getByConversationId(binding.conversationId)).toEqual(binding);
-    expect(manager.listBySessionKey(binding.targetSessionKey)).toEqual([binding]);
-    expect(manager.touchConversation(binding.conversationId)?.lastActivityAt).toBe(Date.now());
-    expect(manager.unbindConversation(binding.conversationId)?.targetSessionKey).toBe(
-      binding.targetSessionKey,
-    );
   });
 });
