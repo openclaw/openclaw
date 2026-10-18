@@ -1,20 +1,68 @@
-// Imessage test support covers sanitize outbound plugin behavior.
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it } from "vitest";
 import {
-  protectIMessageFencedRoleMarkers,
-  sanitizeIMessageFinalOutboundText,
+  protectIMessageFencedRoleMarkers as protectRoles,
+  sanitizeIMessageFinalOutboundText as sanitizeFinal,
   sanitizeOutboundText,
 } from "./sanitize-outbound.js";
 
+function expectPrivateRemoved(source: string, hidden: string | RegExp) {
+  const { text } = sanitizeFinal(source);
+  expect(text).toContain("visible companion");
+  if (typeof hidden === "string") {
+    expect(text).not.toContain(hidden);
+  } else {
+    expect(text).not.toMatch(hidden);
+  }
+}
+
+function expectRejected(
+  source: string,
+  reason: string,
+  options: Parameters<typeof sanitizeFinal>[1] = {},
+) {
+  expect(() => sanitizeFinal(source, options)).toThrow("iMessage outbound " + reason);
+}
+
+function protectedUserRole() {
+  const protectedText = protectRoles("```yaml\nuser:\n```");
+  const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
+  expect(token).toBeDefined();
+  return { protectedText, token };
+}
+
 describe("sanitizeOutboundText", () => {
-  it("returns empty string unchanged", () => {
-    expect(sanitizeOutboundText("")).toBe("");
+  it.each([
+    ["returns empty string unchanged", "", ""],
+    [
+      "preserves normal user-facing text",
+      "Hello! How can I help you today?",
+      "Hello! How can I help you today?",
+    ],
+    [
+      "strips <thinking> tags and content",
+      "<thinking>internal reasoning</thinking>The answer is 42.",
+      "The answer is 42.",
+    ],
+    [
+      "strips <thought> tags and content",
+      "<thought>secret</thought>Visible reply",
+      "Visible reply",
+    ],
+    ["strips <final> tags", "<final>Hello world</final>", "Hello world"],
+    [
+      "strips <relevant_memories> tags and content",
+      "<relevant_memories>memory data</relevant_memories>Visible",
+      "Visible",
+    ],
+    ["collapses excessive blank lines after stripping", "Hello\n\n\n\n\nWorld", "Hello\n\nWorld"],
+  ])("%s", (_name, input, expected) => {
+    expect(sanitizeOutboundText(input)).toBe(expected);
   });
 
   it("preserves raw Markdown for edit and poll transport while removing real private markers", () => {
     const raw = ["user:", "# system:", "**assistant:**", "us#+#+#er:", "visible"].join("\n");
-    const sanitized = sanitizeIMessageFinalOutboundText(raw);
+    const sanitized = sanitizeFinal(raw);
 
     expect(sanitized.text).toContain("# system:");
     expect(sanitized.text).toContain("**assistant:**");
@@ -23,9 +71,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("removes formatted private headings while preserving native iMessage styles", () => {
-    const sanitized = sanitizeIMessageFinalOutboundText("# user:\n**😀 visible**", {
-      formatMarkdown: true,
-    });
+    const sanitized = sanitizeFinal("# user:\n**😀 visible**", { formatMarkdown: true });
     const bold = sanitized.ranges.find((range) => range.styles.includes("bold"));
 
     expect(sanitized.text).not.toMatch(/^user:$/m);
@@ -35,7 +81,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("strips assistant reasoning before computing native style offsets", () => {
-    const sanitized = sanitizeIMessageFinalOutboundText(
+    const sanitized = sanitizeFinal(
       "<thinking>hidden thought</thinking><relevant_memories>hidden memory</relevant_memories>**😀 visible**",
       { formatMarkdown: true },
     );
@@ -53,13 +99,11 @@ describe("sanitizeOutboundText", () => {
       "hidden tool response",
       "</function_response>",
     ].join("\n");
-    const sanitized = sanitizeIMessageFinalOutboundText(` \t${hidden}\nvisible\n `);
+    const sanitized = sanitizeFinal(` \t${hidden}\nvisible\n `);
 
     expect(sanitized.text).toBe(" \tvisible\n ");
-    expect(sanitizeIMessageFinalOutboundText(" \tclean raw text\n ").text).toBe(
-      " \tclean raw text\n ",
-    );
-    expect(sanitizeIMessageFinalOutboundText(" \t\n ").text).toBe(" \t\n ");
+    expect(sanitizeFinal(" \tclean raw text\n ").text).toBe(" \tclean raw text\n ");
+    expect(sanitizeFinal(" \t\n ").text).toBe(" \t\n ");
   });
 
   it.each([
@@ -77,9 +121,7 @@ describe("sanitizeOutboundText", () => {
     "<relevant_<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>memories>hidden</relevant_<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>memories>",
     "<function_response<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>hidden</function_response<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>",
   ])("rejects ambiguous nested HTML before any destructive sanitization", (source) => {
-    expect(() => sanitizeIMessageFinalOutboundText(source)).toThrow(
-      "iMessage outbound ambiguous nested HTML is not allowed",
-    );
+    expectRejected(source, "ambiguous nested HTML is not allowed");
   });
 
   it("preserves real code, comparisons, templates, and quoted HTML attribute contents", () => {
@@ -94,7 +136,7 @@ describe("sanitizeOutboundText", () => {
       `<strong title="<tag>">bold</strong> <del data-note='s>'>strike</del>`,
       `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`,
     ]) {
-      expect(sanitizeIMessageFinalOutboundText(source).text).toBe(source);
+      expect(sanitizeFinal(source).text).toBe(source);
     }
   });
 
@@ -103,7 +145,7 @@ describe("sanitizeOutboundText", () => {
       style: "markdown",
     });
 
-    expect(sanitizeIMessageFinalOutboundText(text).text).toBe("visible");
+    expect(sanitizeFinal(text).text).toBe("visible");
   });
 
   it.each([
@@ -114,10 +156,10 @@ describe("sanitizeOutboundText", () => {
     "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>PRIVATE_RUNTIME_SECRET<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
   ])("removes private runtime blocks and their payload before role protection", (hidden) => {
     for (const source of [hidden, `\`${hidden}\``, `\`\`\`xml\n${hidden}\n\`\`\``]) {
-      const sanitized = sanitizeIMessageFinalOutboundText(`${source}\nvisible companion`);
-      expect(sanitized.text).toContain("visible companion");
-      expect(sanitized.text).not.toContain("PRIVATE_RUNTIME_SECRET");
-      expect(sanitized.text).not.toMatch(/system-reminder|previous_response|INTERNAL_CONTEXT/i);
+      expectPrivateRemoved(
+        `${source}\nvisible companion`,
+        /PRIVATE_RUNTIME_SECRET|system-reminder|previous_response|INTERNAL_CONTEXT/i,
+      );
     }
   });
 
@@ -127,9 +169,8 @@ describe("sanitizeOutboundText", () => {
         for (const attribute of [">", "/>", "<previous_response>"]) {
           const hidden = `<${name} data-x=${quote}${attribute}${quote}>QUOTED_PRIVATE_SECRET</${name}>`;
           for (const source of [hidden, `\`${hidden}\``, `\`\`\`xml\n${hidden}\n\`\`\``]) {
-            const sanitized = sanitizeIMessageFinalOutboundText(`${source}\nvisible companion`);
-            expect(sanitized.text).toContain("visible companion");
-            expect(sanitized.text).not.toMatch(
+            expectPrivateRemoved(
+              `${source}\nvisible companion`,
               /QUOTED_PRIVATE_SECRET|system-reminder|previous_response/i,
             );
           }
@@ -153,15 +194,13 @@ describe("sanitizeOutboundText", () => {
         `</ </${name}>>`,
       ]) {
         const source = `<${name}>${opaque}OPAQUE_PRIVATE_SECRET</${name}>\nvisible companion`;
-        const sanitized = sanitizeIMessageFinalOutboundText(source);
-        expect(sanitized.text).toContain("visible companion");
-        expect(sanitized.text).not.toContain("OPAQUE_PRIVATE_SECRET");
+        expectPrivateRemoved(source, "OPAQUE_PRIVATE_SECRET");
       }
     }
-    expect(sanitizeIMessageFinalOutboundText("ordinary <!-- unfinished user example").text).toBe(
+    expect(sanitizeFinal("ordinary <!-- unfinished user example").text).toBe(
       "ordinary <!-- unfinished user example",
     );
-    expect(sanitizeIMessageFinalOutboundText("ordinary <! unfinished user example").text).toBe(
+    expect(sanitizeFinal("ordinary <! unfinished user example").text).toBe(
       "ordinary <! unfinished user example",
     );
   });
@@ -175,9 +214,7 @@ describe("sanitizeOutboundText", () => {
           `\n\n    </${inner}>\n`,
         ]) {
           const source = `<${outer}>${fakeClose}CODE_PRIVATE_SECRET</${outer}>\nvisible companion`;
-          const sanitized = sanitizeIMessageFinalOutboundText(source);
-          expect(sanitized.text).toContain("visible companion");
-          expect(sanitized.text).not.toContain("CODE_PRIVATE_SECRET");
+          expectPrivateRemoved(source, "CODE_PRIVATE_SECRET");
         }
       }
     }
@@ -201,38 +238,32 @@ describe("sanitizeOutboundText", () => {
           `<${rawText.toUpperCase()} data-x=">" />`,
         ]) {
           const source = `<${name}>${opener}</${name}><${name}></${rawText}>RAW_TEXT_PRIVATE_SECRET</${name}>\nvisible companion`;
-          const sanitized = sanitizeIMessageFinalOutboundText(source);
-          expect(sanitized.text).toContain("visible companion");
-          expect(sanitized.text).not.toContain("RAW_TEXT_PRIVATE_SECRET");
+          expectPrivateRemoved(source, "RAW_TEXT_PRIVATE_SECRET");
         }
       }
-      expect(() =>
-        sanitizeIMessageFinalOutboundText(
-          `<${name}><plaintext></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
-        ),
-      ).toThrow("iMessage outbound runtime markup is malformed");
-      expect(() =>
-        sanitizeIMessageFinalOutboundText(
-          `<${name}><PLAINTEXT /></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
-        ),
-      ).toThrow("iMessage outbound runtime markup is malformed");
+      expectRejected(
+        `<${name}><plaintext></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
+        "runtime markup is malformed",
+      );
+      expectRejected(
+        `<${name}><PLAINTEXT /></${name}>RAW_TEXT_PRIVATE_SECRET</${name}>`,
+        "runtime markup is malformed",
+      );
     }
-    expect(sanitizeIMessageFinalOutboundText("<script>ordinary unfinished user example").text).toBe(
+    expect(sanitizeFinal("<script>ordinary unfinished user example").text).toBe(
       "<script>ordinary unfinished user example",
     );
     expect(
-      sanitizeIMessageFinalOutboundText(
+      sanitizeFinal(
         "<script><system-reminder>RAW_TEXT_PRIVATE_SECRET</system-reminder></script>visible",
       ).text,
     ).not.toContain("RAW_TEXT_PRIVATE_SECRET");
   });
 
   it("retains user-authored XML while removing paired private runtime context", () => {
-    expect(sanitizeIMessageFinalOutboundText("<note>visible XML</note>").text).toBe(
-      "<note>visible XML</note>",
-    );
+    expect(sanitizeFinal("<note>visible XML</note>").text).toBe("<note>visible XML</note>");
     expect(
-      sanitizeIMessageFinalOutboundText(
+      sanitizeFinal(
         "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
       ).text,
     ).toBe("before  after");
@@ -246,10 +277,8 @@ describe("sanitizeOutboundText", () => {
       "visible companion",
     ].join("\n");
 
-    expect(sanitizeIMessageFinalOutboundText(source).text).toContain("visible companion");
-    expect(sanitizeIMessageFinalOutboundText(source).text).not.toMatch(
-      /system-reminder|previous_response/i,
-    );
+    expect(sanitizeFinal(source).text).toContain("visible companion");
+    expect(sanitizeFinal(source).text).not.toMatch(/system-reminder|previous_response/i);
   });
 
   it.each([
@@ -263,9 +292,8 @@ describe("sanitizeOutboundText", () => {
     "removes complete balanced nested private wrappers without leaking outer payload",
     (hidden) => {
       for (const source of [hidden, `\`${hidden}\``, `\`\`\`xml\n${hidden}\n\`\`\``]) {
-        const sanitized = sanitizeIMessageFinalOutboundText(`${source}\nvisible companion`);
-        expect(sanitized.text).toContain("visible companion");
-        expect(sanitized.text).not.toMatch(
+        expectPrivateRemoved(
+          `${source}\nvisible companion`,
           /PRIVATE_NESTED_SECRET|system-reminder|previous_response/i,
         );
       }
@@ -292,16 +320,10 @@ describe("sanitizeOutboundText", () => {
       "<system-reminder><!-- </system-reminder> OUTER_PRIVATE_SECRET",
       "<system-reminder><! unfinished bogus declaration OUTER_PRIVATE_SECRET",
     ]) {
-      expect(() => sanitizeIMessageFinalOutboundText(source)).toThrow(
-        "iMessage outbound runtime markup is malformed",
-      );
+      expect(() => sanitizeFinal(source)).toThrow("iMessage outbound runtime markup is malformed");
     }
-    expect(() =>
-      sanitizeIMessageFinalOutboundText("<system-reminder>".repeat(33) + "private"),
-    ).toThrow("iMessage outbound runtime markup exceeded its limit");
-    expect(sanitizeIMessageFinalOutboundText("<system-reminder>visible orphan").text).toBe(
-      "visible orphan",
-    );
+    expectRejected("<system-reminder>".repeat(33) + "private", "runtime markup exceeded its limit");
+    expect(sanitizeFinal("<system-reminder>visible orphan").text).toBe("visible orphan");
   });
 
   it.each([
@@ -316,10 +338,9 @@ describe("sanitizeOutboundText", () => {
       ["fenced", `\`\`\`xml\n${malformed}\n\`\`\``],
       ["wide-fenced", `\`\`\`\`xml\n${malformed}\n\`\`\`\``],
     ] as const) {
-      expect(
-        () => sanitizeIMessageFinalOutboundText(source),
-        JSON.stringify({ malformed, wrapper, source }),
-      ).toThrow("iMessage outbound runtime markup is malformed");
+      expect(() => sanitizeFinal(source), JSON.stringify({ malformed, wrapper, source })).toThrow(
+        "iMessage outbound runtime markup is malformed",
+      );
     }
   });
 
@@ -334,11 +355,11 @@ describe("sanitizeOutboundText", () => {
       "assistant:",
       "```",
     ].join("\n");
-    const protection = protectIMessageFencedRoleMarkers(source);
+    const protection = protectRoles(source);
 
     expect(protection.text).toContain("\ue003".repeat("user".length));
     expect(protection.text).not.toMatch(/[\ue000-\ue002]/);
-    const sanitized = sanitizeIMessageFinalOutboundText(protection.text, { protection });
+    const sanitized = sanitizeFinal(protection.text, { protection });
     for (const role of ["user", "system", "assistant"]) {
       expect(sanitized.text).toMatch(new RegExp(`^${role}:$`, "m"));
     }
@@ -346,7 +367,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("drops native style metadata when fenced assistant reasoning is exposed after formatting", () => {
-    const sanitized = sanitizeIMessageFinalOutboundText(
+    const sanitized = sanitizeFinal(
       ["```xml", "<thinking>hidden thought</thinking>", "```", "**😀 visible**"].join("\n"),
       { formatMarkdown: true },
     );
@@ -366,9 +387,7 @@ describe("sanitizeOutboundText", () => {
     { name: "inline memories", source: "`<relevant-memories>hidden</relevant-memories>`" },
     { name: "unterminated fenced memories", source: "```xml\n<relevant_memories>hidden\n```" },
   ])("rejects $name instead of leaking private payload through raw Markdown", ({ source }) => {
-    expect(() => sanitizeIMessageFinalOutboundText(source)).toThrow(
-      "iMessage outbound hidden assistant content is not allowed",
-    );
+    expectRejected(source, "hidden assistant content is not allowed");
   });
 
   it("recursively rejects assistant reasoning through multiple closed Markdown fence layers", () => {
@@ -378,12 +397,8 @@ describe("sanitizeOutboundText", () => {
       nested = `${fence}xml\n${nested}\n${fence}`;
     }
 
-    expect(() => sanitizeIMessageFinalOutboundText(nested)).toThrow(
-      "iMessage outbound hidden assistant content is not allowed",
-    );
-    expect(() => sanitizeIMessageFinalOutboundText(nested, { formatMarkdown: true })).toThrow(
-      "iMessage outbound hidden assistant content is not allowed",
-    );
+    expectRejected(nested, "hidden assistant content is not allowed");
+    expectRejected(nested, "hidden assistant content is not allowed", { formatMarkdown: true });
   });
 
   it("fails closed when recursive Markdown unwrapping exceeds its security budget", () => {
@@ -393,34 +408,7 @@ describe("sanitizeOutboundText", () => {
       nested = `${fence}xml\n${nested}\n${fence}`;
     }
 
-    expect(() => sanitizeIMessageFinalOutboundText(nested)).toThrow(
-      "iMessage outbound Markdown security projection exceeded its limit",
-    );
-  });
-
-  it("preserves normal user-facing text", () => {
-    const text = "Hello! How can I help you today?";
-    expect(sanitizeOutboundText(text)).toBe(text);
-  });
-
-  it("strips <thinking> tags and content", () => {
-    const text = "<thinking>internal reasoning</thinking>The answer is 42.";
-    expect(sanitizeOutboundText(text)).toBe("The answer is 42.");
-  });
-
-  it("strips <thought> tags and content", () => {
-    const text = "<thought>secret</thought>Visible reply";
-    expect(sanitizeOutboundText(text)).toBe("Visible reply");
-  });
-
-  it("strips <final> tags", () => {
-    const text = "<final>Hello world</final>";
-    expect(sanitizeOutboundText(text)).toBe("Hello world");
-  });
-
-  it("strips <relevant_memories> tags and content", () => {
-    const text = "<relevant_memories>memory data</relevant_memories>Visible";
-    expect(sanitizeOutboundText(text)).toBe("Visible");
+    expectRejected(nested, "Markdown security projection exceeded its limit");
   });
 
   it("strips +#+#+#+# separator patterns", () => {
@@ -449,30 +437,25 @@ describe("sanitizeOutboundText", () => {
     );
   });
 
-  it("collapses excessive blank lines after stripping", () => {
-    const text = "Hello\n\n\n\n\nWorld";
-    expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");
-  });
-
   it.each([
-    {
-      name: "backtick fence preserves user while stripping prose user",
-      input: "user:\n```yaml\nuser:\n  name: alice\n```",
-      expected: "```yaml\nuser:\n  name: alice\n```",
-    },
-    {
-      name: "tilde fence preserves system while stripping prose system",
-      input: "system:\n~~~yaml\nsystem:\n  enabled: true\n~~~",
-      expected: "~~~yaml\nsystem:\n  enabled: true\n~~~",
-    },
-    {
-      name: "closed fence preserves assistant while stripping prose assistant",
-      input: "assistant:\n```yaml\nassistant:\n  enabled: true\n```",
-      expected: "```yaml\nassistant:\n  enabled: true\n```",
-    },
-    {
-      name: "unterminated fence never exposes internal marker families",
-      input: [
+    [
+      "backtick fence preserves user while stripping prose user",
+      "user:\n```yaml\nuser:\n  name: alice\n```",
+      "```yaml\nuser:\n  name: alice\n```",
+    ],
+    [
+      "tilde fence preserves system while stripping prose system",
+      "system:\n~~~yaml\nsystem:\n  enabled: true\n~~~",
+      "~~~yaml\nsystem:\n  enabled: true\n~~~",
+    ],
+    [
+      "closed fence preserves assistant while stripping prose assistant",
+      "assistant:\n```yaml\nassistant:\n  enabled: true\n```",
+      "```yaml\nassistant:\n  enabled: true\n```",
+    ],
+    [
+      "unterminated fence never exposes internal marker families",
+      [
         "#+#+#",
         "assistant to=final",
         "user:",
@@ -481,43 +464,43 @@ describe("sanitizeOutboundText", () => {
         "assistant to=tool",
         "user:",
       ].join("\n"),
-      expected: "```text",
-    },
-    {
-      name: "longer matching closing fence preserves role mappings",
-      input: "```yaml\nuser:\n  id: 1\n````",
-      expected: "```yaml\nuser:\n  id: 1\n````",
-    },
-    {
-      name: "three-space-indented fences preserve role mappings",
-      input: "Example:\n   ```yaml\n   user:\n     id: 1\n   ```",
-      expected: "Example:\n   ```yaml\n   user:\n     id: 1\n   ```",
-    },
-    {
-      name: "CRLF fences preserve role mappings",
-      input: "```yaml\r\nuser:\r\n  id: 1\r\n```",
-      expected: "```yaml\r\nuser:\r\n  id: 1\r\n```",
-    },
-    {
-      name: "closing fence whitespace preserves role mappings",
-      input: "```yaml\nuser:\n  id: 1\n``` \t",
-      expected: "```yaml\nuser:\n  id: 1\n```",
-    },
-  ] as const)("$name", ({ input, expected }) => {
+      "```text",
+    ],
+    [
+      "longer matching closing fence preserves role mappings",
+      "```yaml\nuser:\n  id: 1\n````",
+      "```yaml\nuser:\n  id: 1\n````",
+    ],
+    [
+      "three-space-indented fences preserve role mappings",
+      "Example:\n   ```yaml\n   user:\n     id: 1\n   ```",
+      "Example:\n   ```yaml\n   user:\n     id: 1\n   ```",
+    ],
+    [
+      "CRLF fences preserve role mappings",
+      "```yaml\r\nuser:\r\n  id: 1\r\n```",
+      "```yaml\r\nuser:\r\n  id: 1\r\n```",
+    ],
+    [
+      "closing fence whitespace preserves role mappings",
+      "```yaml\nuser:\n  id: 1\n``` \t",
+      "```yaml\nuser:\n  id: 1\n```",
+    ],
+  ] as const)("%s", (_name, input, expected) => {
     expect(sanitizeOutboundText(input)).toBe(expected);
   });
 
   it.each([
-    { name: "an unterminated backtick fence", text: "```yaml\nuser:" },
-    { name: "an unterminated tilde fence", text: "~~~yaml\nsystem:" },
-    { name: "a mismatched closing fence", text: "```yaml\nassistant:\n~~~" },
-    { name: "a shorter closing fence", text: "````yaml\nuser:\n```" },
-    { name: "indented code", text: "    user:\n    enabled: true" },
-    { name: "inline code", text: "prefix `user:` suffix" },
-    { name: "multiline inline code", text: "prefix ```\nuser:\n``` suffix" },
-    { name: "a midline opener", text: "prefix ```yaml\nuser:\n```" },
-    { name: "a quoted fence", text: "> ```yaml\n> user:\n> ```" },
-  ])("does not exempt role markers in $name", ({ text }) => {
+    ["an unterminated backtick fence", "```yaml\nuser:"],
+    ["an unterminated tilde fence", "~~~yaml\nsystem:"],
+    ["a mismatched closing fence", "```yaml\nassistant:\n~~~"],
+    ["a shorter closing fence", "````yaml\nuser:\n```"],
+    ["indented code", "    user:\n    enabled: true"],
+    ["inline code", "prefix `user:` suffix"],
+    ["multiline inline code", "prefix ```\nuser:\n``` suffix"],
+    ["a midline opener", "prefix ```yaml\nuser:\n```"],
+    ["a quoted fence", "> ```yaml\n> user:\n> ```"],
+  ])("does not exempt role markers in %s", (_name, text) => {
     expect(sanitizeOutboundText(text)).not.toMatch(/^[ \t]*(?:user|system|assistant):\s*$/m);
   });
 
@@ -548,7 +531,7 @@ describe("sanitizeOutboundText", () => {
 
   it("preserves role provenance and remaps native UTF-16 styles after final scrubbing", () => {
     const source = "```yaml\nuser:\n  name: alice\n```";
-    const protectedText = protectIMessageFencedRoleMarkers(source);
+    const protectedText = protectRoles(source);
     const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
     expect(token).toHaveLength("user".length);
     const hidden = "assistant:\n";
@@ -567,9 +550,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("fails closed when formatted content forges an authenticated role marker", () => {
-    const protectedText = protectIMessageFencedRoleMarkers("```yaml\nuser:\n```");
-    const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
-    expect(token).toBeDefined();
+    const { protectedText, token } = protectedUserRole();
 
     expect(() =>
       protectedText.sanitizeFormatted({ text: `${token}:\n${token}:`, ranges: [] }),
@@ -577,9 +558,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("rejects partial authenticated-marker glyphs before they can replace a removed role", () => {
-    const protectedText = protectIMessageFencedRoleMarkers("```yaml\nuser:\n```");
-    const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
-    expect(token).toBeDefined();
+    const { protectedText, token } = protectedUserRole();
 
     expect(() =>
       protectedText.sanitizeFormatted({
@@ -590,9 +569,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("fails closed when marker removal assembles a second authenticated role token", () => {
-    const protectedText = protectIMessageFencedRoleMarkers("```yaml\nuser:\n```");
-    const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
-    expect(token).toBeDefined();
+    const { protectedText, token } = protectedUserRole();
     const splitToken = `${token?.slice(0, 2)}#+#+#${token?.slice(2)}`;
 
     expect(() =>
@@ -601,7 +578,7 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("remaps native UTF-16 ranges across every private-marker removal pass", () => {
-    const protectedText = protectIMessageFencedRoleMarkers("safe");
+    const protectedText = protectRoles("safe");
     const disguised = "us#+#+#er:";
     const sanitized = protectedText.sanitizeFormatted({
       text: `${disguised}\n😀 styled`,
@@ -614,9 +591,7 @@ describe("sanitizeOutboundText", () => {
 
   it("selects a distinct role marker when user content already contains private-use text", () => {
     const existing = "\ue000".repeat("user".length);
-    const protectedText = protectIMessageFencedRoleMarkers(
-      ["```yaml", "user:", "```", existing].join("\n"),
-    );
+    const protectedText = protectRoles(["```yaml", "user:", "```", existing].join("\n"));
     const token = protectedText.text.split("\n")[1]?.match(/[\ue000-\uf8ff]+/)?.[0];
 
     expect(token).not.toBe(existing);
@@ -625,15 +600,13 @@ describe("sanitizeOutboundText", () => {
 
   it("never chooses a protected glyph that already occurs as a user-authored partial marker", () => {
     const existing = "\ue000";
-    const protectedText = protectIMessageFencedRoleMarkers(
-      ["```yaml", "user:", "```", existing].join("\n"),
-    );
+    const protectedText = protectRoles(["```yaml", "user:", "```", existing].join("\n"));
 
     expect(protectedText.text.split("\n")[1]).not.toContain(existing);
   });
 
   it("removes every private marker family after final Markdown rendering", () => {
-    const protectedText = protectIMessageFencedRoleMarkers("safe");
+    const protectedText = protectRoles("safe");
     const sanitized = protectedText.sanitizeFormatted({
       text: "assistant to=tool\n#+#+#\nUSER:\nVisible",
       ranges: [],

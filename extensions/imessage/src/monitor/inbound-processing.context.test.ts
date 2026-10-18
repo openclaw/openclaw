@@ -57,32 +57,42 @@ function resolveDecision(
   });
 }
 
+async function buildContext(
+  message: InboundDecisionParams["message"],
+  decision?: Awaited<ReturnType<typeof resolveDecision>>,
+) {
+  const admitted = decision ?? (await resolveDecision({ message }));
+  expect(admitted.kind).toBe("dispatch");
+  if (admitted.kind !== "dispatch") {
+    throw new Error("expected context fixture admission");
+  }
+  return buildIMessageInboundContext({
+    cfg,
+    accountService: undefined,
+    decision: admitted,
+    message,
+    historyLimit: 0,
+    groupHistories: new Map(),
+  });
+}
+
+function contextMessage(overrides: Partial<InboundDecisionParams["message"]>) {
+  return {
+    id: 12344,
+    guid: "p:0/GUID-contact-name",
+    sender: "+15555550123",
+    sender_name: "Alice",
+    chat_name: "",
+    text: "Hello",
+    is_from_me: false,
+    is_group: false,
+    ...overrides,
+  };
+}
+
 describe("buildIMessageInboundContext presentation", () => {
   it("uses provider-resolved contact names for direct session and sender presentation", async () => {
-    const message = {
-      id: 12344,
-      guid: "p:0/GUID-contact-name",
-      sender: "+15555550123",
-      sender_name: "Alice",
-      chat_name: "",
-      text: "Hello",
-      is_from_me: false,
-      is_group: false,
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload, fromLabel } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
+    const { ctxPayload, fromLabel } = await buildContext(contextMessage({}));
 
     expect(fromLabel).toBe("Alice id:+15555550123");
     expect(ctxPayload.ConversationLabel).toBe("Alice");
@@ -92,31 +102,15 @@ describe("buildIMessageInboundContext presentation", () => {
   });
 
   it("keeps group route IDs out of named session presentation", async () => {
-    const message = {
-      id: 12345,
-      guid: "p:0/GUID-group-name",
-      chat_id: 13,
-      chat_name: "Family",
-      sender: "+15555550123",
-      sender_name: "Alice",
-      text: "Hello",
-      is_from_me: false,
-      is_group: true,
-    };
-    const decision = await resolveDecision({ message });
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload, fromLabel } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message,
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
+    const { ctxPayload, fromLabel } = await buildContext(
+      contextMessage({
+        id: 12345,
+        guid: "p:0/GUID-group-name",
+        chat_id: 13,
+        chat_name: "Family",
+        is_group: true,
+      }),
+    );
 
     expect(fromLabel).toBe("Family id:13");
     expect(ctxPayload.ConversationLabel).toBe("Family");
@@ -125,53 +119,25 @@ describe("buildIMessageInboundContext presentation", () => {
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {
-  const resolveDmCommandDecision = (params: {
-    messageId: number;
-    storeAllowFrom: string[];
-    dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-    allowFrom?: string[];
-    text?: string;
-  }) =>
-    resolveDecision({
-      message: {
-        id: params.messageId,
-        sender: "+15555550123",
-        text: params.text ?? "/status",
-        is_from_me: false,
-        is_group: false,
-      },
-      allowFrom: params.allowFrom ?? [],
-      dmPolicy: params.dmPolicy ?? "open",
-      storeAllowFrom: params.storeAllowFrom,
-    });
-
   it("does not auto-authorize DM commands in open mode without allowlists", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 100,
-      storeAllowFrom: [],
+    const decision = await resolveDecision({
+      message: { id: 100, text: "/status" },
+      allowFrom: [],
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "dmPolicy blocked" });
   });
 
   it("marks authorized iMessage control commands as text command turns", async () => {
-    const decision = await resolveDmCommandDecision({
-      messageId: 102,
+    const decision = await resolveDecision({
+      message: { id: 102, text: "/new" },
+      allowFrom: [],
       dmPolicy: "pairing",
       storeAllowFrom: ["+15555550123"],
-      text: "/new",
     });
 
-    expect(decision.kind).toBe("dispatch");
-    if (decision.kind !== "dispatch") {
-      return;
-    }
-
-    const { ctxPayload } = await buildIMessageInboundContext({
-      cfg,
-      accountService: undefined,
-      decision,
-      message: {
+    const { ctxPayload } = await buildContext(
+      {
         id: 102,
         guid: "p:0/GUID-command",
         sender: "+15555550123",
@@ -179,9 +145,8 @@ describe("resolveIMessageInboundDecision command auth", () => {
         is_from_me: false,
         is_group: false,
       },
-      historyLimit: 0,
-      groupHistories: new Map(),
-    });
+      decision,
+    );
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
     expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
@@ -199,20 +164,18 @@ describe("iMessage bot-owned thread mention policy", () => {
   const rootGuid = "imessage-bot-thread-root";
 
   beforeAll(async () => {
-    await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: rootGuid,
-      chatId: 123,
-      timestamp: Date.now(),
-      isFromMe: true,
-    });
-    await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "imessage-human-thread-root",
-      chatId: 123,
-      timestamp: Date.now(),
-      isFromMe: false,
-    });
+    for (const [messageId, isFromMe] of [
+      [rootGuid, true],
+      ["imessage-human-thread-root", false],
+    ] as const) {
+      await rememberIMessageReplyCache({
+        accountId: "default",
+        messageId,
+        chatId: 123,
+        timestamp: Date.now(),
+        isFromMe,
+      });
+    }
   });
 
   async function resolveThreadReply(overrides: Parameters<typeof resolveDecision>[0] = {}) {

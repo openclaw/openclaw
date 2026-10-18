@@ -54,6 +54,18 @@ async function runUserPathProbe(params: {
 
 describe("detectRemoteHostFromCliPath", () => {
   const tempDirs: string[] = [];
+  async function tempDir() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+  async function wrapper(content: string, dir?: string, basename = "imsg-remote") {
+    const wrapperDir = dir ?? (await tempDir());
+    await fs.mkdir(wrapperDir, { recursive: true });
+    const wrapperPath = path.join(wrapperDir, basename);
+    await fs.writeFile(wrapperPath, content);
+    return wrapperPath;
+  }
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -64,14 +76,13 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("uses the system home when HOME is blank", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-home-"));
-    tempDirs.push(home);
+    const home = await tempDir();
     vi.stubEnv("HOME", "");
     vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-    const wrapperDir = path.join(home, ".openclaw");
-    const wrapperPath = path.join(wrapperDir, "imsg-remote");
-    await fs.mkdir(wrapperDir, { recursive: true });
-    await fs.writeFile(wrapperPath, '#!/bin/sh\nexec ssh user@example.test imsg "$@"\n', "utf8");
+    await wrapper(
+      '#!/bin/sh\nexec ssh user@example.test imsg "$@"\n',
+      path.join(home, ".openclaw"),
+    );
 
     await expect(resolveIMessageRemoteHost({ cliPath: "~/.openclaw/imsg-remote" })).resolves.toBe(
       "user@example.test",
@@ -79,8 +90,7 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("never selects a working-directory tilde shadow when HOME is blank", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-shadow-"));
-    tempDirs.push(cwd);
+    const cwd = await tempDir();
     const basename = `imsg-${randomUUID()}`;
     const shadowPath = path.join(cwd, "~", ".openclaw", basename);
     await fs.mkdir(path.dirname(shadowPath), { recursive: true });
@@ -96,27 +106,8 @@ describe("detectRemoteHostFromCliPath", () => {
     expect(result.content).toBeNull();
   });
 
-  it.each([["exec ssh bot@messages-mac imsg", "missing argument forwarding"]])(
-    "rejects an ambiguous %s wrapper (%s)",
-    async (command) => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-ambiguous-"));
-      tempDirs.push(dir);
-      const wrapperPath = path.join(dir, "imsg-remote");
-      await fs.writeFile(wrapperPath, `#!/bin/sh\n${command}\n`);
-      const readFile = vi.spyOn(fs, "readFile");
-
-      await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-        "configure channels.imessage.remoteHost explicitly",
-      );
-      await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
-        "configure channels.imessage.remoteHost explicitly",
-      );
-      expect(readFile).toHaveBeenCalledOnce();
-      expect(getCachedIMessageRemoteHost({ cliPath: wrapperPath })).toBeUndefined();
-    },
-  );
-
   it.each([
+    ["missing argument forwarding", "#!/bin/sh\nexec ssh bot@messages-mac imsg\n"],
     [
       "continued simple ssh",
       ["#!/bin/sh", "exec \\", 'ssh bot@messages-mac imsg "$@"', ""].join("\n"),
@@ -128,10 +119,7 @@ describe("detectRemoteHostFromCliPath", () => {
       ),
     ],
   ])("caches %s as ambiguous", async (_label, content) => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-complex-"));
-    tempDirs.push(dir);
-    const wrapperPath = path.join(dir, "imsg-remote");
-    await fs.writeFile(wrapperPath, content);
+    const wrapperPath = await wrapper(content);
     const readFile = vi.spyOn(fs, "readFile");
 
     await expect(resolveIMessageRemoteHost({ cliPath: wrapperPath })).rejects.toThrow(
@@ -145,11 +133,7 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("lets explicit remoteHost override an ambiguous wrapper without reading it", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-explicit-"));
-    tempDirs.push(dir);
-    const wrapperPath = path.join(dir, "imsg-remote");
-    await fs.writeFile(
-      wrapperPath,
+    const wrapperPath = await wrapper(
       '#!/bin/sh\nexec ssh -J jump@bastion bot@messages-mac imsg "$@"\n',
     );
     const readFile = vi.spyOn(fs, "readFile");
@@ -170,12 +154,12 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("coalesces concurrent wrapper reads and keys the cache by expanded cliPath", async () => {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-cache-"));
-    tempDirs.push(home);
+    const home = await tempDir();
     vi.stubEnv("HOME", home);
-    const wrapperPath = path.join(home, ".openclaw", "imsg-remote");
-    await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
-    await fs.writeFile(wrapperPath, '#!/bin/sh\nexec ssh bot@messages-mac imsg "$@"\n');
+    const wrapperPath = await wrapper(
+      '#!/bin/sh\nexec ssh bot@messages-mac imsg "$@"\n',
+      path.join(home, ".openclaw"),
+    );
     const readFile = vi.spyOn(fs, "readFile");
 
     await expect(
@@ -195,10 +179,11 @@ describe("detectRemoteHostFromCliPath", () => {
   });
 
   it("caches a non-SSH wrapper as local across concurrent callers", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-local-wrapper-"));
-    tempDirs.push(dir);
-    const wrapperPath = path.join(dir, "imsg-local");
-    await fs.writeFile(wrapperPath, '#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n');
+    const wrapperPath = await wrapper(
+      '#!/bin/sh\nexec /opt/homebrew/bin/imsg "$@"\n',
+      undefined,
+      "imsg-local",
+    );
     const readFile = vi.spyOn(fs, "readFile");
 
     await expect(
