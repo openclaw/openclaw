@@ -17,8 +17,6 @@ type PluginPresentationHooks = ChannelSettingsHooks & {
   isConnected: () => boolean;
 };
 
-export type ChannelPluginPresentation = ReturnType<typeof createChannelPluginPresentation>;
-
 export function createChannelPluginPresentation(hooks: PluginPresentationHooks) {
   const details = createChannelSettingsPresentation(hooks);
   let catalog: PluginListResult | null = null;

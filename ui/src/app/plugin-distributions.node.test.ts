@@ -199,6 +199,7 @@ it.each([
 ])(
   "prepares source Settings assets for a UI-only build and preserves sibling distributions (%s)",
   async (placement) => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
     const { pluginRoot, files, generation } = await fixture();
     const settingsRoot = path.join(root, "extensions/settings-fixture");
     await fs.mkdir(settingsRoot, { recursive: true });
@@ -208,7 +209,13 @@ it.each([
     await fs.symlink(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
     await fs.writeFile(
       path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", type: "module" }),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        ...(placement.section === "channels"
+          ? { files: ["!dist/extensions/settings-fixture/**"] }
+          : {}),
+      }),
     );
     await fs.writeFile(
       path.join(settingsRoot, "package.json"),

@@ -9,7 +9,9 @@ import { settingsViews } from "./index.tsx";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  for (const stop of cleanups.splice(0)) stop();
+  for (const stop of cleanups.splice(0)) {
+    stop();
+  }
   document.body.replaceChildren();
   vi.useRealTimers();
 });
@@ -74,9 +76,11 @@ function fixture() {
   flush();
   function button(label: string) {
     const node = [...container.querySelectorAll("button")].find(
-      (node) => node.textContent?.trim() === label,
+      (candidate) => candidate.textContent?.trim() === label,
     );
-    if (!node) throw new Error(`Missing button ${label}`);
+    if (!node) {
+      throw new Error(`Missing button ${label}`);
+    }
     return node;
   }
   function field(name: string, value: string) {
@@ -131,7 +135,10 @@ it("preserves null imported names and extra profile metadata", async () => {
     }),
   );
   f.button("Import from Relays").click();
-  await settle();
+  await vi.waitFor(() => {
+    flush();
+    expect(f.container.textContent).toContain("Profile imported from relays. Review and publish.");
+  });
   expect(f.container.querySelector<HTMLInputElement>("#nostr-profile-name")!.value).toBe("");
   expect(f.container.querySelector<HTMLInputElement>("#nostr-profile-displayName")!.value).toBe(
     "Imported display",
@@ -148,7 +155,10 @@ it("merges an import into the live draft and reveals imported advanced fields", 
   flush();
   f.field("displayName", "Typed during import");
   pending.resolve(ok({ ok: true, imported: { name: "Imported", website: "https://example.com" } }));
-  await settle();
+  await vi.waitFor(() => {
+    flush();
+    expect(f.container.textContent).toContain("Profile imported. Review and publish.");
+  });
   expect(f.container.querySelector<HTMLInputElement>("#nostr-profile-displayName")!.value).toBe(
     "Typed during import",
   );
@@ -198,9 +208,19 @@ it.each(["Save & Publish", "Import from Relays"])(
     const f = fixture();
     f.request.mockImplementation(
       ({ signal }) =>
-        new Promise((_resolve, reject) =>
-          signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
-        ),
+        new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              try {
+                signal.throwIfAborted();
+              } catch (error) {
+                reject(error);
+              }
+            },
+            { once: true },
+          );
+        }),
     );
     f.button(action).click();
     flush();
@@ -237,7 +257,9 @@ it.each(["disconnect", "replacement form", "abort"] as const)(
       f.button("Edit Profile").click();
       flush();
       f.field("name", "Fresh draft");
-    } else f.abort.abort();
+    } else {
+      f.abort.abort();
+    }
     expect(f.request.mock.calls[0]![0].signal.aborted).toBe(true);
     pending.resolve(ok({ ok: true, saved: true, merged: { name: "Stale import" } }));
     await settle();
@@ -251,10 +273,11 @@ it.each(["disconnect", "replacement form", "abort"] as const)(
       );
       f.update({ connected: true, connectionEpoch: 3 });
       expect(f.button("Import from Relays").disabled).toBe(false);
-    } else if (retirement === "replacement form")
+    } else if (retirement === "replacement form") {
       expect(f.container.querySelector<HTMLInputElement>("#nostr-profile-name")!.value).toBe(
         "Fresh draft",
       );
+    }
   },
 );
 

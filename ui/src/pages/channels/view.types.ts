@@ -1,8 +1,15 @@
 import type { ChannelsPairingRequest } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
-import type { ChannelPluginPresentation } from "./plugin-presentation-loader.ts";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import type { ChannelSetup } from "./wizard-setup.ts";
+
+export type ChannelSettingsPresentation = {
+  has: (channelId: string) => boolean;
+  sync: () => void;
+  reset: () => void;
+  attach: (channelId: string, container: HTMLElement) => () => void;
+};
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -14,7 +21,11 @@ export type ChannelPairingPrompt = {
 export type ChannelsProps = {
   channels: ChannelsState;
   config: RuntimeConfigState;
-  presentation: Pick<ChannelPluginPresentation, "pluginCatalog" | "pluginIconUrls" | "details">;
+  presentation: {
+    readonly pluginCatalog: PluginListResult | null;
+    readonly pluginIconUrls: Record<string, string>;
+    readonly details: ChannelSettingsPresentation;
+  };
   wizardHost: ChannelSetup;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;

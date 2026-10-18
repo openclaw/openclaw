@@ -81,7 +81,7 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   let gatewayPairingAuthSignature: string | null = null;
   let canManagePairing = false;
   let canAdmin = false;
-  const connection = new GatewayPageBinding(() => {}, {
+  const connection = new GatewayPageBinding(() => publishOperations(), {
     getGateway: () => getContext().gateway,
     onSnapshot: handleGatewaySnapshot,
   });

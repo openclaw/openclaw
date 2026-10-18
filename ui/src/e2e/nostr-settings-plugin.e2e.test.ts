@@ -18,8 +18,9 @@ suite.define(() => {
           assets: Array<{ url: string; status: number }> = [];
         page.on("pageerror", (error) => errors.push(error.message));
         page.on("response", (response) => {
-          if (response.url().includes("/assets/plugins/nostr/"))
+          if (response.url().includes("/assets/plugins/nostr/")) {
             assets.push({ url: new URL(response.url()).pathname, status: response.status() });
+          }
         });
         const writes: Array<{ method: string; path: string; body: unknown }> = [];
         await page.route("**/api/channels/nostr/**", async (route) => {
@@ -140,7 +141,7 @@ suite.define(() => {
         await detail.getByRole("button", { name: "Save", exact: true }).click();
         const saved = await gateway.waitForRequest("config.set", { after: beforeSave });
         expect(saved.params).toMatchObject({ baseHash: "nostr-config-1" });
-        expect(JSON.parse(String((saved.params as { raw: string }).raw))).toEqual({
+        expect(JSON.parse((saved.params as { raw: string }).raw)).toEqual({
           channels: { nostr: { enabled: false } },
         });
         await gateway.waitForRequest("channels.status", {

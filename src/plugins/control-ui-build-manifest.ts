@@ -13,7 +13,7 @@ import {
 export function loadPluginControlUiDeclaration(params: {
   rootDir: string;
   controlUi: unknown;
-  channels?: readonly string[];
+  channels?: unknown;
   rejectHardlinks: boolean;
   rootRealPath?: string;
 }): ReturnType<typeof normalizeManifestControlUi> {

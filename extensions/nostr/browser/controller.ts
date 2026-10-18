@@ -37,8 +37,9 @@ export function createProfileController(
       !form ||
       form.saving ||
       form.importing
-    )
+    ) {
       return;
+    }
     cancelOperation();
     const current = new AbortController();
     operation = current;
@@ -62,7 +63,9 @@ export function createProfileController(
         action === "save"
           ? { action, ...(await putNostrProfile({ ...request, values: submitted.values })) }
           : { action, ...(await importNostrProfile(request)) };
-      if (!isCurrent() || !form) return;
+      if (!isCurrent() || !form) {
+        return;
+      }
       const settled = { ...form, [busy]: false, error: null, success: null };
       if (!result.ok || result.data?.ok === false || !result.data) {
         form = {
@@ -101,11 +104,14 @@ export function createProfileController(
         };
       }
       notify();
-      if (!form.error && (result.action === "save" || result.data?.saved))
+      if (!form.error && (result.action === "save" || result.data?.saved)) {
         await context.refresh(true);
+      }
     } catch (error) {
       // Retired callbacks must not call even the host's lifetime-bound error formatter.
-      if (!isCurrent()) return;
+      if (!isCurrent()) {
+        return;
+      }
       editForm((value) => ({
         ...value,
         [busy]: false,
@@ -133,19 +139,25 @@ export function createProfileController(
   return {
     read: () => ({ snapshot, form, accountId }),
     update(next: ControlUiChannelSettingsSnapshot) {
-      if (disposed) return;
+      if (disposed) {
+        return;
+      }
       if (
         snapshot.connectionEpoch !== next.connectionEpoch ||
         snapshot.connected !== next.connected
       ) {
         cancelOperation();
-        if (form) form = { ...form, saving: false, importing: false };
+        if (form) {
+          form = { ...form, saving: false, importing: false };
+        }
       }
       snapshot = next;
       notify();
     },
     edit(nextAccountId: string, profile: NostrProfile | null) {
-      if (disposed) return;
+      if (disposed) {
+        return;
+      }
       cancelOperation();
       accountId = nextAccountId;
       form = createNostrProfileFormState(profile ?? undefined);

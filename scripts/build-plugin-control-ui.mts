@@ -58,7 +58,7 @@ async function buildBundledPluginControlUi(
 async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
   const selected: string[] = [];
   for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })) {
-    if (entry.isolated || !isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+    if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
       continue;
     }
     const rootDir = path.join(repoRoot, "extensions", entry.id);

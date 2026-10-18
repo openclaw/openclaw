@@ -1,10 +1,11 @@
 /** @jsxImportSource @solidjs/web */
-import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+
 import type { JSX } from "@solidjs/web";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMemo, For, Show, onSettled } from "solid-js";
 import { SettingsRow, SettingsSection, SettingsStatus } from "./components.tsx";
 import type { createProfileController } from "./controller.ts";
@@ -265,11 +266,11 @@ export function createProfileCard(
               connected={state().snapshot.connected}
               accountId={accountId()}
               callbacks={{
-                onFieldChange: controller.field,
-                onSave: controller.save,
-                onImport: controller.import,
-                onCancel: controller.cancel,
-                onToggleAdvanced: controller.toggleAdvanced,
+                onFieldChange: (field, value) => controller.field(field, value),
+                onSave: () => void controller.save(),
+                onImport: () => void controller.import(),
+                onCancel: () => controller.cancel(),
+                onToggleAdvanced: () => controller.toggleAdvanced(),
               }}
             />
           )}

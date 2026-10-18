@@ -950,17 +950,22 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     const rejection = expect(request).rejects.toThrow();
     const signal = fetchMock.mock.calls[0]![1]!.signal!;
     let second: ReturnType<typeof createContext> | undefined;
-    if (retirement === "disconnect") f.gateway.emit({ phase: "stopped" });
-    else if (retirement === "client") {
+    if (retirement === "disconnect") {
+      f.gateway.emit({ phase: "stopped" });
+    } else if (retirement === "client") {
       f.gateway.connection.token = "rotated-token";
       f.gateway.emit({ client: createGateway().snapshot.client });
-    } else if (retirement === "admin") setGatewayScopes(f.gateway, ["operator.read"]);
-    else if (retirement === "source") {
+    } else if (retirement === "admin") {
+      setGatewayScopes(f.gateway, ["operator.read"]);
+    } else if (retirement === "source") {
       second = createContext(f.gateway);
       Object.assign(second.context, { plugins: f.source.context.plugins });
       replacePageContext(f.page, second.context);
-    } else if (retirement === "unmount") disposePage(f.page);
-    else caller.abort();
+    } else if (retirement === "unmount") {
+      disposePage(f.page);
+    } else {
+      caller.abort();
+    }
     expect(signal.aborted).toBe(true);
     await expect(
       f.context.request(profileRequest(retirement === "caller" ? caller.signal : undefined)),
@@ -968,8 +973,9 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
     pending.resolve(Response.json({ error: "Unauthorized" }, { status: 401 }));
     await rejection;
     expect(fetchMock).toHaveBeenCalledOnce();
-    if (retirement !== "disconnect" && retirement !== "caller")
+    if (retirement !== "disconnect" && retirement !== "caller") {
       expect(f.mounts[0]!.dispose).toHaveBeenCalledOnce();
+    }
     f.source.runtimeConfig.dispose();
     f.source.channels.dispose();
     second?.runtimeConfig.dispose();
@@ -978,7 +984,7 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
 );
 
 it("checks operation authority after consuming a successful response body", async () => {
-  const body = createDeferred<unknown>();
+  const body = createDeferred();
   const reading = createDeferred<void>();
   vi.stubGlobal(
     "fetch",
@@ -1035,7 +1041,7 @@ it.each([
     );
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/channels/custom-profile/main%2Faccount/profile");
     expect(result.status).toBe(first === 403 ? 403 : second);
-    if (first === 403 || second !== 200)
+    if (first === 403 || second !== 200) {
       expect(result.errorMessage).toBe(
         first === 403
           ? "HTTP 403: Forbidden"
@@ -1043,6 +1049,7 @@ it.each([
             ? "HTTP 503"
             : "HTTP 401: Unauthorized",
       );
+    }
     f.source.runtimeConfig.dispose();
     f.source.channels.dispose();
   },
@@ -1054,9 +1061,9 @@ it("keeps a caller deadline across credential retry and response-body consumptio
     .fn<typeof fetch>()
     .mockImplementationOnce(
       async () =>
-        await new Promise<Response>((resolve) =>
-          setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000),
-        ),
+        await new Promise<Response>((resolve) => {
+          setTimeout(() => resolve(new Response(null, { status: 401 })), 15_000);
+        }),
     )
     .mockImplementation(
       async (_url, init) =>
@@ -1064,11 +1071,19 @@ it("keeps a caller deadline across credential retry and response-body consumptio
           ok: true,
           status: 200,
           json: () =>
-            new Promise((_resolve, reject) =>
-              init!.signal!.addEventListener("abort", () => reject(init!.signal!.reason), {
-                once: true,
-              }),
-            ),
+            new Promise((_resolve, reject) => {
+              init!.signal!.addEventListener(
+                "abort",
+                () => {
+                  try {
+                    init!.signal!.throwIfAborted();
+                  } catch (error) {
+                    reject(error);
+                  }
+                },
+                { once: true },
+              );
+            }),
         }) as Response,
     );
   vi.stubGlobal("fetch", fetchMock);

@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { type JSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 import { children, Show } from "solid-js";
 
 // Plugin-owned native markup consumes the host's existing Settings stylesheet.

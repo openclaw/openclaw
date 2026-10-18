@@ -19,14 +19,16 @@ export const settingsViews: readonly ControlUiChannelSettingsView[] = [
         context,
         () => {
           const next = controller.read();
-          if (next.snapshot.presented) setState(next);
+          if (next.snapshot.presented) {
+            setState(next);
+          }
         },
         createTranslator(() => controller.read().snapshot.locale),
       );
       const Profile = createProfileCard(context, state, controller);
       const stop = render(() => <Profile />, container);
       return {
-        update: controller.update,
+        update: (snapshot) => controller.update(snapshot),
         dispose() {
           try {
             controller.dispose();

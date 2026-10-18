@@ -20,7 +20,7 @@ import { createParkedProjection } from "../../lib/reactive/parked-projection.ts"
 import { controlUiPluginDistributions } from "../../plugins/control-ui-distribution.ts";
 import { createControlUiSettingsComponents } from "../../plugins/control-ui-settings-components.solid.tsx";
 import { ChannelConfig } from "./view.config.tsx";
-import type { ChannelsProps } from "./view.types.ts";
+import type { ChannelSettingsPresentation, ChannelsProps } from "./view.types.ts";
 
 export type ChannelSettingsHooks = {
   getContext: () => ApplicationContext;
@@ -44,7 +44,9 @@ export function channelSettingsPath(channelId: string, accountId: string, path: 
 }
 
 /** A channel editor belongs to this page, not the detail modal or a transport epoch. */
-export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
+export function createChannelSettingsPresentation(
+  hooks: ChannelSettingsHooks,
+): ChannelSettingsPresentation {
   type Entry = {
     node: HTMLElement;
     abort: AbortController;
@@ -87,7 +89,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
   function retire(channelId: string) {
     const entry = entries.get(channelId);
     entries.delete(channelId);
-    if (!entry) return;
+    if (!entry) {
+      return;
+    }
     entry.abort.abort();
     entry.transport.abort();
     try {
@@ -98,7 +102,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
   }
   function ensure(channelId: string) {
     const existing = entries.get(channelId);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const application = hooks.getContext();
     const { gateway, channels, plugins, runtimeConfig } = application;
     const client = gateway.snapshot.client;
@@ -126,7 +132,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
       }
     };
     const fail = (error: unknown) => {
-      if (entries.get(channelId) !== entry || entry.abort.signal.aborted) return;
+      if (entries.get(channelId) !== entry || entry.abort.signal.aborted) {
+        return;
+      }
       entry.abort.abort();
       entry.transport.abort();
       entry.dispose?.();
@@ -156,8 +164,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
           components: createControlUiSettingsComponents(loaded.signal),
           async request(request) {
             current();
-            if (request.method !== "PUT" && request.method !== "POST")
+            if (request.method !== "PUT" && request.method !== "POST") {
               throw new Error("Unsupported channel Settings method.");
+            }
             const connection = hooks.getConnection();
             const scope = connection.capture();
             const signal = AbortSignal.any([loaded.signal, entry.transport.signal, request.signal]);
@@ -165,14 +174,15 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
               signal.throwIfAborted();
               current();
               return (
-                !!scope &&
+                scope !== null &&
                 connection.isCurrent(scope) &&
                 gateway.snapshot.phase === "connected" &&
                 hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)
               );
             };
-            if (!admitted())
+            if (!admitted()) {
               throw new Error("Channel Settings requires a connected administrator.");
+            }
             const authCandidates = resolveControlUiAuthCandidates({
               hello: gateway.snapshot.hello,
               settings: { token: gateway.connection.token },
@@ -190,8 +200,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
               admitted,
             );
             const result = await readControlUiJsonResponse(response, signal);
-            if (!admitted())
+            if (!admitted()) {
               throw new DOMException("Channel Settings request has ended", "AbortError");
+            }
             return {
               ok: response.ok,
               status: response.status,
@@ -228,7 +239,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
             }, container);
             let mounted = true;
             const dispose = () => {
-              if (!mounted) return;
+              if (!mounted) {
+                return;
+              }
               mounted = false;
               stopAbort();
               stopConfig();
@@ -238,7 +251,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
           },
           async refresh(probe) {
             current();
-            if (gateway.snapshot.phase !== "connected") return;
+            if (gateway.snapshot.phase !== "connected") {
+              return;
+            }
             await channels.refresh(probe);
           },
           formatRelativeTimestamp(timestamp) {
@@ -257,7 +272,9 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
         const mounted = loaded.view.mount(entry.node, context);
         let active = true;
         entry.dispose = () => {
-          if (!active) return;
+          if (!active) {
+            return;
+          }
           active = false;
           stop();
           try {
@@ -293,11 +310,15 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
     }
     for (const [channelId, slot] of slots) {
       const entry = ensure(channelId);
-      if (entry.node.parentNode !== slot) slot.replaceChildren(entry.node);
+      if (entry.node.parentNode !== slot) {
+        slot.replaceChildren(entry.node);
+      }
     }
   }
   function reset() {
-    for (const channelId of entries.keys()) retire(channelId);
+    for (const channelId of entries.keys()) {
+      retire(channelId);
+    }
   }
   onCleanup(() => {
     disposed = true;
@@ -326,7 +347,7 @@ export function createChannelSettingsPresentation(hooks: ChannelSettingsHooks) {
 
 export function ChannelSettingsSlot(props: {
   channelId: string;
-  presentation: ReturnType<typeof createChannelSettingsPresentation>;
+  presentation: ChannelSettingsPresentation;
 }) {
   let container!: HTMLDivElement;
   onSettled(() => props.presentation.attach(props.channelId, container));

@@ -1,5 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiChannelSettingsContext } from "openclaw/plugin-sdk/control-ui";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NostrProfile } from "./types.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;

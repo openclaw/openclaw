@@ -148,14 +148,14 @@ it("binds channel settings loading to the declared channel without runtime activ
 });
 it("rejects module channel identity drift even when section and panel match", async () => {
   const f = fixture();
-  const placement = { section: "channels", panel: "detail", channelId: "custom" } as const;
-  packaged[0]!.settingsViews = [placement];
+  const channelPlacement = { section: "channels", panel: "detail", channelId: "custom" } as const;
+  packaged[0]!.settingsViews = [channelPlacement];
   vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
     pluginId: "fixture",
-    settingsViews: [{ placement: { ...placement, channelId: "foreign" }, mount: vi.fn() }],
+    settingsViews: [{ placement: { ...channelPlacement, channelId: "foreign" }, mount: vi.fn() }],
   });
-  await expect(f.runtime.loadSettingsView(placement, new AbortController().signal)).rejects.toThrow(
-    "Invalid or duplicate",
-  );
+  await expect(
+    f.runtime.loadSettingsView(channelPlacement, new AbortController().signal),
+  ).rejects.toThrow("Invalid or duplicate");
   f.runtime.dispose();
 });
