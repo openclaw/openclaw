@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -10,7 +12,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { sessionTitleHandlers } from "./sessions-title.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   runIsolatedCompletion: vi.fn(),
@@ -33,38 +35,32 @@ const cfg: OpenClawConfig = {
     },
   },
 };
-
-function roleConfig(role: GatewayOperatorRoleDefinition, name = "limited"): OpenClawConfig {
-  return { ...cfg, gateway: { roles: { default: name, definitions: { [name]: role } } } };
+function modelConfig(defaults: AgentDefaultsConfig, main: AgentEntryConfig = {}): OpenClawConfig {
+  return {
+    ...cfg,
+    agents: { entries: { main }, defaults: { ...cfg.agents?.defaults, ...defaults } },
+  };
+}
+function roleConfig(role: GatewayOperatorRoleDefinition, config = cfg): OpenClawConfig {
+  return { ...config, gateway: { roles: { default: "limited", definitions: { limited: role } } } };
 }
 
 function operatorModelConfig(allow: string[]): OpenClawConfig {
-  return {
-    ...roleConfig({
+  return roleConfig(
+    {
       agents: "*",
       scopes: ["operator.write"],
       sessions: { others: "none" },
       modelPolicy: { sourceAgent: "main", allow },
-    }),
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: {
-          "title-test/primary": {},
-          "title-test/utility": {},
-          "title-test/blocked": { alias: "hidden-title-model" },
-        },
-      },
     },
-  };
-}
-
-function utilityModelConfig(utilityModel: string): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: { ...cfg.agents, defaults: { ...cfg.agents?.defaults, utilityModel } },
-  };
+    modelConfig({
+      models: {
+        "title-test/primary": {},
+        "title-test/utility": {},
+        "title-test/blocked": { alias: "hidden-title-model" },
+      },
+    }),
+  );
 }
 
 let testState: OpenClawTestState;
@@ -90,6 +86,7 @@ type TitleCase = {
   infer?: boolean;
 };
 const titleCase = (name: string, options: TitleCase = {}) => ({ name, ...options });
+const refusal = (code: string) => [false, undefined, expect.objectContaining({ code })];
 
 function connectedClient(profileId?: string): GatewayClient {
   return {
@@ -113,7 +110,7 @@ async function prepare(
   client: GatewayClient | null = null,
   controls: { connections?: ReadonlySet<GatewayClient>; signal?: AbortSignal } = {},
 ) {
-  const respond = vi.fn();
+  const respond = vi.fn<RespondFn>();
   const method = "sessions.title.prepare";
   const connections = controls.connections ?? new Set(client ? [client] : []);
   const context: Pick<GatewayRequestContext, "getRuntimeConfig" | "getClientConnIds"> = {
@@ -135,7 +132,7 @@ async function prepare(
     signal: controls.signal,
     isWebchatConnect: () => false,
   });
-  return respond;
+  return respond.mock.calls;
 }
 
 describe("sessions.title.prepare", () => {
@@ -228,7 +225,7 @@ describe("sessions.title.prepare", () => {
   const withoutInference = [
     ...["", "invalid/"].map((utilityModel) =>
       titleCase(`disabled or malformed utility ${JSON.stringify(utilityModel)}`, {
-        config: utilityModelConfig(utilityModel),
+        config: modelConfig({ utilityModel }),
       }),
     ),
     titleCase("blank input", { params: { message: "   " } }),
@@ -263,13 +260,7 @@ describe("sessions.title.prepare", () => {
     }),
     titleCase("denied creation-agent model", {
       params: { model: "other-model/denied" },
-      config: {
-        ...cfg,
-        agents: {
-          ...cfg.agents,
-          entries: { main: { modelPolicy: { allow: ["title-test/primary"] } } },
-        },
-      },
+      config: modelConfig({}, { modelPolicy: { allow: ["title-test/primary"] } }),
     }),
     ...(["foreign", "delegated", "unidentified"] as const).map((profile) =>
       titleCase(`${profile} personal account`, { profile, personal: true, error: "FORBIDDEN" }),
@@ -282,7 +273,7 @@ describe("sessions.title.prepare", () => {
     titleCase("connected personal account", { connected: true, personal: true }),
     titleCase("cross-provider utility without primary credentials", {
       model: "title-test/primary@work",
-      config: utilityModelConfig("other-title/utility"),
+      config: modelConfig({ utilityModel: "other-title/utility" }),
       provider: "other-title",
     }),
     ...(
@@ -292,7 +283,7 @@ describe("sessions.title.prepare", () => {
       ] as const
     ).map(([provider, runtime]) =>
       titleCase(`${provider} catalog runtime`, {
-        config: utilityModelConfig(`${provider}/synthetic-utility`),
+        config: modelConfig({ utilityModel: `${provider}/synthetic-utility` }),
         catalog: true,
         provider,
         utility: "synthetic-utility",
@@ -350,19 +341,18 @@ describe("sessions.title.prepare", () => {
       client,
     );
     if (selection.error) {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: selection.error }),
-      );
+      expect(respond).toContainEqual(refusal(selection.error));
     } else {
-      expect(respond).toHaveBeenCalledWith(true, {
-        title: selection.infer && !selection.fails ? "Draft session title" : null,
-      });
+      expect(respond).toContainEqual([
+        true,
+        {
+          title: selection.infer && !selection.fails ? "Draft session title" : null,
+        },
+      ]);
     }
     expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(selection.infer ? 1 : 0);
     if (selection.infer) {
-      expect(respond).toHaveBeenCalledTimes(1);
+      expect(respond).toHaveLength(1);
     }
     if (selection.infer && !selection.fails) {
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
@@ -403,7 +393,7 @@ describe("sessions.title.prepare", () => {
         scopes: ["operator.write"],
         sessions: { others: "none" },
       };
-      const config = roleConfig(writer, "writer");
+      const config = roleConfig(writer);
       const client = connectedClient(ownerId);
       const connections = new Set([client]);
       const abort = new AbortController();
@@ -440,11 +430,7 @@ describe("sessions.title.prepare", () => {
           inference.resolve({ text: "Title after authority ended" });
         }
       }
-      expect(await pending).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
+      expect(await pending).toEqual([refusal("FORBIDDEN")]);
       expect(mocks.runIsolatedCompletion).toHaveBeenCalledTimes(1);
     },
   );

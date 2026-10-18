@@ -2,65 +2,46 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SkillsDetailResultSchema } from "../../../packages/gateway-protocol/src/schema/skill-detail.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveClawHubCatalogIconUrl } from "../../plugins/catalog-icon-registry.js";
-
-vi.mock("../../config/config.js", () => ({
-  getRuntimeConfig: vi.fn(() => ({})),
-  writeConfigFile: vi.fn(),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: vi.fn(() => ["main"]),
-  resolveDefaultAgentId: vi.fn(() => "main"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-}));
-
-vi.mock("../../skills/lifecycle/install.js", () => ({
-  installSkill: vi.fn(),
-}));
 
 const { skillsHandlers } = await import("./skills.js");
 const { callGatewayHandler } = await import("./skills.test-helpers.js");
 
 const SLUG = "imap-smtp-email";
-const PUBLISHERS = ["gzlicanyi", "wangchenyu8"] as const;
+const EXTERNAL_REF = `skills-sh:openclaw/skills/${SLUG}`;
 const SEARCH_ICON_URL = `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`;
 const DETAIL_ICON_URL = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
 const OWNER_IMAGE_URL = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
 
-function searchPayload() {
-  return {
-    results: [
-      ...PUBLISHERS.map((ownerHandle) => ({
-        slug: SLUG,
-        registry: "https://unrelated.example",
-        ownerHandle,
-        icon: SEARCH_ICON_URL,
-        source: "clawhub",
-        install: { kind: "clawhub", reference: `${ownerHandle}/${SLUG}` },
-      })),
-      {
-        slug: SLUG,
-        ownerHandle: "acme",
-        source: "skills-sh",
-        install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
-      },
-    ],
-  };
-}
+const SEARCH_ROWS = [
+  ...["gzlicanyi", "wangchenyu8"].map((ownerHandle) => ({
+    slug: SLUG,
+    registry: "https://unrelated.example",
+    ownerHandle,
+    icon: SEARCH_ICON_URL,
+    source: "clawhub",
+    install: { kind: "clawhub", reference: `${ownerHandle}/${SLUG}` },
+  })),
+  {
+    slug: SLUG,
+    ownerHandle: "acme",
+    source: "skills-sh",
+    install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
+  },
+];
 
 let requestedUrls: URL[] = [];
 let malformedScan = false;
 let wrongIdentity: "slug" | "owner" | "version" | undefined;
 
-function fakeClawHub(input: string): Response {
+function fakeClawHub(input: string | URL): Response {
   const url = new URL(input);
   requestedUrls.push(url);
   if (url.pathname === "/api/v1/search") {
-    return Response.json(searchPayload());
+    return Response.json({ results: SEARCH_ROWS });
   }
   if (url.pathname.startsWith(`/api/v1/skills/${SLUG}/versions/`)) {
     return Response.json({
@@ -118,166 +99,132 @@ const callSkillsHandler = (method: string, params: Record<string, unknown>) =>
   callGatewayHandler(skillsHandlers, method, params);
 const detail = (params: Record<string, unknown> = {}) =>
   callSkillsHandler("skills.detail", { slug: `@wangchenyu8/${SLUG}`, ...params });
+async function expectDetail(version: string, response: Record<string, unknown>) {
+  const result = await detail({ version });
+  expect(result).toMatchObject({ ok: true, response, error: undefined });
+  expect(Value.Check(SkillsDetailResultSchema, result.response)).toBe(true);
+}
 
-describe("ClawHub publisher identity across skills.search and skills.detail", () => {
-  beforeEach(() => {
-    requestedUrls = [];
-    malformedScan = false;
-    wrongIdentity = undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string | URL) => fakeClawHub(input instanceof URL ? input.href : input)),
-    );
-  });
+beforeEach(() => {
+  requestedUrls = [];
+  malformedScan = false;
+  wrongIdentity = undefined;
+  vi.stubGlobal("fetch", async (input: string | URL) => fakeClawHub(input));
+});
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.unstubAllEnvs();
-  });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
-  it("preserves publisher and registry identity from the configured registry", async () => {
-    const registry = "https://registry.example";
-    vi.stubEnv("OPENCLAW_CLAWHUB_URL", registry + "/");
-    vi.stubEnv("CLAWHUB_URL", undefined);
-    const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG, limit: 10 });
+it("preserves publisher and registry identity from the configured registry", async () => {
+  const registry = "https://registry.example";
+  vi.stubEnv("OPENCLAW_CLAWHUB_URL", registry + "/");
+  vi.stubEnv("CLAWHUB_URL", undefined);
+  const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG, limit: 10 });
 
-    expect(ok).toBe(true);
-    const results = (
-      response as {
-        results: { registry: string; installRef?: string; installOnly?: true }[];
-      }
-    ).results;
-    expect(requestedUrls).toHaveLength(1);
-    const request = expectDefined(requestedUrls[0], "search request");
-    expect(request.searchParams.get("limit")).toBe("10");
-    expect(resolveClawHubCatalogIconUrl(SEARCH_ICON_URL)).toBe(SEARCH_ICON_URL);
-    expect(request.origin).toBe(registry);
-    expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
-    expect(results.map((r) => r.installRef)).toEqual([
-      `@gzlicanyi/${SLUG}`,
-      `@wangchenyu8/${SLUG}`,
-      `skills-sh:acme/tools/${SLUG}`,
-    ]);
-    expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
-  });
-
-  it("reads the selected release card and scan without relabeling latest requirements", async () => {
-    const { ok, response, error } = await detail({ version: "1.0.0" });
-
-    expect(error).toBeUndefined();
-    expect(ok).toBe(true);
-    expect(Value.Check(SkillsDetailResultSchema, response)).toBe(true);
-    expect(resolveClawHubCatalogIconUrl(DETAIL_ICON_URL)).toBe(DETAIL_ICON_URL);
-    expect(resolveClawHubCatalogIconUrl(OWNER_IMAGE_URL)).toBe(OWNER_IMAGE_URL);
-    expect(response).toMatchObject({
-      registry: "https://clawhub.ai",
-      source: "clawhub",
-      installRef: `@wangchenyu8/${SLUG}`,
-      latestVersion: { version: "2.0.0" },
-      selectedRelease: { version: "1.0.0", changelog: "Selected release notes" },
-      card: { status: "available", content: "# Email skill 1.0.0\nFull card content." },
-      requirements: { status: "unavailable" },
-      security: {
-        status: "available",
-        scanStatus: "suspicious",
-        summary: "Review network access.",
-      },
-      downloadability: { status: "unknown" },
-    });
-    for (const request of requestedUrls) {
-      expect(request.searchParams.get("ownerHandle")).toBe("wangchenyu8");
+  expect(ok).toBe(true);
+  const results = (
+    response as {
+      results: { registry: string; installRef?: string; installOnly?: true }[];
     }
-    expect(requestedUrls.map((request) => request.pathname)).toContain(
-      `/api/v1/skills/${SLUG}/versions/1.0.0`,
-    );
-    const cardRequest = requestedUrls.find((request) => request.pathname.endsWith("/card"));
-    expect(expectDefined(cardRequest, "card request").searchParams.get("version")).toBe("1.0.0");
-  });
+  ).results;
+  expect(requestedUrls).toHaveLength(1);
+  const request = expectDefined(requestedUrls[0], "search request");
+  expect(request.searchParams.get("limit")).toBe("10");
+  expect(resolveClawHubCatalogIconUrl(SEARCH_ICON_URL)).toBe(SEARCH_ICON_URL);
+  expect(request.origin).toBe(registry);
+  expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
+  expect(results.map((r) => r.installRef)).toEqual([
+    `@gzlicanyi/${SLUG}`,
+    `@wangchenyu8/${SLUG}`,
+    `skills-sh:acme/tools/${SLUG}`,
+  ]);
+  expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
+});
 
-  it.each(["slug", "owner"] as const)(
-    "refuses registry detail with mismatched %s identity",
-    async (identity) => {
-      wrongIdentity = identity;
-      const { ok, error } = await detail();
-
-      expect(ok).toBe(false);
-      expect(error).toMatchObject({
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("different"),
-      });
-      expect(requestedUrls).toHaveLength(1);
+it("reads the selected release card and scan without relabeling latest requirements", async () => {
+  await expectDetail("1.0.0", {
+    registry: "https://clawhub.ai",
+    source: "clawhub",
+    installRef: `@wangchenyu8/${SLUG}`,
+    latestVersion: { version: "2.0.0" },
+    selectedRelease: { version: "1.0.0", changelog: "Selected release notes" },
+    card: { status: "available", content: "# Email skill 1.0.0\nFull card content." },
+    requirements: { status: "unavailable" },
+    security: {
+      status: "available",
+      scanStatus: "suspicious",
+      summary: "Review network access.",
     },
+    downloadability: { status: "unknown" },
+  });
+  expect(resolveClawHubCatalogIconUrl(DETAIL_ICON_URL)).toBe(DETAIL_ICON_URL);
+  expect(resolveClawHubCatalogIconUrl(OWNER_IMAGE_URL)).toBe(OWNER_IMAGE_URL);
+  for (const request of requestedUrls) {
+    expect(request.searchParams.get("ownerHandle")).toBe("wangchenyu8");
+  }
+  expect(requestedUrls.map((request) => request.pathname)).toContain(
+    `/api/v1/skills/${SLUG}/versions/1.0.0`,
   );
+  const cardRequest = requestedUrls.find((request) => request.pathname.endsWith("/card"));
+  expect(expectDefined(cardRequest, "card request").searchParams.get("version")).toBe("1.0.0");
+});
 
-  it("does not relabel a different release returned by the registry", async () => {
-    wrongIdentity = "version";
-    const { ok, response } = await detail({ version: "2.0.0" });
-
-    expect(ok).toBe(true);
-    expect(response).toMatchObject({
-      selectedRelease: null,
-      security: { status: "unavailable" },
-      requirements: { status: "unavailable" },
-      downloadability: { status: "unknown", reason: expect.stringContaining("different release") },
-      warnings: [expect.stringContaining("different release")],
-    });
+it.each([
+  ["slug mismatch", "slug", `@wangchenyu8/${SLUG}`, "UNAVAILABLE", "different", 1],
+  ["owner mismatch", "owner", `@wangchenyu8/${SLUG}`, "UNAVAILABLE", "different", 1],
+  ["ambiguous bare slug", undefined, SLUG, "UNAVAILABLE", "AMBIGUOUS_SKILL_SLUG", undefined],
+  ["external source", undefined, EXTERNAL_REF, "INVALID_REQUEST", "install-only", 0],
+] as const)("refuses detail for %s", async (_name, identity, slug, code, message, requestCount) => {
+  wrongIdentity = identity;
+  expect(await detail({ slug })).toMatchObject({
+    ok: false,
+    error: { code, message: expect.stringContaining(message) },
   });
+  if (requestCount !== undefined) {
+    expect(requestedUrls).toHaveLength(requestCount);
+  }
+});
 
-  it("keeps a malformed optional scan out of the detail response", async () => {
-    malformedScan = true;
-    const { ok, response } = await detail({ version: "1.0.0" });
-
-    expect(ok).toBe(true);
-    expect(Value.Check(SkillsDetailResultSchema, response)).toBe(true);
-    expect(response).toMatchObject({
-      selectedRelease: { version: "1.0.0" },
-      card: { status: "available" },
-      security: { status: "unavailable" },
-    });
+it("does not relabel a different release returned by the registry", async () => {
+  wrongIdentity = "version";
+  await expectDetail("2.0.0", {
+    selectedRelease: null,
+    security: { status: "unavailable" },
+    requirements: { status: "unavailable" },
+    downloadability: { status: "unknown", reason: expect.stringContaining("different release") },
+    warnings: [expect.stringContaining("different release")],
   });
+});
 
-  it("surfaces the ambiguous-slug error instead of picking a publisher for a bare slug", async () => {
-    const { ok, error } = await detail({ slug: SLUG });
-
-    expect(ok).toBe(false);
-    expect(String((error as { message?: string }).message)).toContain("AMBIGUOUS_SKILL_SLUG");
+it("keeps a malformed optional scan out of the detail response", async () => {
+  malformedScan = true;
+  await expectDetail("1.0.0", {
+    selectedRelease: { version: "1.0.0" },
+    card: { status: "available" },
+    security: { status: "unavailable" },
   });
+});
 
-  it("refuses external-source detail instead of reading a same-slug registry skill", async () => {
-    const { ok, error } = await detail({
-      slug: `skills-sh:openclaw/skills/${SLUG}`,
-    });
-
-    expect(ok).toBe(false);
-    expect(error).toMatchObject({ code: "INVALID_REQUEST" });
-    expect(requestedUrls.some((url) => url.pathname.includes("/api/v1/skills/"))).toBe(false);
+it("returns error when ClawHub is unreachable", async () => {
+  vi.useFakeTimers();
+  const fetchStarted = createDeferred();
+  vi.stubGlobal("fetch", async () => {
+    fetchStarted.resolve();
+    throw new Error("connection refused");
   });
-
-  it("returns error when ClawHub is unreachable", async () => {
-    vi.useFakeTimers();
-    const fetchStarted = createDeferred();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        fetchStarted.resolve();
-        throw new Error("connection refused");
-      }),
-    );
-    try {
-      const pending = callSkillsHandler("skills.search", { query: "test" });
-      // Credential lookup can await filesystem I/O before any retry timer exists.
-      await awaitGateBeforeSettlement(
-        fetchStarted.promise,
-        pending,
-        "skills.search completed before reaching fetch",
-      );
-      await vi.runAllTimersAsync();
-      expect(await pending).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "connection refused" },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+  const pending = callSkillsHandler("skills.search", { query: "test" });
+  // Credential lookup can await filesystem I/O before any retry timer exists.
+  await awaitGateBeforeSettlement(
+    fetchStarted.promise,
+    pending,
+    "skills.search completed before reaching fetch",
+  );
+  await vi.runAllTimersAsync();
+  expect(await pending).toMatchObject({
+    ok: false,
+    error: { code: "UNAVAILABLE", message: "connection refused" },
   });
 });

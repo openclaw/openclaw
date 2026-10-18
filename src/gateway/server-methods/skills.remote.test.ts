@@ -141,9 +141,8 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         assertCurrent: () => {},
       };
       await saveSkillLibrary(authority, {
-        slug: "private-procedure",
-        content:
-          "---\nname: private-procedure\ndescription: Session-pinned private procedure\n---\nInstructions\n",
+        slug: "private",
+        content: "---\nname: private\ndescription: Private procedure\n---\nInstructions\n",
         expectedRevision: null,
       });
       const sessionKey = "agent:main:shared-skills";
@@ -158,10 +157,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         },
       );
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const requestContext = bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg },
-        () => projection,
-      );
+      const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
       const entered = createDeferred();
       const resume = createDeferred();
       const release = registerAgentWorkspaceAccess(state.workspaceDir, {
@@ -186,7 +182,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
         "skills.status",
         { sessionKey },
         {
-          context: requestContext,
+          context,
           client: {
             authenticatedUserProfile: { profileId: bob.id },
             connect: { scopes: ["operator.read", "operator.write"] },
@@ -212,7 +208,7 @@ it.each(["unchanged", "revoked", "replaced"] as const)(
             response: {
               skills: expect.arrayContaining([
                 expect.objectContaining({
-                  description: "Session-pinned private procedure",
+                  description: "Private procedure",
                   source: "openclaw-library",
                 }),
               ]),

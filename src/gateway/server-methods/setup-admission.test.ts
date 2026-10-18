@@ -54,6 +54,12 @@ async function finishPrompt(session: WizardSession, answer?: string) {
   await whenAdmittedWizardSessionSettled(session);
 }
 
+async function expectAdmissionRecovered(create = () => new WizardSession(async () => {})) {
+  const session = await createAdmittedWizardSession(create);
+  expect(session).toBeDefined();
+  await whenAdmittedWizardSessionSettled(session!);
+}
+
 describe("setup admission", () => {
   beforeEach(() => {
     mocks.stateDir = tempDirs.make("openclaw-setup-admission-");
@@ -87,7 +93,7 @@ describe("setup admission", () => {
   });
 
   it.each(["process drain", "server close"])(
-    "settles an abandoned prompt before %s releases its runtime",
+    "%s settles abandoned prompts before releasing its runtime",
     async (closing) => {
       const work = new GatewayConnectionWork();
       const disconnected = work.registerConnection(() => {});
@@ -161,7 +167,7 @@ describe("setup admission", () => {
     ["after write", undefined, false],
     ["after write", undefined, true],
   ] as const)(
-    "preserves committed work at shutdown: %s, prompt=%s, write failure=%s",
+    "preserves committed work at shutdown: %s/%s/fail=%s",
     async (when, prompt, failWrite) => {
       const finishWrite = createDeferred();
       const prompting = createDeferred();
@@ -207,14 +213,12 @@ describe("setup admission", () => {
           expect(session.getCurrentStep()).toBeUndefined();
         }
         await whenAdmittedWizardSessionSettled(session);
-        expect(await session.next()).toMatchObject({
-          done: true,
-          ...(prompt
-            ? { status: "error" }
-            : failWrite
-              ? { status: "error", error: "settings write failed" }
-              : { status: "done", modelActivation: { modelRef: "ollama/local-model" } }),
-        });
+        const expected = prompt
+          ? { status: "error" }
+          : failWrite
+            ? { status: "error", error: "settings write failed" }
+            : { status: "done", modelActivation: { modelRef: "ollama/local-model" } };
+        expect(await session.next()).toMatchObject({ done: true, ...expected });
         if (prompt) {
           expect({ written, answered, roots: getActiveGatewayRootWorkCount() }).toEqual({
             written: true,
@@ -231,7 +235,7 @@ describe("setup admission", () => {
   );
 
   it.each(["credentials", "provider note", "final commit"])(
-    "finishes the protected preparation artifact but stops before %s after shutdown",
+    "finishes preparation but halts at %s on shutdown",
     async (checkpoint) => {
       const finishArtifact = createDeferred();
       const artifactPath = path.join(mocks.stateDir, "reviewed-provider.txt");
@@ -310,26 +314,21 @@ describe("setup admission", () => {
     }
   });
 
-  it.each([false, true])(
-    "does not construct a wizard after drain wins target-lock acquisition (reset=%s)",
-    async (reset) => {
-      const create = vi.fn(() => new WizardSession(async () => {}));
-      const pending = createAdmittedWizardSession(create);
-      const rejected = expect(pending).rejects.toThrow(
-        "Gateway is restarting. Please try again shortly.",
-      );
-      markGatewayRestartDraining();
-      if (reset) {
-        resetGatewayWorkAdmission();
-      }
-      await rejected;
-      expect(create).not.toHaveBeenCalled();
+  it.each([false, true])("drain prevents construction (reset=%s)", async (reset) => {
+    const create = vi.fn(() => new WizardSession(async () => {}));
+    const pending = createAdmittedWizardSession(create);
+    const rejected = expect(pending).rejects.toThrow(
+      "Gateway is restarting. Please try again shortly.",
+    );
+    markGatewayRestartDraining();
+    if (reset) {
       resetGatewayWorkAdmission();
-      const fresh = await createAdmittedWizardSession(create);
-      expect(fresh).toBeDefined();
-      await whenAdmittedWizardSessionSettled(fresh!);
-    },
-  );
+    }
+    await rejected;
+    expect(create).not.toHaveBeenCalled();
+    resetGatewayWorkAdmission();
+    await expectAdmissionRecovered(create);
+  });
 
   it("keeps shutdown error provenance when a provider maps closed input to cancellation", async () => {
     const session = await admit(async (prompter, _signal, owner) => {
@@ -354,46 +353,41 @@ describe("setup admission", () => {
     }
   });
 
-  it.each([false, true])(
-    "releases its drain listener and root even when target-lock cleanup fails (%s)",
-    async (failCleanup) => {
-      const finish = createDeferred();
-      const drainSignal = getGatewayRestartDrainSignal();
-      const priorListeners = getEventListeners(drainSignal, "abort").length;
-      const releaseError = new Error("target-lock release failed");
-      const lock = failCleanup
-        ? vi
-            .spyOn(setupMigration, "withSetupMigrationTargetLock")
-            .mockImplementationOnce(async (_stateDir, run) => {
-              await run();
-              throw releaseError;
-            })
-        : undefined;
-      let session: WizardSession | undefined;
-      try {
-        session = await admit(() => finish.promise, true);
-        expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners + 1);
-        finish.resolve();
-        const settlement = whenAdmittedWizardSessionSettled(session);
-        if (failCleanup) {
-          await expect(settlement).rejects.toBe(releaseError);
-        } else {
-          await settlement;
-        }
-        expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        const fresh = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-        expect(fresh).toBeDefined();
-        await whenAdmittedWizardSessionSettled(fresh!);
-      } finally {
-        finish.resolve();
-        if (session) {
-          await whenAdmittedWizardSessionSettled(session).catch(() => {});
-        }
-        lock?.mockRestore();
+  it.each([false, true])("releases listener and root (cleanup fails=%s)", async (failCleanup) => {
+    const finish = createDeferred();
+    const drainSignal = getGatewayRestartDrainSignal();
+    const priorListeners = getEventListeners(drainSignal, "abort").length;
+    const releaseError = new Error("target-lock release failed");
+    const lock = failCleanup
+      ? vi
+          .spyOn(setupMigration, "withSetupMigrationTargetLock")
+          .mockImplementationOnce(async (_stateDir, run) => {
+            await run();
+            throw releaseError;
+          })
+      : undefined;
+    let session: WizardSession | undefined;
+    try {
+      session = await admit(() => finish.promise, true);
+      expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners + 1);
+      finish.resolve();
+      const settlement = whenAdmittedWizardSessionSettled(session);
+      if (failCleanup) {
+        await expect(settlement).rejects.toBe(releaseError);
+      } else {
+        await settlement;
       }
-    },
-  );
+      expect(getEventListeners(drainSignal, "abort")).toHaveLength(priorListeners);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await expectAdmissionRecovered();
+    } finally {
+      finish.resolve();
+      if (session) {
+        await whenAdmittedWizardSessionSettled(session).catch(() => {});
+      }
+      lock?.mockRestore();
+    }
+  });
 
   it("releases an admitted session lease when construction fails", async () => {
     await expect(
@@ -401,9 +395,7 @@ describe("setup admission", () => {
         throw new Error("construction failed");
       }),
     ).rejects.toThrow("construction failed");
-    const recovered = await createAdmittedWizardSession(() => new WizardSession(async () => {}));
-    expect(recovered).toBeDefined();
-    await whenAdmittedWizardSessionSettled(recovered!);
+    await expectAdmissionRecovered();
   });
 
   it("reserves wizard admission while setup waits to acquire its target lock", async () => {
