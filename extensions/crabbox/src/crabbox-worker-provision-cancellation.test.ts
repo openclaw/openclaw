@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
 import {
@@ -25,6 +25,10 @@ it.each([
   "checkpoint inspect",
   "checkpoint fork",
 ])("cancels %s without releasing its command or launching later work", async (phase) => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const controller = new AbortController();
   const reason = new Error("worker stop requested");
   const started = createDeferred<void>();
@@ -89,6 +93,8 @@ it.each([
     .catch((error: unknown) => error)
     .finally(settled);
   await started.promise;
+  // Settle the admitted lease's initial heartbeat before measuring cancellation.
+  await vi.advanceTimersByTimeAsync(0);
   const commandCount = calls.length;
   try {
     controller.abort(reason);
