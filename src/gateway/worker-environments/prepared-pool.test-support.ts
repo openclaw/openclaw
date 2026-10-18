@@ -109,27 +109,31 @@ class PreparedPoolFixture {
     preparationKey = PREPARATION_KEY,
     runSetupScript?: boolean,
     repository?: RepositoryWorkerProjectSnapshot,
-  ): WorkerProfile => {
-    return {
-      settings: {},
-      executionMode: "worker-turn",
-      project: {
-        ...(repository ?? {
-          key: projectKey,
-          root: path.join(this.root, projectKey),
-          baseCommit: "d".repeat(40),
-        }),
-        preparation: {
-          key: preparationKey,
-          cacheKey: "9".repeat(64),
-          contractVersion: 1,
-          ...(runSetupScript === false ? { runSetupScript: false } : {}),
-          target: { ...PREPARATION_TARGET },
-          artifacts: createPreparationArtifacts(),
-        },
+  ): WorkerProfile => ({
+    settings: {},
+    executionMode: "worker-turn",
+    project: {
+      ...(repository ?? {
+        key: projectKey,
+        root: path.join(this.root, projectKey),
+        baseCommit: "d".repeat(40),
+      }),
+      preparation: {
+        key: preparationKey,
+        cacheKey: "9".repeat(64),
+        contractVersion: 1,
+        ...(runSetupScript === false ? { runSetupScript: false } : {}),
+        target: { ...PREPARATION_TARGET },
+        artifacts: createPreparationArtifacts(),
       },
-    };
-  };
+    },
+  });
+
+  intent = (projectKey = PROJECT_KEY) => ({
+    providerId: this.provider.id,
+    profileSnapshot: this.profile(projectKey),
+    preparationKey: PREPARATION_KEY,
+  });
 
   seed = (
     environmentId: string,
@@ -143,8 +147,8 @@ class PreparedPoolFixture {
       profileId?: string;
       expiresAtMs?: number;
     } = {},
-  ) => {
-    return this.store.createIntent({
+  ) =>
+    this.store.createIntent({
       environmentId,
       providerId: this.provider.id,
       profileId: options.profileId ?? "development",
@@ -165,16 +169,13 @@ class PreparedPoolFixture {
             }
           : undefined,
     });
-  };
 
-  credential = (value: string, sessionId: string | null = value) => {
-    return {
-      credentialHash: hashWorkerCredential(value),
-      sessionId,
-      rpcSetVersion: 1,
-      expiresAtMs: this.nowMs + 10_000,
-    };
-  };
+  credential = (value: string, sessionId: string | null = value) => ({
+    credentialHash: hashWorkerCredential(value),
+    sessionId,
+    rpcSetVersion: 1,
+    expiresAtMs: this.nowMs + 10_000,
+  });
 
   ready = async ({ environmentId }: WorkerEnvironmentRecord) => {
     await this.store.transition({ environmentId, from: "requested", to: "provisioning" });
@@ -302,17 +303,14 @@ class PreparedPoolFixture {
     await this.store.transition({ environmentId, from: "destroying", to: "destroyed" });
   };
 
-  pool = (overrides: Partial<PoolOptions> = {}) => {
-    return createPreparedWorkerPool({
+  pool = (overrides: Partial<PoolOptions> = {}) =>
+    createPreparedWorkerPool({
       store: this.store,
       getConfig: () => this.config,
       resolveProvider: () => this.provider,
       prepareRetention: async () => ({ isCurrent: () => true }),
-      prepareIntent: async (_profileId, { projectPath }) => ({
-        providerId: this.provider.id,
-        profileSnapshot: this.profile(path.basename(projectPath!)),
-        preparationKey: PREPARATION_KEY,
-      }),
+      prepareIntent: async (_profileId, { projectPath }) =>
+        this.intent(path.basename(projectPath!)),
       assertIntentCurrent: () => {},
       reconcile: async () => {},
       signal: this.abort.signal,
@@ -320,7 +318,6 @@ class PreparedPoolFixture {
       warn: vi.fn(),
       ...overrides,
     });
-  };
 
   schedule = (owner: ReturnType<PreparedPoolFixture["pool"]>) => {
     const operation = owner.schedule();

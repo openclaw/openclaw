@@ -314,9 +314,7 @@ printf 'setup\\n' >> "$HOME/count"
 
   it("reports Git failure causes without exposing command output or paths", async () => {
     const f = await fixture();
-    const first = await f.preparedOperation();
-    await first.project.prepare(f);
-    first.close();
+    await prepare(f);
     for (const [failure, detail] of [
       [
         { status: null, error: Object.assign(new Error("private command"), { code: "ETIMEDOUT" }) },
@@ -477,19 +475,12 @@ cat input.txt >> "$HOME/count"
     expect(f.uploadBytes).toHaveLength(2);
     expect(f.uploadBytes[0]).toBeGreaterThan(2 * 1024 * 1024);
     expect(f.uploadBytes[1]).toBeLessThan(f.uploadBytes[0]! / 100);
-    const cold = await f.preparedOperation(undefined, {
-      project: b,
-      key: "b".repeat(64),
-      cacheKey: "d".repeat(64),
-    });
-    const coldB = (await cold.project.prepare(f)).preparedWorkspace!;
-    cold.close();
+    const coldB = (await prepare(f, { project: b, key: "b".repeat(64), cacheKey: "d".repeat(64) }))
+      .preparedWorkspace!;
     expect(coldB.workspaceDir).not.toBe(preparedB.workspaceDir);
     expect(await readText(coldB.workspaceDir, "generated")).toBe("tracked B\n");
     expect(await readText(coldB.homeDir, "count")).toBe("changed B\n");
-    const third = await f.preparedOperation(undefined, { project: a });
-    expect((await third.project.prepare(f)).preparedWorkspace).toEqual(preparedA);
-    third.close();
+    expect((await prepare(f, { project: a })).preparedWorkspace).toEqual(preparedA);
     expect(retainedChecks).toEqual([a.baseCommit, b.baseCommit]);
     expect(f.uploadBytes).toHaveLength(2);
     expect(await readText(preparedA.homeDir, "count")).toBe(
@@ -500,11 +491,7 @@ cat input.txt >> "$HOME/count"
     expect(await readText(preparedA.workspaceDir, "build/original-path")).toBe(
       preparedA.workspaceDir,
     );
-    expect(
-      (await fs.readdir(path.join(preparedA.homeDir, ".openclaw-worker", "manifests")))
-        .filter((file) => file.endsWith(".json"))
-        .toSorted(),
-    ).toEqual(
+    expect((await manifestFiles(preparedA.homeDir)).toSorted()).toEqual(
       [preparedA.sourceManifestRef, preparedA.preparedManifestRef]
         .map((ref) => `${ref.slice(7)}.json`)
         .toSorted(),
@@ -545,18 +532,13 @@ test -e build/cache || printf retained > build/cache
       }),
     ).toBe(`${f.project.baseCommit} missing`);
     const project = await snapshot(f.repository);
-    const next = await f.preparedOperation(undefined, { project, key: "b".repeat(64) });
-    try {
-      const refreshed = (await next.project.prepare(f)).preparedWorkspace!;
-      expect(refreshed.workspaceDir).toBe(prepared.workspaceDir);
-      expect(await readText(refreshed.workspaceDir, "input.txt")).toBe("rewritten source\n");
-      expect(await readText(refreshed.workspaceDir, "build/cache")).toBe("retained");
-      expect(await requireGit(refreshed.workspaceDir, ["rev-parse", "HEAD"])).toBe(
-        project.baseCommit,
-      );
-    } finally {
-      next.close();
-    }
+    const refreshed = (await prepare(f, { project, key: "b".repeat(64) })).preparedWorkspace!;
+    expect(refreshed.workspaceDir).toBe(prepared.workspaceDir);
+    expect(await readText(refreshed.workspaceDir, "input.txt")).toBe("rewritten source\n");
+    expect(await readText(refreshed.workspaceDir, "build/cache")).toBe("retained");
+    expect(await requireGit(refreshed.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+      project.baseCommit,
+    );
   });
 
   it("retains separate pristine and completed manifests while refreshing setup-modified sources", async () => {
@@ -582,9 +564,7 @@ cat input.txt >> "$HOME/count"
     expect(completed.entries.some((entry) => entry.path === "generated/result")).toBe(true);
     expect(await readText(f.seed, "input.txt")).toBe("prepared base\n");
     expect(await readText(a.workspaceDir, "input.txt")).toBe("prepared base\nbuilt\n");
-    const replay = await f.preparedOperation();
-    expect((await replay.project.prepare(f)).preparedWorkspace).toEqual(a);
-    replay.close();
+    expect((await prepare(f)).preparedWorkspace).toEqual(a);
     expect(await readText(a.homeDir, "count")).toBe("prepared base\nbuilt\n");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
     await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
@@ -611,12 +591,9 @@ cat input.txt >> "$HOME/count"
     );
     await fs.rm(completion);
     // Matching root B/P artifacts cannot manufacture successful setup completion.
-    const incomplete = await f.preparedOperation(undefined, {
-      project: projectB,
-      key: "b".repeat(64),
-    });
-    await expect(incomplete.project.prepare(f)).rejects.toThrow("completion artifact is invalid");
-    incomplete.close();
+    await expect(prepare(f, { project: projectB, key: "b".repeat(64) })).rejects.toThrow(
+      "completion artifact is invalid",
+    );
     expect(await readText(b.homeDir, "count")).toBe("prepared base\nbuilt\nchanged B\nbuilt\n");
   });
 
@@ -660,13 +637,11 @@ printf 'setup\\n' >> "$HOME/count"
     await fs.writeFile(path.join(f.repository, "input.txt"), "failure B\n");
     await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
     const b = await snapshot(f.repository);
-    const second = await f.preparedOperation(undefined, { project: b, key: "b".repeat(64) });
-    await expect(second.project.prepare(f)).rejects.toThrow("Prepared project setup failed");
-    second.close();
+    await expect(prepare(f, { project: b, key: "b".repeat(64) })).rejects.toThrow(
+      "Prepared project setup failed",
+    );
     for (const project of [b, f.project]) {
-      const retry = await f.preparedOperation(undefined, { project });
-      await expect(retry.project.prepare(f)).rejects.toThrow();
-      retry.close();
+      await expect(prepare(f, { project })).rejects.toThrow();
     }
     expect(await readText(prepared.homeDir, "count")).toBe("setup\nsetup\n");
     expect(await manifestFiles(prepared.homeDir)).toEqual([]);
@@ -780,9 +755,7 @@ ${action}
         }
       }
       expect(await manifestFiles(home)).toEqual([]);
-      const retry = await f.preparedOperation();
-      await expect(retry.project.prepare(f)).rejects.toThrow();
-      retry.close();
+      await expect(prepare(f)).rejects.toThrow();
       expect(await readText(home, "count").catch(() => "")).toBe(count);
       expect(await manifestFiles(home)).toEqual([]);
     },

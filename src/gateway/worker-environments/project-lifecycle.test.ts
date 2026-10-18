@@ -3,6 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { result as spawnResult } from "./bootstrap.test-support.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { runWorkerProjectLifecycle } from "./project-setup-script.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -61,14 +62,7 @@ function lifecycleTransport(failExecutable?: string) {
           },
         },
       });
-      return {
-        stdout: "",
-        stderr,
-        code: process.exitCode,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return spawnResult({ stderr, code: process.exitCode });
     }),
   };
   return { tunnel, events, invocations, killedGroups };

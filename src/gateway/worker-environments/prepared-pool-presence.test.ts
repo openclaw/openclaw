@@ -252,11 +252,7 @@ it("cleans unrelated expiry and refills a healthy sibling before held presence a
   fixture.releases.push(() => release.resolve());
   presence.prepareIntent.mockImplementation(async (_profileId, options) => {
     if (options.projectPath) {
-      return {
-        providerId: fixture.provider.id,
-        profileSnapshot: fixture.profile(healthyKey),
-        preparationKey: PREPARATION_KEY,
-      };
+      return fixture.intent(healthyKey);
     }
     entered.resolve();
     await release.promise;

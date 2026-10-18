@@ -1,17 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  PREPARATION_KEY,
-  usePreparedPoolFixture,
-  type PoolOptions,
-} from "./prepared-pool.test-support.js";
+import { usePreparedPoolFixture, type PoolOptions } from "./prepared-pool.test-support.js";
 
 const fixture = usePreparedPoolFixture();
-const intent = (projectKey?: string) => ({
-  providerId: fixture.provider.id,
-  profileSnapshot: fixture.profile(projectKey),
-  preparationKey: PREPARATION_KEY,
-});
 const reconciledIds = (reconcile: ReturnType<typeof vi.fn<PoolOptions["reconcile"]>>) =>
   reconcile.mock.calls.map(([record]) => record.environmentId);
 async function readyReserve() {
@@ -141,7 +132,7 @@ it.each([
     }
     const prepareIntent = vi.fn<PoolOptions["prepareIntent"]>(async () => {
       failWhileUnavailable("refill admission");
-      return intent();
+      return fixture.intent();
     });
     const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
     const warn = vi.fn<PoolOptions["warn"]>();
@@ -154,7 +145,6 @@ it.each([
     });
 
     await fixture.schedule(owner);
-
     expect(fixture.reserves()).toEqual([reserve]);
     if (refillFailure) {
       expect(reconciledIds(reconcile)).toEqual([reserve.environmentId]);
@@ -208,9 +198,7 @@ it.each(["expired", "disabled", "idle timeout", "retention during provider outag
         : {}),
       reconcile,
     });
-
     await fixture.schedule(owner);
-
     expect(fixture.store.get(reserve.environmentId)).toMatchObject({
       destroyRequestedAtMs: fixture.nowMs,
       ...(independentCleanup ? { preparation: reserve.preparation } : {}),
@@ -237,7 +225,7 @@ it("starts expired reserve cleanup before awaiting unrelated source admission", 
     prepareIntent: async () => {
       entered.resolve();
       await release.promise;
-      return intent(projectKey);
+      return fixture.intent(projectKey);
     },
   });
   const running = fixture.schedule(owner);

@@ -1,5 +1,6 @@
 import { execFile, execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -167,47 +168,39 @@ process.exit(result.status ?? 1);
 describe("public repository project seeds", () => {
   it("refuses an HTTP authentication challenge without consulting the machine's netrc files", async () => {
     const authorizationPresent: boolean[] = [];
-    const server = createServer((request, response) => {
+    await using server = createServer((request, response) => {
       authorizationPresent.push(request.headers.authorization !== undefined);
       response.writeHead(401, { "WWW-Authenticate": 'Basic realm="synthetic-test"' });
       response.end();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("HTTP authentication fixture did not bind a TCP port");
-      }
-      const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
-      const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
-      for (const name of [".netrc", "_netrc", "override.netrc"]) {
-        await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });
-      }
-      await expect(
-        f.runAsync({
-          USERPROFILE: f.home,
-          NETRC: path.join(f.home, "override.netrc"),
-          netrc: path.join(f.home, "override.netrc"),
-          NO_PROXY: "127.0.0.1",
-          no_proxy: "127.0.0.1",
-        }),
-      ).rejects.toMatchObject({ code: 1, stderr: "Project repository fetch failed\n" });
-      expect(authorizationPresent.length).toBeGreaterThan(0);
-      expect(authorizationPresent).not.toContain(true);
-      expect(JSON.parse(await read(f.authHomeWitness))).toEqual({
-        inheritedHome: false,
-        inheritedUserProfile: false,
-        netrcOverridePresent: false,
-      });
-      expect(await fs.readdir(path.dirname(f.directory))).toEqual([]);
-      expect(await read(path.join(f.home, ".netrc"))).toBe(netrc);
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+    await once(server.listen(0, "127.0.0.1"), "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("HTTP authentication fixture did not bind a TCP port");
     }
+    const f = await fixture(false, `http://127.0.0.1:${address.port}/repository.git`);
+    const netrc = "machine 127.0.0.1 login synthetic-user password synthetic-password\n";
+    for (const name of [".netrc", "_netrc", "override.netrc"]) {
+      await fs.writeFile(path.join(f.home, name), netrc, { mode: 0o600 });
+    }
+    await expect(
+      f.runAsync({
+        USERPROFILE: f.home,
+        NETRC: path.join(f.home, "override.netrc"),
+        netrc: path.join(f.home, "override.netrc"),
+        NO_PROXY: "127.0.0.1",
+        no_proxy: "127.0.0.1",
+      }),
+    ).rejects.toMatchObject({ code: 1, stderr: "Project repository fetch failed\n" });
+    expect(authorizationPresent.length).toBeGreaterThan(0);
+    expect(authorizationPresent).not.toContain(true);
+    expect(JSON.parse(await read(f.authHomeWitness))).toEqual({
+      inheritedHome: false,
+      inheritedUserProfile: false,
+      netrcOverridePresent: false,
+    });
+    expect(await fs.readdir(path.dirname(f.directory))).toEqual([]);
+    expect(await read(path.join(f.home, ".netrc"))).toBe(netrc);
   });
 
   it("installs only the pinned Git objects without inherited authentication or executing repository code, then reuses them offline", async () => {
