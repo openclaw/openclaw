@@ -1,7 +1,6 @@
 // Doctor node-hosting precondition tests cover browser-only auth and unreachable onboarding.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerAgentHarness } from "../agents/harness/registry.js";
-import type { AgentHarness } from "../agents/harness/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -28,20 +27,10 @@ describe("node-hosting preconditions", () => {
       "default",
     );
     for (const [id, cloudPlacement] of [
-      [
-        "codex",
-        {
-          mode: "remote-exec",
-          devicePlacement: {
-            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-            consumesWorkerSlot: false,
-          },
-        },
-      ],
       ["cloud-only", { mode: "remote-exec" }],
       ["acpx", undefined],
     ] as const) {
-      const harness: AgentHarness = {
+      registerAgentHarness({
         id,
         label: id,
         ...(cloudPlacement ? { cloudPlacement } : {}),
@@ -49,8 +38,7 @@ describe("node-hosting preconditions", () => {
         async runAttempt() {
           throw new Error("not used");
         },
-      };
-      registerAgentHarness(harness);
+      });
     }
   });
 
@@ -143,42 +131,31 @@ describe("node-hosting preconditions", () => {
   );
 
   it.each([
-    {
-      name: "both unavailable",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "trusted-proxy" },
-        },
+    [
+      "both unavailable",
+      { auth: { mode: "trusted-proxy" } },
+      ["machine-client-auth", "node-onboarding-url"],
+    ],
+    [
+      "Tailscale identity without a shared secret",
+      {
+        tailscale: { mode: "serve" },
+        auth: { mode: "token", allowTailscale: true },
       },
-      requirements: ["machine-client-auth", "node-onboarding-url"],
+      ["machine-client-auth"],
+    ],
+  ] satisfies Array<[string, OpenClawConfig["gateway"], string[]]>)(
+    "warns when %s",
+    async (_name, gateway, requirements) => {
+      const cfg: OpenClawConfig = { ...healthyBase, gateway: { bind: "loopback", ...gateway } };
+      expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
     },
-    {
-      name: "Tailscale identity without a shared secret",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          tailscale: { mode: "serve" },
-          auth: { mode: "token", allowTailscale: true },
-        },
-      },
-      requirements: ["machine-client-auth"],
-    },
-  ] satisfies Array<{
-    name: string;
-    cfg: OpenClawConfig;
-    requirements: string[];
-  }>)("warns when $name", async ({ cfg, requirements }) => {
-    expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
-  });
+  );
 
   it.each([
     {
       name: "device-pair is explicitly disabled",
       cfg: {
-        ...healthyBase,
         plugins: { entries: { "device-pair": { enabled: false } } },
       },
       requirement: "node-onboarding-plugin",
@@ -186,7 +163,6 @@ describe("node-hosting preconditions", () => {
     {
       name: "every configured agent resolves to an incompatible runtime",
       cfg: {
-        ...healthyBase,
         agents: {
           ownership: "explicit",
           entries: {
@@ -200,19 +176,16 @@ describe("node-hosting preconditions", () => {
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; requirement: string }>)(
     "warns when $name",
     async ({ cfg, requirement }) => {
-      expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toContain(requirement);
+      expect(
+        (await findingsFor({ ...healthyBase, ...cfg })).map((finding) => finding.requirement),
+      ).toContain(requirement);
     },
   );
 
-  it.each(["codex"])("does not activate plugins or reject a cold %s runtime", async (runtime) => {
+  it("does not activate plugins or reject a cold codex runtime", async () => {
     resetPluginRuntimeStateForTest();
-
-    expect(
-      await findingsFor({
-        ...healthyBase,
-        agents: { defaults: runtimeAgent(runtime) },
-      }),
-    ).toEqual([]);
+    const cfg = { ...healthyBase, agents: { defaults: runtimeAgent("codex") } };
+    expect(await findingsFor(cfg)).toEqual([]);
     expect(getActivePluginRegistry()).toBeNull();
   });
 

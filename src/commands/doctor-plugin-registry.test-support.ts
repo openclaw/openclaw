@@ -30,23 +30,14 @@ export function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEn
 }
 
 export function createCandidate(rootDir: string, id = "demo"): PluginCandidate {
-  fs.writeFileSync(
-    path.join(rootDir, "index.ts"),
-    "throw new Error('runtime entry should not load during doctor registry repair');\n",
-    "utf8",
-  );
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "throw new Error('runtime loaded');\n", "utf8");
   writeJson(rootDir, "openclaw.plugin.json", {
     id,
     name: id,
     configSchema: { type: "object" },
     providers: [id],
   });
-  return {
-    idHint: id,
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "global",
-  };
+  return { idHint: id, source: path.join(rootDir, "index.ts"), rootDir, origin: "global" };
 }
 
 export function createBundledCandidate(params: {
@@ -81,31 +72,28 @@ export function createManagedNpmPlugin(params: {
   peerDependencies?: Record<string, string>;
   packageLock?: boolean;
 }) {
-  const npmBaseDir = path.join(params.stateDir, "npm");
   const npmRoot = resolvePluginNpmProjectDir({
-    npmDir: npmBaseDir,
+    npmDir: path.join(params.stateDir, "npm"),
     packageName: params.packageName,
   });
   const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
   fs.mkdirSync(packageDir, { recursive: true });
   writeJson(npmRoot, "package.json", { dependencies: { [params.packageName]: params.version } });
   if (params.packageLock) {
+    const dependencies = {
+      [params.packageName]: { version: params.version },
+      "other-plugin": { version: "1.0.0" },
+    };
+    const entries = Object.entries(dependencies);
     writeJson(npmRoot, "package-lock.json", {
       lockfileVersion: 3,
       packages: {
         "": {
-          dependencies: {
-            [params.packageName]: params.version,
-            "other-plugin": "1.0.0",
-          },
+          dependencies: Object.fromEntries(entries.map(([name, { version }]) => [name, version])),
         },
-        [`node_modules/${params.packageName}`]: { version: params.version },
-        "node_modules/other-plugin": { version: "1.0.0" },
+        ...Object.fromEntries(entries.map(([name, value]) => [`node_modules/${name}`, value])),
       },
-      dependencies: {
-        [params.packageName]: { version: params.version },
-        "other-plugin": { version: "1.0.0" },
-      },
+      dependencies,
     });
   }
   writeJson(packageDir, "package.json", {
@@ -122,7 +110,9 @@ export function createManagedNpmPlugin(params: {
   return { npmRoot, packageDir };
 }
 
-export function createCurrentIndex(): InstalledPluginIndex {
+export function createCurrentIndex(
+  installRecords: InstalledPluginIndex["installRecords"] = {},
+): InstalledPluginIndex {
   return {
     version: 1,
     hostContractVersion: "2026.4.25",
@@ -130,7 +120,7 @@ export function createCurrentIndex(): InstalledPluginIndex {
     migrationVersion: 1,
     policyHash: "policy-v1",
     generatedAtMs: 1777118400000,
-    installRecords: {},
+    installRecords,
     plugins: [],
     diagnostics: [],
   };
@@ -142,20 +132,18 @@ export function createCurrentIndexWithNpmRecord(params: {
   packageDir: string;
   version: string;
 }): InstalledPluginIndex {
-  return {
-    ...createCurrentIndex(),
-    installRecords: {
-      [params.pluginId]: {
-        source: "npm",
-        spec: `${params.packageName}@${params.version}`,
-        installPath: params.packageDir,
-        version: params.version,
-        resolvedName: params.packageName,
-        resolvedVersion: params.version,
-        resolvedSpec: `${params.packageName}@${params.version}`,
-      },
+  const { pluginId, packageName, packageDir, version } = params;
+  return createCurrentIndex({
+    [pluginId]: {
+      source: "npm",
+      spec: `${packageName}@${version}`,
+      installPath: packageDir,
+      version,
+      resolvedName: packageName,
+      resolvedVersion: version,
+      resolvedSpec: `${packageName}@${version}`,
     },
-  };
+  });
 }
 
 export function createCurrentIndexWithPathRecord(params: {
@@ -163,16 +151,13 @@ export function createCurrentIndexWithPathRecord(params: {
   installPath: string;
   version?: string;
 }): InstalledPluginIndex {
-  return {
-    ...createCurrentIndex(),
-    installRecords: {
-      [params.pluginId]: {
-        source: "path",
-        installPath: params.installPath,
-        ...(params.version ? { version: params.version } : {}),
-      },
+  return createCurrentIndex({
+    [params.pluginId]: {
+      source: "path",
+      installPath: params.installPath,
+      ...(params.version ? { version: params.version } : {}),
     },
-  };
+  });
 }
 
 export function expectedPluginIndexRecord(params: {
@@ -197,12 +182,7 @@ export function expectedPluginIndexRecord(params: {
     rootDir: params.rootDir,
     origin: params.origin,
     enabled: true,
-    startup: {
-      sidecar: false,
-      memory: false,
-      configPaths: [],
-      agentHarnesses: [],
-    },
+    startup: { sidecar: false, memory: false, configPaths: [], agentHarnesses: [] },
     contributions: {
       channels: [],
       channelConfigs: [],
