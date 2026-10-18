@@ -23,6 +23,7 @@ vi.mock("@slack/web-api", async (importOriginal) => {
   return { WebClient, WebAPIRateLimitedError };
 });
 
+let createSlackStartupAuthClient: typeof import("./client.js").createSlackStartupAuthClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
 let resolveSlackMonitorDispatchers: typeof import("./client-options.js").resolveSlackMonitorDispatchers;
@@ -88,6 +89,7 @@ beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({ resolveSlackMonitorDispatchers } = await import("./client-options.js"));
   ({
+    createSlackStartupAuthClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
     resolveSlackWebClientOptions,
@@ -109,6 +111,42 @@ afterEach(() => {
 });
 
 describe("slack web client config", () => {
+  it.each([60_000, -60_000])(
+    "keeps the startup auth retry budget stable across a wall-clock shift of %i ms",
+    async (clockShiftMs) => {
+      const nowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValueOnce(1_000_000)
+        .mockReturnValue(1_000_000 + clockShiftMs);
+      const monotonicNowSpy = vi.spyOn(performance, "now").mockReturnValue(10_000);
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+        callback: () => void,
+      ) => {
+        callback();
+        return 1 as unknown as NodeJS.Timeout;
+      }) as typeof setTimeout);
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 429,
+          headers: { "retry-after": "120" },
+        }),
+      );
+      try {
+        createSlackStartupAuthClient("xoxb-startup", { fetch: fetchMock as never });
+        const options = WebClient.mock.calls[0]?.[1] as WebClientOptions;
+
+        await expect(requireFetch(options)("https://slack.test/api/auth.test")).rejects.toThrow(
+          "Slack startup auth retry budget exhausted after rate limit",
+        );
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 35_000);
+      } finally {
+        timeoutSpy.mockRestore();
+        monotonicNowSpy.mockRestore();
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
   it("keeps default write clients separated by token", () => {
     const first = getSlackWriteClient("xoxb-one");
     const second = getSlackWriteClient("xoxb-two");
