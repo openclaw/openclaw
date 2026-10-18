@@ -1,4 +1,3 @@
-// Zalo test support covers monitor.pairing.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -98,15 +97,14 @@ describe("Zalo pairing lifecycle", () => {
       await replayPairing(monitor, "zalo-pairing");
       expectPairingScope("acct-zalo-pairing");
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
-        string,
-        { chat_id?: string; text?: string },
-        unknown,
-      ];
-      expect(sendToken).toBe("zalo-token");
-      expect(sendPayload.chat_id).toBe("dm-pairing-1");
-      expect(sendPayload.text).toContain("PAIRCODE");
-      expect(sendOptions).toBeUndefined();
+      expect(sendMessageMock.mock.calls[0]).toEqual([
+        "zalo-token",
+        expect.objectContaining({
+          chat_id: "dm-pairing-1",
+          text: expect.stringContaining("PAIRCODE"),
+        }),
+        undefined,
+      ]);
     } finally {
       await monitor.stop();
     }

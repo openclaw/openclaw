@@ -1,4 +1,3 @@
-// Zalo tests cover api plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -25,13 +24,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
   };
 });
 
-const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
-  resolvePinnedHostnameWithPolicyMock: vi.fn(),
-}));
+const resolvePinnedHostnameWithPolicyMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  resolvePinnedHostnameWithPolicy: (...args: unknown[]) =>
-    resolvePinnedHostnameWithPolicyMock(...args),
+  resolvePinnedHostnameWithPolicy: resolvePinnedHostnameWithPolicyMock,
 }));
 
 import {
@@ -47,17 +43,13 @@ import {
 } from "./api.js";
 import { ZALO_DEFAULT_REQUEST_TIMEOUT_MS, ZALO_SEND_PHOTO_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
-const ZALO_JSON_CAP_BYTES = 16 * 1024 * 1024;
-
 function oversizedZaloJsonResponse(onCancel: () => void): Response {
   const response = new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array(ZALO_JSON_CAP_BYTES + 1));
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
       },
-      cancel() {
-        onCancel();
-      },
+      cancel: onCancel,
     }),
     { headers: { "content-type": "application/json" }, status: 200 },
   );
@@ -91,31 +83,11 @@ function signalAbortedZaloJsonResponse(signal: AbortSignal, onAbort: () => void)
   );
 }
 
-function createOkFetcher() {
-  return vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
-}
+const createOkFetcher = () =>
+  vi.fn<ZaloFetch>(async () => new Response(JSON.stringify({ ok: true, result: {} })));
 
 const sendTestPhoto = (photo: string, fetcher: ZaloFetch) =>
   sendPhoto("test-token", { chat_id: "chat-123", photo }, fetcher);
-
-async function expectInvalidApiRoot(value: string, error: string) {
-  vi.stubEnv("ZALO_API_URL", value);
-  await expect(
-    callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
-  ).rejects.toThrow(error);
-}
-
-async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) => Promise<unknown>) {
-  const fetcher = createOkFetcher();
-  await run("test-token", fetcher);
-  expect(fetcher).toHaveBeenCalledTimes(1);
-  const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo request");
-  if (!init) {
-    throw new Error("expected Zalo request init");
-  }
-  expect(init.method).toBe("POST");
-  expect(init.headers).toEqual({ "Content-Type": "application/json" });
-}
 
 describe("Zalo API request methods", () => {
   afterEach(() => {
@@ -191,30 +163,26 @@ describe("Zalo API request methods", () => {
     });
   });
 
-  it("rejects an empty ZALO_API_URL", async () => {
-    await expectInvalidApiRoot("   ", "ZALO_API_URL must not be empty.");
+  it.each([
+    ["   ", "must not be empty."],
+    ["file:///tmp/zalo", "must use http:// or https://."],
+    ["https://proxy.example/zalo#provider", "must not include a query string or fragment."],
+  ])("rejects invalid API root %j", async (apiUrl, error) => {
+    vi.stubEnv("ZALO_API_URL", apiUrl);
+    await expect(
+      callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
+    ).rejects.toThrow(`ZALO_API_URL ${error}`);
   });
 
-  it("rejects invalid alternate API URLs", async () => {
-    await expectInvalidApiRoot("file:///tmp/zalo", "ZALO_API_URL must use http:// or https://.");
-  });
-
-  it.each(["https://proxy.example/zalo#provider"])(
-    "rejects an API root with URL suffix components: %s",
-    async (apiUrl) => {
-      await expectInvalidApiRoot(
-        apiUrl,
-        "ZALO_API_URL must not include a query string or fragment.",
-      );
-    },
-  );
-
-  it("uses POST for getWebhookInfo", async () => {
-    await expectPostJsonRequest(getWebhookInfo);
-  });
-
-  it("keeps POST for deleteWebhook", async () => {
-    await expectPostJsonRequest(deleteWebhook);
+  it.each([getWebhookInfo, deleteWebhook])("uses JSON POST for %s", async (run) => {
+    const fetcher = createOkFetcher();
+    await run("test-token", fetcher);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo request");
+    expect({ method: init?.method, headers: init?.headers }).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
   });
 
   it("keeps the default request deadline active while reading a hanging send response body", async () => {
@@ -237,10 +205,7 @@ describe("Zalo API request methods", () => {
 
     await rejected;
     const [, init] = expectDefined(fetcher.mock.calls[0], "Zalo send request");
-    if (!init?.signal) {
-      throw new Error("expected Zalo send request abort signal");
-    }
-    expect(init.signal.aborted).toBe(true);
+    expect(init?.signal?.aborted).toBe(true);
     expect(bodyAborted).toBe(true);
   });
 
@@ -307,24 +272,12 @@ describe("Zalo API request methods", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it("rejects non-http photo URLs", async () => {
+  it.each([
+    ["file:///etc/passwd", "must use HTTP or HTTPS"],
+    ["not a url", "must be an absolute HTTP or HTTPS URL"],
+  ])("rejects photo %j before DNS or fetch", async (photo, error) => {
     const fetcher = createOkFetcher();
-
-    await expect(sendTestPhoto("file:///etc/passwd", fetcher)).rejects.toThrow(
-      "Zalo photo URL must use HTTP or HTTPS",
-    );
-
-    expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
-    expect(fetcher).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-URL strings", async () => {
-    const fetcher = createOkFetcher();
-
-    await expect(sendTestPhoto("not a url", fetcher)).rejects.toThrow(
-      "Zalo photo URL must be an absolute HTTP or HTTPS URL",
-    );
-
+    await expect(sendTestPhoto(photo, fetcher)).rejects.toThrow(`Zalo photo URL ${error}`);
     expect(resolvePinnedHostnameWithPolicyMock).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
   });
