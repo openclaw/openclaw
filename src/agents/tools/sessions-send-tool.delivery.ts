@@ -201,7 +201,7 @@ export async function trySessionsSendActiveRunDelivery(
       throw new Error("active run session incarnation changed");
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
-    if (activeRunSessionId && messageText) {
+    if (activeOperation && activeRunSessionId && messageText) {
       const queue = async (
         assertCurrent: () => void,
         lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
@@ -288,6 +288,7 @@ export async function trySessionsSendActiveRunDelivery(
               sessionId: activeRunSessionId,
               agentId: params.sendParams.agentId,
             },
+            activeOperation,
             selection.assertCurrent,
             queue,
           )

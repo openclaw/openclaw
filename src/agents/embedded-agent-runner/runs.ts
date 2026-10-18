@@ -586,15 +586,6 @@ export type ActiveEmbeddedRunOwner = {
   waitForSettlement: () => Promise<void>;
 };
 
-/** Captures settlement for the exact native attempt currently attached to a session. */
-export function captureActiveEmbeddedRunAttemptSettlement(
-  sessionId: string,
-): Promise<void> | undefined {
-  const handle = getActiveNativeAttempt(sessionId);
-  const registration = handle ? getEmbeddedRunAttachment(handle) : undefined;
-  return registration?.settlement.promise;
-}
-
 function projectActiveEmbeddedRunOwner(
   registration: ActiveEmbeddedRunAttachment,
   handle: EmbeddedAgentQueueHandle,

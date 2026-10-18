@@ -2,15 +2,19 @@ import {
   captureOperatorToolGatewayContinuationContext,
   runWithInProcessGatewaySessionMutation,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
-import type { ReplyMessageInjectionOptions } from "../../sessions/session-controller.contracts.js";
+import type {
+  ReplyMessageInjectionOptions,
+  ReplyOperation,
+} from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerSteerResult } from "../../sessions/session-controller.steer.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { captureActiveEmbeddedRunAttemptSettlement } from "../embedded-agent-runner/runs.js";
+import { getControllerEmbeddedAttachment } from "../embedded-agent-runner/run-state.js";
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 
 /** The recipient owns accepted input until commit or cancellation, independently of the sender. */
 export async function queueSessionsSendSteeringWithCustody(
   target: { sessionKey: string; sessionId: string; agentId: string },
+  operation: ReplyOperation,
   assertSelectionCurrent: () => void,
   queue: (
     assertCurrent: () => void,
@@ -37,7 +41,7 @@ export async function queueSessionsSendSteeringWithCustody(
             assertMutationCurrent();
           };
           assertCurrent();
-          const attemptSettlement = captureActiveEmbeddedRunAttemptSettlement(target.sessionId);
+          const attemptSettlement = getControllerEmbeddedAttachment(operation)?.settlement.promise;
           const queued = queue(assertCurrent, {
             onQueueAccepted: (value) => {
               accepted ||= value;
