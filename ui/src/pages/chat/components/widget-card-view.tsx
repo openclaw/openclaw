@@ -35,7 +35,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { postWidgetTheme } from "../../../lib/widget-theme.ts";
+import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
 import "./browser-tab-card.tsx";
 import {
@@ -305,6 +305,7 @@ function WidgetFrame(props: {
         setReportedHeight(nextHeight);
         props.params.onHeightChange?.(nextHeight);
       });
+      return registerWidgetThemeFrame(element, "*");
     });
     onCleanup(() => {
       widgetFrameRegistry.delete(element);
