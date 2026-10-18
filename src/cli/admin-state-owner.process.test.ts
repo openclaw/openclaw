@@ -58,6 +58,15 @@ const entrypoint = resolveRuntimeWorkerArgv(
 const token = "synthetic-admin-routing-token";
 const channel = "routing-fixture";
 const pattern = "/usr/bin/routing-fixture";
+const teamScope = { kind: "team" } as const;
+const readSecret = (name: string) => readSecretStoreValue({ scope: teamScope, name });
+const approvalWrite = <const Kind extends string>(kind: Kind, args: string[]) =>
+  ({
+    kind,
+    method: "exec.approvals.set",
+    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+    args: ["approvals", ...args, "--json"],
+  }) as const;
 const operations = [
   {
     kind: "pairing-list",
@@ -77,24 +86,9 @@ const operations = [
     capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
     args: ["approvals", "get", "--json"],
   },
-  {
-    kind: "approvals-set",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "set", "--stdin", "--json"],
-  },
-  {
-    kind: "allowlist-add",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "allowlist", "add", pattern, "--json"],
-  },
-  {
-    kind: "allowlist-remove",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "allowlist", "remove", pattern, "--json"],
-  },
+  approvalWrite("approvals-set", ["set", "--stdin"]),
+  approvalWrite("allowlist-add", ["allowlist", "add", pattern]),
+  approvalWrite("allowlist-remove", ["allowlist", "remove", pattern]),
 ] as const;
 type Scenario = "live" | "offline" | "missing-capability" | "refused" | "lost-reply";
 
@@ -126,6 +120,40 @@ describe("administrative CLI state owner routing", () => {
     for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
       vi.stubEnv(key, env[key]);
     }
+  };
+  const runOwned = async (
+    args: readonly string[],
+    input?: string,
+    writes: "adminSql" | "secretWrites" = "adminSql",
+  ) => {
+    if (scenario === "offline") {
+      await releaseOwner();
+    }
+    const result = await run(args, input);
+    if (!owner) {
+      owner = await acquireOwner();
+      expect(owner).not.toBeNull();
+    }
+    const succeeded = scenario === "live" || scenario === "offline";
+    expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
+    const observation = await readObservation();
+    if (scenario === "offline") {
+      expect(observation[writes]).toBeGreaterThan(0);
+      if (writes === "adminSql") {
+        expect(observation.workerSql).toBeGreaterThan(0);
+      }
+      expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
+    } else {
+      expect(observation[writes]).toBe(0);
+    }
+    const warning =
+      scenario === "refused"
+        ? "No local mutation was attempted"
+        : scenario === "lost-reply" && "outcome may be partial";
+    if (warning) {
+      expect(result.stderr).toContain(warning);
+    }
+    return { result, succeeded };
   };
 
   beforeAll(async () => {
@@ -305,42 +333,22 @@ describe("administrative CLI state owner routing", () => {
         },
       },
     });
-    if (scenario === "offline") {
-      await releaseOwner();
-    }
-    const result = await run(
+    const { result, succeeded } = await runOwned(
       operation.args,
       // Default CLI saves have always normalized legacy string allowlist entries.
       JSON.stringify({ version: 1, agents: { "*": { allowlist: [pattern] } } }),
     );
-    if (!owner) {
-      owner = await acquireOwner();
-      expect(owner).not.toBeNull();
-    }
-    const observation = await readObservation();
-    const succeeded = scenario === "live" || scenario === "offline";
-    expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
-    if (scenario === "offline") {
-      expect(observation.adminSql).toBeGreaterThan(0);
-      expect(observation.workerSql).toBeGreaterThan(0);
-      expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
-      expect(methods).toEqual([]);
-    } else {
-      expect(observation.adminSql).toBe(0);
-      const prefix = operation.method === "exec.approvals.set" ? ["exec.approvals.get"] : [];
-      expect(methods).toEqual(
-        scenario === "missing-capability" ? prefix : [...prefix, operation.method],
-      );
-    }
+    const prefix = operation.method === "exec.approvals.set" ? ["exec.approvals.get"] : [];
+    expect(methods).toEqual(
+      scenario === "offline"
+        ? []
+        : scenario === "missing-capability"
+          ? prefix
+          : [...prefix, operation.method],
+    );
     if (scenario === "missing-capability") {
       expect(result.stderr).toContain(operation.capability);
       expect(result.stderr).toContain("Update the Gateway");
-    }
-    if (scenario === "refused") {
-      expect(result.stderr).toContain("No local mutation was attempted");
-    }
-    if (scenario === "lost-reply") {
-      expect(result.stderr).toContain("outcome may be partial");
     }
     const applied = succeeded || scenario === "lost-reply";
     const pairing = readChannelPairingStateSnapshot(channel);
@@ -381,70 +389,44 @@ describe("administrative CLI state owner routing", () => {
       scenario = mode;
       selectedMethod = "secrets.store.set";
       await writeSecretStoreEntry({
-        scope: { kind: "team" },
+        scope: teamScope,
         name: "OWNER_SECRET",
         value: "synthetic-original",
         kind: "secret",
         updatedBy: "fixture",
       });
-      if (mode === "offline") {
-        await releaseOwner();
-      }
-      const result = await run(
+      await runOwned(
         ["secrets", "store", "set", "OWNER_SECRET", "--value-file", "-"],
         "synthetic-rotated",
+        "secretWrites",
       );
-      if (!owner) {
-        owner = await acquireOwner();
-      }
-      expect(result.code, result.stderr).toBe(mode === "live" || mode === "offline" ? 0 : 1);
-      const observation = await readObservation();
-      if (mode === "offline") {
-        expect(observation.secretWrites).toBeGreaterThan(0);
-        expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
-      } else {
-        expect(observation.secretWrites).toBe(0);
-      }
       expect(methods).toEqual(mode === "offline" ? [] : ["secrets.store.set"]);
-      expect(
-        await readSecretStoreValue({ scope: { kind: "team" }, name: "OWNER_SECRET" }),
-      ).toMatchObject({
+      expect(await readSecret("OWNER_SECRET")).toMatchObject({
         ok: true,
         value: mode === "refused" ? "synthetic-original" : "synthetic-rotated",
       });
-      if (mode === "refused") {
-        expect(result.stderr).toContain("No local mutation was attempted");
-      }
-      if (mode === "lost-reply") {
-        expect(result.stderr).toContain("outcome may be partial");
-      }
     },
   );
 
   it("routes secret import, host policy, and removal through the live owner", async () => {
-    const runSecret = async (args: string[], input?: string) => {
-      const result = await run(["secrets", "store", ...args], input);
-      expect(result.code, result.stderr).toBe(0);
-      const observed = await readObservation();
-      expect(observed.secretWrites).toBe(0);
-    };
+    const runSecret = (args: string[], input?: string) =>
+      runOwned(["secrets", "store", ...args], input, "secretWrites");
     await runSecret(
       ["import", "--from", "-", "--yes"],
       "BATCH_TOKEN=synthetic-imported\nBATCH_MODE=test\n",
     );
-    expect(
-      await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" }),
-    ).toMatchObject({ ok: true, value: "synthetic-imported" });
+    expect(await readSecret("BATCH_TOKEN")).toMatchObject({
+      ok: true,
+      value: "synthetic-imported",
+    });
     await runSecret(["set", "BATCH_TOKEN", "--allow-host", "API.EXAMPLE.COM"]);
     expect(
-      (await listSecretStoreEntries({ scope: { kind: "team" } })).find(
+      (await listSecretStoreEntries({ scope: teamScope })).find(
         (entry) => entry.name === "BATCH_TOKEN",
       ),
     ).toMatchObject({ kind: "secret", allowedHosts: ["api.example.com"] });
     await runSecret(["rm", "BATCH_TOKEN", "--yes"]);
-    expect((await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" })).ok).toBe(
-      false,
-    );
+    expect((await readSecret("BATCH_TOKEN")).ok).toBe(false);
     expect(methods).toEqual([
       "secrets.store.import",
       "secrets.store.allowedHosts",

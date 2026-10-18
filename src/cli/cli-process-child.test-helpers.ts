@@ -47,11 +47,9 @@ async function releaseCliProcessChild(child: ChildProcessWithoutNullStreams): Pr
     }),
   );
   try {
-    try {
-      await stopChildProcess(child, CLEANUP_TIMEOUT_MS, { force: true });
-    } catch (error) {
+    await stopChildProcess(child, CLEANUP_TIMEOUT_MS, { force: true }).catch((error: unknown) => {
       failures.push(String(error));
-    }
+    });
     // Local destruction cannot prove an inherited writer released its output.
     if (failures.length === 0) {
       failures.push(...(await ended).filter((error) => error !== undefined));
@@ -228,19 +226,17 @@ export async function runCliProcessChild(params: {
   });
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
-  let stdout = "";
-  let stderr = "";
+  const output = { stdout: "", stderr: "" };
   let collectingOutput = true;
   let timedOut = false;
-  const failure = (reason: string) =>
-    new Error(
-      formatCliProcessFailure({ reason, stdout, stderr: withoutDiagnosticReadiness(stderr) }),
-    );
+  const snapshot = () => ({ ...output, stderr: withoutDiagnosticReadiness(output.stderr) });
+  const failure = (reason: string) => new Error(formatCliProcessFailure({ reason, ...snapshot() }));
   const outputFailure = createDeferredCore<never>();
   const checkOutputLimit = () => {
     if (
       params.maxBuffer !== undefined &&
-      Buffer.byteLength(stdout) + Buffer.byteLength(withoutDiagnosticReadiness(stderr)) >
+      Buffer.byteLength(output.stdout) +
+        Buffer.byteLength(withoutDiagnosticReadiness(output.stderr)) >
         params.maxBuffer
     ) {
       outputFailure.reject(failure(`CLI process exceeded maxBuffer (${params.maxBuffer} bytes)`));
@@ -251,14 +247,10 @@ export async function runCliProcessChild(params: {
       if (!collectingOutput) {
         return;
       }
-      if (name === "stdout") {
-        stdout += chunk;
-      } else {
-        stderr += chunk;
-      }
+      output[name] += chunk;
       checkOutputLimit();
       if (name === "stdout" && !timedOut) {
-        params.onStdout?.(stdout);
+        params.onStdout?.(output.stdout);
       }
     });
   }
@@ -301,37 +293,35 @@ export async function runCliProcessChild(params: {
     // The deadline is final: even an exit during diagnostic grace remains a failure.
     timedOut = true;
     const reason = `CLI process did not exit before the ${timeoutMs}ms deadlock guard (exitCode=${child.exitCode} signalCode=${child.signalCode})`;
-    const processTree = captureCliProcessTree(child.pid);
-    let diagnosticRequest = "unavailable: preload not ready or runtime unsupported";
-    const finish = (report = "Node diagnostic report unavailable: signal was not requested.") => {
-      const diagnosticDump = stderr.match(/\[cli-process-diagnostics\] (\{"pid":[^\n]*\})\n/u)?.[1];
-      void processTree.then((tree) =>
-        completion.reject(
-          failure(
-            `${reason}\nChild diagnostics: ${diagnosticRequest}; ${diagnosticDump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- process tree at deadline ---\n${tree}\n--- Node diagnostic report ---\n${report}\n--- child diagnostics ---\n${diagnosticDump ?? "No child dump received before cleanup."}`,
-          ),
-        ),
-      );
-    };
-    void processTree.then(() => {
+    void captureCliProcessTree(child.pid).then(async (tree) => {
+      let diagnosticRequest = "unavailable: preload not ready or runtime unsupported";
+      let report = Promise.resolve("Node diagnostic report unavailable: signal was not requested.");
       // An unhandled SIGQUIT would terminate Node before we could inspect it.
-      if (reportDir && stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)) {
+      if (
+        reportDir &&
+        output.stderr.includes(`[cli-process-diagnostics] ready pid=${child.pid}\n`)
+      ) {
         diagnosticRequest = "SIGQUIT was not delivered";
         try {
           if (child.kill("SIGQUIT")) {
             diagnosticRequest = `SIGQUIT requested; report grace<=${REPORT_GRACE_MS}ms`;
             // Preserve the child's JS diagnostic and trailing pipe output grace.
-            void collectNodeDiagnosticReport(
+            report = collectNodeDiagnosticReport(
               path.join(reportDir, "diagnostic.json"),
               DIAGNOSTIC_GRACE_MS,
-            ).then(finish);
-            return;
+            );
           }
         } catch (error) {
           diagnosticRequest = `request failed: ${String(error)}`;
         }
       }
-      finish();
+      const reportText = await report;
+      const dump = output.stderr.match(/\[cli-process-diagnostics\] (\{"pid":[^\n]*\})\n/u)?.[1];
+      completion.reject(
+        failure(
+          `${reason}\nChild diagnostics: ${diagnosticRequest}; ${dump ? "received" : "no response"}. SIGKILL cleanup attempted.\n--- process tree at deadline ---\n${tree}\n--- Node diagnostic report ---\n${reportText}\n--- child diagnostics ---\n${dump ?? "No child dump received before cleanup."}`,
+        ),
+      );
     });
   }, timeoutMs);
   guard.unref();
@@ -352,5 +342,5 @@ export async function runCliProcessChild(params: {
       throw error;
     });
   const exit = await (reports ? reports.track(settled) : settled);
-  return { ...exit, stdout, stderr: withoutDiagnosticReadiness(stderr) };
+  return { ...exit, ...snapshot() };
 }

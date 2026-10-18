@@ -6,7 +6,6 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -126,7 +125,7 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
   };
-  const entry: InternalSessionEntry = {
+  const entry = {
     sessionId: "openclaw-process-session",
     lifecycleRevision: "process-lifecycle",
     activeWriterRunId: "process-writer",
@@ -175,10 +174,7 @@ if (!await accessor.replaceSessionEntry(scope, rebound)) throw new Error("proof 
     loadSessionEntryReadOnly({ sessionKey, storePath, env })?.cliSessionBindings?.["proof-cli"]
       ?.sessionId,
   ).toBe(newerCliSessionId);
-  const spawn = JSON.parse((await fs.readFile(spawnLog, "utf8")).trim()) as {
-    argv: string[];
-  };
-  expect(spawn.argv).toEqual([
+  expect(JSON.parse((await fs.readFile(spawnLog, "utf8")).trim())).toHaveProperty("argv", [
     "--resume",
     sourceCliSessionId,
     "--fork-session",

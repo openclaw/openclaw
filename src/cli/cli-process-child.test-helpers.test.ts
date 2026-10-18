@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi, type TestContext } from "vitest";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { shouldEnableNodeDiagnosticReports } from "../../scripts/lib/node-diagnostic-report.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
@@ -17,25 +17,21 @@ import {
   waitForCliProcessStderrMarker,
 } from "./cli-process-child.test-helpers.js";
 
-const reportCleanupHooks = vi.hoisted(() => ({
-  afterEach: [] as (() => void | Promise<void>)[],
-  finished: [] as (() => void | Promise<void>)[],
-}));
-// Invoke the registered report cleanup while its child is still alive.
-vi.mock("vitest", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("vitest")>();
+type ReportCleanup = Parameters<TestContext["onTestFinished"]>[0];
+function reportHooks(context: TestContext) {
+  const callbacks: ReportCleanup[] = [];
   return {
-    ...actual,
-    afterEach: (cleanup: () => void | Promise<void>) => {
-      reportCleanupHooks.afterEach.push(cleanup);
-      return actual.afterEach(cleanup);
+    onTestFinished: (callback: ReportCleanup) => {
+      callbacks.push(callback);
+      context.onTestFinished(callback);
     },
-    onTestFinished: (cleanup: () => void | Promise<void>) => {
-      reportCleanupHooks.finished.push(cleanup);
-      return actual.onTestFinished(cleanup);
+    async clean() {
+      for (const callback of callbacks) {
+        await callback(context);
+      }
     },
   };
-});
+}
 
 const DETACHED_GRANDCHILD_SCRIPT = [
   "const { spawn } = require('node:child_process');",
@@ -76,14 +72,6 @@ function runScript({
 
 const captureFailure = (error: unknown) => error;
 const closedPipes = { stdin: { closed: true }, stdout: { closed: true }, stderr: { closed: true } };
-async function cleanReports(first: number, afterEach = false) {
-  for (const cleanup of [
-    ...(afterEach ? reportCleanupHooks.afterEach : []),
-    ...reportCleanupHooks.finished.slice(first),
-  ]) {
-    await cleanup();
-  }
-}
 
 it("keeps the end of streams longer than the output tail cap", () => {
   const message = formatCliProcessFailure({
@@ -95,9 +83,9 @@ it("keeps the end of streams longer than the output tail cap", () => {
   expect(message).toContain("[... truncated 8 chars ...]");
   expect(message).toMatch(/xEND$/u);
 });
-it("names the live handle and keeps partial output when a child never exits", async () => {
+it("names the live handle and keeps partial output when a child never exits", async (context) => {
   let child: ChildProcessWithoutNullStreams | undefined;
-  const firstFinishedHook = reportCleanupHooks.finished.length;
+  const reports = reportHooks(context);
   const childRun = runScript({
     script: [
       "process.stdout.write('partial');",
@@ -107,15 +95,14 @@ it("names the live handle and keeps partial output when a child never exits", as
       "setInterval(() => {}, 1_000);",
     ],
     timeoutMs: 500,
+    onTestFinished: reports.onTestFinished,
     interact: (runningChild) => {
       child = runningChild;
       onTestFinished(() => stopChildProcess(runningChild, 1_000));
       runningChild.stdin.end();
     },
   });
-  const reportCleanup = shouldEnableNodeDiagnosticReports()
-    ? (reportCleanupHooks.afterEach[0] ?? reportCleanupHooks.finished[firstFinishedHook]!)()
-    : undefined;
+  const reportCleanup = reports.clean();
   const failure = await childRun.catch(captureFailure);
   await reportCleanup;
 
@@ -185,20 +172,21 @@ it.skipIf(process.platform === "win32").each([
   },
 );
 
-it.each([false, true])(
+it.for([false, true])(
   "preserves input failure, joins pipes, and retains unjoined reports (kill fails=%s)",
-  async (killFails) => {
+  async (killFails, context) => {
     const inputFailure = new Error("CLI interaction failed");
     const fixture = createFixtureLifetime();
     const root = fixture.createTempDir("cli-report-owner-");
     const owner = createVitestResourceOwner(root);
-    const firstFinishedHook = reportCleanupHooks.finished.length;
+    const reports = reportHooks(context);
     let child: ChildProcessWithoutNullStreams | undefined;
     let reportDir: string | undefined;
     let restoreKill: (() => void) | undefined;
     try {
       const failure = await withEnvAsync({ TMPDIR: root, TMP: root, TEMP: root }, () =>
         runScript({
+          onTestFinished: reports.onTestFinished,
           script:
             "const directory = process.report?.reportOnSignal ? process.report.directory : undefined; if (directory) process.report.writeReport(); process.stdout.write(JSON.stringify({ directory })); setInterval(() => {}, 1_000);",
           interact: async (runningChild) => {
@@ -223,7 +211,7 @@ it.each([false, true])(
       if (reportDir) {
         expect(fs.existsSync(path.join(reportDir, "diagnostic.json"))).toBe(true);
       }
-      await cleanReports(firstFinishedHook, true);
+      await reports.clean();
       if (reportDir) {
         expect(fs.existsSync(reportDir)).toBe(killFails);
       }
@@ -268,13 +256,14 @@ it("preserves a launch failure and closes its pipes without a live child", async
 
 it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
   "requires inherited output EOF before releasing a detached handoff (%s)",
-  async (shape, { signal }) => {
+  async (shape, context) => {
+    const { signal } = context;
     const launcherShape = shape === "identity-unavailable" ? "launcher-alive" : shape;
     const fixture = createFixtureLifetime();
     const root = fixture.createTempDir("cli-inherited-output-");
     const owner = createVitestResourceOwner(root);
     const receipt = path.join(root, "descendant.pid");
-    const firstFinishedHook = reportCleanupHooks.finished.length;
+    const reports = reportHooks(context);
     const chunks: string[] = [];
     let child: ChildProcessWithoutNullStreams | undefined;
     let descendantPid: number | undefined;
@@ -290,6 +279,7 @@ it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
     try {
       const result = await withEnvAsync({ TMPDIR: root, TMP: root, TEMP: root }, () =>
         runScript({
+          onTestFinished: reports.onTestFinished,
           script: DETACHED_GRANDCHILD_SCRIPT,
           args: [launcherShape, receipt],
           onStdout: (stdout) => chunks.push(stdout),
@@ -335,7 +325,7 @@ it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
           signalCode: launcherShape === "launcher-alive" ? "SIGKILL" : null,
         });
       }
-      await cleanReports(firstFinishedHook);
+      await reports.clean();
       if (shape === "finite" || !shouldEnableNodeDiagnosticReports()) {
         expect(() => owner.assertReleased()).not.toThrow();
       } else {
@@ -367,7 +357,7 @@ it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
           }
         }
       });
-      await cleanReports(firstFinishedHook);
+      await reports.clean();
       await fixture.cleanup();
     }
   },
