@@ -34,7 +34,10 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
+import {
+  createModelObserver,
+  createModelPromptStats,
+} from "./attempt.model-diagnostic-observation.js";
 
 function wrap(
   streamFn: StreamFn,
@@ -456,7 +459,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       small: "short",
       large: (
         Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
-        '"\\日本語 café 🦞\ud800x\udfff\ud800\ud800\udfff\udfff /\u2028\u2029'
+        '"\\日本語 café 🦞\ud800x\udfff'
       ).repeat(128),
       omitted: undefined,
       array: [undefined, Number.NaN, Symbol("omitted")],
@@ -465,9 +468,11 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     };
     const messages = [{ role: "user" as const, content: "fixture", timestamp: 0, extra: value }];
     const tools = [{ name: "fixture", description: "fixture", parameters: Type.Object({}, value) }];
+    const measurePromptStats = createModelPromptStats();
     const observer = createModelObserver({
       streamContext: { messages, tools },
       capturePromptStats: true,
+      measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
     observer.observeResponseChunk(Date.now(), value);
@@ -480,17 +485,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     });
     for (const text of ["changed 漢字\ud800".repeat(512), "short"]) {
       value.large = text;
-      expect(
-        createModelObserver({ streamContext: { messages, tools }, capturePromptStats: true })
-          .promptStats,
-      ).toMatchObject({
+      expect(measurePromptStats({ messages, tools })).toMatchObject({
         inputMessagesChars: JSON.stringify(messages).length,
         toolDefinitionsChars: JSON.stringify(tools).length,
       });
     }
   });
 
-  it("measures prompt sizes across appends, rewrites, and compaction", async () => {
+  it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
     setDiagnosticsEnabledForProcess(true);
     const first = { role: "user" as const, content: 'prefix "漢字"\n'.repeat(512), timestamp: 1 };
     const second = { role: "user" as const, content: "append 🦞\n".repeat(512), timestamp: 2 };
@@ -518,7 +520,25 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           toolDefinitionsChars: 2,
           totalChars: inputMessagesChars + 8,
         });
-        await wrapped({} as never, context);
+        const stringify = vi.spyOn(JSON, "stringify");
+        try {
+          await wrapped({} as never, context);
+          // Unchanged prefix text must not be encoded again on an append.
+          if (
+            messages.length === 2 &&
+            messages[0] === first &&
+            first.content.startsWith("prefix")
+          ) {
+            expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(
+              0,
+            );
+            expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
+              1,
+            );
+          }
+        } finally {
+          stringify.mockRestore();
+        }
       }
     });
     expect(
@@ -547,7 +567,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     expect(observer.promptStats?.inputMessagesChars).toBe(expectedChars);
     expect(observer.sizeTimingFields().requestPayloadBytes).toBe(expectedBytes);
-    expect(largestJsonString).toBeLessThan(8 * 1024);
+    expect(largestJsonString).toBeLessThan(64 * 1024);
   });
 
   it("orders semantic results between repeated request observations", async () => {

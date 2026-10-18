@@ -50,47 +50,34 @@ type ModelCallObservationState = {
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
-function jsonStringContentLength(text: string, utf8: boolean): number {
-  let length = utf8 ? Buffer.byteLength(text, "utf8") : text.length;
-  // oxlint-disable-next-line no-control-regex -- JSON escapes U+0000 through U+001F.
-  const firstEscape = text.search(/[\u0000-\u001f"\\\ud800-\udfff]/u);
-  for (let index = firstEscape; index >= 0 && index < text.length; index++) {
-    const code = text.charCodeAt(index);
-    if (
-      code === 0x22 ||
-      code === 0x5c ||
-      code === 8 ||
-      code === 9 ||
-      code === 10 ||
-      code === 12 ||
-      code === 13
-    ) {
-      length++;
-    } else if (code < 0x20) {
-      length += 5;
-    } else if (code >= 0xd800 && code <= 0xdfff) {
-      const next = text.charCodeAt(index + 1);
-      if (code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
-        index++;
-      } else {
-        // JSON escapes lone surrogates; UTF-8 otherwise counts a three-byte replacement.
-        length += utf8 ? 3 : 5;
-      }
-    }
-  }
-  return length;
-}
+type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
+type PromptStringLengthPass = { previous: PromptStringLengths; current: PromptStringLengths };
 
-function jsonLength(value: unknown, utf8: boolean): number | undefined {
+function jsonLength(
+  value: unknown,
+  utf8: boolean,
+  promptStringLengths?: PromptStringLengthPass,
+): number | undefined {
   try {
     let stringLengths = 0;
-    const serialized = JSON.stringify(value, (_key, part: unknown) => {
+    const serialized = JSON.stringify(value, function (this: object, key, part: unknown) {
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
-      // Count large strings without allocating quoted copies. Native JSON still
-      // owns toJSON, property omission, keys, and container semantics.
-      stringLengths += jsonStringContentLength(part, utf8);
+      const cached = !utf8 ? promptStringLengths?.previous.get(this)?.get(key) : undefined;
+      // Keep large strings out of the combined JSON allocation. Native encoding
+      // still owns escaping, surrogate handling, toJSON, and container semantics.
+      let chars = cached?.text === part ? cached.chars : undefined;
+      if (chars === undefined) {
+        const encoded = JSON.stringify(part);
+        chars = (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      }
+      if (!utf8 && promptStringLengths) {
+        const fields = promptStringLengths.current.get(this) ?? new Map();
+        fields.set(key, { text: part, chars });
+        promptStringLengths.current.set(this, fields);
+      }
+      stringLengths += chars;
       return "";
     });
     return serialized === undefined
@@ -146,12 +133,28 @@ function streamContextModelContentFields(
   return Object.keys(content).length > 0 ? content : undefined;
 }
 
+export function createModelPromptStats() {
+  // The attempt owns this cache; each field's exact text is its revision. Keep
+  // walking containers so compaction and in-place hook edits retain JSON semantics.
+  let previous: PromptStringLengths = new WeakMap();
+  return (streamContext: ModelCallRequestContext) => {
+    const current: PromptStringLengths = new WeakMap();
+    const stats = streamContextModelPromptStats(streamContext, { previous, current });
+    // Drop deleted fields and compacted history even if their holders remain alive.
+    previous = current;
+    return stats;
+  };
+}
+
 function streamContextModelPromptStats(
   streamContext: ModelCallRequestContext,
+  promptStringLengths?: PromptStringLengthPass,
 ): ModelCallPromptStats | undefined {
   const { messages, tools, systemPrompt } = streamContext;
-  const inputMessagesChars = messages ? jsonLength(messages, false) : undefined;
-  const toolDefinitionsChars = tools ? jsonLength(tools, false) : undefined;
+  const inputMessagesChars = messages
+    ? jsonLength(messages, false, promptStringLengths)
+    : undefined;
+  const toolDefinitionsChars = tools ? jsonLength(tools, false, promptStringLengths) : undefined;
   const systemPromptChars = systemPrompt?.length;
   if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
@@ -311,10 +314,11 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
+  measurePromptStats?: ReturnType<typeof createModelPromptStats>;
 }) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
   const promptStats = params.capturePromptStats
-    ? streamContextModelPromptStats(params.streamContext)
+    ? (params.measurePromptStats ?? streamContextModelPromptStats)(params.streamContext)
     : undefined;
   const state: ModelCallObservationState = {
     responseStreamBytes: 0,

@@ -10,7 +10,10 @@ import {
   type ModelCallDiagnosticContext,
   type ModelCallLifecycle,
 } from "./attempt.model-diagnostic-lifecycle.js";
-import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
+import {
+  createModelObserver,
+  createModelPromptStats,
+} from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 
@@ -165,6 +168,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
+  const measurePromptStats = createModelPromptStats();
   return (
     model: Parameters<StreamFn>[0] & Pick<ProviderRuntimeModel, "requestTimeoutMs">,
     streamContext,
@@ -185,6 +189,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          measurePromptStats,
         }),
     });
 
