@@ -1,6 +1,4 @@
 /* @vitest-environment jsdom */
-// Exercises the serialized mock gateway exactly as a page would: the init
-// script installs MockWebSocket on window, and requests flow over it.
 import { expectDefined } from "@openclaw/normalization-core";
 import { Compile } from "typebox/compile";
 import { expect, vi } from "vitest";
@@ -242,14 +240,15 @@ it.for(["absent", "null", "explicit"] as const)(
       baseHash: "mock-config-hash-3",
     });
     await flushMockTimers();
-    gateway.setMethodResponse("config.get", {
+    const persisted = {
       raw: JSON.stringify(replacement),
       config: replacement,
       hash: "replacement-hash",
       appliedConfigHash: "replacement-applied-hash",
       valid: true,
       issues: [],
-    });
+    };
+    gateway.setMethodResponse("config.get", persisted);
     gateway.resolveDeferred("config.patch", { ok: true, hash: "replacement-hash" });
     expect(frames.find((frame) => frame.id === "pending-replacement")).toMatchObject({
       ok: true,
@@ -258,12 +257,7 @@ it.for(["absent", "null", "explicit"] as const)(
     execute(script);
     const reconnected = gatewayPage.connect();
     await flushMockTimers();
-    expect(await reconnected.request("get-replaced", "config.get", {})).toMatchObject({
-      raw: JSON.stringify(replacement),
-      config: replacement,
-      hash: "replacement-hash",
-      appliedConfigHash: "replacement-applied-hash",
-    });
+    expect(await reconnected.request("get-replaced", "config.get", {})).toMatchObject(persisted);
     expect(
       await reconnected.request("set-after-replacement", "config.set", {
         raw: JSON.stringify(replacement),

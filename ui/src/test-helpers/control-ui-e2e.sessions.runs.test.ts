@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { expect } from "vitest";
 import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
-import { flushMockTimers as flush } from "./mock-gateway-page.test-support.ts";
 import { sessionClient } from "./session-gateway-client.test-support.ts";
 
 const runFacts = (status: string, activeRunIds: string[] = []) => ({
@@ -9,26 +8,21 @@ const runFacts = (status: string, activeRunIds: string[] = []) => ({
   activeRunIds,
   hasActiveRun: activeRunIds.length > 0,
 });
+const abortedRuns = (runIds: string[]) => ({ aborted: runIds.length > 0, runIds });
 
 it.for(["sessions.create", "sessions.catalog.continue"])(
   "retains a terminal event before the %s acknowledgment",
   async (method, { connect }) => {
     const key = "agent:main:created-before-ack";
     const runId = "created-run";
-    const { send, request, controls } = await connect({
+    const connection = await connect({
       deferredMethods: [method],
       methodResponses: { [method]: { key, runStarted: true, runId } },
     });
-    const client = sessionClient(request, key);
-    await send(method, { message: "Prepare workspace" });
-    controls.emit("chat", {
-      sessionKey: key,
-      runId,
-      state: "error",
-      errorMessage: "Workspace preparation failed",
-    });
-    controls.resolveDeferred(method);
-    await flush();
+    const client = sessionClient(connection, key);
+    await client.send(method, { message: "Prepare workspace" });
+    client.emitChat(runId, "error", "Workspace preparation failed");
+    await client.resolve(method);
     expect(await client.session()).toMatchObject({
       key,
       ...runFacts("failed"),
@@ -50,28 +44,22 @@ it("commits targeted and session-wide aborts without replacing session edits or 
     ...runFacts("running", ["other-run"]),
     label: "Other",
   };
-  const { request, frames } = await connect({
+  const connection = await connect({
     sessions: [active, other],
     methodResponses: { "sessions.list": { sessions: [active, other] } },
   });
-  const client = sessionClient(request, active.key);
+  const client = sessionClient(connection, active.key);
   await client.patch({ label: "Renamed onboarding" });
-  await request("sessions.patch", { key: other.key, pinned: true });
-  expect(await client.abort({ runId: "unknown-run" })).toMatchObject({
-    aborted: false,
-    runIds: [],
-  });
-  expect(await client.abort({ runId: "run-a" })).toMatchObject({
-    aborted: true,
-    runIds: ["run-a"],
-  });
+  await client.request("sessions.patch", { key: other.key, pinned: true });
+  expect(await client.abort({ runId: "unknown-run" })).toMatchObject(abortedRuns([]));
+  expect(await client.abort({ runId: "run-a" })).toMatchObject(abortedRuns(["run-a"]));
   const expectRows = async (...rows: Record<string, unknown>[]) => {
     expect(await client.rows()).toEqual(
       expect.arrayContaining(rows.map((row) => expect.objectContaining(row))),
     );
   };
   await expectRows({ ...active, label: "Renamed onboarding", activeRunIds: ["run-b"] });
-  expect(await client.abort()).toMatchObject({ aborted: true, runIds: ["run-b"] });
+  expect(await client.abort()).toMatchObject(abortedRuns(["run-b"]));
   await expectRows(
     {
       ...active,
@@ -81,11 +69,11 @@ it("commits targeted and session-wide aborts without replacing session edits or 
     },
     { ...other, pinned: true },
   );
-  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+  expect(client.chatEvents()).toEqual([
     expect.objectContaining({ sessionKey: active.key, runId: "run-a", state: "aborted" }),
     expect.objectContaining({ sessionKey: active.key, runId: "run-b", state: "aborted" }),
   ]);
-  expect(frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
+  expect(client.frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
 });
 
 it.for(["direct", "descendant", "targeted"] as const)(
@@ -104,7 +92,7 @@ it.for(["direct", "descendant", "targeted"] as const)(
           : {}),
     };
     const other = { key: "agent:main:other", status: "running", hasActiveRun: true };
-    const { request } = await connect({
+    const connection = await connect({
       sessionKey: active.key,
       sessions: [active, other],
       sessionInfo: active,
@@ -115,17 +103,16 @@ it.for(["direct", "descendant", "targeted"] as const)(
             : { ok: true, abortedRunId: null, status: "no-active-run" },
       },
     });
-    const client = sessionClient(request, active.key);
+    const client = sessionClient(connection, active.key);
     if (activity === "targeted") {
-      await request("sessions.abort", { key: active.key, runId: "run-a" });
+      await client.request("sessions.abort", { key: active.key, runId: "run-a" });
       expect(await client.session()).toMatchObject({
         ...runFacts("running", ["run-b"]),
         hasActiveSubagentRun: true,
       });
     }
-    await request("sessions.abort", { key: active.key, clearQueued: true });
-    // The Gateway computes these rows at read time, so no read issued after Stop may
-    // republish the pre-Stop activity with an older timestamp.
+    await client.request("sessions.abort", { key: active.key, clearQueued: true });
+    // Read-time rows must not republish pre-Stop activity or timestamps.
     const settled = {
       key: active.key,
       ...runFacts(activity === "targeted" ? "killed" : "done"),
@@ -150,14 +137,14 @@ it("registers a started send for targeted abort without cancelling another run o
 }) => {
   const key = "agent:main:send-abort";
   const active = { key, ...runFacts("running", ["other-run"]) };
-  const { request, frames } = await connect({
+  const connection = await connect({
     sessions: [active],
     methodResponses: {
       "chat.send": { runId: "new-run", status: "started" },
       "sessions.list": { sessions: [active] },
     },
   });
-  const client = sessionClient(request, key);
+  const client = sessionClient(connection, key);
   const params = { sessionKey: key, message: "Start another run", idempotencyKey: "new-run" };
   expect(await client.payload("chat.send", params)).toMatchObject({
     runId: "new-run",
@@ -166,12 +153,12 @@ it("registers a started send for targeted abort without cancelling another run o
   expect(await client.rows()).toMatchObject([
     { activeRunIds: ["other-run", "new-run"], hasActiveRun: true },
   ]);
-  expect(await client.abort({ runId: "new-run" })).toEqual({ aborted: true, runIds: ["new-run"] });
-  await request("chat.send", params);
+  expect(await client.abort({ runId: "new-run" })).toEqual(abortedRuns(["new-run"]));
+  await client.request("chat.send", params);
   expect(await client.rows()).toMatchObject([
     { activeRunIds: ["other-run"], hasActiveRun: true, status: "running" },
   ]);
-  expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual([
+  expect(client.chatEvents()).toEqual([
     expect.objectContaining({ sessionKey: key, runId: "new-run", state: "aborted" }),
   ]);
 });
@@ -196,33 +183,27 @@ it.for([
       key,
       ...runFacts(otherRun ? "running" : "queued", otherRun ? ["other-run"] : []),
     };
-    const { send, response, request, controls } = await connect({
+    const connection = await connect({
       sessions: [initial],
       deferredMethods: ["chat.send"],
       methodResponses: { "chat.send": { runId: "fast-run", status: "started" } },
     });
-    const client = sessionClient(request, key);
-    const params = { sessionKey: key, message: "Complete quickly", idempotencyKey: "fast-run" };
-    const id = await send("chat.send", params);
+    const client = sessionClient(connection, key);
+    const { controls, response } = client;
+    const id = await client.sendChat("fast-run", "Complete quickly");
     expect(response(id)).toBeUndefined();
-    controls.emit("chat", {
-      sessionKey: key,
-      runId: "fast-run",
-      state: event,
-      ...(event === "error" ? { errorMessage: diagnostic } : {}),
-    });
+    client.emitChat("fast-run", event, event === "error" ? diagnostic : undefined);
     expect(await client.rows()).toMatchObject([initial]);
     let newerCompletion: unknown;
     if (newerEvent) {
       if (newerEvent === "abort receipt") {
-        await request("chat.abort", { sessionKey: key, runId: "other-run" });
+        await client.abort({ runId: "other-run" });
       } else {
-        controls.emit("chat", {
-          sessionKey: key,
-          runId: "other-run",
-          state: newerEvent,
-          ...(newerEvent === "error" ? { errorMessage: "Later run failed" } : {}),
-        });
+        client.emitChat(
+          "other-run",
+          newerEvent,
+          newerEvent === "error" ? "Later run failed" : undefined,
+        );
       }
       newerCompletion = (await client.transcript()).sessionInfo;
       expect(newerCompletion).toMatchObject({
@@ -236,8 +217,7 @@ it.for([
       }
       expect(response(id)).toBeUndefined();
     }
-    controls.resolveDeferred("chat.send");
-    await flush();
+    await client.resolve("chat.send");
     expect(response(id)?.payload).toMatchObject({ runId: "fast-run", status: "started" });
     if (newerEvent) {
       expect(await client.rows()).toEqual([newerCompletion]);
@@ -258,30 +238,28 @@ it.for([
         lastRunError: diagnostic,
       });
     }
-    expect(await client.abort({ runId: "fast-run" })).toEqual({ aborted: false, runIds: [] });
+    expect(await client.abort({ runId: "fast-run" })).toEqual(abortedRuns([]));
     // A replayed ACK must not overwrite a newer outcome on the same session.
     if (otherRun) {
-      controls.emit("chat", { sessionKey: key, runId: "other-run", state: "error" });
+      client.emitChat("other-run", "error");
     }
     const beforeReplay = await client.rows();
     if (otherRun) {
       expect(beforeReplay).toMatchObject([runFacts("failed")]);
     }
     controls.deferNext("chat.send");
-    await send("chat.send", params);
-    controls.resolveDeferred("chat.send");
-    await flush();
+    await client.sendChat("fast-run", "Complete quickly");
+    await client.resolve("chat.send");
     expect(await client.rows()).toEqual(beforeReplay);
     if (!otherRun && outcome === "failed") {
       controls.setMethodResponse("chat.send", { runId: "next-run", status: "started" });
       controls.deferNext("chat.send");
-      await send("chat.send", { ...params, idempotencyKey: "next-run" });
-      controls.resolveDeferred("chat.send");
-      await flush();
+      await client.sendChat("next-run", "Complete quickly");
+      await client.resolve("chat.send");
       const next = (await client.transcript()).sessionInfo;
       expect(next).toMatchObject({ status: "running", activeRunIds: ["next-run"] });
       expect(next).not.toHaveProperty("lastRunError");
-      controls.emit("chat", { sessionKey: key, runId: "next-run", state: "final" });
+      client.emitChat("next-run", "final");
       const completed = (await client.transcript()).sessionInfo;
       expect(completed).toMatchObject({ status: "done", activeRunIds: [] });
       expect(completed).not.toHaveProperty("lastRunError");
@@ -302,7 +280,7 @@ it.for([
     const key = "agent:main:abort-before-ack";
     const runId = "pending-run";
     const aborted = outcome === "success";
-    const { send, request, controls, frames } = await connect({
+    const connection = await connect({
       sessions: [{ key, ...runFacts("queued") }],
       deferredMethods: ["chat.send"],
       methodResponses: {
@@ -310,26 +288,28 @@ it.for([
         "chat.abort":
           outcome === "error"
             ? { __mockError: { code: "INVALID_REQUEST", message: "Abort rejected" } }
-            : { aborted, runIds: aborted ? [runId] : [] },
+            : abortedRuns(aborted ? [runId] : []),
       },
     });
-    const client = sessionClient(request, key);
-    await send("chat.send", { sessionKey: key, message: "Start", idempotencyKey: runId });
-    const result = await request("chat.abort", { sessionKey: key, ...(targeted ? { runId } : {}) });
+    const client = sessionClient(connection, key);
+    await client.sendChat(runId);
+    const result = await client.request("chat.abort", {
+      sessionKey: key,
+      ...(targeted ? { runId } : {}),
+    });
     if (outcome === "error") {
       expect(result.ok).toBe(false);
     } else {
-      expect(result.payload).toEqual({ aborted, runIds: aborted ? [runId] : [] });
+      expect(result.payload).toEqual(abortedRuns(aborted ? [runId] : []));
     }
-    controls.resolveDeferred("chat.send");
-    await flush();
+    await client.resolve("chat.send");
     expect(await client.rows()).toMatchObject([
       {
         key,
         ...runFacts(aborted ? "killed" : "running", aborted ? [] : [runId]),
       },
     ]);
-    expect(frames.filter((frame) => frame.event === "chat").map((frame) => frame.payload)).toEqual(
+    expect(client.chatEvents()).toEqual(
       aborted ? [expect.objectContaining({ sessionKey: key, runId, state: "aborted" })] : [],
     );
   },

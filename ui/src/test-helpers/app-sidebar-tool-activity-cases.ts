@@ -175,7 +175,7 @@ it.each([
 ])(
   "withdraws matching $stream progress with $metadata metadata when $flag changes",
   ({ stream, flag, metadata }) => {
-    const { narration, tools, emit: emitTool } = createToolNarration();
+    const { tools, emit: emitTool } = createToolNarration();
     const emit = (
       runId: string,
       toolCallId: string,
@@ -208,7 +208,6 @@ it.each([
     expect(tools).toHaveLength(visibleCount + 1);
     emit("run-2", "current", { [flag]: true }, stream);
     expect(tools).toHaveLength(visibleCount + 1);
-    narration.disconnect();
   },
 );
 

@@ -52,7 +52,25 @@ function installColdLoadProbes(
   let liveInvalidatorOwner: ProbeInit.SessionDataProbeOwner | undefined;
   let originalLiveInvalidator: ProbeInit.ProbeMethod | undefined;
   const chatOwners = new Map<HTMLElement, ProbeInit.ChatOwnerRecord>();
-  const chatLifecycle = new Map<string, Map<string, Map<string, { count: number; ms: number }>>>();
+  function lifecycleCounter() {
+    const groups = new Map<string, Map<string, { count: number; ms: number }>>();
+    return {
+      record(method: string, ms: number) {
+        const methods = groups.get(liveKind) ?? new Map();
+        const stats = methods.get(method) ?? { count: 0, ms: 0 };
+        stats.count++;
+        stats.ms += ms;
+        methods.set(method, stats);
+        groups.set(liveKind, methods);
+        lastActivity = performance.now();
+      },
+      read: () =>
+        Object.fromEntries(
+          [...groups].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
+        ),
+    };
+  }
+  const chatLifecycle = new Map<string, ReturnType<typeof lifecycleCounter>>();
   const chatProducerStacks = new Map<string, number>();
   const frameProbe = createFrameProbe(() => ({
     startedAt: liveStartedAt,
@@ -83,15 +101,9 @@ function installColdLoadProbes(
       );
     },
     record(tag: string, method: string, ms = 0) {
-      const kinds = chatLifecycle.get(tag) ?? new Map();
-      const methods = kinds.get(liveKind) ?? new Map();
-      const stats = methods.get(method) ?? { count: 0, ms: 0 };
-      stats.count++;
-      stats.ms += ms;
-      methods.set(method, stats);
-      kinds.set(liveKind, methods);
-      chatLifecycle.set(tag, kinds);
-      lastActivity = performance.now();
+      const counter = chatLifecycle.get(tag) ?? lifecycleCounter();
+      counter.record(method, ms);
+      chatLifecycle.set(tag, counter);
     },
     producer(record: ProbeInit.ChatOwnerRecord, source: string) {
       const stack = new Error().stack?.split("\n").slice(3, 18).join(" <- ") ?? "";
@@ -210,12 +222,7 @@ function installColdLoadProbes(
         measurement: "pane-render-passes-and-explicit-lifecycle-notifications",
         unmeasured: ["page snapshot computations", "fine-grained Solid bindings"],
         lifecycle: Object.fromEntries(
-          [...chatLifecycle].map(([tag, kinds]) => [
-            tag,
-            Object.fromEntries(
-              [...kinds].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
-            ),
-          ]),
+          [...chatLifecycle].map(([tag, counter]) => [tag, counter.read()]),
         ),
         producerStacks: Object.fromEntries(chatProducerStacks),
         requests: Object.fromEntries(chatRequests),
@@ -232,10 +239,7 @@ function installColdLoadProbes(
   const sidebarLifecycleOriginals = new Map<ProbeInit.SidebarLifecycle, () => void>();
   const sidebarPasses: Array<{ method: ProbeInit.SidebarLifecycle; kind: string; atMs: number }> =
     [];
-  const sidebarLifecycle = new Map<
-    string,
-    Map<ProbeInit.SidebarLifecycle, { count: number; ms: number }>
-  >();
+  const sidebarLifecycle = lifecycleCounter();
   const sidebarOwnerStacks = new Map<string, number>();
   const OriginalWeakMap = window.WeakMap;
   class RegistrationWeakMap<K extends WeakKey, V> extends OriginalWeakMap<K, V> {
@@ -421,13 +425,7 @@ function installColdLoadProbes(
             } finally {
               if (connected) {
                 sidebarPasses.push({ method, kind: liveKind, atMs: started - liveStartedAt });
-                const group = sidebarLifecycle.get(liveKind) ?? new Map();
-                const stats = group.get(method) ?? { count: 0, ms: 0 };
-                stats.count++;
-                stats.ms += performance.now() - started;
-                group.set(method, stats);
-                sidebarLifecycle.set(liveKind, group);
-                lastActivity = performance.now();
+                sidebarLifecycle.record(method, performance.now() - started);
               }
             }
           };
@@ -477,9 +475,7 @@ function installColdLoadProbes(
           ? {
               measurement: "owner-invalidations-and-projection-lifecycle-passes",
               passes: sidebarPasses,
-              lifecycle: Object.fromEntries(
-                [...sidebarLifecycle].map(([kind, methods]) => [kind, Object.fromEntries(methods)]),
-              ),
+              lifecycle: sidebarLifecycle.read(),
               invalidationStacks: Object.fromEntries(sidebarOwnerStacks),
             }
           : null,
