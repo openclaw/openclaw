@@ -472,6 +472,7 @@ function git(checkout, args, options = {}) {
   return execFileSync("git", ["-C", checkout, ...args], {
     ...boundedSyncOptions({}, options.timeoutMs),
     encoding: options.encoding ?? "utf8",
+    maxBuffer: 32 * 1024 * 1024,
     stdio: options.stdio ?? ["ignore", "pipe", "pipe"],
   });
 }

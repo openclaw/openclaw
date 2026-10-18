@@ -419,7 +419,7 @@ function makeManagedFixture(options: Omit<FixtureOptions, "includeSeed"> = {}) {
 function pushFixtureChange(seed: string, file = "docs/index.md") {
   writeFixtureFile(path.join(seed, file), "// changed\n");
   git(seed, "add", file);
-  git(seed, "commit", "-m", "fixture update");
+  git(seed, "commit", "--quiet", "-m", "fixture update");
   git(seed, "push");
 }
 
@@ -1225,6 +1225,18 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     });
     writeFileSync(path.join(seed, "package.json"), '{"name":"openclaw"}\n');
     git(seed, "add", "package.json");
+    // A long catch-up can exceed execFileSync's 1 MiB default with paths alone.
+    const catchupPaths = Array.from(
+      { length: 6000 },
+      (_, index) => `docs/${"catchup-".repeat(27)}${index}.md`,
+    );
+    const emptyBlob = execFileSync("git", ["-C", seed, "hash-object", "-w", "--stdin"], {
+      input: "",
+      encoding: "utf8",
+    }).trim();
+    execFileSync("git", ["-C", seed, "update-index", "--index-info"], {
+      input: catchupPaths.map((file) => `100644 ${emptyBlob}\t${file}\n`).join(""),
+    });
     const changedPath = "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
     pushFixtureChange(seed, changedPath);
     const commands = fakeCommands(mirror);
@@ -1242,7 +1254,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       afterSha: git(seed, "rev-parse", "HEAD"),
       actions: { macAppRebuild: true, macUiVerification: true },
     });
-    expect(output.buildChangedPaths).toEqual([changedPath, "package.json"]);
+    expect(output.buildChangedPaths).toEqual([
+      changedPath,
+      ...catchupPaths.toSorted(),
+      "package.json",
+    ]);
     expect(commands.calls).toEqual([
       `${process.execPath} dist/index.js gateway stop`,
       "pnpm install --frozen-lockfile",
