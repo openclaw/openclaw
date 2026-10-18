@@ -600,11 +600,17 @@ export function prepareProjectedSessionPresentation(
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.
       const view = listView(opts);
-      const conditional = opts.rowMode === "sidebar" || opts.ifRowsRevision !== undefined;
+      const conditional =
+        view.conditional === true ||
+        opts.rowMode === "sidebar" ||
+        opts.ifRowsRevision !== undefined;
       const previous = view.rows;
       if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        view.conditional ||= conditional;
-        return { sessions: previous, rowHistory: view.rowHistory };
+        if (!conditional || view.conditional) {
+          return { sessions: previous, rowHistory: view.rowHistory };
+        }
+        // Promotion prepares and accounts for packed encodings without adding a generation.
+        rows = previous;
       }
       Object.freeze(rows);
       let sharedBytes = 0;

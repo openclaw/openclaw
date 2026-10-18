@@ -77,7 +77,10 @@ function hasRowBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
-  private rowEncodings = new WeakMap<GatewaySessionRow, { refs: number; bytes: number }>();
+  private rowEncodings = new WeakMap<
+    GatewaySessionRow,
+    { refs: number; bytes: number; extraBytes: number }
+  >();
   private bytes = 0;
   private refs = 0;
 
@@ -136,7 +139,7 @@ export class SessionListViewCache {
       this.releaseRowEncodings(view.rows);
     }
     view.conditional ||= conditional;
-    if (view.conditional && view.rows) {
+    if (view.conditional && view.rows && view.rows !== rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
@@ -160,9 +163,16 @@ export class SessionListViewCache {
         this.bytes -= encoding.bytes;
         retainedBytes -= encoding.bytes;
       } else {
-        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row) + (extraBytes?.(row) ?? 0) };
+        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row), extraBytes: 0 };
         this.rowEncodings.set(row, encoding);
       }
+      // Fact encodings can appear when a legacy view opts in while another view
+      // retains the row. Charge their growth once for that row's shared lifetime.
+      const extra = extraBytes?.(row) ?? encoding.extraBytes;
+      const added = extra - encoding.extraBytes;
+      this.bytes += added;
+      retainedBytes += added;
+      encoding.extraBytes = extra;
       bytes += encoding.bytes;
     }
     return bytes;
@@ -173,6 +183,8 @@ export class SessionListViewCache {
       const encoding = this.rowEncodings.get(row)!;
       if (--encoding.refs === 0) {
         this.rowEncodings.delete(row);
+        this.bytes -= encoding.extraBytes;
+        retainedBytes -= encoding.extraBytes;
       } else {
         this.bytes += encoding.bytes;
         retainedBytes += encoding.bytes;
