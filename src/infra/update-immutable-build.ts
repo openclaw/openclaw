@@ -7,6 +7,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
+import type { ImmutableOperatorBuildAccount } from "./update-immutable-build-account.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 import { directoryIdentity } from "./update-immutable-layout.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
@@ -45,6 +46,7 @@ try {
 
 export async function runImmutableBuild(params: {
   descriptor: ImmutableInstallDescriptor;
+  operator?: ImmutableOperatorBuildAccount;
   stage: string;
   sha: string;
   timeoutMs: number;
@@ -54,6 +56,10 @@ export async function runImmutableBuild(params: {
 }): Promise<void> {
   const { descriptor, stage, sha, timeoutMs, assertCurrent } = params;
   const build = descriptor.build;
+  const account = build ?? params.operator;
+  if (!account || account.uid === 0) {
+    throw new Error("Immutable builds require a non-root build account.");
+  }
   if (build?.account === descriptor.service.account) {
     throw new Error("Immutable build and runtime accounts must be separate.");
   }
@@ -71,8 +77,8 @@ export async function runImmutableBuild(params: {
     }
   }
   if (build) {
-    const id = async (flag: string, account: string) =>
-      checked(["/usr/bin/id", flag, account], stage);
+    const id = async (flag: string, accountName: string) =>
+      checked(["/usr/bin/id", flag, accountName], stage);
     const uid = await id("-u", build.account);
     const gid = await id("-g", build.account);
     const groups = await id("-G", build.account);
@@ -116,21 +122,15 @@ export async function runImmutableBuild(params: {
       stage,
     );
     assertCurrent();
-    await fs.chown(stage, build.uid, build.gid);
   }
-  try {
-    await fs.access(stage, fs.constants.W_OK);
-  } catch (error) {
-    throw new Error(
-      `Immutable build cannot write private staging area ${stage}; check the operator's permissions.`,
-      { cause: error },
-    );
+  if (process.geteuid?.() === 0) {
+    await fs.chown(stage, account.uid, account.gid);
   }
   for (const name of ["home", "tmp"]) {
     const dir = path.join(stage, name);
     await fs.mkdir(dir, { mode: 0o700 });
-    if (build) {
-      await fs.chown(dir, build.uid, build.gid);
+    if (process.geteuid?.() === 0) {
+      await fs.chown(dir, account.uid, account.gid);
     }
   }
   const unit = `openclaw-build-${randomUUID()}.service`;
@@ -138,8 +138,8 @@ export async function runImmutableBuild(params: {
   const worker = resolveRuntimeProcessEntrypointUrl("immutableBuild");
   const resolver = JSON.stringify((await fs.realpath("/etc/resolv.conf")).replaceAll("%", "%%"));
   const properties = [
-    `User=${build?.uid ?? process.geteuid?.()}`,
-    `Group=${build?.gid ?? process.getegid?.()}`,
+    `User=${account.uid}`,
+    `Group=${account.gid}`,
     "SupplementaryGroups=",
     "Slice=system.slice",
     "Delegate=no",
@@ -166,7 +166,7 @@ export async function runImmutableBuild(params: {
     `BindReadOnlyPaths=-/run/systemd/resolve ${resolver}`,
     `ReadWritePaths=${stage}`,
     `RuntimeMaxSec=${Math.ceil((timeoutMs * 12 + UPDATE_NETWORK_TIMEOUT_MS * 2) / 1000)}`,
-    `InaccessiblePaths=${build ? "-/root " : ""}${descriptor.service.stateDir} ${descriptor.service.configPath}`,
+    `InaccessiblePaths=-/root ${descriptor.service.stateDir} ${descriptor.service.configPath}`,
     ...(build
       ? [`MemoryMax=${build.resources.memoryMaxBytes}`, `TasksMax=${build.resources.tasksMax}`]
       : []),
@@ -204,7 +204,7 @@ export async function runImmutableBuild(params: {
         "--",
         "/usr/bin/env",
         "-i",
-        `PATH=${build ? `${build.toolchainPath}:/usr/bin:/bin` : (process.env.PATH ?? systemEnv.PATH)}`,
+        `PATH=${build ? `${build.toolchainPath}:/usr/bin:/bin` : params.operator!.path}`,
         "LANG=C.UTF-8",
         `HOME=${stage}/home`,
         `TMPDIR=${stage}/tmp`,

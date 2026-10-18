@@ -105,13 +105,19 @@ async function generation() {
 describe("sealed immutable generation", () => {
   it("seals recorded operator-build provenance and detects its later modification", async () => {
     const { root, sha } = await generation();
-    await recordImmutableOperatorBuild(root);
+    await recordImmutableOperatorBuild(root, { account: "fixture", uid: 1002, gid: 1002 });
     await sealImmutableGeneration(root);
     const original = await verifyImmutableGeneration(root, sha, runGit);
     expect(JSON.parse(await fs.readFile(path.join(root, "dist/build-info.json"), "utf8"))).toEqual({
       commit: sha,
       buildId: sha,
-      immutableBuild: { builtBy: "operator", isolation: "none" },
+      immutableBuild: {
+        builtBy: "operator",
+        isolation: "none",
+        account: "fixture",
+        uid: 1002,
+        gid: 1002,
+      },
     });
     await unseal(root);
     await fs.writeFile(

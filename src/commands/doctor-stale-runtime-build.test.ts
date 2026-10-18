@@ -85,6 +85,7 @@ describe("collectStaleRuntimeBuildFindings", () => {
 
   it.each([
     [{ builtBy: "operator", isolation: "none" }, true],
+    [{ builtBy: "operator", isolation: "none", account: "fixture", uid: 1002, gid: 1002 }, true],
     [{ builtBy: "isolated-account", isolation: "none" }, false],
     [{ builtBy: "operator", isolation: "systemd" }, false],
   ])(
@@ -100,7 +101,7 @@ describe("collectStaleRuntimeBuildFindings", () => {
         expect.objectContaining({
           severity: "warning",
           message: expect.stringContaining("without an isolated build account"),
-          details: { builtBy: "operator", isolation: "none" },
+          details: immutableBuild,
           fixHint: expect.stringContaining("https://docs.openclaw.ai/cli/update"),
         }),
       ]);

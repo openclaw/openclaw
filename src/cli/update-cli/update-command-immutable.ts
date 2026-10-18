@@ -95,6 +95,11 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
     return false;
   }
   let result: Awaited<ReturnType<typeof prepareImmutableUpdate>>;
+  const reportedWarnings = new Set<string>();
+  const onWarning = (warning: string) => {
+    reportedWarnings.add(warning);
+    defaultRuntime.error(`Warning: ${warning}`);
+  };
   let drainTimeoutMs: number | undefined;
   try {
     drainTimeoutMs = parseUpdateTimeoutMs(opts.drainTimeout, "--drain-timeout");
@@ -115,13 +120,16 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
       sha: opts.sha,
       dryRun: opts.dryRun,
       timeoutMs: parseUpdateTimeoutMs(opts.timeout),
+      onWarning,
     });
   } catch (error) {
     return reportImmutableFailure(error, opts.json);
   }
   if (!opts.json) {
     for (const warning of result.warnings) {
-      defaultRuntime.error(`Warning: ${warning}`);
+      if (!reportedWarnings.has(warning)) {
+        onWarning(warning);
+      }
     }
   }
   const receipts: string[] = [];

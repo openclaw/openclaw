@@ -54,7 +54,10 @@ export async function readImmutableSchemaContracts(record: ImmutableInstallRecor
 type GenerationEntry = { file: string; stat: Stats };
 
 /** Record provenance in the private materialized artifact before its digest and seal. */
-export async function recordImmutableOperatorBuild(root: string): Promise<void> {
+export async function recordImmutableOperatorBuild(
+  root: string,
+  account: { account: string; uid: number; gid: number },
+): Promise<void> {
   const file = path.join(root, "dist", "build-info.json");
   const info = asNullableRecord(JSON.parse(await fs.readFile(file, "utf8")));
   if (!info) {
@@ -62,7 +65,7 @@ export async function recordImmutableOperatorBuild(root: string): Promise<void> 
   }
   await fs.writeFile(
     file,
-    `${JSON.stringify({ ...info, immutableBuild: { builtBy: "operator", isolation: "none" } }, null, 2)}\n`,
+    `${JSON.stringify({ ...info, immutableBuild: { builtBy: "operator", isolation: "none", account: account.account, uid: account.uid, gid: account.gid } }, null, 2)}\n`,
   );
   const { writePackageDistInventory } = await import("../../scripts/lib/package-dist-inventory.js");
   await writePackageDistInventory(root);

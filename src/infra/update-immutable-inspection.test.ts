@@ -323,16 +323,24 @@ it("reports recorded build isolation for current and prepared generations", asyn
   for (const generation of [f.currentPath, f.candidatePath]) {
     write(
       path.join(generation, "dist", "build-info.json"),
-      JSON.stringify({ immutableBuild: { builtBy: "operator", isolation: "none" } }),
+      JSON.stringify({
+        immutableBuild: {
+          builtBy: "operator",
+          isolation: "none",
+          account: "fixture",
+          uid: 1002,
+          gid: 1002,
+        },
+      }),
     );
   }
   const coverage = await inspectImmutableUpdateCoverage({ root: f.root });
   expect(coverage.warnings).toEqual([
     expect.stringContaining(
-      "Current generation was built by the operator without an isolated build account",
+      "Current generation was built by the operator fixture (uid 1002, gid 1002)",
     ),
     expect.stringContaining(
-      "Prepared generation was built by the operator without an isolated build account",
+      "Prepared generation was built by the operator fixture (uid 1002, gid 1002)",
     ),
   ]);
   expect(formatImmutableUpdateCoverage(coverage).join("\n")).toContain(

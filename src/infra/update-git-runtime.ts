@@ -73,11 +73,26 @@ export async function readBuiltRuntimeCommit(root: string): Promise<string | nul
 /** Recorded release provenance; absence does not establish how a build ran. */
 export async function readBuiltRuntimeIsolation(
   root: string,
-): Promise<{ builtBy: "operator"; isolation: "none" } | undefined> {
+): Promise<
+  | { builtBy: "operator"; isolation: "none"; account?: string; uid?: number; gid?: number }
+  | undefined
+> {
   const buildInfo = await tryReadJson(path.join(root, "dist", "build-info.json"));
   const immutableBuild = asNullableRecord(asNullableRecord(buildInfo)?.immutableBuild);
   return immutableBuild?.builtBy === "operator" && immutableBuild.isolation === "none"
-    ? { builtBy: "operator", isolation: "none" }
+    ? {
+        builtBy: "operator",
+        isolation: "none",
+        ...(typeof immutableBuild.account === "string" &&
+        Number.isSafeInteger(immutableBuild.uid) &&
+        Number.isSafeInteger(immutableBuild.gid)
+          ? {
+              account: immutableBuild.account,
+              uid: Number(immutableBuild.uid),
+              gid: Number(immutableBuild.gid),
+            }
+          : {}),
+      }
     : undefined;
 }
 

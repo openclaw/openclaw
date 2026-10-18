@@ -80,6 +80,7 @@ it("dispatches immutable preparation before mutable admission", async () => {
     sha: targetSha,
     dryRun: false,
     timeoutMs: 60_000,
+    onWarning: expect.any(Function),
   });
   expectJson({ status: "prepared", installKind: "immutable", activation: "disabled", targetSha });
   expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();
@@ -115,21 +116,26 @@ it.each([false, true])("retains build warnings when activation throws (JSON: %s)
     ...installation,
     activationEnabled: true,
   });
-  vi.spyOn(immutable, "prepareImmutableUpdate").mockResolvedValue({
-    status: "prepared",
-    installation: { ...installation, prepared: preparedReceipt },
-    targetSha,
-    steps: [],
-    warnings: [warning],
-  });
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(immutable, "prepareImmutableUpdate").mockImplementation(async ({ onWarning }) => {
+    onWarning?.(warning);
+    expect(error).toHaveBeenCalledExactlyOnceWith(`Warning: ${warning}`);
+    expect(activation.activate).not.toHaveBeenCalled();
+    return {
+      status: "prepared",
+      installation: { ...installation, prepared: preparedReceipt },
+      targetSha,
+      steps: [],
+      warnings: [warning],
+    };
+  });
   activation.activate.mockRejectedValueOnce(new Error("Activation failed"));
   await expect(updateCommand({ json })).rejects.toBeInstanceOf(ExitError);
   if (json) {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({ warnings: [warning] }),
     );
-    expect(error).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledExactlyOnceWith(`Warning: ${warning}`);
   } else {
     expect(error.mock.calls.filter(([message]) => message === `Warning: ${warning}`)).toHaveLength(
       1,

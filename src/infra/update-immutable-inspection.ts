@@ -64,9 +64,10 @@ export async function inspectImmutableUpdateCoverage(params: {
     throw new Error("Immutable adoption record is unavailable.");
   }
   assertImmutableDescriptorCurrent(record.descriptor);
-  if (await readBuiltRuntimeIsolation(record.descriptor.current.path)) {
+  const currentBuild = await readBuiltRuntimeIsolation(record.descriptor.current.path);
+  if (currentBuild) {
     result.warnings.push(
-      "Current generation was built by the operator without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.",
+      `Current generation was built by the operator${currentBuild.account ? ` ${currentBuild.account} (uid ${currentBuild.uid}, gid ${currentBuild.gid})` : ""} without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.`,
     );
   }
   const selected = record.prepared;
@@ -77,9 +78,10 @@ export async function inspectImmutableUpdateCoverage(params: {
       if (directoryIdentity(selected.path) !== selected.identity) {
         throw new Error("Prepared generation identity differs from its receipt.");
       }
-      if (await readBuiltRuntimeIsolation(selected.path)) {
+      const preparedBuild = await readBuiltRuntimeIsolation(selected.path);
+      if (preparedBuild) {
         result.warnings.push(
-          "Prepared generation was built by the operator without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.",
+          `Prepared generation was built by the operator${preparedBuild.account ? ` ${preparedBuild.account} (uid ${preparedBuild.uid}, gid ${preparedBuild.gid})` : ""} without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.`,
         );
       }
       const contracts = await readImmutableSchemaContracts(record);

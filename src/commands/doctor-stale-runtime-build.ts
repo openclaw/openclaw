@@ -30,8 +30,7 @@ export async function collectStaleRuntimeBuildFindings(
         {
           checkId: STALE_RUNTIME_BUILD_CHECK_ID,
           severity: "warning",
-          message:
-            "This immutable release was built by the operator without an isolated build account.",
+          message: `This immutable release was built by the operator${isolation.account ? ` ${isolation.account} (uid ${isolation.uid}, gid ${isolation.gid})` : ""} without an isolated build account.`,
           path: root,
           details: isolation,
           fixHint:

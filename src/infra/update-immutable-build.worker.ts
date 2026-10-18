@@ -11,6 +11,9 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 // The installed updater owns this entrypoint; candidate code only runs inside its build unit.
 async function build(): Promise<void> {
+  if (process.geteuid?.() === 0) {
+    throw new Error("Immutable builds require a non-root build account.");
+  }
   const [stage, sha, deadline, workDeadline = "0", current, currentSha] = process.argv.slice(2);
   if (
     !stage ||
@@ -32,6 +35,11 @@ async function build(): Promise<void> {
   ) {
     throw new Error("Invalid immutable build command deadline.");
   }
+  await fs.access(stage, fs.constants.W_OK).catch((error: unknown) => {
+    throw new Error(`Immutable build account cannot write private staging area ${stage}.`, {
+      cause: error,
+    });
+  });
   const runCommand: CommandRunner = (argv, options) =>
     runCommandWithTimeout(argv, { ...options, killProcessTree: true });
   const steps: UpdateStepResult[] = [];
