@@ -12,6 +12,7 @@ import {
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { exactButton } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -28,13 +29,16 @@ beforeEach(() => {
     : undefined;
 });
 const answer = "Keep this companion answer visible until the reset succeeds.";
-const initiatingSessionKey = "agent:main:companion-clear";
+const sessionKey = "agent:main:companion-clear";
 const nextSessionKey = "agent:main:companion-next";
 const resetError = "Companion reset unavailable during reconnect";
 
 type CompanionSurface = {
-  clearButton: Locator;
+  clear: (defer?: boolean) => Promise<void>;
+  finishClear: () => Promise<void>;
   companion: Locator;
+  input: Locator;
+  text: (value: string) => Locator;
   gateway: MockGatewayControls;
   page: Page;
 };
@@ -59,51 +63,48 @@ async function withCompanion(
             __mockError: { code: "UNAVAILABLE", message: resetError },
           },
           "sessions.companion.state": {
-            cases: [
-              {
-                match: { sessionKey: initiatingSessionKey },
-                response: {
-                  exchanges: [{ question: "What changed?", answer, ts: Date.now() - 1_000 }],
-                },
+            cases: [sessionKey, nextSessionKey].map((key) => ({
+              match: { sessionKey: key },
+              response: {
+                exchanges:
+                  key === sessionKey
+                    ? [{ question: "What changed?", answer, ts: Date.now() - 1_000 }]
+                    : [],
               },
-              { match: { sessionKey: nextSessionKey }, response: { exchanges: [] } },
-            ],
-          },
-          "sessions.list": {
-            count: 2,
-            defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-            path: "",
-            sessions: [
-              { key: initiatingSessionKey, kind: "direct", label: "Original", updatedAt: 2 },
-              { key: nextSessionKey, kind: "direct", label: "Next", updatedAt: 1 },
-            ],
-            ts: Date.now(),
+            })),
           },
         },
-        sessionKey: initiatingSessionKey,
+        sessions: [
+          { key: sessionKey, kind: "direct", label: "Original", updatedAt: 2 },
+          { key: nextSessionKey, kind: "direct", label: "Next", updatedAt: 1 },
+        ],
+        sessionKey,
       });
 
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, initiatingSessionKey));
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const stateRequest = await gateway.waitForRequest("sessions.companion.state");
-      expect(stateRequest.params).toEqual({
-        agentId: "main",
-        sessionKey: initiatingSessionKey,
-      });
+      expect(stateRequest.params).toEqual({ agentId: "main", sessionKey });
       await openChatSidePanelType(page, "Side chat");
       const companion = page.locator("openclaw-chat-session-rail");
-      await companion.getByText(answer, { exact: true }).waitFor();
-      // The embedded rail contributes its Clear action to the shared Layout menu.
-      const clearButton = page.getByRole("button", { name: "Clear side chat", exact: true });
-      await run({ clearButton, companion, gateway, page });
+      const text = (value: string) => companion.getByText(value, { exact: true });
+      await text(answer).waitFor();
+      const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
+      const clear = async (defer = false) => {
+        if (defer) {
+          await gateway.deferNext("sessions.companion.reset");
+        }
+        await openChatLayoutMenu(page);
+        await page.getByRole("button", { name: "Clear side chat", exact: true }).click();
+        await closeChatLayoutMenu(page);
+        await gateway.waitForRequest("sessions.companion.reset");
+      };
+      const finishClear = async () => {
+        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
+        await expect.poll(() => text(answer).count()).toBe(0);
+      };
+      await run({ clear, finishClear, companion, input, text, gateway, page });
     },
   );
-}
-
-async function clearCompanion(clearButton: Locator): Promise<void> {
-  const page = clearButton.page();
-  await openChatLayoutMenu(page);
-  await clearButton.click();
-  await closeChatLayoutMenu(page);
 }
 
 async function capture(page: Page, name: string, elements: Locator[]) {
@@ -119,29 +120,25 @@ suite.define(() => {
   it.each([1200, 390])(
     "preserves the thread on reset failure and a newer draft after a successful retry at %ipx",
     async (width) => {
-      await withCompanion(async ({ clearButton, companion, gateway, page }) => {
-        await clearCompanion(clearButton);
-        await gateway.waitForRequest("sessions.companion.reset");
+      await withCompanion(async ({ clear, finishClear, companion, input, text, gateway, page }) => {
+        await clear();
 
         const alert = page.getByRole("alert").filter({ hasText: resetError });
         await alert.waitFor({ state: "visible" });
-        await companion.getByText(answer, { exact: true }).waitFor();
+        await text(answer).waitFor();
         await capture(page, "reset-failure", [alert, companion]);
 
         await openChatDetails(page);
         await closeChatDetails(page);
         await alert.getByRole("button", { name: "Dismiss error" }).click();
         await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
-        await gateway.deferNext("sessions.companion.reset");
-        await clearCompanion(clearButton);
+        await clear(true);
 
         await expect
           .poll(async () => (await gateway.getRequests("sessions.companion.reset")).length)
           .toBe(2);
-        const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
         await input.fill("Keep the question I typed after Clear");
-        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
-        await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+        await finishClear();
         expect(await input.inputValue()).toBe("Keep the question I typed after Clear");
         expect(await page.getByRole("alert").count()).toBe(0);
         await capture(page, "reset-success", [companion]);
@@ -150,24 +147,21 @@ suite.define(() => {
   );
 
   it("retains a question sent after Clear while its answer is pending", async () => {
-    await withCompanion(async ({ clearButton, companion, gateway }) => {
-      await gateway.deferNext("sessions.companion.reset");
-      await clearCompanion(clearButton);
-      await gateway.waitForRequest("sessions.companion.reset");
+    await withCompanion(async ({ clear, finishClear, input, text, gateway }) => {
+      const question = "Answer the question sent after Clear";
+      await clear(true);
       await gateway.deferNext("sessions.companion.ask");
-      const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      await input.fill("Answer the question sent after Clear");
+      await input.fill(question);
       await input.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
-      expect(request.params).toMatchObject({ question: "Answer the question sent after Clear" });
-      await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
-      await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
-      await companion.getByText("Answer the question sent after Clear", { exact: true }).waitFor();
+      expect(request.params).toMatchObject({ question });
+      await finishClear();
+      await text(question).waitFor();
       await gateway.resolveDeferred("sessions.companion.ask", {
         answer: "New answer retained",
         ts: 2,
       });
-      await companion.getByText("New answer retained", { exact: true }).waitFor();
+      await text("New answer retained").waitFor();
       expect(await input.inputValue()).toBe("");
     });
   });
@@ -175,7 +169,7 @@ suite.define(() => {
   it.each(["pending", "completed"])(
     "retires a pre-Clear %s image without cancelling a newer image",
     async (oldRead) => {
-      await withCompanion(async ({ clearButton, companion, gateway, page }) => {
+      await withCompanion(async ({ clear, finishClear, companion, input, gateway, page }) => {
         const reads = await page.evaluateHandle(() => {
           const NativeFileReader = FileReader;
           const pending = new Map<string, () => Promise<void>>();
@@ -210,7 +204,6 @@ suite.define(() => {
             },
           };
         });
-        const input = companion.getByRole("textbox", { name: "Ask in side chat", exact: true });
         const paste = (name: string) =>
           input.evaluate((element, fileName) => {
             const canvas = document.createElement("canvas");
@@ -233,18 +226,15 @@ suite.define(() => {
           }, name);
         await input.fill("Old draft cleared even when an old image completes");
         await paste("old.png");
-        await companion.getByRole("button", { name: "Remove old.png", exact: true }).waitFor();
-        await gateway.deferNext("sessions.companion.reset");
-        await clearCompanion(clearButton);
-        await gateway.waitForRequest("sessions.companion.reset");
+        await exactButton(companion, "Remove old.png").waitFor();
+        await clear(true);
         if (oldRead === "completed") {
           await reads.evaluate((proof) => proof.finish("old.png"));
           await companion.getByRole("img", { name: "old.png", exact: true }).waitFor();
         }
         const newImage = await paste("new.png");
-        await companion.getByRole("button", { name: "Remove new.png", exact: true }).waitFor();
-        await gateway.resolveDeferred("sessions.companion.reset", { ok: true });
-        await expect.poll(() => companion.getByText(answer, { exact: true }).count()).toBe(0);
+        await exactButton(companion, "Remove new.png").waitFor();
+        await finishClear();
         expect(await input.inputValue()).toBe("");
         expect(await reads.evaluate((proof) => proof.aborted)).toEqual(
           oldRead === "pending" ? ["old.png"] : [],
@@ -254,25 +244,21 @@ suite.define(() => {
         }
         await reads.evaluate((proof) => proof.finish("new.png"));
         await companion.getByRole("img", { name: "new.png", exact: true }).waitFor();
-        expect(
-          await companion.getByRole("button", { name: "Remove old.png", exact: true }).count(),
-        ).toBe(0);
+        expect(await exactButton(companion, "Remove old.png").count()).toBe(0);
         await input.fill("Send only the image added after Clear");
         await input.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({
           attachments: [{ fileName: "new.png", content: newImage }],
         });
-        expect((request.params as { attachments: unknown[] }).attachments).toHaveLength(1);
+        expect(request.params).toHaveProperty("attachments.length", 1);
       });
     },
   );
 
   it("does not publish a delayed reset rejection into a newly selected session", async () => {
-    await withCompanion(async ({ clearButton, gateway, page }) => {
-      await gateway.deferNext("sessions.companion.reset");
-      await clearCompanion(clearButton);
-      await gateway.waitForRequest("sessions.companion.reset");
+    await withCompanion(async ({ clear, gateway, page }) => {
+      await clear(true);
 
       await navigateToControlUiSession(page, nextSessionKey);
       await gateway.rejectDeferred("sessions.companion.reset", {
@@ -280,24 +266,20 @@ suite.define(() => {
         message: resetError,
       });
 
-      const visiblePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-      expect(await visiblePane.getByRole("alert").filter({ hasText: resetError }).count()).toBe(0);
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
+      const error = pane.getByRole("alert").filter({ hasText: resetError });
+      expect(await error.count()).toBe(0);
       await capture(page, "stale-reset-error-suppressed", [
-        visiblePane.locator(".agent-chat__composer-combobox textarea"),
+        pane.locator(".agent-chat__composer-combobox textarea"),
       ]);
 
-      await navigateToControlUiSession(page, initiatingSessionKey);
-      const initiatingPane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-      expect(await initiatingPane.getByRole("alert").filter({ hasText: resetError }).count()).toBe(
-        0,
-      );
-      await initiatingPane
+      await navigateToControlUiSession(page, sessionKey);
+      expect(await error.count()).toBe(0);
+      const preservedAnswer = pane
         .locator("openclaw-chat-session-rail")
-        .getByText(answer, { exact: true })
-        .waitFor();
-      await capture(page, "initiating-thread-preserved", [
-        initiatingPane.locator("openclaw-chat-session-rail").getByText(answer, { exact: true }),
-      ]);
+        .getByText(answer, { exact: true });
+      await preservedAnswer.waitFor();
+      await capture(page, "initiating-thread-preserved", [preservedAnswer]);
     });
   });
 });

@@ -21,6 +21,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const profile = "diff-code-fold-live";
 const key = "agent:main:folding-proof";
+const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const before = [
   "export function summarize(count: number) {",
   '  const label = "before";',
@@ -83,14 +84,10 @@ const suite = createControlUiE2eSuite({
           seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
           return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"[seed % 52];
         }).join("");
-      longBefore = Array.from(
-        { length: 64 },
-        (_, i) => "const before" + i + ' = "' + identifier() + '";',
-      );
-      longAfter = Array.from(
-        { length: 64 },
-        (_, i) => "const after" + i + ' = "' + identifier() + '";',
-      );
+      const longLines = (label: string) =>
+        Array.from({ length: 64 }, (_, i) => `const ${label}${i} = "${identifier()}";`);
+      longBefore = longLines("before");
+      longAfter = longLines("after");
       await writeSources(false);
       git("add", ".");
       git("commit", "-m", "Synthetic diff baseline");
@@ -139,16 +136,13 @@ suite.define(() => {
       }
       return JSON.parse(result.stdout);
     };
-    expect(
-      (
-        await rpc("sessions.create", {
-          agentId: "main",
-          key,
-          label: "Manual code folding proof",
-          cwd: workspace,
-        })
-      ).ok,
-    ).toBe(true);
+    const created = await rpc("sessions.create", {
+      agentId: "main",
+      key,
+      label: "Manual code folding proof",
+      cwd: workspace,
+    });
+    expect(created.ok).toBe(true);
     const diff = await rpc("sessions.diff", { sessionKey: key });
     expect(diff.files.map((file: { path: string }) => file.path)).toEqual([
       "example.ts",
@@ -188,7 +182,7 @@ suite.define(() => {
             void response.body().then((bytes) =>
               servedAssets.push({
                 url: new URL(response.url()).pathname,
-                sha256: createHash("sha256").update(bytes).digest("hex"),
+                sha256: sha256(bytes),
               }),
             );
           }
@@ -200,7 +194,10 @@ suite.define(() => {
         await focusChatSidePanel(page);
         const panel = page.locator(".session-diff");
         const file = panel.locator(".session-diff__file").filter({ hasText: "example.ts" });
-        await file.locator(".session-diff__code-toggle").first().waitFor();
+        const codeToggle = file.locator(".session-diff__code-toggle");
+        const placeholder = file.locator(".session-diff__code-placeholder");
+        const button = (name: string) => file.getByRole("button", { name, exact: true });
+        await codeToggle.first().waitFor();
         const splitLeft = ".session-diff-split__side--left .session-diff-split__text";
         const splitRight = ".session-diff-split__side--right .session-diff-split__text";
         await expectLines(file, splitLeft, [before[1], before[3]]);
@@ -222,12 +219,13 @@ suite.define(() => {
           await section.locator(".session-diff__file-toggle").click();
         }
         await take("before-expanded");
-        await file.getByRole("button", { name: "Collapse code at line 1", exact: true }).click();
-        await file.locator(".session-diff__code-placeholder").waitFor();
+        await button("Collapse code at line 1").click();
+        await placeholder.waitFor();
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
         await expectLines(file, ".session-diff-split__text", [before[0]]);
-        expect(await file.locator(".session-diff__code-placeholder").textContent()).toContain("+2");
-        expect(await file.locator(".session-diff__code-placeholder").textContent()).toContain("-2");
+        const foldedText = await placeholder.textContent();
+        expect(foldedText).toContain("+2");
+        expect(foldedText).toContain("-2");
         await take("after-folded-split");
         const view = async (name: string) => {
           await panel.getByRole("button", { name: "Change view options" }).click();
@@ -239,7 +237,7 @@ suite.define(() => {
         for (const section of await otherFiles.all()) {
           await section.locator(".session-diff__file-toggle").click();
         }
-        await file.locator(".session-diff__code-placeholder").click();
+        await placeholder.click();
         const unifiedDel = ".chat-diff__row--del .chat-diff__text";
         const unifiedAdd = ".chat-diff__row--add .chat-diff__text";
         await expectLines(file, unifiedDel, [before[1], before[3]]);
@@ -262,20 +260,20 @@ suite.define(() => {
           ".session-diff-split__side--right.session-diff-split__side--filled .session-diff-split__text",
           longAfter,
         );
-        await file.getByRole("button", { name: "Collapse code at line 3", exact: true }).click();
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(1);
+        await button("Collapse code at line 3").click();
+        expect(await placeholder.count()).toBe(1);
         await panel.getByRole("button", { name: "Refresh changes" }).click();
         await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(1);
-        await file.getByRole("button", { name: "Collapse code at line 1", exact: true }).click();
-        await file.getByRole("button", { name: "Expand code at line 1", exact: true }).click();
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(1);
+        expect(await placeholder.count()).toBe(1);
+        await button("Collapse code at line 1").click();
+        await button("Expand code at line 1").click();
+        expect(await placeholder.count()).toBe(1);
         const action = async (name: string) => {
-          await file.getByRole("button", { name: "Actions for example.ts" }).click();
+          await button("Actions for example.ts").click();
           await page.getByRole("menuitem", { name, exact: true }).click();
         };
         await action("Expand Code");
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(0);
+        expect(await placeholder.count()).toBe(0);
         await action("Collapse Functions and Classes");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
         await writeFile(
@@ -285,7 +283,7 @@ suite.define(() => {
         const refreshStart = await page.evaluate(() => performance.now());
         await panel.getByRole("button", { name: "Refresh changes" }).click();
         await file.getByText('return "nothing";', { exact: true }).waitFor();
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(0);
+        expect(await placeholder.count()).toBe(0);
         report.changedPatchRefreshMs =
           (await page.evaluate(
             () =>
@@ -295,17 +293,14 @@ suite.define(() => {
                 );
               }),
           )) - refreshStart;
-        await file.getByRole("button", { name: "Collapse code at line 1", exact: true }).waitFor();
+        await button("Collapse code at line 1").waitFor();
         await action("Collapse Code");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
         await action("Expand Code");
-        expect(await file.locator(".session-diff__code-placeholder").count()).toBe(0);
+        expect(await placeholder.count()).toBe(0);
         for (const asset of servedAssets) {
-          expect(
-            createHash("sha256")
-              .update(await readFile(path.join(process.cwd(), "dist/control-ui", asset.url)))
-              .digest("hex"),
-          ).toBe(asset.sha256);
+          const built = await readFile(path.join(process.cwd(), "dist/control-ui", asset.url));
+          expect(sha256(built)).toBe(asset.sha256);
         }
         expect(servedAssets.length).toBeGreaterThan(0);
         report.assets = servedAssets;

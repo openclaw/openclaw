@@ -8,6 +8,27 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "session discussion toggle" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+async function openDiscussion(
+  page: Page,
+  sessionKey: string,
+  methodResponses: Record<string, unknown>,
+) {
+  const gateway = await installMockGateway(page, {
+    sessionKey,
+    methodResponses,
+    featureMethods: ["session.discussion.info", "session.discussion.open"],
+    historyMessages: [
+      {
+        content: [{ type: "text", text: "Discussion proof." }],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await gateway.waitForRequest("session.discussion.info");
+  return gateway;
+}
 async function withDiscussionPage(
   run: (page: Page, capture: (name: string) => Promise<void>) => Promise<void>,
   options: BrowserContextOptions = {},
@@ -31,34 +52,11 @@ async function withDiscussionPage(
 suite.define(() => {
   it("keeps an existing discussion closed until the header action opens it", async () => {
     await withDiscussionPage(async (page, capture) => {
-      const sessionKey = "agent:main:discussion-proof";
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["session.discussion.info", "session.discussion.open"],
-        historyMessages: [
-          {
-            content: [{ type: "text", text: "Discussion toggle proof." }],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
-        ],
-        methodResponses: {
-          "session.discussion.info": {
-            openUrl: "https://discussion.example/session",
-            state: "open",
-          },
-          "session.discussion.open": {
-            openUrl: "https://discussion.example/session",
-            state: "open",
-          },
-        },
-        sessionKey,
+      const open = { openUrl: "https://discussion.example/session", state: "open" };
+      const gateway = await openDiscussion(page, "agent:main:discussion-proof", {
+        "session.discussion.info": open,
+        "session.discussion.open": open,
       });
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await gateway.waitForRequest("session.discussion.info");
-
-      // An existing discussion stays closed until the operator asks for it, and
-      // showing it must never re-open the discussion on the gateway.
       const discussionPanel = page.locator('.side-panel__panel[data-panel-slot="discussion"]');
       const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
       await expect.poll(() => discussionPanel.count()).toBe(0);
@@ -68,9 +66,7 @@ suite.define(() => {
 
       await expect.poll(() => discussionPanel.count()).toBe(1);
       await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
-      // The tab must carry the upgraded panel, not an empty box: the element is
-      // defined lazily per slot, so a missing runtime registration renders as a
-      // silently blank tab.
+      // The lazy panel must be registered, not an empty custom-element host.
       await expect
         .poll(() =>
           page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
@@ -91,8 +87,6 @@ suite.define(() => {
   it("keeps a cross-origin discussion in sync when the real host color scheme changes", async () => {
     await withDiscussionPage(
       async (page, capture) => {
-        const sessionKey = "agent:main:discussion-theme-proof";
-
         await page.route("https://discussion.example/embed/channel/**", (route) =>
           route.fulfill({
             contentType: "text/html; charset=utf-8",
@@ -122,46 +116,26 @@ suite.define(() => {
           }),
         );
 
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["session.discussion.info", "session.discussion.open"],
-          historyMessages: [
-            {
-              content: [{ type: "text", text: "Cross-origin theme proof." }],
-              role: "assistant",
-              timestamp: Date.now(),
-            },
-          ],
-          methodResponses: {
-            "session.discussion.info": { state: "available" },
-            "session.discussion.open": {
-              embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
-              openUrl: "https://discussion.example/app/T1/C1",
-              state: "open",
-            },
+        await openDiscussion(page, "agent:main:discussion-theme-proof", {
+          "session.discussion.info": { state: "available" },
+          "session.discussion.open": {
+            embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
+            openUrl: "https://discussion.example/app/T1/C1",
+            state: "open",
           },
-          sessionKey,
         });
-
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await gateway.waitForRequest("session.discussion.info");
         await activateChatHeaderPanelAction(page, "Show discussion");
 
         const frameElement = page.locator("iframe.session-discussion__frame");
         await expect.poll(() => frameElement.count()).toBe(1);
-        await expect
-          .poll(() =>
-            page
-              .frames()
-              .some((candidate) =>
-                candidate.url().startsWith("https://discussion.example/embed/channel/"),
-              ),
-          )
-          .toBe(true);
-        const frame = page
-          .frames()
-          .find((candidate) =>
-            candidate.url().startsWith("https://discussion.example/embed/channel/"),
-          );
+        const discussionFrame = () =>
+          page
+            .frames()
+            .find((candidate) =>
+              candidate.url().startsWith("https://discussion.example/embed/channel/"),
+            );
+        await expect.poll(() => Boolean(discussionFrame())).toBe(true);
+        const frame = discussionFrame();
         expect(frame).toBeDefined();
 
         const frameUrl = new URL(frame!.url());

@@ -1,4 +1,3 @@
-// Control UI E2E tests cover the pending-send bubble handoff to authoritative history.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -32,8 +31,8 @@ const ONE_PIXEL_PNG_B64 =
 const ONE_PIXEL_PNG_DATA_URL = `data:image/png;base64,${ONE_PIXEL_PNG_B64}`;
 const USER_ECHO_ENTRY_ID = "pending-handoff-user-echo";
 
-async function startFrameSampler(currentPage: Page, probeText = PROBE_TEXT): Promise<void> {
-  await currentPage.evaluate((text) => {
+async function startFrameSampler(page: Page, probeText = PROBE_TEXT): Promise<void> {
+  await page.evaluate((text) => {
     const win = window as SamplerWindow;
     const frames: FrameSample[] = [];
     win.openclawSendFrameSamples = frames;
@@ -70,8 +69,12 @@ async function startFrameSampler(currentPage: Page, probeText = PROBE_TEXT): Pro
   }, probeText);
 }
 
-async function stopFrameSampler(currentPage: Page): Promise<FrameSample[]> {
-  return currentPage.evaluate(() => {
+function readFrames(page: Page) {
+  return page.evaluate(() => (window as SamplerWindow).openclawSendFrameSamples ?? []);
+}
+
+async function stopFrameSampler(page: Page): Promise<FrameSample[]> {
+  return page.evaluate(() => {
     const win = window as SamplerWindow;
     win.openclawSendFrameSamplerStop?.();
     return win.openclawSendFrameSamples ?? [];
@@ -85,23 +88,11 @@ function analyzeFrameContinuity(
   const firstHealthy = frames.findIndex(isHealthy);
   expect(firstHealthy).toBeGreaterThanOrEqual(0);
   const continuityFrames = frames.slice(firstHealthy);
-  expect(
-    continuityFrames
-      .filter((frame) => !isHealthy(frame))
-      .map((frame) => ({
-        imageCount: frame.imageCount,
-        loadedImageCount: frame.loadedImageCount,
-        present: frame.present,
-        rowKeys: frame.rowKeys,
-        t: frame.t,
-      })),
-  ).toEqual([]);
+  expect(continuityFrames.filter((frame) => !isHealthy(frame))).toEqual([]);
   const keyTimeline: string[] = [];
-  for (const frame of continuityFrames) {
-    for (const key of frame.rowKeys) {
-      if (keyTimeline[keyTimeline.length - 1] !== key) {
-        keyTimeline.push(key);
-      }
+  for (const key of continuityFrames.flatMap((frame) => frame.rowKeys)) {
+    if (keyTimeline[keyTimeline.length - 1] !== key) {
+      keyTimeline.push(key);
     }
   }
   return keyTimeline;
@@ -118,42 +109,70 @@ function historyMessage<T extends { seq: number }>(
 
 const BASE_HISTORY = [historyMessage("assistant", "Ready.", { seq: 1 }, Date.now() - 5_000)];
 
+async function emitSessionMessage(
+  gateway: MockGatewayControls,
+  message: Record<string, unknown>,
+  messageId: string,
+  messageSeq: number,
+  activeRunIds: string[] = [],
+  extra: Record<string, unknown> = {},
+) {
+  const hasActiveRun = activeRunIds.length > 0;
+  await gateway.emitGatewayEvent("session.message", {
+    sessionKey: "main",
+    message,
+    messageId,
+    messageSeq,
+    activeRunIds,
+    hasActiveRun,
+    session: {
+      key: "main",
+      kind: "direct",
+      status: hasActiveRun ? "running" : "done",
+      hasActiveRun,
+      activeRunIds,
+      updatedAt: Date.now(),
+    },
+    ...extra,
+  });
+}
+
 type ChatSendParams = {
   attachments?: Array<{ content?: string; mimeType?: string }>;
   idempotencyKey?: string;
 };
 
 async function openChatAndSubmitProbe(
-  currentPage: Page,
+  page: Page,
   gateway: MockGatewayControls,
   opts: { attachImage?: boolean; deferSend?: boolean; probeText?: string } = {},
 ): Promise<{ runId: string; sendParams: ChatSendParams }> {
   const probeText = opts.probeText ?? PROBE_TEXT;
-  await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-  await currentPage
+  await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+  await page
     .locator(".chat-thread")
     .getByText("Ready.", { exact: true })
     .waitFor({ timeout: 10_000 });
   await gateway.waitForRequest("sessions.list");
   if (opts.attachImage) {
-    await currentPage.locator(".agent-chat__file-input").setInputFiles({
+    await page.locator(".agent-chat__file-input").setInputFiles({
       name: "pixel.png",
       mimeType: "image/png",
       buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
     });
-    await currentPage.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
+    await page.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
   }
   if (opts.deferSend) {
     await gateway.deferNext("chat.send");
   }
-  await startFrameSampler(currentPage, probeText);
-  await currentPage.locator(".agent-chat__input textarea").fill(probeText);
-  await currentPage.locator(".agent-chat__input textarea").press("Enter");
+  await startFrameSampler(page, probeText);
+  await page.locator(".agent-chat__input textarea").fill(probeText);
+  await page.locator(".agent-chat__input textarea").press("Enter");
   const send = await gateway.waitForRequest("chat.send");
   const sendParams = send.params as ChatSendParams;
   const runId = sendParams.idempotencyKey ?? "";
   expect(runId).toBeTruthy();
-  await currentPage
+  await page
     .locator("[data-virtual-row-key]")
     .getByText(probeText, { exact: true })
     .waitFor({ timeout: 10_000 });
@@ -161,7 +180,7 @@ async function openChatAndSubmitProbe(
 }
 
 async function finishRunAndSettle(
-  currentPage: Page,
+  page: Page,
   gateway: MockGatewayControls,
   runId: string,
   userEcho: Record<string, unknown>,
@@ -171,46 +190,25 @@ async function finishRunAndSettle(
   // Count either terminal trigger's authoritative history read.
   const historyRequestsBeforeTerminal = (await gateway.getRequests("chat.history")).length;
   await gateway.emitChatFinal({ runId, text: "Run complete." });
-  await currentPage
+  await page
     .locator(".chat-bubble")
     .getByText("Run complete.", { exact: true })
     .waitFor({ timeout: 10_000 });
-  // The Gateway persists the assistant turn and publishes it with a terminal
-  // session row; this is what triggers the authoritative history reload.
-  await gateway.emitGatewayEvent("session.message", {
-    activeRunIds: [],
+  await emitSessionMessage(gateway, finalMessage, "pending-handoff-final-1", 3, [], {
     clientRunId: runId,
-    hasActiveRun: false,
-    message: finalMessage,
-    messageId: "pending-handoff-final-1",
-    messageSeq: 3,
-    session: {
-      activeRunIds: [],
-      hasActiveRun: false,
-      key: "main",
-      kind: "direct",
-      status: "done",
-      updatedAt: Date.now(),
-    },
-    sessionKey: "main",
   });
-  // The handoff must complete: history is re-read and the probe bubble becomes
-  // the authoritative copy (its data-entry-id comes only from loaded history,
-  // never from the pending queue projection).
+  // Only loaded history can supply the authoritative data-entry-id.
   await expect
     .poll(async () => (await gateway.getRequests("chat.history")).length, { timeout: 10_000 })
     .toBeGreaterThan(historyRequestsBeforeTerminal);
   await expect
-    .poll(
-      () => currentPage.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).count(),
-      {
-        timeout: 10_000,
-      },
-    )
+    .poll(() => page.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).count(), {
+      timeout: 10_000,
+    })
     .toBe(1);
   // Let a few more frames elapse so trailing samples cover the settled state.
-  await currentPage.waitForTimeout(500);
-  return stopFrameSampler(currentPage);
+  await page.waitForTimeout(500);
+  return stopFrameSampler(page);
 }
 
 function userMessage(runId: string, text = PROBE_TEXT) {
@@ -283,30 +281,32 @@ suite.define(() => {
           activeRunIds: [],
           status: "done",
         };
-        const latestPage = {
+        const historyPage = {
           sessionId,
           sessionInfo: session,
-          messages: [tail],
-          hasMore: true,
-          nextOffset: 80,
           totalMessages: 200,
           thinkingLevel: null,
-          inputReceipts: [],
         };
         await gateway.setMethodResponse("chat.history", {
           cases: [
             {
               match: { offset: 80 },
               response: {
-                sessionId,
-                sessionInfo: session,
+                ...historyPage,
                 messages: [ready, canonicalUser],
                 hasMore: false,
-                totalMessages: 200,
-                thinkingLevel: null,
               },
             },
-            { match: {}, response: latestPage },
+            {
+              match: {},
+              response: {
+                ...historyPage,
+                messages: [tail],
+                hasMore: true,
+                nextOffset: 80,
+                inputReceipts: [],
+              },
+            },
           ],
         });
         await gateway.deferNext("chat.history", { offset: 80 });
@@ -370,29 +370,21 @@ suite.define(() => {
         await pane.locator('.chat-bubble[data-entry-id="canonical-land-request"]').waitFor();
         await waitForChatScrollIdle(page);
         const after = await readQualification();
-        const userCount = await pane
-          .locator(".chat-bubble")
-          .getByText(prompt, { exact: true })
-          .count();
-        const fallbackCount = await pane
-          .locator(".chat-bubble")
-          .getByText(fallback, { exact: true })
-          .count();
+        const bubbles = pane.locator(".chat-bubble");
+        const userCount = await bubbles.getByText(prompt, { exact: true }).count();
+        const fallbackCount = await bubbles.getByText(fallback, { exact: true }).count();
         await capture("pending-assistant-after-history.png");
         if (proofDir) {
+          const proof = {
+            before,
+            after,
+            userCount,
+            fallbackCount,
+            sends: (await gateway.getRequests("chat.send")).length,
+          };
           await writeFile(
             path.join(proofDir, "pending-assistant-proof.json"),
-            JSON.stringify(
-              {
-                before,
-                after,
-                userCount,
-                fallbackCount,
-                sends: (await gateway.getRequests("chat.send")).length,
-              },
-              null,
-              2,
-            ) + "\n",
+            JSON.stringify(proof, null, 2) + "\n",
           );
         }
         expect(userCount).toBe(1);
@@ -406,24 +398,24 @@ suite.define(() => {
   it("does not recreate a consumed prompt outside the visible history page after reconnect", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
-      async ({ page: currentPage }) => {
-        const capture = captureProof(currentPage);
+      async ({ page }) => {
+        const capture = captureProof(page);
         const sessionId = "consumed-prompt-session";
         const prompt = "land PR";
         const finalText = "Landed the PR. All focused checks passed.";
         const executionRunId = "recovered-execution";
-        const gateway = await installMockGateway(currentPage, {
+        const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           historyMessages: BASE_HISTORY,
           sessions: [{ key: "main", sessionId, label: "Synthetic PR landing" }],
         });
-        const { runId } = await openChatAndSubmitProbe(currentPage, gateway, {
+        const { runId } = await openChatAndSubmitProbe(page, gateway, {
           deferSend: true,
           probeText: prompt,
         });
-        await stopFrameSampler(currentPage);
+        await stopFrameSampler(page);
         await gateway.setOnline(false);
-        await currentPage
+        await page
           .locator('.chat-send-status[data-send-state="waiting-reconnect"]')
           .getByText("Waiting for reconnect", { exact: true })
           .waitFor();
@@ -454,18 +446,19 @@ suite.define(() => {
                   arguments: { command: "pnpm check" },
                 },
               ],
-              timestamp: timestamp + seq,
-              __openclaw: { id: `entry-${seq}`, seq, runId: executionRunId },
             },
             {
               role: "toolResult",
               toolCallId,
               toolName: "exec",
               content: [{ type: "text", text: "Focused check passed." }],
-              timestamp: timestamp + seq + 1,
-              __openclaw: { id: `entry-${seq + 1}`, seq: seq + 1, runId: executionRunId },
             },
-          ];
+          ].map((message, offset) =>
+            Object.assign(message, {
+              timestamp: timestamp + seq + offset,
+              __openclaw: { id: `entry-${seq + offset}`, seq: seq + offset, runId: executionRunId },
+            }),
+          );
         }).flat();
         const finalMessage = historyMessage(
           "assistant",
@@ -516,40 +509,32 @@ suite.define(() => {
         await gateway.waitForRequest("chat.history", {
           match: { inputRunIds: [runId], limit: 1000 },
         });
-        await currentPage.getByText(finalText, { exact: true }).waitFor();
-        await expect.poll(() => currentPage.locator(".chat-send-status").count()).toBe(0);
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: "main",
+        await page.getByText(finalText, { exact: true }).waitFor();
+        await expect.poll(() => page.locator(".chat-send-status").count()).toBe(0);
+        await emitSessionMessage(gateway, finalMessage, "consumed-prompt-final", 605, [], {
           sessionId,
           clientRunId: executionRunId,
-          message: finalMessage,
-          messageId: "consumed-prompt-final",
-          messageSeq: 605,
-          activeRunIds: [],
-          hasActiveRun: false,
           session: sessionInfo,
         });
-        await waitForChatScrollIdle(currentPage);
+        await waitForChatScrollIdle(page);
         // Retain the failed UI too: a phantom source appears below the completed
         // answer even though its only durable copy belongs to an older page.
         await capture("consumed-prompt-latest-page.png");
-        const userBubbles = currentPage.locator(".chat-bubble").getByText(prompt, { exact: true });
+        const userBubbles = page.locator(".chat-bubble").getByText(prompt, { exact: true });
         const latestPromptCount = await userBubbles.count();
         await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
         await gateway.resolveDeferred("chat.history");
-        await waitForChatScrollIdle(currentPage);
-        const thread = currentPage.locator(".chat-pane-cache__pane--active .chat-thread");
+        await waitForChatScrollIdle(page);
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.hover();
-        await currentPage.mouse.wheel(0, -1_000_000);
-        await currentPage.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).waitFor();
-        await waitForChatScrollIdle(currentPage);
+        await page.mouse.wheel(0, -1_000_000);
+        await page.locator(`.chat-bubble[data-entry-id="${USER_ECHO_ENTRY_ID}"]`).waitFor();
+        await waitForChatScrollIdle(page);
         await capture("consumed-prompt-loaded-history.png");
         expect(latestPromptCount).toBe(0);
         expect(await userBubbles.count()).toBe(1);
-        expect(await currentPage.locator(".chat-send-status").count()).toBe(0);
-        expect(await currentPage.getByRole("button", { name: "Stop", exact: true }).count()).toBe(
-          0,
-        );
+        expect(await page.locator(".chat-send-status").count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       },
     );
@@ -564,12 +549,12 @@ suite.define(() => {
         viewport: { height: 800, width: 1200 },
         ...(proofDir ? { recordVideo: { dir: proofDir } } : {}),
       },
-      async ({ page: currentPage }) => {
-        const capture = captureProof(currentPage);
-        const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
-        const { runId } = await openChatAndSubmitProbe(currentPage, gateway);
+      async ({ page }) => {
+        const capture = captureProof(page);
+        const gateway = await installMockGateway(page, { historyMessages: BASE_HISTORY });
+        const { runId } = await openChatAndSubmitProbe(page, gateway);
         await capture("01-submitted.png");
-        await finishRunAndSettle(currentPage, gateway, runId, userMessage(runId));
+        await finishRunAndSettle(page, gateway, runId, userMessage(runId));
         await capture("02-canonical.png");
 
         const laterMessage = historyMessage(
@@ -580,36 +565,20 @@ suite.define(() => {
         );
         await gateway.setHistoryMessages([laterMessage]);
         const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
-        await gateway.emitGatewayEvent("session.message", {
-          sessionKey: "main",
-          message: laterMessage,
-          messageId: "later-window",
-          messageSeq: 4,
-          activeRunIds: [],
-          hasActiveRun: false,
-          session: {
-            key: "main",
-            kind: "direct",
-            status: "done",
-            hasActiveRun: false,
-            activeRunIds: [],
-            updatedAt: Date.now(),
-          },
-        });
+        await emitSessionMessage(gateway, laterMessage, "later-window", 4);
         await expect
           .poll(async () => (await gateway.getRequests("chat.history")).length)
           .toBeGreaterThan(historyRequestsBefore);
-        await currentPage.getByText("Later history window.", { exact: true }).waitFor();
-        const probe = currentPage.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
+        await page.getByText("Later history window.", { exact: true }).waitFor();
+        const probe = page.locator(".chat-bubble").getByText(PROBE_TEXT, { exact: true });
         await expect.poll(() => probe.count()).toBe(0);
         await capture("03-later-page.png");
 
-        await startFrameSampler(currentPage);
+        await startFrameSampler(page);
         await gateway.emitChatFinal({ runId, text: "Run complete." });
-        // Observe the replay over rendered frames, including asynchronous outbox
-        // retirement and trailing history reconciliation, not just the first tick.
-        await currentPage.waitForTimeout(500);
-        const frames = await stopFrameSampler(currentPage);
+        // Include trailing outbox retirement and history reconciliation frames.
+        await page.waitForTimeout(500);
+        const frames = await stopFrameSampler(page);
         await capture("04-terminal-replay.png");
         expect(frames.length).toBeGreaterThan(0);
         expect(frames.filter((frame) => frame.present)).toEqual([]);
@@ -620,117 +589,77 @@ suite.define(() => {
   });
 
   it("keeps a submitted image visible when queued execution changes its run ID", async () => {
-    await suite.withPage(
-      { viewport: { height: 800, width: 1200 } },
-      async ({ page: currentPage }) => {
-        const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
-        const { runId, sendParams } = await openChatAndSubmitProbe(currentPage, gateway, {
-          attachImage: true,
-          deferSend: true,
-          probeText: IMAGE_PROBE_TEXT,
-        });
+    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { historyMessages: BASE_HISTORY });
+      const { runId, sendParams } = await openChatAndSubmitProbe(page, gateway, {
+        attachImage: true,
+        deferSend: true,
+        probeText: IMAGE_PROBE_TEXT,
+      });
 
-        expect(sendParams.attachments?.[0]).toMatchObject({
-          content: ONE_PIXEL_PNG_B64,
-          mimeType: "image/png",
-        });
-        await expect
-          .poll(() =>
-            currentPage.evaluate(() =>
-              ((window as SamplerWindow).openclawSendFrameSamples ?? []).some(
-                (frame) =>
-                  frame.rowKeys.length === 1 &&
-                  frame.imageCount === 1 &&
-                  frame.loadedImageCount === 1,
-              ),
-            ),
-          )
-          .toBe(true);
-        // A locally submitted turn plays the composer entry animation exactly once.
-        expect(
-          await currentPage.evaluate(() =>
-            ((window as SamplerWindow).openclawSendFrameSamples ?? []).some(
-              (frame) => frame.enteringBubbleCount === 1,
-            ),
-          ),
-        ).toBe(true);
-        await gateway.resolveDeferred("chat.send");
+      expect(sendParams.attachments?.[0]).toMatchObject({
+        content: ONE_PIXEL_PNG_B64,
+        mimeType: "image/png",
+      });
+      await expect.poll(async () => (await readFrames(page)).some(isHealthyImageFrame)).toBe(true);
+      // A locally submitted turn plays the composer entry animation exactly once.
+      expect((await readFrames(page)).some((frame) => frame.enteringBubbleCount === 1)).toBe(true);
+      await gateway.resolveDeferred("chat.send");
 
-        const frames = await finishRunAndSettle(currentPage, gateway, runId, {
-          content: [
-            { text: IMAGE_PROBE_TEXT, type: "text" },
-            {
-              type: "image",
-              url: ONE_PIXEL_PNG_DATA_URL,
-              source: { type: "url", url: ONE_PIXEL_PNG_DATA_URL },
-            },
-          ],
-          role: "user",
-          timestamp: Date.now(),
-          __openclaw: {
-            id: USER_ECHO_ENTRY_ID,
-            idempotencyKey: runId,
-            runId: "queued-execution",
-            seq: 2,
+      const frames = await finishRunAndSettle(page, gateway, runId, {
+        content: [
+          { text: IMAGE_PROBE_TEXT, type: "text" },
+          {
+            type: "image",
+            url: ONE_PIXEL_PNG_DATA_URL,
+            source: { type: "url", url: ONE_PIXEL_PNG_DATA_URL },
           },
-        });
+        ],
+        role: "user",
+        timestamp: Date.now(),
+        __openclaw: {
+          id: USER_ECHO_ENTRY_ID,
+          idempotencyKey: runId,
+          runId: "queued-execution",
+          seq: 2,
+        },
+      });
 
-        const keyTimeline = analyzeFrameContinuity(frames, isHealthyImageFrame);
-        // The bubble keeps one identity through the pending -> history handoff, so
-        // the DOM node is never remounted (no animation replay, no layout jump).
-        expect(new Set(keyTimeline).size).toBe(1);
-        const submittedRow = currentPage
-          .locator("[data-virtual-row-key]")
-          .filter({ hasText: IMAGE_PROBE_TEXT });
-        expect(await submittedRow.getByText("Attached image", { exact: false }).count()).toBe(0);
-      },
-    );
+      const keyTimeline = analyzeFrameContinuity(frames, isHealthyImageFrame);
+      // A stable pending/history identity avoids remounting the image.
+      expect(new Set(keyTimeline).size).toBe(1);
+      const submittedRow = page
+        .locator("[data-virtual-row-key]")
+        .filter({ hasText: IMAGE_PROBE_TEXT });
+      expect(await submittedRow.getByText("Attached image", { exact: false }).count()).toBe(0);
+    });
   });
 
   it("keeps the submitted user turn visible when the session echo lands before the send ack", async () => {
-    await suite.withPage(
-      { viewport: { height: 800, width: 1200 } },
-      async ({ page: currentPage }) => {
-        const gateway = await installMockGateway(currentPage, { historyMessages: BASE_HISTORY });
-        const { runId } = await openChatAndSubmitProbe(currentPage, gateway, { deferSend: true });
+    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, { historyMessages: BASE_HISTORY });
+      const { runId } = await openChatAndSubmitProbe(page, gateway, { deferSend: true });
 
-        // The Gateway persists and broadcasts the user turn before the ack resolves.
-        const userEcho = userMessage(runId);
-        await gateway.setHistoryMessages([...BASE_HISTORY, userEcho]);
-        const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
-        await gateway.emitGatewayEvent("session.message", {
-          activeRunIds: [runId],
-          clientRunId: runId,
-          hasActiveRun: true,
-          message: userEcho,
-          messageId: "pending-handoff-echo-1",
-          messageSeq: 2,
-          session: {
-            activeRunIds: [runId],
-            hasActiveRun: true,
-            key: "main",
-            kind: "direct",
-            status: "running",
-            updatedAt: Date.now(),
-          },
-          sessionKey: "main",
-        });
-        await expect
-          .poll(async () => (await gateway.getRequests("chat.history")).length, {
-            timeout: 10_000,
-          })
-          .toBeGreaterThan(historyRequestsBefore);
-        await currentPage.waitForTimeout(300);
-        await gateway.resolveDeferred("chat.send");
+      // The Gateway persists and broadcasts the user turn before the ack resolves.
+      const userEcho = userMessage(runId);
+      await gateway.setHistoryMessages([...BASE_HISTORY, userEcho]);
+      const historyRequestsBefore = (await gateway.getRequests("chat.history")).length;
+      await emitSessionMessage(gateway, userEcho, "pending-handoff-echo-1", 2, [runId], {
+        clientRunId: runId,
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).length, {
+          timeout: 10_000,
+        })
+        .toBeGreaterThan(historyRequestsBefore);
+      await page.waitForTimeout(300);
+      await gateway.resolveDeferred("chat.send");
 
-        const frames = await finishRunAndSettle(currentPage, gateway, runId, userEcho);
-        const keyTimeline = analyzeFrameContinuity(frames);
-        expect(new Set(keyTimeline).size).toBe(1);
-        // The single stable key above proves the node never remounted, so the
-        // entry animation cannot have replayed; at most the one submitted turn
-        // still carries the (inert, completed) animation class.
-        expect(await currentPage.locator(".chat-bubble--enter").count()).toBeLessThanOrEqual(1);
-      },
-    );
+      const frames = await finishRunAndSettle(page, gateway, runId, userEcho);
+      const keyTimeline = analyzeFrameContinuity(frames);
+      expect(new Set(keyTimeline).size).toBe(1);
+      // The completed entry-animation class may remain on the one stable node.
+      expect(await page.locator(".chat-bubble--enter").count()).toBeLessThanOrEqual(1);
+    });
   });
 });
