@@ -11,6 +11,7 @@ import { StateDatabaseOfflineMaintenanceError } from "../../infra/gateway-state-
 import * as ownerRecord from "../../infra/gateway-state-owner-record.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as processRunner from "../../process/exec.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -28,6 +29,7 @@ import type { PreManagedServiceStop } from "./update-command-service.js";
 
 const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
+const realRunCommand = processRunner.runCommandWithTimeout;
 
 async function execute(params = executionParams("package")) {
   return executeMutableUpdate(await bindExecutionGuards(params));
@@ -216,8 +218,44 @@ describe("mutable update execution", () => {
   it("waits for a real transient maintenance owner before Git checkout", async () => {
     await withTestDir({ prefix: "git-maintenance-before-checkout-" }, async (root) => {
       const params = await runParams(root, "git", path.join(root, "state"));
-      params.updateStepTimeoutMs = 5_000;
-      const target = { schemaVersions: { state: 15, agent: 19 } };
+      params.updateStepTimeoutMs = 15_000;
+      params.timeoutMs = 60_000;
+      params.shouldRestart = false;
+      params.opts = { ...params.opts, json: true, restart: false };
+      const git = async (...args: string[]) => {
+        const result = await realRunCommand(["git", ...args], { cwd: root, timeoutMs: 10_000 });
+        if (result.code !== 0) {
+          throw new Error(result.stderr || `git ${args.join(" ")} failed`);
+        }
+        return result.stdout.trim();
+      };
+      await fs.writeFile(
+        path.join(root, ".gitignore"),
+        ".artifacts/\ndist/\nleases/\nnode_modules/\nremote.git/\nstate/\n",
+      );
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        '{"name":"openclaw","version":"2026.10.4"}\n',
+      );
+      await fs.writeFile(path.join(root, "openclaw.mjs"), "export {};\n");
+      await git("init", "--initial-branch=main");
+      await git("config", "user.name", "OpenClaw Test");
+      await git("config", "user.email", "openclaw@example.com");
+      await git("add", ".");
+      await git("commit", "-m", "base");
+      const baseSha = await git("rev-parse", "HEAD");
+      const remote = path.join(root, "remote.git");
+      await git("init", "--bare", remote);
+      await git("remote", "add", "origin", remote);
+      await git("push", "origin", "main");
+      await fs.writeFile(path.join(root, "candidate.txt"), "candidate\n");
+      await git("add", "candidate.txt");
+      await git("commit", "-m", "candidate");
+      const candidateSha = await git("rev-parse", "HEAD");
+      await git("push", "--force", "origin", "main");
+      await git("reset", "--hard", baseSha);
+      params.channel = "dev";
+      params.devTarget = { mode: "detached", ref: candidateSha };
       let releaseTimer: ReturnType<typeof setTimeout> | undefined;
       let releaseRequested = false;
       const lockModule = new URL("../../infra/gateway-lock.ts", import.meta.url).href;
@@ -273,17 +311,41 @@ describe("mutable update execution", () => {
           }
         },
       );
-      mocks.runGitUpdate.mockImplementationOnce(
-        async (options: Parameters<typeof updateGitInstall>[0]) => {
-          await options.inspectGitTarget?.(target);
-          return { ...successfulUpdate, mode: "git" };
-        },
+      const actualGit =
+        await vi.importActual<typeof import("./update-command-git.js")>("./update-command-git.js");
+      mocks.runGitUpdate.mockImplementation(actualGit.updateGitInstall);
+      vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) =>
+        argv[0] === "git"
+          ? await realRunCommand(argv, options)
+          : await (async () => {
+              const cwd = typeof options === "object" ? options.cwd : undefined;
+              if (cwd && argv.some((arg) => arg === "build" || arg === "ui:build")) {
+                const uiRoot = path.join(cwd, "dist", "control-ui");
+                await fs.mkdir(path.join(uiRoot, "assets"), { recursive: true });
+                await fs.writeFile(
+                  path.join(uiRoot, "index.html"),
+                  '<script src="./assets/startup.js"></script>\n',
+                );
+                await fs.writeFile(path.join(uiRoot, "assets", "startup.js"), "export {};\n");
+              }
+              return {
+                code: 0,
+                stdout: "",
+                stderr: "",
+                signal: null,
+                killed: false,
+                termination: "exit" as const,
+              };
+            })(),
       );
 
       try {
         const execution = await execute(params);
 
-        expect(execution?.result.status).toBe("ok");
+        expect(await git("rev-parse", "HEAD")).toBe(candidateSha);
+        expect(execution?.result.steps).toContainEqual(
+          expect.objectContaining({ name: "git-checkout", exitCode: 0 }),
+        );
         expect(refusals[0]).toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
         expect(releaseRequested).toBe(true);
       } finally {
