@@ -3,7 +3,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   persistCompactionBoundaryWithSessionEntryAsync,
   replaceSessionEntrySync,
@@ -26,6 +28,7 @@ it("retains compaction display facts until a branch change requires a new tail",
     setRuntimeConfigSnapshot(cfg);
     const scope = {
       agentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       sessionKey: "agent:main:compaction-display",
       sessionId: "compaction-display",
     };
@@ -38,11 +41,12 @@ it("retains compaction display facts until a branch change requires a new tail",
       timestamp: 1,
     });
     expect(keptId).toBeTypeOf("string");
-    await manager.appendMessageAsync({
-      role: "assistant",
-      content: "Keep this reply",
-      timestamp: 2,
-    });
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Keep this reply" }],
+        timestamp: 2,
+      }),
+    );
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
     expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
@@ -79,7 +83,9 @@ it("retains compaction display facts until a branch change requires a new tail",
     expect(reads).toEqual([]);
     expect(backfill).not.toHaveBeenCalled();
 
-    await manager.appendMessageAsync({ role: "assistant", content: "New reply", timestamp: 3 });
+    await manager.appendMessageAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "New reply" }], timestamp: 3 }),
+    );
     await compact();
     await projection.ensureMaterialized();
     await nextTurn();
