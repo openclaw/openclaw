@@ -8,7 +8,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
   deferSqlitePostCommitPublication,
@@ -291,7 +291,9 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
       timer.refresh();
     }
   };
-  const timer = runInDetachedAsyncContext(() => setTimeout(closeIdle, SQLITE_IDLE_HANDLE_TTL_MS));
+  const timer = runInDetachedAsyncContext(() =>
+    setTimeout(closeIdle, resolveAgentDatabaseIdleHandleTtlMs()),
+  );
   const cleanupListener = addAbortListener(cleanupSignal, refresh);
   timer.unref();
   cache.idleTimers.set(database.db, {

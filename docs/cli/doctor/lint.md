@@ -58,6 +58,10 @@ unchanged. It reports missing llama.cpp setup and the interactive `models auth l
 without claiming full Gateway readiness, starting services, downloading models, or changing
 config.
 
+This check snapshots agent databases only when memory search is enabled and the
+agent's effective provider is `local`. Agents using the default or another remote
+provider do not need a database snapshot for this check.
+
 Human output is compact:
 
 ```text

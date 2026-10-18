@@ -150,7 +150,6 @@ function buildCtx(overrides: Partial<NodeEventContext> = {}): NodeEventContext {
     broadcastVoiceWakeChanged: () => {},
     addChatRun: () => {},
     removeChatRun: () => undefined,
-    chatAbortControllers: new Map(),
     dedupe: new Map(),
     agentRunSeq: new Map(),
     getHealthCache: () => null,
@@ -214,13 +213,16 @@ describe("node exec events", () => {
     deviceIdentity.mockClear();
   });
 
-  it.each([false, true])(
-    "preserves exec authorization and terminal consumption with suppressNotifyOnExit=%s",
-    async (suppressNotifyOnExit) => {
+  it.each([
+    { suppressNotifyOnExit: true, settle: "disconnect" },
+    { suppressNotifyOnExit: false, settle: "result" },
+    { suppressNotifyOnExit: false, settle: "disconnect" },
+  ] as const)(
+    "consumes exec authorization and notifies only undelivered output (suppress=$suppressNotifyOnExit, settle=$settle)",
+    async ({ suppressNotifyOnExit, settle }) => {
       const registry = new NodeRegistry();
-      const connection = { connId: "conn-1" },
-        auth = registry.authorizeSystemRunEvent.bind(registry);
-      const [runId, sessionKey] = [`run-seq-suppress-${suppressNotifyOnExit}`, "agent:main:main"];
+      const connection = { connId: "conn-1" };
+      const [runId, sessionKey] = [`run-seq-${suppressNotifyOnExit}-${settle}`, "agent:main:main"];
       const eventRouting = { sessionKey, contextKey: `exec:${runId}` };
       const startedPayload = { runId, sessionKey, command: "printf ok" };
       const finishedPayload = {
@@ -232,40 +234,61 @@ describe("node exec events", () => {
       };
       const unmatchedEvent = eventResult("exec.finished", "unmatched_exec_event");
       const { emit } = nodeFixture("node-1", {
-        authorizeNodeSystemRunEvent: (p) => auth({ ...p, terminal: p.event !== "exec.started" }),
+        authorizeNodeSystemRunEvent: (p) =>
+          registry.authorizeSystemRunEventWithState({
+            ...p,
+            terminal: p.event !== "exec.started",
+          }) ?? false,
       });
-      registry.register(makeNodeClient(connection.connId, "node-1"), {
-        pairingIdentity: "identity-a",
-      });
+      const client = makeNodeClient(connection.connId, "node-1");
+      const sent: string[] = [];
+      Object.assign(client.socket, { send: (frame: string) => sent.push(frame) });
+      registry.register(client, { pairingIdentity: "identity-a" });
       const invoke = registry.invoke({
         nodeId: "node-1",
         command: "system.run",
         params: { runId, sessionKey },
         timeoutMs: 0,
       });
-      try {
-        await expect(
-          emit("exec.finished", finishedPayload, { connId: "wrong-conn" }),
-        ).resolves.toEqual(unmatchedEvent);
-        await expect(emit("exec.started", startedPayload, connection)).resolves.toBeUndefined();
+      await expect(
+        emit("exec.finished", finishedPayload, { connId: "wrong-conn" }),
+      ).resolves.toEqual(unmatchedEvent);
+      await expect(emit("exec.started", startedPayload, connection)).resolves.toBeUndefined();
 
-        const started = [`Exec started (node=node-1 id=${runId}): printf ok`, eventRouting];
-        const wake = [execEventHeartbeatOptions(sessionKey)];
-        expect(enqueue.mock.calls).toEqual([started]);
-        expect(heartbeat.mock.calls).toEqual([wake]);
+      const started = [`Exec started (node=node-1 id=${runId}): printf ok`, eventRouting];
+      const wake = [execEventHeartbeatOptions(sessionKey)];
+      expect(enqueue.mock.calls).toEqual([started]);
+      expect(heartbeat.mock.calls).toEqual([wake]);
 
-        await expect(emit("exec.finished", finishedPayload, connection)).resolves.toBeUndefined();
-        // Remove suppression on replay so filtering cannot hide unconsumed authorization.
-        await expect(
-          emit("exec.finished", { ...finishedPayload, suppressNotifyOnExit: false }, connection),
-        ).resolves.toEqual(unmatchedEvent);
-        const finished = [`Exec finished (node=node-1 id=${runId}, code 0)\ndone`, eventRouting];
-        expect(enqueue.mock.calls).toEqual(suppressNotifyOnExit ? [started] : [started, finished]);
-        expect(heartbeat.mock.calls).toEqual(suppressNotifyOnExit ? [wake] : [wake, wake]);
-      } finally {
+      await expect(emit("exec.finished", finishedPayload, connection)).resolves.toBeUndefined();
+      // Remove suppression on replay so filtering cannot hide unconsumed authorization.
+      await expect(
+        emit("exec.finished", { ...finishedPayload, suppressNotifyOnExit: false }, connection),
+      ).resolves.toEqual(unmatchedEvent);
+      // The waiting caller owns the output until its invoke settles.
+      expect(enqueue.mock.calls).toEqual([started]);
+
+      if (settle === "result") {
+        const request = sent
+          .map((frame) => JSON.parse(frame) as { event?: string; payload?: { id?: string } })
+          .find((frame) => frame.event === "node.invoke.request");
+        registry.handleInvokeResult({
+          id: request?.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: connection.connId,
+          ok: true,
+          payloadJSON: "{}",
+        });
+        await expect(invoke).resolves.toMatchObject({ ok: true });
+      } else {
         registry.unregister(connection.connId);
-        await invoke;
+        await expect(invoke).resolves.toMatchObject({ ok: false });
       }
+      const finished = [`Exec finished (node=node-1 id=${runId}, code 0)\ndone`, eventRouting];
+      const recovered = !suppressNotifyOnExit && settle === "disconnect";
+      expect(enqueue.mock.calls).toEqual(recovered ? [started, finished] : [started]);
+      expect(heartbeat.mock.calls).toEqual(recovered ? [wake, wake] : [wake]);
+      registry.unregister(connection.connId);
     },
   );
 

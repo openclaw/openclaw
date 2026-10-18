@@ -42,16 +42,19 @@ import {
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { createAgentEventTestHarness } from "./server-chat.agent-events.test-harness.js";
+import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -372,7 +375,6 @@ describe("durable pre-reply run failure", () => {
         const transcriptBefore = await loadTranscriptEvents(target);
         const chatRunState = createChatRunState();
         const ops: ChatAbortOps = {
-          chatAbortControllers: new Map(),
           chatRunState,
           removeChatRun: () => undefined,
           agentRunSeq: new Map(),
@@ -381,20 +383,26 @@ describe("durable pre-reply run failure", () => {
         };
         const active = registerChatAbortController({
           ...target,
-          chatAbortControllers: ops.chatAbortControllers,
+          target: captureRpcTargetForTest(target),
           runId,
           timeoutMs: 60_000,
           kind: "agent",
         });
-        active.markExecutionStarted();
+        if (!active.entry) {
+          throw new Error("Missing active source");
+        }
+        active.initializeTiming();
+        const releaseActive = await claimRpcSourceForTest(active.entry);
+        expect(active.markExecutionStarted()).toBe(true);
         const queuedRunId = "queued-follow-up";
         const queued = registerChatAbortController({
           ...target,
-          chatAbortControllers: ops.chatAbortControllers,
+          target: captureRpcTargetForTest(target),
           runId: queuedRunId,
           timeoutMs: 60_000,
           kind: "agent",
         });
+        queued.initializeTiming();
         const events: AgentEventPayload[] = [];
         const unsubscribe = onAgentEvent((queuedEvent) => {
           if (queuedEvent.runId === queuedRunId && queuedEvent.stream === "lifecycle") {
@@ -410,9 +418,9 @@ describe("durable pre-reply run failure", () => {
             }),
           ).toEqual({ aborted: true });
           expect(queued.controller.signal.aborted).toBe(true);
-          expect(ops.chatAbortControllers.has(queuedRunId)).toBe(false);
+          expect(rpcSourceTesting.has(queuedRunId)).toBe(false);
           expect(active.controller.signal.aborted).toBe(false);
-          expect(ops.chatAbortControllers.get(runId)?.controller).toBe(active.controller);
+          expect(rpcSourceTesting.get(runId)?.input.abortSignal).toBe(active.controller.signal);
           expect(events).toHaveLength(1);
           for (const queuedEvent of events) {
             expect(
@@ -462,6 +470,7 @@ describe("durable pre-reply run failure", () => {
         } finally {
           unsubscribe();
           queued.cleanup();
+          releaseActive();
           active.cleanup();
           chatRunState.clear();
         }

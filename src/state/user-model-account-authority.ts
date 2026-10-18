@@ -455,6 +455,12 @@ export function createAuthProfileCredentialWriteAdmission(
   };
 }
 
+export class AuthProfileCredentialPublicationPendingError extends Error {
+  constructor(readonly waitUntilCurrent: () => Promise<void>) {
+    super("Auth profile credential authority is unavailable; retry after owner recovery");
+  }
+}
+
 export function captureAuthProfileCredentialAuthority(
   context: OpenClawStateWorkerContext,
   source: { identity: string; databasePath: string },
@@ -497,32 +503,33 @@ export function captureAuthProfileCredentialAuthority(
       throw unavailable();
     }
   };
+  const waitUntilCurrent = async () => {
+    assertOwnerCurrent();
+    while (root.pending.size || owner.pending.size) {
+      const changed = createDeferredCore();
+      (root.waiters ??= new Set()).add(changed.resolve);
+      (owner.waiters ??= new Set()).add(changed.resolve);
+      // Worker-only state owners can close without a native-handle lifecycle event.
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        async close(identity) {
+          if (!identity || identity.key === context.admission.identity.key) {
+            changed.resolve();
+          }
+        },
+      });
+      try {
+        await changed.promise;
+      } finally {
+        unregister();
+        root.waiters.delete(changed.resolve);
+        owner.waiters.delete(changed.resolve);
+      }
+      assertOwnerCurrent();
+    }
+  };
   // Preparation may overlap publication; only the effect reader grants current authority.
   return {
-    async waitUntilCurrent() {
-      assertOwnerCurrent();
-      while (root.pending.size || owner.pending.size) {
-        const changed = createDeferredCore();
-        (root.waiters ??= new Set()).add(changed.resolve);
-        (owner.waiters ??= new Set()).add(changed.resolve);
-        // Worker-only state owners can close without a native-handle lifecycle event.
-        const unregister = registerOpenClawStateDatabaseAsyncResource({
-          async close(identity) {
-            if (!identity || identity.key === context.admission.identity.key) {
-              changed.resolve();
-            }
-          },
-        });
-        try {
-          await changed.promise;
-        } finally {
-          unregister();
-          root.waiters.delete(changed.resolve);
-          owner.waiters.delete(changed.resolve);
-        }
-        assertOwnerCurrent();
-      }
-    },
+    waitUntilCurrent,
     observe(credential: AuthProfileCredential | undefined) {
       if (!retained.observed) {
         retained.credential = credential && structuredClone(credential);
@@ -532,7 +539,7 @@ export function captureAuthProfileCredentialAuthority(
     readCurrentCredential(this: void) {
       assertOwnerCurrent();
       if (root.pending.size || owner.pending.size) {
-        throw unavailable();
+        throw new AuthProfileCredentialPublicationPendingError(waitUntilCurrent);
       }
       return retained.credential && structuredClone(retained.credential);
     },

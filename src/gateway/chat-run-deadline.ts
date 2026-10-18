@@ -1,9 +1,7 @@
 import {
   asDateTimestampMs,
-  isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -43,31 +41,4 @@ export function resolveAgentRunExpiresAtMs(params: { now: number; timeoutMs: num
     minMs: DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
     maxMs: Math.max(0, params.timeoutMs) + DEFAULT_CHAT_RUN_ABORT_GRACE_MS,
   });
-}
-
-/** A new candidate cannot revive a cancelled, expired, or replaced execution. */
-export function renewChatRunExecutionDeadline(params: {
-  entries: ReadonlyMap<string, ChatAbortControllerEntry>;
-  runId: string;
-  controller: AbortController;
-  timeoutMs: number;
-  now?: number;
-}): boolean {
-  const entry = params.entries.get(params.runId);
-  if (entry?.controller !== params.controller || params.controller.signal.aborted) {
-    return false;
-  }
-  if (entry.executionStarted !== true) {
-    return false;
-  }
-  const now = params.now ?? Date.now();
-  if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
-    return false;
-  }
-  const nextExpiresAtMs = resolveAgentRunExpiresAtMs({ now, timeoutMs: params.timeoutMs });
-  if (nextExpiresAtMs <= entry.expiresAtMs) {
-    return false;
-  }
-  entry.expiresAtMs = nextExpiresAtMs;
-  return true;
 }

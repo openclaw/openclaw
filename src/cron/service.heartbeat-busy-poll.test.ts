@@ -1,10 +1,9 @@
-// Real scheduler, busy lanes and SQLite; only model/channel I/O is injected.
+// Real scheduler, controller turns and SQLite; only model/channel I/O is injected.
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
-import { createReplyOperation, replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import {
@@ -23,14 +22,15 @@ import {
   setHeartbeatWakeHandler,
   setHeartbeatsEnabled,
 } from "../infra/heartbeat-wake.js";
+import * as heartbeatTargets from "../infra/outbound/targets.js";
 import {
   enqueueSystemEventWithReceipt,
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { enqueueCommandInLane, getQueueSize, resetAllLanes } from "../process/command-queue.js";
+import { resetAllLanes } from "../process/command-queue.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { CommandLane } from "../process/lanes.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -85,6 +85,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
   const resources: { runner?: ReturnType<typeof startHeartbeatRunner>; cron?: CronService } = {};
   const releases: Array<() => void> = [];
   const scheduledRuns: Promise<void>[] = [];
+  const heldTurns: Promise<void>[] = [];
   async function close() {
     for (const release of releases) {
       release();
@@ -100,6 +101,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       if (vi.isFakeTimers()) {
         await vi.advanceTimersByTimeAsync(1_000);
       }
+      await Promise.allSettled(heldTurns);
       await Promise.allSettled(scheduledRuns);
       await resources.cron?.waitForIdle();
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
@@ -154,6 +156,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     lastChannel: "telegram",
     lastProvider: "telegram",
     lastTo: "12345",
+    sessionId: "busy-session",
   });
   const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
     createHeartbeatToolResponsePayload({
@@ -226,16 +229,33 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       (await writeCronJobScratch({ storePath, jobId: monitor.id, content: options.scratch })).ok,
     ).toBe(true);
   }
-  async function holdLane(lane: string) {
+  async function holdSession(key = sessionKey) {
     const started = createDeferred();
     const release = createDeferred();
     releases.push(() => release.resolve());
-    const work = enqueueCommandInLane(lane, async () => {
-      started.resolve();
-      await release.promise;
-    });
+    const work = withSessionTurn(
+      {
+        sessionKey: key,
+        sessionId: key === sessionKey ? "busy-session" : "busy-isolated-session",
+        agentId: "main",
+        storePath: sessionStorePath,
+      },
+      async (operation, signal) => {
+        operation?.setPhase("running");
+        const wait = operation?.watchdog.beginWait({
+          kind: "runtime_owned",
+          isCurrent: () => !signal.aborted,
+        });
+        started.resolve();
+        try {
+          await release.promise;
+        } finally {
+          wait?.close();
+        }
+      },
+    );
+    heldTurns.push(work);
     await started.promise;
-    expect(getQueueSize(lane)).toBe(1);
     return async () => {
       release.resolve();
       await work;
@@ -252,7 +272,7 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     coalesce,
     finished,
     waitForFinished,
-    holdLane,
+    holdSession,
     tick: () => {
       const pending = onTimer(created.state);
       scheduledRuns.push(pending);
@@ -270,7 +290,7 @@ describe("native heartbeat busy poll settlement", () => {
   it("ends a busy actionable scratch poll before its deadline and executes only the next persisted tick", async () => {
     const f = await createPollFixture({ scratch: "- Check the service status\n" });
 
-    const releaseMain = await f.holdLane(CommandLane.Main);
+    const releaseSession = await f.holdSession();
     const firstTick = f.monitor.state.nextRunAtMs!;
     await vi.advanceTimersByTimeAsync(firstTick - Date.now());
     const firstRun = f.tick();
@@ -326,7 +346,7 @@ describe("native heartbeat busy poll settlement", () => {
     expect(f.finished()).toHaveLength(1);
     expect(f.runOnce).toHaveBeenCalledOnce();
     expect(f.reply).not.toHaveBeenCalled();
-    await releaseMain();
+    await releaseSession();
     await vi.advanceTimersByTimeAsync(nextTick - Date.now() - 1);
     expect(f.runOnce).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(1);
@@ -344,10 +364,10 @@ describe("native heartbeat busy poll settlement", () => {
     expect(f.cron.getJob(f.monitor.id)?.state.consecutiveErrors).toBe(0);
   });
 
-  it("keeps cron-in-progress and native force semantics while a direct manual wake still retries", async () => {
+  it("retires a forced native poll on a busy session while a direct manual wake still retries", async () => {
     const f = await createPollFixture();
 
-    const releaseCron = await f.holdLane(CommandLane.CronNested);
+    const releaseSession = await f.holdSession();
     const forced = f.cron.run(f.monitor.id, "force");
     await f.coalesce();
     await expect(forced).resolves.toMatchObject({ ok: true, ran: true });
@@ -362,7 +382,7 @@ describe("native heartbeat busy poll settlement", () => {
     );
     expect(f.finished()[0]).toMatchObject({
       status: "skipped",
-      error: "heartbeat skipped: cron-in-progress",
+      error: "heartbeat skipped: requests-in-flight",
     });
     const settled = vi.fn();
     const manual = requestHeartbeatAndWait({
@@ -377,7 +397,7 @@ describe("native heartbeat busy poll settlement", () => {
     expect(settled).not.toHaveBeenCalled();
     expect(f.reply).not.toHaveBeenCalled();
     expect(f.runOnce).toHaveBeenCalledTimes(2);
-    await releaseCron();
+    await releaseSession();
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(manual).resolves.toMatchObject({ status: "ran" });
     expect(f.reply).toHaveBeenCalledOnce();
@@ -396,7 +416,7 @@ describe("native heartbeat busy poll settlement", () => {
         return undefined;
       });
       const task = source === "coalesced task" ? await addHeartbeatJob(f.cron, "task") : undefined;
-      const releaseMain = await f.holdLane(CommandLane.Main);
+      const releaseSession = await f.holdSession();
       if (!task) {
         enqueueSystemEventWithReceipt(text, {
           sessionKey: f.sessionKey,
@@ -422,7 +442,7 @@ describe("native heartbeat busy poll settlement", () => {
       }
       expect(f.finished()).toHaveLength(0);
       expect(f.reply).not.toHaveBeenCalled();
-      await releaseMain();
+      await releaseSession();
       await vi.advanceTimersByTimeAsync(60_000);
       await expect(Promise.all(parents)).resolves.toEqual(
         Array.from({ length: parentCount }, () => expect.objectContaining({ ok: true, ran: true })),
@@ -450,35 +470,29 @@ describe("native heartbeat busy poll settlement", () => {
   it("retains late isolated admission and a subsequent pre-execution busy retry", async () => {
     const f = await createPollFixture({ isolated: true });
 
-    // Admission must recheck isolated work registered after the base-session fence.
-    const isActive = replyRunRegistry.isActive.bind(replyRunRegistry);
-    let lateRun: ReturnType<typeof createReplyOperation> | undefined;
-    const activeReply = vi.spyOn(replyRunRegistry, "isActive").mockImplementationOnce((key) => {
-      const active = isActive(key);
-      lateRun = createReplyOperation({
-        sessionKey: `${f.sessionKey}:heartbeat`,
-        sessionId: "late-isolated-reply",
-        resetTriggered: false,
-      });
-      lateRun.setPhase("running");
-      return active;
+    // The wake-stage check is clear; a real controller turn starts while
+    // delivery resolution yields, before isolated admission checks again.
+    const resolveTarget = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
+    let releaseSession: (() => Promise<void>) | undefined;
+    vi.spyOn(
+      heartbeatTargets,
+      "resolveHeartbeatDeliveryTargetWithSessionRoute",
+    ).mockImplementationOnce(async (...args) => {
+      const target = await resolveTarget(...args);
+      releaseSession = await f.holdSession(`${f.sessionKey}:heartbeat`);
+      return target;
     });
     const parent = f.cron.run(f.monitor.id, "force");
-    try {
-      await f.coalesce();
-      await f.runOnce.mock.results[0]?.value;
-      expect(activeReply).toHaveBeenCalledTimes(2);
-      expect(f.finished()).toHaveLength(0);
-      expect(f.reply).not.toHaveBeenCalled();
-    } finally {
-      lateRun?.complete();
-    }
-    const releaseMain = await f.holdLane(CommandLane.Main);
+    await f.coalesce();
+    await f.runOnce.mock.results[0]?.value;
+    expect(releaseSession).toBeTypeOf("function");
+    expect(f.finished()).toHaveLength(0);
+    expect(f.reply).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(f.runOnce).toHaveBeenCalledTimes(2);
     await f.runOnce.mock.results[1]?.value;
     expect(f.finished()).toHaveLength(0);
-    await releaseMain();
+    await releaseSession?.();
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(parent).resolves.toMatchObject({ ok: true, ran: true });
     expect(f.finished()[0]?.error).toBeUndefined();

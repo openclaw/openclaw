@@ -23,13 +23,13 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
-  ACTIVE_EMBEDDED_RUNS,
+  getActiveNativeAttempt,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
 } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
@@ -4491,7 +4491,8 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
             // Queued diagnostics may outlive cleanup or a same-id replacement.
             const fence = getOwnedSessionTranscriptWriterFence();
             const runId = fence?.expectedWriterRunId;
-            const handle = runId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) : undefined;
+            const attachment = runId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) : undefined;
+            const handle = attachment?.handle;
             const diagnostic = handle?.diagnosticOwner;
             const context = runId ? getAgentRunContext(runId) : undefined;
             const authority = context?.delegatedAuthority;
@@ -4501,7 +4502,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               context &&
               authority &&
               diagnostic.runId === runId &&
-              ACTIVE_EMBEDDED_RUNS.get(diagnostic.sessionId) === handle &&
+              getActiveNativeAttempt(diagnostic.sessionId) === handle &&
               !isDiagnosticEmbeddedRunOwnerClosed(diagnostic) &&
               handle?.isAborted?.() !== true &&
               context.sessionId === diagnostic.sessionId &&
@@ -5311,16 +5312,19 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     throw new Error("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT requires OPENAI_API_KEY");
   }
   const { detectInferenceBackends } = await import("../commands/onboard-inference.js");
-  const candidates = await detectInferenceBackends({
-    config: {},
-    env: { OPENAI_API_KEY: apiKey },
-    platform: "linux",
-    deps: {
-      probeLocalCommand: async (command) => ({ command, found: false }),
-      hasCodexCliAuthFile: () => false,
-      readGeminiCliCredentials: () => null,
-    },
-  });
+  const probes = await import("../system-agent/probes.js");
+  const cliCredentials = await import("../agents/cli-credentials.js");
+  const probe = vi
+    .spyOn(probes, "probeLocalCommand")
+    .mockImplementation(async (command) => ({ command, found: false }));
+  const login = vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
+  let candidates: Awaited<ReturnType<typeof detectInferenceBackends>>;
+  try {
+    candidates = await detectInferenceBackends({ config: {} });
+  } finally {
+    probe.mockRestore();
+    login.mockRestore();
+  }
   const selected = candidates.find((candidate) => candidate.kind === "openai-api-key");
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");

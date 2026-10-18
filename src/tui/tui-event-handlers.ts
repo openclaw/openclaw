@@ -38,6 +38,7 @@ import type {
   SessionChangedEvent,
   SessionMessageEvent,
   TuiHistoryLoadResult,
+  TuiSessionRow,
 } from "./tui-types.js";
 
 const ACTIVITY_PHASES = new Set(["start", "finishing", "end", "error"]);
@@ -57,6 +58,7 @@ type EventHandlerContext = Omit<
   };
   updateFooter: () => void;
   loadHistory: () => Promise<TuiHistoryLoadResult>;
+  applySessionEventRow?: (row: TuiSessionRow) => boolean;
   noteLocalRunId?: (runId: string) => void;
   isLocalBtwRunId?: (runId: string) => boolean;
   forgetLocalBtwRunId?: (runId: string) => void;
@@ -70,6 +72,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     state,
     setActivityStatus,
     refreshSessionInfo,
+    applySessionEventRow,
     loadHistory,
     noteLocalRunId,
     isLocalRunId,
@@ -530,7 +533,10 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
     }
 
-    if (runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId))) {
+    if (
+      runCoordinator.routeSessionMessageRefresh(Boolean(liveUserMessage || authoritativeRunId)) &&
+      !(evt.session && applySessionEventRow?.(evt.session))
+    ) {
       void refreshSessionInfo?.();
     }
   });

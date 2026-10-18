@@ -43,6 +43,8 @@ import { isMemoryFlushPlanNativeProviderOwned } from "../../plugins/memory-state
 import { CommandLane } from "../../process/lanes.js";
 import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -92,8 +94,6 @@ import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js"
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const MAX_FLUSH_FAILURES = 3;
@@ -362,7 +362,7 @@ export async function runSessionCompactionIfNeeded(params: {
     }
   };
   const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(
-    params.followupRun.turnAdoptionLifecycle,
+    params.followupRun,
     params.abortSignal,
   );
   try {
@@ -814,8 +814,7 @@ export async function runMemoryFlushIfNeeded(params: {
       phase: "memory_flushing",
     });
   }
-  const { turnAdoptionLifecycle } = params.followupRun;
-  const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(turnAdoptionLifecycle, abortSignal);
+  const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(params.followupRun, abortSignal);
   // Only runnable maintenance owns a run context. The matching finally is
   // the sole cleanup path so setup, execution, and persistence exits cannot orphan it.
   try {

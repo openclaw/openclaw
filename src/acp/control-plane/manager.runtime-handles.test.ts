@@ -92,12 +92,24 @@ describe("AcpSessionManager runtime handles", () => {
   it("disposes every retained handle and cancels the active turn before its close", async () => {
     const f = fixture();
     const idleSessionKey = "agent:claude:acp:idle";
+    const persisted = new Map<string, SessionAcpMeta>();
     hoisted.readAcpSessionEntryMock.mockImplementation(
       ({ sessionKey }: { sessionKey: string }) => ({
         sessionKey,
         storeSessionKey: sessionKey,
-        acp: readySessionMeta(),
+        acp: persisted.get(sessionKey) ?? readySessionMeta(),
       }),
+    );
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(
+      async (input: Parameters<WriteManagerSessionMeta>[0]) => {
+        const current = persisted.get(input.sessionKey) ?? readySessionMeta();
+        const entry = { sessionId: input.sessionKey, updatedAt: 1, acp: current };
+        const next = input.mutate(current, entry);
+        if (next) {
+          persisted.set(input.sessionKey, next);
+        }
+        return { ...entry, acp: next ?? current };
+      },
     );
     const entered = createDeferred();
     const release = createDeferred();

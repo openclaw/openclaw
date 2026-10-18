@@ -13,7 +13,7 @@ import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
+import { log as runnerLog } from "../agents/embedded-agent-runner/logger.js";
 import type {
   EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -21,11 +21,11 @@ import type {
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcome,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import { queueDetachedEmbeddedAgentMessage } from "../agents/embedded-agent-runner/runs.message-injection.js";
 import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
 import {
   compileStructuredInputForm,
@@ -43,11 +43,21 @@ import {
   prepareWatchedSessionsPromptAsync,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage as formatError } from "../infra/errors.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
 import { maxAsk, minSecurity } from "../infra/exec-approvals-policy.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import {
+  canInjectReplyMessageTarget,
+  captureReplyMessageInjectionTarget,
+} from "../sessions/session-controller.message-injection.js";
+import {
+  resolveActiveReplyOperationForSessionId,
+  resolveActiveSessionRunId as resolveActiveEmbeddedRunSessionId,
+} from "../sessions/session-controller.queries.js";
+import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 
 export type {
   AgentExecutorBinding,
@@ -113,6 +123,7 @@ export { projectProgressCardChannelUpdate } from "../session-cards/progress-card
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  resolveMessageToolSourceReplyFinal,
 } from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
@@ -360,23 +371,80 @@ export {
 export {
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
-  clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
-  setActiveEmbeddedRun,
 };
+
+type AgentHarnessActiveRunHandle = Omit<Parameters<typeof attachActiveEmbeddedRun>[1], symbol>;
+
+/** Registers within the host-bound attempt and returns cleanup for this exact native run. */
+export function setActiveEmbeddedRun(
+  sessionId: string,
+  handle: AgentHarnessActiveRunHandle,
+  sessionKey?: string,
+  sessionFile?: string,
+  agentId?: string,
+): ((reason?: string) => void) | undefined {
+  const attachment = attachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, agentId);
+  if (!attachment) {
+    return undefined;
+  }
+  return (reason) =>
+    detachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, reason, attachment);
+}
+
+/** A retained cleanup closes only its captured run, including after a successor registers. */
+export function clearActiveEmbeddedRun(
+  sessionId: string,
+  handle: AgentHarnessActiveRunHandle,
+  sessionKey?: string,
+  sessionFile?: string,
+  reason = "run_completed",
+  cleanup?: ReturnType<typeof setActiveEmbeddedRun>,
+): void {
+  if (cleanup) {
+    cleanup(reason);
+  } else {
+    detachActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile, reason);
+  }
+}
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
- * boolean API only reports immediate queue eligibility and cannot observe async
- * runtime rejection; runtime-owned delivery paths should use acceptance-aware
- * steering instead of public SDK queueing.
+ * boolean API reports whether the active turn or sessionless native sink could
+ * take input now; it cannot observe the later outcome and never retries a refusal.
  */
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
   options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
+  const operation = resolveActiveReplyOperationForSessionId(sessionId);
+  if (!operation) {
+    return queueDetachedEmbeddedAgentMessage(sessionId, text, options);
+  }
+  const target = captureReplyMessageInjectionTarget(operation);
+  if (!target || !canInjectReplyMessageTarget(target, options)) {
+    return false;
+  }
+  void steerSessionControllerOperation({
+    operation,
+    text,
+    options: options ?? { steeringMode: "all" },
+    abortOnUnconfirmedTranscript: false,
+  }).then(
+    (steer) => {
+      if (steer.status === "indeterminate") {
+        runnerLog.warn(
+          `queue message outcome unconfirmed: sessionId=${sessionId}; inspect the conversation before retrying`,
+        );
+      } else if (steer.status !== "accepted") {
+        runnerLog.warn(`queue message not accepted: sessionId=${sessionId} status=${steer.status}`);
+      }
+    },
+    (error: unknown) =>
+      runnerLog.warn(`queue message rejected: sessionId=${sessionId} err=${formatError(error)}`),
+  );
+  return true;
 }
 export { finalizeAgentToolAvailability } from "../agents/agent-tool-availability.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";

@@ -9,11 +9,11 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import {
-  isCompetingSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  isCompetingSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { prepareCronDescendantDeletion } from "./isolated-agent/run-subagent-registry.runtime.js";
@@ -75,11 +75,12 @@ export async function removeCronRunContinuationSessionIfIdle(
   if (!original || !canRemoveCronRunContinuation(original.cronRunContinuation)) {
     return;
   }
-  await runExclusiveSessionLifecycleMutation("cron-cleanup", {
+  await runSessionMutation({
+    diagnosticLabel: "cron-cleanup",
     scope: storePath,
     identities: [sessionKey, original.sessionId],
     run: async () => {
-      if (isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, original.sessionId])) {
+      if (isCompetingSessionControllerWorkActive(storePath, [sessionKey, original.sessionId])) {
         return;
       }
       const pendingSessionDeliveries = await loadPendingSessionDeliveries(context);

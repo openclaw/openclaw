@@ -3,12 +3,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import {
   patchSessionEntryCore,
@@ -18,14 +19,20 @@ import * as sessionPatches from "../../config/sessions/session-accessor.sqlite-e
 import * as sessionInventory from "../../config/sessions/session-entry-read-runtime.js";
 import { CronService } from "../../cron/service.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
-  beginSessionWorkAdmission,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  captureSessionTarget,
+  type SessionEffectRef,
+} from "../../sessions/session-controller.lifecycle.js";
+import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
+import {
+  getRpcSourceForGateway,
+  isRpcSourceRegistered,
+} from "../../sessions/session-controller.rpc-sources.js";
 import * as deletionJournals from "../../state/agent-deletion-journal.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { runWithChatAbortExecution } from "../chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import {
@@ -100,12 +107,19 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
         toolEventRecipients: context.chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: vi.fn(),
       });
+      const target = captureSessionTarget({
+        storeScope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+          agentId: "doomed",
+        }),
+        sessionKey,
+        incarnation: sessionId,
+        agentId: "doomed",
+      });
       const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
+        target,
         agentId: "doomed",
         sessionKey,
         sessionId,
@@ -117,6 +131,8 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
         throw new Error("Expected an active run registration");
       }
       const entry = registration.entry;
+      registration.initializeTiming();
+      expect(registration.markExecutionStarted()).toBe(true);
       const aborted = createDeferred();
       const terminalSettled = createDeferred();
       const finishExecution = createDeferred();
@@ -124,26 +140,23 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
       registration.controller.signal.addEventListener("abort", () => aborted.resolve(), {
         once: true,
       });
-      const execution = runWithChatAbortExecution(
-        entry,
-        async () => {
-          await aborted.promise;
-          emitAgentEvent({
-            runId,
-            sessionId,
-            sessionKey,
-            agentId: "doomed",
-            stream: "lifecycle",
-            data: { phase: "error", aborted: true, stopReason: "aborted", endedAt: 2_000 },
-          });
-          registration.cleanup();
-          terminalPersistence = entry.projectSessionTerminalPersistence;
-          await terminalPersistence?.catch(() => {});
-          terminalSettled.resolve();
-          await finishExecution.promise;
-        },
-        registration.cleanup,
-      );
+      const execution = (async () => {
+        await aborted.promise;
+        emitAgentEvent({
+          runId,
+          sessionId,
+          sessionKey,
+          agentId: "doomed",
+          stream: "lifecycle",
+          data: { phase: "error", aborted: true, stopReason: "aborted", endedAt: 2_000 },
+        });
+        registration.cleanup();
+        terminalPersistence = entry.adapter.projectSessionTerminalPersistence;
+        await terminalPersistence?.catch(() => {});
+        terminalSettled.resolve();
+        await finishExecution.promise;
+      })();
+      trackSessionControllerSourceWork(entry.input, execution);
       const deleting = deleteGatewayAgent("doomed", true, context);
       const deletionResult = Promise.allSettled([deleting]);
       try {
@@ -153,7 +166,9 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
           "deletion skipped cancellation",
         );
         expect(terminalPersistence).toBeInstanceOf(Promise);
-        expect(context.chatAbortControllers.get(runId)).toBe(entry);
+        expect(getRpcSourceForGateway(runId, getGatewayContextResolver(entry.input), target)).toBe(
+          entry,
+        );
         expect(getRuntimeConfig().agents?.entries?.doomed).toBeDefined();
         await expect(
           patchSessionEntryCore({ agentId: "doomed", sessionKey }, () => ({ label: "late write" })),
@@ -206,7 +221,7 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
           await expect(deleting).resolves.toMatchObject({ ok: true, agentId: "doomed" });
           expect(getRuntimeConfig().agents?.entries?.doomed).toBeUndefined();
         }
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(isRpcSourceRegistered(entry)).toBe(false);
       } finally {
         aborted.resolve();
         finishExecution.resolve();
@@ -319,8 +334,8 @@ it("preserves another agent's replacement run and admissions in a shared store d
     });
     setActiveEmbeddedRun(sessionId, original, "agent:doomed:active", undefined, "doomed");
     const draining = drainAgentDeletionRuns("doomed", cfg, createDirectChatContext(), () => {});
-    let active: SessionWorkAdmissionLease | undefined;
-    let pending: Promise<SessionWorkAdmissionLease> | undefined;
+    let active: SessionEffectRef | undefined;
+    let pending: Promise<SessionEffectRef> | undefined;
     const activeInterrupted = vi.fn(() => active?.release());
     const pendingInterrupted = vi.fn();
     try {
@@ -332,11 +347,10 @@ it("preserves another agent's replacement run and admissions in a shared store d
         scope: storePath,
         identities: ["agent:keeper:active", sessionId],
         owner: Symbol("keeper-turn"),
-        serializeOwner: true,
         assertAllowed: () => {},
       };
-      active = await beginSessionWorkAdmission({ ...admission, onInterrupt: activeInterrupted });
-      pending = beginSessionWorkAdmission({ ...admission, onInterrupt: pendingInterrupted });
+      active = await beginSessionEffect({ ...admission, onInterrupt: activeInterrupted });
+      pending = beginSessionEffect({ ...admission, onInterrupt: pendingInterrupted });
       void pending.catch(() => {});
       inventory.resolve([]);
       await expect(draining).resolves.toBeUndefined();
@@ -406,7 +420,7 @@ it.each([false, true])(
         terminalAtMs: null,
         recoveryError: null,
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         agentId: "doomed",
         scope: state.path("agents/doomed/sessions/sessions.json"),
         identities: [baseKey, sessionId],

@@ -18,11 +18,6 @@ import {
 } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -67,6 +62,11 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
+import {
+  createReplyOperation,
+  type ReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
@@ -3094,7 +3094,7 @@ describe("prepareCliRunContext", () => {
               }),
             );
             await answeringPlaceholder.bindToolAuthorityRouteAsync(nextRoute);
-            expect(replyRunRegistry.get(original.sessionKey)).toBe(answeringPlaceholder);
+            expect(getSessionControllerOperation(original.sessionKey)).toBe(answeringPlaceholder);
           }
           const answer = () =>
             claimPendingAgentQuestionAnswerFromCaller({

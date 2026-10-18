@@ -5,7 +5,6 @@ import {
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { withGroupThreadTurn } from "../../auto-reply/group-thread-context.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveReactionMessageId } from "../../channels/plugins/actions/reaction-message-id.js";
 import type {
   ChannelMessageActionContext,
@@ -35,10 +34,14 @@ import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
@@ -49,6 +52,7 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
 
 const EMPTY_CATALOG = {
@@ -83,6 +87,7 @@ describe("registered message action source completion", () => {
     target?: string;
     delivery?: Record<string, unknown>;
     media?: boolean;
+    collision?: "before" | "during" | "replacement" | "unbound";
     expected?: true;
   }> = [
     ...(
@@ -157,12 +162,41 @@ describe("registered message action source completion", () => {
       target: "C123",
     })),
     { action: "react", mode: "non-reply mutation", target: "C123" },
+    {
+      action: "upload-file",
+      mode: "colliding run-scoped source under another ambient owner",
+      collision: "before",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding ambient owner without the requested run binding",
+      collision: "unbound",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding unscoped source during delivery",
+      collision: "during",
+      expected: true,
+    },
+    {
+      action: "upload-file",
+      mode: "colliding successor before unscoped invocation",
+      collision: "replacement",
+      expected: true,
+    },
   ];
 
   it.each(cases)(
     "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, delivery, media, expected }) => {
+    async ({ action, mode, target, delivery, media, collision, expected }) => {
+      const sessionId = "source-completion-session";
+      let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
       const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
+        if (collision === "during") {
+          createCollision();
+        }
         if (mode === "throw") {
           throw new Error("synthetic upload failure");
         }
@@ -208,27 +242,68 @@ describe("registered message action source completion", () => {
       // The turn's reply operation keeps this fact so a later stall cannot answer again.
       const operation = createReplyOperation({
         sessionKey: identity.sessionKey,
-        sessionId: "source-completion-session",
+        sessionId,
         resetTriggered: false,
+        ...(collision && {
+          target: captureSessionTarget({
+            storeScope: "/stores/message-source.sqlite",
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
+        }),
       });
+      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
+        competingOperation = createReplyOperation({
+          sessionKey: identity.sessionKey,
+          sessionId,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope,
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
+        });
+      };
+      if (collision === "before") {
+        operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
+      }
+      if (collision === "before" || collision === "unbound") {
+        createCollision();
+      }
       try {
         const config: OpenClawConfig = {
           ...workspaceConfig,
           tools: { message: { crossContext: { allowWithinProvider: true } } },
         };
         setRuntimeConfigSnapshot(config);
-        const tool = createMessageTool({
-          config,
-          ...source,
-          agentId: identity.agentId,
-          runId: identity.runId,
-          sessionId: operation.sessionId,
-          agentSessionKey: identity.sessionKey,
-          agentAccountId: "default",
-          messageActionTurnCapability: capability,
-          sourceReplyDeliveryMode: "automatic",
-          ...secretDeps,
-        });
+        const createTool = () =>
+          createMessageTool({
+            config,
+            ...source,
+            agentId: identity.agentId,
+            runId: identity.runId,
+            sessionId: operation.sessionId,
+            agentSessionKey: identity.sessionKey,
+            agentAccountId: "default",
+            messageActionTurnCapability: capability,
+            sourceReplyDeliveryMode: "automatic",
+            ...secretDeps,
+          });
+        const ambientOperation = competingOperation;
+        const tool =
+          (collision === "before" || collision === "unbound") && ambientOperation
+            ? await withGatewayToolCallerIdentity(
+                {
+                  ...identity,
+                  operationalRunInstance: createOperationalRunInstanceRef(identity.runId),
+                },
+                () => withSessionControllerOwner(ambientOperation, createTool),
+              )
+            : createTool();
+        if (collision === "replacement") {
+          operation.complete();
+          createCollision("/stores/message-source.sqlite");
+        }
         const execution = tool.execute("source-upload", {
           action,
           message: "Uploaded source reply",
@@ -257,7 +332,10 @@ describe("registered message action source completion", () => {
             (result.details as { messageDelivery?: unknown }).messageDelivery,
           );
           expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
-          expect(operation.sourceReplyDelivered).toBe(expected === true);
+          expect(operation.sourceReplyDelivered).toBe(expected === true && collision !== "unbound");
+          if (competingOperation) {
+            expect(competingOperation.sourceReplyDelivered).toBe(false);
+          }
           if (expected) {
             expect(deliveryFact).toMatchObject({
               status: "settled",
@@ -268,6 +346,7 @@ describe("registered message action source completion", () => {
         }
       } finally {
         operation.complete();
+        competingOperation?.complete();
         revokeMessageActionTurnCapability(capability);
       }
     },

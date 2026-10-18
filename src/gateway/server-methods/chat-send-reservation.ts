@@ -1,23 +1,30 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
+import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
-import { readPreRegisteredRun } from "./chat-abort-authorization.js";
+import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+/** Bind pending reservation and acceptance updates to one captured chat-send attempt. */
 export function createPendingChatSendReservationAccess(params: {
   context: GatewayRequestHandlerOptions["context"];
   client: GatewayRequestHandlerOptions["client"];
   attemptId: string;
+  requestIdentity?: string;
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
 }) {
   const { pendingChatSendKey: key, clientRunId: runId } = params.session;
+  // Reservation facts stay fixed while retry and placement preparation await.
+  const { now, sessionKey, backingSessionId, rawSessionKey, selectedAgent, timeoutMs } =
+    params.session;
+  const { turnKind } = params.request;
   const read = () =>
     readPreRegisteredRun({
       key,
@@ -26,29 +33,35 @@ export function createPendingChatSendReservationAccess(params: {
     });
   return {
     read,
+    abort: (stopReason: string) =>
+      writePreRegisteredChatAbort({
+        context: params.context,
+        runId,
+        stopReason,
+        attemptId: params.attemptId,
+        requestIdentity: params.requestIdentity,
+      }),
     reserve: () => {
-      const { context, request, session, attemptId } = params;
+      const { context, request, attemptId } = params;
       context.dedupe.set(key, {
-        ts: session.now,
+        ts: now,
         ok: true,
-        requestIdentity: request.goalOperation?.requestFingerprint ?? request.requestIdentity,
+        requestIdentity: params.requestIdentity,
         payload: {
-          runId: session.clientRunId,
+          runId,
           attemptId,
           status: "accepted",
-          sessionKey: session.sessionKey,
-          ...(session.backingSessionId ? { sessionId: session.backingSessionId } : {}),
-          ...(session.rawSessionKey === session.sessionKey
-            ? {}
-            : { sessionKeyAliases: [session.rawSessionKey] }),
-          ...(session.selectedAgent.agentId ? { agentId: session.selectedAgent.agentId } : {}),
+          sessionKey,
+          ...(backingSessionId ? { sessionId: backingSessionId } : {}),
+          ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
+          ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
           ownerConnId: normalizeOptionalString(params.client?.connId),
           ownerDeviceId: normalizeOptionalString(params.client?.connect?.device?.id),
           expiresAtMs: resolveChatRunExpiresAtMs({
-            now: session.now,
-            timeoutMs: session.timeoutMs,
+            now,
+            timeoutMs,
           }),
-          turnKind: request.turnKind,
+          turnKind,
           ...(request.goalOperation
             ? { goalFingerprint: request.goalOperation.requestFingerprint }
             : {}),
@@ -63,6 +76,21 @@ export function createPendingChatSendReservationAccess(params: {
       ) {
         params.context.dedupe.delete(key);
       }
+    },
+    markInputAccepted: () => {
+      if (params.requestIdentity === undefined) {
+        return;
+      }
+      const accepted = params.context.dedupe.get("chat:" + runId);
+      if (
+        accepted?.ok !== true ||
+        accepted.requestIdentity !== params.requestIdentity ||
+        accepted.payload !== undefined ||
+        accepted.error !== undefined
+      ) {
+        throw new Error("Chat input acceptance marker changed before acknowledgment");
+      }
+      accepted.effectAccepted = true;
     },
   };
 }
@@ -126,7 +154,9 @@ export function inspectGoalChatSendRetry({
       !identityConflict &&
       (pending?.payload.goalFingerprint === request.goalOperation.requestFingerprint ||
         newlyPublishedResponse ||
-        (!pending && !durableClaimAccepted && context.chatAbortControllers.has(clientRunId)))
+        (!pending &&
+          !durableClaimAccepted &&
+          getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)))
     ) {
       respond(
         false,
@@ -143,8 +173,7 @@ export function inspectGoalChatSendRetry({
       durableClaimAccepted ||
       cachedResponse ||
       context.chatRunState.hasAbortMarker(clientRunId) ||
-      context.chatAbortControllers.has(clientRunId) ||
-      context.chatQueuedTurns?.has(clientRunId)
+      getRpcSourceForGateway(clientRunId, context.resolveGatewayContext)
     ) {
       throw new SessionGoalOperationError(
         "operation-conflict",

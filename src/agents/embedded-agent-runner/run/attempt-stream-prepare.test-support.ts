@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { vi } from "vitest";
-import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   buildToolLifecycleErrorResult,
@@ -19,7 +19,7 @@ import { createResourceLoader } from "../../sessions/agent-session-loop-resource
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { isToolResultError } from "../../tool-result-error.js";
-import { ACTIVE_EMBEDDED_RUNS } from "../run-state.js";
+import { getActiveNativeAttempt } from "../run-state.js";
 import {
   createAttemptNestedToolActivityState,
   readAttemptNestedToolActivity,
@@ -45,7 +45,6 @@ export function prepareCatalogExecutor(options?: {
   sessionManager?: SessionManager;
   hookRunner?: StreamInput["agentSession"]["hookRunner"];
   attempt?: Partial<StreamInput["attempt"]>;
-  sandboxSessionKey?: string;
   sessionKey?: string;
   replyOperation?: ReplyOperation;
   onAttemptAbort?: () => void;
@@ -267,14 +266,13 @@ export async function observeTerminalRunActivity(
         if (event.stream === "lifecycle") {
           terminalEvents.push({
             phase: event.data.phase,
-            active: ACTIVE_EMBEDDED_RUNS.has("session-output-schema"),
+            active: Boolean(getActiveNativeAttempt("session-output-schema")),
           });
         }
       },
     });
     try {
-      const activeBefore =
-        ACTIVE_EMBEDDED_RUNS.get("session-output-schema") === prepared.queueHandle;
+      const activeBefore = getActiveNativeAttempt("session-output-schema") === prepared.queueHandle;
       for (const listener of listeners) {
         await listener({ type: "agent_end", messages: [], willRetry: false });
       }
@@ -282,7 +280,7 @@ export async function observeTerminalRunActivity(
       return {
         activeBefore,
         terminalEvents,
-        activeAfter: ACTIVE_EMBEDDED_RUNS.has("session-output-schema"),
+        activeAfter: Boolean(getActiveNativeAttempt("session-output-schema")),
       };
     } finally {
       try {
@@ -290,9 +288,9 @@ export async function observeTerminalRunActivity(
       } finally {
         await prepared.deferredLifecycleOwner?.discard();
         prepared.subscription.unsubscribe();
-        const { clearActiveEmbeddedRun } =
+        const { detachActiveEmbeddedRun } =
           await vi.importActual<typeof import("../runs.js")>("../runs.js");
-        clearActiveEmbeddedRun("session-output-schema", prepared.queueHandle, sessionKey);
+        detachActiveEmbeddedRun("session-output-schema", prepared.queueHandle, sessionKey);
       }
     }
   } finally {
