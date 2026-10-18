@@ -280,6 +280,25 @@ describe("gateway hooks helpers", () => {
     expectPayloadError({ agentId: "  " }, "agentId must be a non-empty string");
   });
 
+  test("normalizeAgentPayload floors timeoutSeconds and ignores values below one second", () => {
+    const cases: Array<[unknown, number | undefined]> = [
+      [1, 1],
+      [1.9, 1],
+      [2, 2],
+      [0.5, undefined],
+      [0.999, undefined],
+      [0, undefined],
+      [-1, undefined],
+      [Number.NaN, undefined],
+    ];
+    for (const [timeoutSeconds, expected] of cases) {
+      expect(agentPayload({ timeoutSeconds })).toMatchObject({
+        ok: true,
+        value: { timeoutSeconds: expected },
+      });
+    }
+  });
+
   test("hook target resolution keeps config fallback out of request payloads", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig());
     const unknownAgent = (input: string, agentId: string) =>
