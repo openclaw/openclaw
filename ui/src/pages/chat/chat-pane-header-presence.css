@@ -1,0 +1,24 @@
+.chat-pane__presence--desktop .viewer-facepile {
+  margin-inline-start: 0;
+}
+
+.chat-pane__presence--desktop .viewer-avatar {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--panel-strong);
+  font-size: 10px;
+}
+
+.chat-pane__presence--desktop .viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar,
+.chat-pane__presence--desktop .viewer-facepile > .viewer-avatar:not(:first-child) {
+  margin-left: calc(-1 * var(--space-2));
+}
+
+.chat-pane__presence--desktop .viewer-avatar--overflow {
+  width: 26px;
+  height: 26px;
+  background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
+  color: var(--text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}

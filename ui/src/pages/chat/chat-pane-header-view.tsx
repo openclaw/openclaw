@@ -1,5 +1,6 @@
 import { Icon } from "../../components/solid/icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import "./chat-pane-header-presence.css";
 
 type PresenceProps = Pick<
   HTMLElementTagNameMap["openclaw-viewer-facepile"],
@@ -22,9 +23,9 @@ export function PaneSubagentStop(props: { onAbort: () => void }) {
 export function PaneHeaderPresence(props: PresenceProps) {
   return (
     <openclaw-viewer-facepile
-      class="chat-pane__presence"
+      class="chat-pane__presence chat-pane__presence--desktop"
       prop:staticUsers={props.staticUsers}
-      prop:maxVisible={4}
+      prop:maxVisible={3}
       prop:personActivity={props.personActivity}
       variant="session"
     />
