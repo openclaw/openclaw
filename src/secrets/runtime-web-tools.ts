@@ -559,6 +559,9 @@ export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
+  kinds?: readonly ("search" | "fetch")[];
+  /** Explicit run selections must fail before inference if credentials are absent. */
+  requireSearchCredentials?: boolean;
   allowUnavailableSecretOwners?: boolean;
   forceColdRefKeys?: ReadonlySet<string>;
 }) {
@@ -594,7 +597,7 @@ export async function resolveRuntimeWebTools(params: {
   if (!search && !fetch && !hasPluginWebSearchConfig && !hasPluginWebFetchConfig) {
     return result;
   }
-  for (const kind of ["search", "fetch"] as const) {
+  for (const kind of params.kinds ?? (["search", "fetch"] as const)) {
     const toolConfig = kind === "search" ? search : fetch;
     const rawProvider = normalizeLowercaseStringOrEmpty(toolConfig?.provider);
     const contract = kind === "search" ? "webSearchProviders" : "webFetchProviders";
@@ -644,8 +647,23 @@ export async function resolveRuntimeWebTools(params: {
         manifestRecords: params.context.manifestRegistry?.plugins,
       });
     };
-    const resolveProviders = async () =>
-      sortPluginEntriesForAutoDetect(
+    let selectedSearchUsesAuthProfile = false;
+    const resolveProviders = async () => {
+      if (isSearch && params.requireSearchCredentials) {
+        const entries = (
+          await loadRuntimeWebToolsFallbackProviders()
+        ).resolvePluginWebSearchProviders({
+          config: params.sourceConfig,
+          env,
+          ...(configuredBundledPluginId ? { onlyPluginIds: [configuredBundledPluginId] } : {}),
+          manifestRecords: params.context.manifestRegistry?.plugins,
+        });
+        selectedSearchUsesAuthProfile = entries.some(
+          (entry) => entry.id === rawProvider && Boolean(entry.authProviderId),
+        );
+        return sortPluginEntriesForAutoDetect(entries);
+      }
+      return sortPluginEntriesForAutoDetect(
         await resolveBundledWebProviders({
           kind,
           sourceConfig: params.sourceConfig,
@@ -654,6 +672,7 @@ export async function resolveRuntimeWebTools(params: {
           hasCustomPluginRisk: await getHasCustomWebProviderRisk(contract),
         }),
       );
+    };
     if (!configuredBundledPluginId && rawProvider) {
       configuredBundledPluginId = await resolveManifestOwner();
     }
@@ -746,6 +765,22 @@ export async function resolveRuntimeWebTools(params: {
           forceColdRefKeys: params.forceColdRefKeys,
         }),
     });
+    const selectedProvider = providers.find(
+      (provider) => provider.id === metadata.selectedProvider,
+    );
+    if (
+      isSearch &&
+      params.requireSearchCredentials &&
+      metadata.selectedProvider &&
+      selectedProvider?.requiresCredential !== false &&
+      // Profile-backed providers resolve auth at execution; config/env absence is not a verdict.
+      !selectedSearchUsesAuthProfile &&
+      metadata.selectedProviderKeySource === "missing"
+    ) {
+      throw new Error(
+        `web_search provider "${metadata.selectedProvider}" is unavailable; configure its credentials.`,
+      );
+    }
     attachWebProviderFailures(selection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
       kind,

@@ -6,6 +6,30 @@ import {
 } from "./jobs-validation.js";
 
 describe("cron target and payload guidance", () => {
+  it.each(["main", "current", "session:report"] as const)(
+    "rejects a provider override for %s",
+    (sessionTarget) => {
+      expect(() =>
+        assertSupportedJobSpec({
+          sessionTarget,
+          payload: { kind: "agentTurn", webSearchProvider: "brave" },
+        }),
+      ).toThrow(/webSearchProvider.*isolated/);
+    },
+  );
+
+  it.each(["systemEvent", "command", "script"] as const)(
+    "rejects provider overrides on %s payloads",
+    (kind) => {
+      expect(() =>
+        assertSupportedJobSpec({
+          sessionTarget: "isolated",
+          payload: { kind, webSearchProvider: "brave" },
+        }),
+      ).toThrow(/webSearchProvider.*agentTurn/);
+    },
+  );
+
   it.each(["current", "session:agent:main:dashboard:continuation"] as const)(
     "names %s and the agent-turn fix for a system event",
     (sessionTarget) => {

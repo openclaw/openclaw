@@ -50,6 +50,9 @@ export function resolveEmbeddedRuntimePluginSelections(input: {
       // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
       requestedHarness && (index === 0 || explicitHarness) ? { runtime: requestedHarness } : {},
       { agentId },
+      run.webSearchProvider
+        ? { webSearchProvider: run.webSearchProvider.trim().toLowerCase() }
+        : {},
     ),
   );
 }

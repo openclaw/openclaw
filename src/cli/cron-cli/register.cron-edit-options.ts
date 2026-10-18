@@ -14,7 +14,7 @@ import {
   parseCronStringList,
   parseCronThinkingOption,
 } from "./shared.js";
-import { parseCronThreadIdOption } from "./thread-id-shared.js";
+import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
 
 const assignIf = (
@@ -33,6 +33,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   loadExistingJob: () => Promise<CronJob>,
   webhookUrl: string | undefined,
   commandCwd: string | undefined,
+  webSearchProvider: string | null | undefined,
 ): Promise<Record<string, unknown>> {
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
@@ -160,6 +161,21 @@ export async function resolveCronEditPayloadDeliveryPatch(
   } else if (requestedPayloadKinds.length > 1) {
     throw new CronCliError("Choose at most one payload change");
   }
+  if (webSearchProvider !== undefined) {
+    const existingJob = await loadExistingJob();
+    const sessionTarget =
+      normalizeCronSessionTargetOption(opts.session) ?? existingJob.sessionTarget;
+    payloadKind ??= existingJob.payload.kind;
+    // A clear can accompany retargeting away from an isolated job. It must
+    // never turn a non-agent job into an incomplete agent payload implicitly.
+    if (
+      payloadKind !== "agentTurn" ||
+      (sessionTarget !== "isolated" &&
+        !(webSearchProvider === null && existingJob.sessionTarget === "isolated"))
+    ) {
+      throw new CronCliError("Web search provider options require an isolated agentTurn job");
+    }
+  }
   let payload: Record<string, unknown> | undefined;
   if (payloadKind === "systemEvent") {
     payload = { kind: "systemEvent" };
@@ -168,6 +184,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     payload = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
     assignIf(payload, "model", opts.clearModel ? null : model);
+    assignIf(payload, "webSearchProvider", webSearchProvider);
     assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
     assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
     if (opts.clearThinking) {

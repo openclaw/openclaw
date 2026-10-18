@@ -340,16 +340,17 @@ function* createOpenClawToolsSteps(
   });
   if (webSearchTool) {
     const configured =
-      preparedWebSearchConfigured ??
-      hasConfiguredWebSearchProvider({
-        config: availabilityConfig ?? resolvedConfig,
-        agentDir: webSearchAgentDir,
-        authStore: options?.authProfileStore,
-        runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
-      });
+      options?.webSearchProvider !== undefined ||
+      (preparedWebSearchConfigured ??
+        hasConfiguredWebSearchProvider({
+          config: availabilityConfig ?? resolvedConfig,
+          agentDir: webSearchAgentDir,
+          authStore: options?.authProfileStore,
+          runtimeWebSearch: runtimeWebTools?.search,
+          ...(options?.authProfileStoreSource !== undefined
+            ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
+            : {}),
+        }));
     options?.onWebSearchConfiguration?.(configured);
     if (!configured) {
       webSearchTool = null;

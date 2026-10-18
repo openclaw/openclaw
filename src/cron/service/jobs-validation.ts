@@ -45,7 +45,10 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
-  job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
+  job: Pick<CronJob, "sessionTarget"> & {
+    payload: Pick<CronJob["payload"], "kind"> &
+      Pick<Extract<CronJob["payload"], { kind: "agentTurn" }>, "webSearchProvider">;
+  },
 ) {
   if (typeof job.sessionTarget !== "string") {
     throw new Error(
@@ -54,6 +57,14 @@ export function assertSupportedJobSpec(
   }
   const isConversationTarget =
     job.sessionTarget === "current" || job.sessionTarget.startsWith("session:");
+  if (
+    job.payload.webSearchProvider !== undefined &&
+    (job.sessionTarget !== "isolated" || job.payload.kind !== "agentTurn")
+  ) {
+    throw new Error(
+      'cron payload.webSearchProvider requires sessionTarget="isolated" and payload.kind="agentTurn"; clear the override before changing the session target',
+    );
+  }
   if (job.sessionTarget.startsWith("session:")) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
   }

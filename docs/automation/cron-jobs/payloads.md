@@ -34,6 +34,12 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 <ParamField path="--model" type="string">
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
+<ParamField path="--web-search-provider" type="string">
+  Managed search provider ID for isolated agent-turn jobs only (for example, `brave`). Omit to inherit normal search selection. The provider must be available and configured; this does not grant tool access or change other sessions.
+</ParamField>
+<ParamField path="--clear-web-search-provider" type="boolean">
+  On `automations edit`, removes the provider override. Cannot combine with `--web-search-provider`.
+</ParamField>
 <ParamField path="--fallbacks" type="string">
   Per-job fallback model list, for example `--fallbacks openai/gpt-6-astra,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
@@ -162,6 +168,22 @@ plugin authority. Configuration changes apply to the next message invocation;
 disabling or narrowing the job itself stops later requests and retries in the
 current invocation. A confirmed write still returns its result if authority ends
 while the response is pending.
+
+### Per-job web search provider
+
+The search provider is independent of the inference model and account. In RPC
+requests, set `payload.webSearchProvider` to a nonblank provider ID; on
+`cron.update`, `patch.payload: { kind: "agentTurn", webSearchProvider: null }`
+removes it, while omitting the field preserves it. The model-facing `automations`
+tool uses `job` for both creation and update fields, not the RPC `patch` envelope.
+Only `sessionTarget: "isolated"` with `payload.kind: "agentTurn"` supports a
+provider override. A target-only edit cannot carry the override into another
+session; clear it in the same update. Replacing the payload kind drops the old
+agent-turn settings. Global search configuration and unrelated job fields remain
+unchanged.
+
+Provider IDs are trimmed and lowercased. CLI backends do not support this override;
+selecting one, including through model fallback, fails before CLI inference starts.
 
 ### Inference account continuity
 

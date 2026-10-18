@@ -10,6 +10,7 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "text",
   "script",
   "model",
+  "webSearchProvider",
   "fallbacks",
   "toolsAllow",
   "thinking",
@@ -253,6 +254,7 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         isNonEmptyString(payload.message) ||
         isNonEmptyString(payload.model) ||
         payload.model === null ||
+        payload.webSearchProvider !== undefined ||
         isNonEmptyString(payload.thinking) ||
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||

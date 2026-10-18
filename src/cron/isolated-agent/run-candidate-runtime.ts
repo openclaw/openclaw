@@ -1,3 +1,4 @@
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "./run-execution.runtime.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
@@ -7,7 +8,7 @@ import { resolveEffectiveAgentRuntime } from "./run.runtime.js";
 export function createCronCandidateExecutionResolver(
   params: Pick<
     CronRunExecutionParams,
-    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession"
+    "cfgWithAgentDefaults" | "agentId" | "runSessionKey" | "cronSession" | "agentPayload"
   >,
 ) {
   return (provider: string, model: string, sessionRuntimeOverride: string | undefined) => {
@@ -31,10 +32,16 @@ export function createCronCandidateExecutionResolver(
         sessionKey: params.runSessionKey,
         sessionEntry: params.cronSession.sessionEntry,
       });
+    const cliExecution = isCliProvider(executionProvider, params.cfgWithAgentDefaults);
+    if (cliExecution && params.agentPayload?.webSearchProvider !== undefined) {
+      const refusal = new Error("webSearchProvider is not supported with CLI backends.");
+      recordModelFallbackStop(refusal);
+      throw refusal;
+    }
     return {
       sessionRuntimeOverride,
       executionProvider,
-      cliExecution: isCliProvider(executionProvider, params.cfgWithAgentDefaults),
+      cliExecution,
       runtime,
     };
   };

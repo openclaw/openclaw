@@ -100,6 +100,16 @@ configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
+Isolated agent-turn [automations](/automation/cron-jobs/payloads) can select a
+provider with `payload.webSearchProvider` (CLI: `--web-search-provider <id>`).
+This selects search for that job's invocation without changing global settings
+or concurrent chats. Omitted overrides inherit normal selection, including
+native search where available. `--clear-web-search-provider` restores inheritance.
+An explicit provider must be available and have its required configuration;
+it does not silently fall back to another provider. Disabled search, tool policy,
+and sandbox restrictions still apply. Provider-specific query filters remain
+search-call arguments, not cron settings.
+
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.

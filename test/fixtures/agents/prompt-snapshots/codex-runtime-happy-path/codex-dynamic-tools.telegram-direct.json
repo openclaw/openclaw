@@ -761,6 +761,19 @@
                         }
                       ],
                       "description": "Allowed tool ids, or null to clear"
+                    },
+                    "webSearchProvider": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "pattern": "\\S",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Search provider ID for isolated agentTurn jobs; omitted inherits, null to clear on update"
                     }
                   },
                   "type": "object"

@@ -95,6 +95,26 @@ function agentDelivery(delivery: UnknownRecord): UnknownRecord {
 }
 
 describe("normalizeCronJobCreate", () => {
+  it("normalizes provider IDs without losing explicit invalid input or update clears", () => {
+    expect(
+      createAgent({ payload: { ...AGENT_TURN, webSearchProvider: " BRAVE \t" } }),
+    ).toHaveProperty("payload.webSearchProvider", "brave");
+    expect(normalizePatch({ payload: { kind: "agentTurn", webSearchProvider: null } })).toEqual({
+      payload: { kind: "agentTurn", webSearchProvider: null },
+    });
+    expect(normalizePatch({ payload: { text: "hello", webSearchProvider: "brave" } })).toEqual({
+      payload: { kind: "agentTurn", message: "hello", webSearchProvider: "brave" },
+    });
+    for (const webSearchProvider of ["", " \t", 42, false, null]) {
+      const normalized = createAgent({ payload: { ...AGENT_TURN, webSearchProvider } });
+      expect(normalized.payload).toHaveProperty("webSearchProvider");
+      expect(validateCronAddParams(normalized)).toBe(false);
+    }
+    const unsupported = createMain({ payload: { ...SYSTEM_EVENT, webSearchProvider: "brave" } });
+    expect(unsupported.payload).toHaveProperty("webSearchProvider", "brave");
+    expect(validateCronAddParams(unsupported)).toBe(false);
+  });
+
   it.each(["create"] as const)(
     "does not validate absent delivery fields during %s normalization",
     (mode) => {

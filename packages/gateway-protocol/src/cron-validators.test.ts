@@ -44,6 +44,59 @@ function expectCases(
 }
 
 describe("cron protocol validators", () => {
+  it("accepts provider IDs without a fixed enum and allows clears only on update", () => {
+    for (const webSearchProvider of ["brave", "custom-search"]) {
+      const payload = { kind: "agentTurn", message: "tick", webSearchProvider };
+      expect(validateCronAddParams(add({ sessionTarget: "isolated", payload }))).toBe(true);
+      expect(validateCronUpdateParams(update({ payload }))).toBe(true);
+      expect(
+        Value.Check(CronJobSchema, {
+          ...add({ sessionTarget: "isolated", payload }),
+          id: "job-1",
+          enabled: true,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          state: {},
+        }),
+      ).toBe(true);
+    }
+    expect(
+      validateCronUpdateParams(
+        update({
+          payload: { kind: "agentTurn", webSearchProvider: null },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      validateCronAddParams(
+        add({
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: "tick", webSearchProvider: null },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects blank, non-string, and non-agent provider selections", () => {
+    for (const webSearchProvider of ["", " \t", 42, false]) {
+      const payload = { kind: "agentTurn", message: "tick", webSearchProvider };
+      expect(validateCronAddParams(add({ sessionTarget: "isolated", payload }))).toBe(false);
+      expect(validateCronUpdateParams(update({ payload }))).toBe(false);
+    }
+    for (const payload of [
+      { kind: "systemEvent", text: "tick" },
+      { kind: "command", argv: ["true"] },
+      { kind: "script", script: "return {};" },
+    ]) {
+      expect(
+        validateCronAddParams(add({ payload: { ...payload, webSearchProvider: "brave" } })),
+      ).toBe(false);
+      expect(
+        validateCronUpdateParams(update({ payload: { ...payload, webSearchProvider: null } })),
+      ).toBe(false);
+    }
+  });
+
   it("reports auto-disable state without accepting it in writable patches", () => {
     const job = {
       ...minimalAddParams,

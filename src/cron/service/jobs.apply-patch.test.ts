@@ -32,6 +32,53 @@ const clearedFailureDestination = {
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
 
 describe("applyJobPatch schedule retention", () => {
+  it("round-trips provider-only edits through storage without changing unrelated job data", () => {
+    const job = makeJob({
+      description: "Keep this",
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        model: "provider/model",
+        thinking: "high",
+        toolsAllow: ["web_search"],
+      },
+      failureAlert: { after: 3 },
+      state: { lastRunAtMs: 123, lastRunStatus: "ok" },
+    });
+    const original = structuredClone(job);
+    applyJobPatch(job, { payload: { kind: "agentTurn", webSearchProvider: "brave" } });
+    expect(projectCronJobThroughStorageCodec(job)).toEqual({
+      ...original,
+      payload: { ...original.payload, webSearchProvider: "brave" },
+    });
+    applyJobPatch(job, { payload: { kind: "agentTurn", webSearchProvider: null } });
+    expect(job).toEqual(original);
+  });
+
+  it.each(["current", "session:report"] as const)(
+    "validates the complete resulting job when moving to %s",
+    (sessionTarget) => {
+      const original = makeJob({
+        payload: { kind: "agentTurn", message: "hello", webSearchProvider: "brave" },
+      });
+      expect(() => applyJobPatch(structuredClone(original), { sessionTarget })).toThrow(
+        /webSearchProvider.*isolated/,
+      );
+      const cleared = structuredClone(original);
+      applyJobPatch(cleared, {
+        sessionTarget,
+        payload: { kind: "agentTurn", webSearchProvider: null },
+      });
+      expect(cleared.payload).toEqual({ kind: "agentTurn", message: "hello" });
+      expect(cleared.sessionTarget).toBe(sessionTarget);
+      expect(() => createJob({ deps: { nowMs: () => 1 } }, { ...original, sessionTarget })).toThrow(
+        /webSearchProvider.*isolated/,
+      );
+    },
+  );
+
   it("defaults cron to cleanup when converting it to at", () => {
     const job = makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } });
     applyJobPatch(job, { schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" } });

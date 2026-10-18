@@ -206,6 +206,7 @@ const CronSystemEventPayloadSchema = closedObject({
 const CronAgentTurnPayloadSchema = cronAgentTurnPayloadSchema({
   message: NonEmptyString,
   model: Type.String(),
+  webSearchProvider: NonBlankString,
   fallbacks: Type.Array(Type.String()),
   toolsAllow: Type.Array(Type.String()),
   thinking: Type.String(),
@@ -247,6 +248,7 @@ const CronPayloadPatchSchema = Type.Union([
   cronAgentTurnPayloadSchema({
     message: Type.Optional(NonEmptyString),
     model: Type.Union([Type.String(), Type.Null()]),
+    webSearchProvider: Type.Union([NonBlankString, Type.Null()]),
     fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
     thinking: Type.Union([Type.String(), Type.Null()]),

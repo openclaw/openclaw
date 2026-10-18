@@ -672,6 +672,7 @@ export function createCronPromptExecutor(
           verboseLevel: params.resolvedVerboseLevel,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           toolsAllow: params.agentPayload?.toolsAllow,
+          webSearchProvider: params.agentPayload?.webSearchProvider?.trim().toLowerCase(),
           scheduledRuntimeAuthority: params.job.runtimeAuthority,
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,

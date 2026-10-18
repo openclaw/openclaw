@@ -163,4 +163,5 @@ export type PluginCodingToolsOptions = Omit<
   | "onProgressCardPlanSaved"
   | "authProfileStoreSource"
   | "onWebSearchConfiguration"
+  | "webSearchProvider"
 >;

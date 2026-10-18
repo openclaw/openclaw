@@ -79,6 +79,7 @@ export function registerCronEditCommand(cron: Command) {
         false,
       )
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
+      .option("--clear-web-search-provider", "Remove the per-job search provider override", false)
       .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
@@ -110,6 +111,14 @@ export function registerCronEditCommand(cron: Command) {
       .action(async (idArg, opts) => {
         try {
           const id = requireCronJobId(idArg);
+          if (opts.clearWebSearchProvider && opts.webSearchProvider !== undefined) {
+            throw new CronCliError(
+              "Use --web-search-provider or --clear-web-search-provider, not both",
+            );
+          }
+          const webSearchProvider = opts.clearWebSearchProvider
+            ? null
+            : parseCronStringOption(opts.webSearchProvider, "--web-search-provider");
           if (opts.clearTools && opts.tools !== undefined) {
             throw new CronCliError("Use --tools or --clear-tools, not both");
           }
@@ -325,6 +334,7 @@ export function registerCronEditCommand(cron: Command) {
               readExistingCronJob,
               webhookUrl,
               commandCwd,
+              webSearchProvider,
             ),
           );
 

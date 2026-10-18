@@ -57,6 +57,7 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--command-input <text>", "stdin for command payloads")
     .option("--thinking <level>", `Thinking level for agent jobs (${THINKING_LEVELS_HELP})`)
     .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
+    .option("--web-search-provider <id>", "Search provider override for isolated agent jobs")
     .option("--fallbacks <list>", "Fallback model list for agent jobs")
     .option(
       "--timeout-seconds <n>",

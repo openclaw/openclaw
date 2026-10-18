@@ -52,10 +52,13 @@ export function preparedModelRuntimeWorkspaceFactsKey(input: PreparedModelRuntim
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
     // Normalization already resolves each model to its runtime. The workspace
     // registry depends on provider/runtime ownership, not the model id itself.
-    runtimePluginSelections: input.runtimePluginSelections?.map(({ provider, runtime }) => ({
-      provider,
-      runtime,
-    })),
+    runtimePluginSelections: input.runtimePluginSelections?.map(
+      ({ provider, runtime, webSearchProvider }) => ({
+        provider,
+        runtime,
+        ...(webSearchProvider ? { webSearchProvider } : {}),
+      }),
+    ),
   });
 }
 
