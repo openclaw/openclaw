@@ -1,7 +1,7 @@
 // Covers the one-time devices/*.json → SQLite pairing store import.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
@@ -18,8 +18,10 @@ const suiteRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-device-pairing-migration-",
 });
 
-beforeAll(async () => {
-  await suiteRootTracker.setup();
+let baseDir: string;
+beforeAll(() => suiteRootTracker.setup());
+beforeEach(async () => {
+  baseDir = await suiteRootTracker.make("case");
 });
 
 afterAll(async () => {
@@ -54,21 +56,19 @@ function legacyPairedDevice(deviceId: string, extra: Partial<PairedDevice> = {})
 }
 
 async function writeLegacyFiles(
-  baseDir: string,
   files: { paired?: Record<string, unknown>; pending?: unknown; bootstrap?: unknown },
+  kind = "devices",
 ): Promise<string> {
-  const devicesDir = path.join(baseDir, "devices");
+  const devicesDir = path.join(baseDir, kind);
   await fs.mkdir(devicesDir, { recursive: true });
-  if (files.paired !== undefined) {
-    await fs.writeFile(path.join(devicesDir, "paired.json"), JSON.stringify(files.paired));
-  }
-  if (files.pending !== undefined) {
-    await fs.writeFile(path.join(devicesDir, "pending.json"), JSON.stringify(files.pending));
-  }
-  if (files.bootstrap !== undefined) {
-    await fs.writeFile(path.join(devicesDir, "bootstrap.json"), JSON.stringify(files.bootstrap));
+  for (const [name, value] of Object.entries(files)) {
+    await fs.writeFile(path.join(devicesDir, `${name}.json`), JSON.stringify(value));
   }
   return devicesDir;
+}
+
+async function expectMigration(imported: number, skippedExisting = 0) {
+  expect(await migrateLegacyDevicePairingStore({ baseDir })).toEqual({ imported, skippedExisting });
 }
 
 async function listDeviceFiles(devicesDir: string): Promise<string[]> {
@@ -77,14 +77,13 @@ async function listDeviceFiles(devicesDir: string): Promise<string[]> {
 
 describe("migrateLegacyDevicePairingStore", () => {
   test("imports legacy paired records and archives all legacy files", async () => {
-    const baseDir = await suiteRootTracker.make("import");
     const nodeSurface = {
       displayName: "Living Room iPad",
       caps: ["camera"],
       createdAtMs: 1_700_000_000_000,
       approvedAtMs: 1_700_000_000_000,
     };
-    const devicesDir = await writeLegacyFiles(baseDir, {
+    const devicesDir = await writeLegacyFiles({
       paired: {
         "device-a": legacyPairedDevice("device-a", { nodeSurface }),
         "device-b": legacyPairedDevice("device-b"),
@@ -93,8 +92,7 @@ describe("migrateLegacyDevicePairingStore", () => {
       bootstrap: { token: { token: "tok", ts: Date.now(), issuedAtMs: Date.now() } },
     });
 
-    const result = await migrateLegacyDevicePairingStore({ baseDir });
-    expect(result).toEqual({ imported: 2, skippedExisting: 0 });
+    await expectMigration(2, 0);
 
     const imported = await getPairedDevice("device-a", baseDir);
     expect(imported).toMatchObject({
@@ -102,8 +100,8 @@ describe("migrateLegacyDevicePairingStore", () => {
       publicKey: "pk-device-a",
       approvedVia: "owner",
       nodeSurface,
+      tokens: { node: { token: "legacy-device-a" } },
     });
-    expect(imported?.tokens?.node?.token).toBe(["legacy", "device-a"].join("-"));
 
     // Transient pending/bootstrap rows are dropped, not imported.
     expect((await listDevicePairing(baseDir)).pending).toEqual([]);
@@ -114,20 +112,12 @@ describe("migrateLegacyDevicePairingStore", () => {
       "pending.json.migrated",
     ]);
 
-    // Second run is a no-op.
     expect(await migrateLegacyDevicePairingStore({ baseDir })).toBeNull();
   });
 
   test("keeps existing SQLite records over legacy rows for the same device id", async () => {
-    const baseDir = await suiteRootTracker.make("existing-wins");
     const pending = await requestDevicePairing(
-      {
-        deviceId: "device-a",
-        publicKey: "pk-current",
-        role: "node",
-        roles: ["node"],
-        scopes: [],
-      },
+      { deviceId: "device-a", publicKey: "pk-current", role: "node", roles: ["node"], scopes: [] },
       baseDir,
     );
     const approved = await approveDevicePairing(
@@ -137,18 +127,16 @@ describe("migrateLegacyDevicePairingStore", () => {
     );
     expect(approved?.status).toBe("approved");
 
-    await writeLegacyFiles(baseDir, {
+    await writeLegacyFiles({
       paired: { "device-a": legacyPairedDevice("device-a") },
     });
 
-    const result = await migrateLegacyDevicePairingStore({ baseDir });
-    expect(result).toEqual({ imported: 0, skippedExisting: 1 });
+    await expectMigration(0, 1);
     expect((await getPairedDevice("device-a", baseDir))?.publicKey).toBe("pk-current");
   });
 
   test("imports usable paired rows while omitting invalid optional fields", async () => {
-    const baseDir = await suiteRootTracker.make("contaminated-paired");
-    const devicesDir = await writeLegacyFiles(baseDir, {
+    const devicesDir = await writeLegacyFiles({
       paired: {
         "device-a": legacyPairedDevice("device-a"),
         "request-a": {
@@ -192,7 +180,6 @@ describe("migrateLegacyDevicePairingStore", () => {
   });
 
   test("throws on an unreadable paired store and leaves the files in place", async () => {
-    const baseDir = await suiteRootTracker.make("corrupt");
     const devicesDir = path.join(baseDir, "devices");
     await fs.mkdir(devicesDir, { recursive: true });
     await fs.writeFile(path.join(devicesDir, "paired.json"), "{not-json}");
@@ -202,14 +189,12 @@ describe("migrateLegacyDevicePairingStore", () => {
   });
 
   test("archives transient-only legacy files without importing anything", async () => {
-    const baseDir = await suiteRootTracker.make("transient-only");
-    const devicesDir = await writeLegacyFiles(baseDir, {
+    const devicesDir = await writeLegacyFiles({
       pending: {},
       bootstrap: {},
     });
 
-    const result = await migrateLegacyDevicePairingStore({ baseDir });
-    expect(result).toEqual({ imported: 0, skippedExisting: 0 });
+    await expectMigration(0, 0);
     expect(await listDeviceFiles(devicesDir)).toEqual([
       "bootstrap.json.migrated",
       "pending.json.migrated",
@@ -217,23 +202,22 @@ describe("migrateLegacyDevicePairingStore", () => {
   });
 
   test("device import before node fold lets legacy node surfaces land on imported records", async () => {
-    const baseDir = await suiteRootTracker.make("with-node-fold");
-    await writeLegacyFiles(baseDir, {
+    await writeLegacyFiles({
       paired: { "device-a": legacyPairedDevice("device-a") },
     });
-    const nodesDir = path.join(baseDir, "nodes");
-    await fs.mkdir(nodesDir, { recursive: true });
-    await fs.writeFile(
-      path.join(nodesDir, "paired.json"),
-      JSON.stringify({
-        "device-a": {
-          nodeId: "device-a",
-          displayName: "Kitchen Display",
-          caps: ["screen"],
-          createdAtMs: 1_700_000_000_000,
-          approvedAtMs: 1_700_000_000_000,
+    await writeLegacyFiles(
+      {
+        paired: {
+          "device-a": {
+            nodeId: "device-a",
+            displayName: "Kitchen Display",
+            caps: ["screen"],
+            createdAtMs: 1_700_000_000_000,
+            approvedAtMs: 1_700_000_000_000,
+          },
         },
-      }),
+      },
+      "nodes",
     );
 
     await migrateLegacyDevicePairingStore({ baseDir });
