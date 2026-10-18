@@ -93,7 +93,7 @@ export async function recoverSessionSendDeliveries(
       if (!readAgentDatabaseAdmissionRefusal(agentId)) {
         await recoverSessionSendDeliveriesForAgents(
           context,
-          config,
+          context.getRuntimeConfig(),
           signal,
           startupTrace,
           new Set([agentId]),

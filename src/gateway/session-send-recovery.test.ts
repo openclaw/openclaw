@@ -120,11 +120,12 @@ let targetEntry: {
   archivedAt?: number;
   lifecycleRevision?: string;
 };
+let currentConfig = config;
 const dispatch = vi.fn();
 const warn = vi.fn();
 const controller = () => new AbortController();
 const context = createDirectChatContext({
-  getRuntimeConfig: () => config,
+  getRuntimeConfig: () => currentConfig,
   recoveryRuntime: createMockGatewayRecoveryRuntime({ dispatchAgent: dispatch }),
 });
 context.logGateway.warn = warn;
@@ -169,6 +170,7 @@ function timed<T>(ms: number, value: () => T) {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers();
+  currentConfig = config;
   setRuntimeConfigSnapshot(config);
   sourceEntry = {
     sessionId: "source-id",
@@ -223,7 +225,7 @@ it("recovers a logical agent's saved input from its shared physical store", asyn
   expectNoCalls(io.report, io.withdraw, warn);
 });
 
-it.each(["admitted", "failed", "cancelled"] as const)(
+it.each(["admitted", "reconfigured", "permission-revoked", "failed", "cancelled"] as const)(
   "recovers a skipped store after its admission owner settles: %s",
   async (outcome) => {
     const refusal = createAgentDatabaseInspectionRefusal({
@@ -262,6 +264,16 @@ it.each(["admitted", "failed", "cancelled"] as const)(
       } else {
         await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
       }
+      if (outcome === "reconfigured" || outcome === "permission-revoked") {
+        currentConfig =
+          outcome === "reconfigured"
+            ? { ...config }
+            : {
+                ...config,
+                session: { communication: { send: "never", receive: "always" } },
+              };
+        setRuntimeConfigSnapshot(currentConfig);
+      }
       if (outcome === "cancelled") {
         cancellation.abort();
       }
@@ -271,15 +283,28 @@ it.each(["admitted", "failed", "cancelled"] as const)(
       } else {
         await recovery;
       }
-      if (outcome === "admitted") {
+      if (outcome === "admitted" || outcome === "reconfigured") {
         expect(dispatch).toHaveBeenCalledOnce();
         expect(dispatch.mock.calls[0]![0].idempotencyKey).toBe(delivery.runId);
         expect(io.discover.mock.calls[1]![0].agentIds).toEqual(new Set(["main"]));
+        expect(io.discover.mock.calls[1]![0].cfg).toBe(currentConfig);
       } else {
         expectNoCalls(dispatch);
-        expect(io.discover).toHaveBeenCalledOnce();
+        if (outcome === "permission-revoked") {
+          expect(io.report).toHaveBeenCalledOnce();
+          expect(
+            io.report.mock.calls[0]![1].selectReport(undefined).details.inputs[0],
+          ).toMatchObject({
+            reason: "permission-denied",
+            attempts: 1,
+          });
+        } else {
+          expect(io.discover).toHaveBeenCalledOnce();
+        }
       }
-      expectNoCalls(io.report);
+      if (outcome !== "permission-revoked") {
+        expectNoCalls(io.report);
+      }
     } finally {
       prepared.resolve();
       await recovery.catch(() => {});
