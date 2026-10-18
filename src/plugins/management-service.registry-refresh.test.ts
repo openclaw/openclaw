@@ -32,6 +32,7 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: (params: unknown) => mocks.replaceConfig(params),
 }));
 
+// mock-isolation: Registry refresh proofs record persistence without modifying installed plugins.
 vi.mock("./install-persistence.js", () => ({
   persistPluginInstall: mocks.persistInstall,
 }));
@@ -45,6 +46,7 @@ vi.mock("./install-config-mutation.js", async (importOriginal) => ({
   selectInstallMutationWriteOptions: (writeOptions: unknown) => writeOptions,
 }));
 
+// mock-isolation: Refresh fixtures supply installation results without downloading packages.
 vi.mock("./clawhub.js", () => ({
   installPluginFromClawHub: mocks.clawhubInstall,
 }));
@@ -65,6 +67,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: mocks.officialCatalog,
 }));
 
+// mock-isolation: Tests assert refresh dispatch without publishing to the process registry.
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshRegistry,
 }));

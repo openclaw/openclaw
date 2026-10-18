@@ -41,6 +41,7 @@ vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Scope proofs control provider discovery without loading real provider plugins.
 vi.mock("../plugins/provider-discovery.js", () => ({
   ...mocks,
   groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) => ({ simple: providers }),

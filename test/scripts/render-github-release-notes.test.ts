@@ -230,7 +230,7 @@ describe("GitHub release-note rendering", () => {
       ],
       [commaSeparated.replace("1,234", "1234"), "provenance is malformed"],
       [singular.replace("1 in-range", "001 in-range"), "provenance is malformed"],
-    ]) {
+    ] as const) {
       expect(() => parseContributionRecordProvenance(line)).toThrow(error);
     }
     expect(() => parseContributionRecordProvenance(singular)).toThrow(

@@ -16,6 +16,7 @@ vi.mock("./matrix/send.js", () => ({
   sendTypingMatrix: vi.fn(),
 }));
 
+// mock-isolation: Adapter proofs use a synthetic runtime instead of the process runtime singleton.
 vi.mock("./runtime.js", () => ({
   getOptionalMatrixRuntime: () => undefined,
   getMatrixRuntime: () => ({ channel: { text: { chunkMarkdownText: (text: string) => [text] } } }),
@@ -211,8 +212,12 @@ describe("matrix channel message adapter", () => {
         media: proveMedia,
         replyTo: proveReplyThread,
         thread: proveReplyThread,
-        messageSendingHooks: () => void expect(adapter.send?.text).toBeTypeOf("function"),
-        afterCommit: () => void expect(adapter.send?.lifecycle?.afterCommit).toBeTypeOf("function"),
+        messageSendingHooks: () => {
+          expect(adapter.send?.text).toBeTypeOf("function");
+        },
+        afterCommit: () => {
+          expect(adapter.send?.lifecycle?.afterCommit).toBeTypeOf("function");
+        },
         reconcileUnknownSend: () => {
           expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
           expect(adapter.durableFinal?.afterUnknownSendTerminal).toBeTypeOf("function");

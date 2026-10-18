@@ -270,8 +270,11 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
   ] satisfies Array<[CronScheduledToolCallerOrigin["kind"], boolean, string]>)(
     "preserves scheduled %s creator authority (configured=%s, delivery=%s)",
     async (origin, configured, delivery) => {
+      const config: OpenClawConfig = {
+        channels: { whatsapp: { accounts: configured ? { work: {} } : {} } },
+      };
       const params = {
-        config: { channels: { whatsapp: { accounts: configured ? { work: {} } : {} } } },
+        config,
         sessionKey: "agent:main:cron:job:run:turn",
         agentId: "main",
         agentAccountId: "default",

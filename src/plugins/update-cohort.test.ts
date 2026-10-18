@@ -23,7 +23,8 @@ vi.mock("./update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPluginsMock(...args),
 }));
 
-vi.mock("./installed-plugin-index.js", () => ({
+vi.mock("./installed-plugin-index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./installed-plugin-index.js")>()),
   loadInstalledPluginIndex: (...args: unknown[]) => loadInstalledPluginIndexMock(...args),
 }));
 

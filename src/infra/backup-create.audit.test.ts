@@ -228,8 +228,14 @@ it.for(["lease-duration overrun", "concurrent audit migration"] as const)(
     clock.mockRestore();
     snapshot.mockRestore();
     const restored = await restoreBackup(state, archive);
+    const manifest = JSON.parse(
+      await fs.readFile(
+        path.join(restored.targetPath, archive.archiveRoot, "manifest.json"),
+        "utf8",
+      ),
+    ) as { assets: Array<{ kind: string; archivePath: string }> };
     const stateAsset = expectDefined(
-      restored.assets.find((asset) => asset.kind === "state"),
+      manifest.assets.find((asset) => asset.kind === "state"),
       "restored state asset",
     );
     const restoredStateDir = path.join(restored.targetPath, stateAsset.archivePath);

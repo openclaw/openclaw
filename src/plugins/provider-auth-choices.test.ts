@@ -198,9 +198,7 @@ describe("provider auth choice manifest helpers", () => {
       cliDescription: "",
       deprecatedChoiceIds: ["old-demo"],
     };
-    setSingleManifestProviderAuthChoices("demo", [
-      { provider: "demo", method: "api-key", ...metadata },
-    ]);
+    setChoices("demo", [{ provider: "demo", method: "api-key", ...metadata }]);
     const expected = {
       pluginId: "demo",
       providerId: "demo",
@@ -221,12 +219,12 @@ describe("provider auth choice manifest helpers", () => {
       cliDescription: "",
       deprecatedChoiceIds: ["old-demo"],
     };
-    expect(resolveManifestProviderAuthChoices()).toStrictEqual([expected]);
+    expect(resolveChoices()).toStrictEqual([expected]);
     for (const read of [
-      () => resolveManifestProviderAuthChoices()[0],
-      () => resolveManifestDeclaredProviderAuthChoices()[0],
-      () => resolveManifestProviderAuthChoice("demo-key"),
-      () => resolveManifestDeprecatedProviderAuthChoice("old-demo"),
+      () => resolveChoices()[0],
+      () => declaredChoices()[0],
+      () => resolveChoice("demo-key"),
+      () => deprecatedChoice("old-demo"),
     ]) {
       const value = read();
       if (!value) {
@@ -245,7 +243,7 @@ describe("provider auth choice manifest helpers", () => {
       value.choiceLabel = "changed output";
       expect(again).toStrictEqual(expected);
     }
-    expect(resolveProviderOnboardAuthFlags()).toStrictEqual([
+    expect(authFlags()).toStrictEqual([
       {
         optionKey: "demoKey",
         authChoice: "demo-key",
@@ -430,9 +428,9 @@ describe("provider auth choice manifest helpers", () => {
   });
 
   it.each([true, false])("preserves legacy credential aliases with native realm=%s", (native) => {
-    setManifestPlugins([
+    setPlugins([
       {
-        ...createManifestPlugin("anthropic", [
+        ...manifest("anthropic", [
           {
             provider: "anthropic",
             method: "cli",
@@ -447,10 +445,8 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
     expect(resolveProviderIdForAuth("claude-cli")).toBe("anthropic");
-    expect(resolveManifestDeprecatedProviderAuthChoice("claude-cli")?.choiceId).toBe(
-      "anthropic-cli",
-    );
-    expect(resolveProviderOnboardAuthFlags()).toContainEqual(
+    expect(deprecatedChoice("claude-cli")?.choiceId).toBe("anthropic-cli");
+    expect(authFlags()).toContainEqual(
       expect.objectContaining({ authChoice: "anthropic-cli", cliFlag: "--anthropic-cli" }),
     );
   });
@@ -629,7 +625,7 @@ describe("provider auth choice manifest helpers", () => {
       ],
       expectedOwner: "custom-openai",
     },
-  ])("$name", ({ candidates, expectedOwner }) => {
+  ] as const)("$name", ({ candidates, expectedOwner }) => {
     setPlugins(candidates.map(([id, origin, provider]) => loginPlugin(id, origin, provider)));
     expect(resolveChoices()).toEqual([
       {
@@ -644,7 +640,7 @@ describe("provider auth choice manifest helpers", () => {
   });
 
   it("resolves manifest-owned provider auth aliases", () => {
-    setManifestPlugins([
+    setPlugins([
       {
         id: "fixture-provider",
         origin: "bundled",

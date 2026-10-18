@@ -72,6 +72,7 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
   resolveAgentRoute: mocks.resolveAgentRoute,
 }));
+// mock-isolation: Listener events are recorded without enqueueing real system events.
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueRoutedSystemEvent: mocks.enqueueSystemEvent,
 }));
@@ -224,11 +225,11 @@ function pausePresenceWork(
     return blocked;
   }
   if (stage === "lookup") {
-    const blocked = pause(store.lookup);
+    const blocked = pause(store.lookup.bind(store));
     vi.spyOn(store, "lookup").mockImplementationOnce(blocked.run);
     return blocked;
   }
-  const blocked = pause(store.registerIfAbsent);
+  const blocked = pause(store.registerIfAbsent.bind(store));
   vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(blocked.run);
   return blocked;
 }

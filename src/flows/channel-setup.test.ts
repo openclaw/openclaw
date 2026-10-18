@@ -85,9 +85,9 @@ function selectExternal() {
   return vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
 }
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function callArg<T>(mock: { mock: { calls: [T, ...unknown[]][] } }, index = 0): T {
   const call = expectDefined(mock.mock.calls[index], `mock call ${index}`);
-  return call[0] as T;
+  return call[0];
 }
 
 function expectExternalCatalogInstallCall(index = 0) {

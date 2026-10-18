@@ -134,7 +134,7 @@ it("opens every Memory schema match on the merged Settings tab", () => {
   };
 
   const find = (query: string) => search(query, { schema: memorySchema, value: {}, uiHints });
-  const destination = { routeId: "memory", pathname: "/settings/memory/settings" };
+  const destination = { routeId: "memory", pathname: "/settings/memory/settings" } as const;
   expectBlocks(find("embedding model"), destination);
   expectBlocks(
     find("memory").filter((block) => block.routeId === "memory"),

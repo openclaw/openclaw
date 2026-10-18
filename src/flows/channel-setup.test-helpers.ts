@@ -187,7 +187,7 @@ export function createChannelSetupMocks() {
         formatAccountLabel: vi.fn(),
       }),
     },
-    reset() {
+    reset(this: void) {
       vi.clearAllMocks();
       for (const mock of Object.values(mocks)) {
         mock.mockReset();

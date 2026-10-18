@@ -65,7 +65,9 @@ function admittedFixture(
 function admittedCaller(runId: string) {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  onTestFinished(() => releaseAgentRunDelegatedAuthority(authority));
+  onTestFinished(() => {
+    releaseAgentRunDelegatedAuthority(authority);
+  });
   return {
     agentId: "main",
     sessionKey: "agent:main:control-ui",

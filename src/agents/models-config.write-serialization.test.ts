@@ -117,12 +117,12 @@ beforeEach(() => {
     );
 });
 
-it.each<[string, string, boolean]>([
+it.for<[string, string, boolean]>([
   ["https://ollama.example/v1", " HTTPS://OLLAMA.EXAMPLE:443/v1///?ignored=true#fragment ", true],
   ["http://127.0.0.1:11434", "https://ollama.example/v1", false],
 ])(
   "prunes only matching endpoint %s (removed=%s, changed=%s)",
-  async (persistedBaseUrl, removedBaseUrl, removed, { agentDir }) => {
+  async ([persistedBaseUrl, removedBaseUrl, removed], { agentDir }) => {
     const provider = {
       baseUrl: persistedBaseUrl,
       api: "ollama",
@@ -378,7 +378,7 @@ it("repairs permissions without cooling the ready cache", async ({ home: _home }
   await expectPrivate(modelsPath);
 });
 
-it.each(["noop", "write"] as const)(
+it.for(["noop", "write"] as const)(
   "repairs models.json permissions without rewriting an unchanged %s plan",
   async (action, { agentDir }) => {
     const modelsPath = path.join(agentDir, "models.json");
@@ -418,7 +418,7 @@ it("invalidates the ready cache after external writes", async ({ home: _home }) 
 it("serializes concurrent models.json writes", async ({ home: _home }) => {
   const configs = ["Proxy A", "Proxy B with longer name"].map((name) => {
     const cfg = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
-    cfg.models!.providers!["custom-proxy"].models[0].name = name;
+    expectDefined(cfg.models?.providers?.["custom-proxy"]?.models[0]).name = name;
     return cfg;
   });
 

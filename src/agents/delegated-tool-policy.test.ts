@@ -93,7 +93,7 @@ function childProfile(cfg = config(), extra: Parameters<typeof profile>[1] = {})
 }
 function selectChild(
   cfg: OpenClawConfig,
-  floor: Parameters<typeof select>[0]["floor"],
+  floor: NonNullable<Parameters<typeof select>[0]>["floor"],
   extra: Parameters<typeof select>[0] = {},
 ) {
   return select({
@@ -203,7 +203,7 @@ describe("deny-only native tool delegation", () => {
     ["ancestor", config(), ancestor({ inheritedToolAllow: ["read", "sessions_spawn"] })],
   ] satisfies Array<[string, OpenClawConfig, Parameters<typeof profile>[1]?]>)(
     "keeps restrictive %s allow ceilings conservative",
-    (_kind, cfg, extra) => {
+    (_kind, cfg, extra = {}) => {
       expect(prepareFloor(profile(cfg, extra))).toBeUndefined();
     },
   );

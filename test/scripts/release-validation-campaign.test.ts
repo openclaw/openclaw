@@ -74,6 +74,7 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
       issues: {
         listForRepo: async () => ({ data: [] }),
         getLabel: async () => ({ data: {} }),
+        createLabel: async () => ({ data: {} }),
         createComment: async (args: Record<string, unknown>) => {
           calls.comments.push(args);
           return { data: {} };

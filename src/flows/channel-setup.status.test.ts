@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   makeCatalogEntry,
@@ -25,20 +26,24 @@ const formatChannelSelectionLine = vi.hoisted(() =>
 );
 const isChannelConfigured = vi.hoisted(() => vi.fn<IsChannelConfigured>(() => false));
 
+// mock-isolation: Status fixtures provide their own channel inventory.
 vi.mock("../channels/chat-meta.js", () => ({ listChatChannels }));
 
+// mock-isolation: Status formatting is driven by the synthetic channel registry.
 vi.mock("../channels/registry.js", () => ({
   formatChannelPrimerLine,
   formatChannelSelectionLine,
   normalizeAnyChannelId: (channelId?: string) => channelId?.trim().toLowerCase() ?? null,
 }));
 
+// mock-isolation: Status proofs control discovered channels without real plugin discovery.
 vi.mock("../commands/channel-setup/discovery.js", () => ({
   resolveChannelSetupEntries,
   shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean } }) =>
     meta.exposure?.setup !== false,
 }));
 
+// mock-isolation: Each status scenario explicitly chooses whether its channel is configured.
 vi.mock("../config/channel-configured.js", () => ({ isChannelConfigured }));
 
 // Keep installable-catalog fixtures independent of the bundled extensions tree.
@@ -91,7 +96,7 @@ beforeEach(() => {
   isChannelConfigured.mockReturnValue(false);
 });
 
-it.each([
+it.each<{ label: string; cfg: OpenClawConfig; workspaceDir?: string; expected: string }>([
   {
     label: "caller-selected explicit fleet",
     cfg: { agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } } },
@@ -113,7 +118,7 @@ it.each([
     workspaceDir: undefined,
     expected: "/tmp/openclaw-main-workspace",
   },
-] as const)("uses $label workspace", async ({ cfg, workspaceDir, expected }) => {
+])("uses $label workspace", async ({ cfg, workspaceDir, expected }) => {
   await statusSummary({ cfg, workspaceDir });
   selectionNotes({ cfg, workspaceDir, selection: [] });
   expect(resolveChannelSetupEntries).toHaveBeenCalledTimes(2);

@@ -19,13 +19,15 @@ function installLocalTransport(bridge: ReturnType<typeof createSandboxFsBridge>)
     bridge.resolvePath({ filePath, cwd }),
   );
   // Replace only byte transport; retain guards, pinned reads, and session readback verification.
-  const write = vi.spyOn(bridge, "writeFile").mockImplementation(local.writeFile);
+  const write = vi
+    .spyOn(bridge, "writeFile")
+    .mockImplementation((params) => local.writeFile(params));
   const create = vi
     .spyOn(bridge, "createFileExclusive")
-    .mockImplementation(local.createFileExclusive!);
-  const remove = vi.spyOn(bridge, "remove").mockImplementation(local.remove);
-  vi.spyOn(bridge, "mkdirp").mockImplementation(local.mkdirp);
-  vi.spyOn(bridge, "stat").mockImplementation(local.stat);
+    .mockImplementation((params) => local.createFileExclusive!(params));
+  const remove = vi.spyOn(bridge, "remove").mockImplementation((params) => local.remove(params));
+  vi.spyOn(bridge, "mkdirp").mockImplementation((params) => local.mkdirp(params));
+  vi.spyOn(bridge, "stat").mockImplementation((params) => local.stat(params));
   const list = vi.spyOn(bridge, "readDirectory").mockImplementation(async (params) => {
     const { hostPath } = bridge.resolvePath(params);
     const entries = await fs.readdir(hostPath!, { withFileTypes: true });

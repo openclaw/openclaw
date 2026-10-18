@@ -23,11 +23,14 @@ const digest = (algorithm: string, encoding: "hex" | "base64" = "hex") =>
   createHash(algorithm).update(bytes).digest(encoding);
 
 type TempWorkspace = Awaited<ReturnType<typeof privateTempWorkspace.tempWorkspace>>;
+type ObservedTempWorkspace = Omit<TempWorkspace, "cleanup"> & {
+  cleanup: ReturnType<typeof vi.fn<TempWorkspace["cleanup"]>>;
+};
 
 async function observeTempWorkspace(params: { cleanupFailure?: Error } = {}) {
   const root = await tempDirs.make("openclaw-clawhub-archive-");
   const createWorkspace = privateTempWorkspace.tempWorkspace;
-  let workspace: TempWorkspace | undefined;
+  let workspace: ObservedTempWorkspace | undefined;
   vi.spyOn(privateTempWorkspace, "tempWorkspace").mockImplementation(async (options) => {
     const ownedWorkspace = await createWorkspace({ ...options, rootDir: root });
     workspace = {
@@ -45,7 +48,7 @@ async function observeTempWorkspace(params: { cleanupFailure?: Error } = {}) {
 
   return {
     root,
-    workspace(): TempWorkspace {
+    workspace(): ObservedTempWorkspace {
       if (!workspace) {
         throw new Error("archive acquisition did not create a temporary workspace");
       }

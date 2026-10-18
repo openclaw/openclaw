@@ -32,10 +32,15 @@ const coldManifest = { providers: [], channels: [], channelConfigs: {}, provider
 const forbidServiceImport = vi.hoisted(() => () => {
   throw new Error("Offline plugin policy must not import Gateway RPC or heavy plugin services");
 });
+// mock-isolation: The offline policy boundary must never load Gateway RPC.
 vi.mock("../gateway/call.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load installation services.
 vi.mock("./management-install.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load uninstallation services.
 vi.mock("./management-uninstall.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load installation persistence.
 vi.mock("./install-persistence.js", forbidServiceImport);
+// mock-isolation: The offline policy boundary must never load the heavy status service.
 vi.mock("./status.js", forbidServiceImport);
 
 afterEach(() => {

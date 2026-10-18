@@ -141,7 +141,9 @@ describe("Tool Search MCP failures", () => {
           isError: isError || isToolResultError(result),
         }),
       },
-      (event) => events.push(event),
+      (event) => {
+        events.push(event);
+      },
       undefined,
       streamFn,
     );

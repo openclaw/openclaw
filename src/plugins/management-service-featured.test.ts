@@ -602,7 +602,7 @@ describe("plugin management Featured authority", () => {
     ]
   >)(
     "preserves the public install action for %s",
-    async (_name, install, source, state, publisher) => {
+    async (_name, install, source, state = undefined, publisher = undefined) => {
       mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
       const entry = { ...compositionEntry("action", install), state, publisher };
 
