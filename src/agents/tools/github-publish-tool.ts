@@ -7,6 +7,8 @@ import {
   GitHubPublicationActionSchema,
   GitHubPublicationEditSchema,
   type GitHubPublicationEdit,
+  GitHubPublicationEvidenceSchema,
+  type GitHubPublicationEvidence,
   GitHubPublicationTitleSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
@@ -37,8 +39,9 @@ function describeGitHubPublishTool(
 - edit: omit title/body to read current metadata. To change either field, send requestId, expectedHeadCommit, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
 - ready: mark the current session's own draft ready for review, using the requestId and expectedHeadCommit observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
 - request_review: after an explicit re-review request, read the current PR with edit, then send requestId and expectedHeadCommit to post only "@clawsweeper re-review". No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
+- upload_evidence: upload one inspected image/video from this conversation's sandbox workspace to its existing GitHub.com PR repository. First read the PR with edit; send its requestId/expectedHeadCommit and evidence {path: workspace-relative path, sha256: inspected lowercase SHA-256, sizeBytes: inspected byte count, at most 10 MB}. Supports PNG, JPEG, GIF, WebP, MP4, MOV and WebM. Only the inspected bytes are sent. Use the returned uploaded URL with edit to associate it in the PR body, then verify reviewer access; uploaded does not prove public access. An unconfirmed result may have created an attachment: never repeat the upload blindly. No host credentials, other mounts, remote URLs, repository or PR selectors are accepted.
 - refresh_base: integrate the selected base into this local managed sandbox before tests and Auto Review. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.
-Edit, request_review, refresh and own-draft readiness accept no other repository, PR, ref or publishing session.`
+Edit, upload_evidence, request_review, refresh and own-draft readiness accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
     ? `${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Guests may only mark their own draft ready; inspection, merge, close and child selection require full operator write access. Actions do not change session sandboxing.`
@@ -70,6 +73,7 @@ export function createGitHubPublishTool(
               : {}),
             ...GitHubBaseRefreshSchema.properties,
             ...GitHubPublicationEditSchema.properties,
+            evidence: Type.Optional(GitHubPublicationEvidenceSchema),
             action: actionsAvailable
               ? Type.Optional(
                   Type.Union([
@@ -77,6 +81,7 @@ export function createGitHubPublishTool(
                     Type.Literal("refresh_base"),
                     Type.Literal("edit"),
                     Type.Literal("request_review"),
+                    Type.Literal("upload_evidence"),
                     ...GitHubPublicationActionSchema.properties.action.anyOf,
                   ]),
                 )
@@ -86,6 +91,7 @@ export function createGitHubPublishTool(
                     Type.Literal("edit"),
                     Type.Literal("ready"),
                     Type.Literal("request_review"),
+                    Type.Literal("upload_evidence"),
                   ]),
                 ),
             title: Type.Optional(GitHubPublicationTitleSchema),
@@ -105,7 +111,9 @@ export function createGitHubPublishTool(
             | "refresh_base"
             | "edit"
             | "request_review"
+            | "upload_evidence"
             | GitHubPublicationAction["action"];
+          evidence?: GitHubPublicationEvidence;
           conflictsResolved?: boolean;
           baseCommit?: string;
         };
@@ -134,6 +142,46 @@ export function createGitHubPublishTool(
             requestId: input.requestId,
             expectedHeadCommit: input.expectedHeadCommit,
           }),
+        );
+      }
+      if (input.action === "upload_evidence") {
+        if (
+          !publicationAvailable ||
+          !input.evidence ||
+          input.publishingSessionKey !== undefined ||
+          input.mergeMethod !== undefined ||
+          input.conflictsResolved !== undefined ||
+          input.baseCommit !== undefined ||
+          input.title !== undefined ||
+          input.body !== undefined ||
+          input.expectedTitle !== undefined ||
+          input.expectedBody !== undefined
+        ) {
+          throw new Error(
+            "upload_evidence accepts only this session's observed PR and inspected workspace media.",
+          );
+        }
+        return jsonResult(
+          await withGatewayToolCallerIdentity(
+            { ...caller, workspaceEvidenceSandbox: options.sandbox ?? undefined },
+            () =>
+              callGateway<SessionGitHubActionResult>(
+                "sessions.github.action",
+                {
+                  sessionKey: caller.sessionKey,
+                  action: "upload_evidence",
+                  requestId: input.requestId,
+                  expectedHeadCommit: input.expectedHeadCommit,
+                  evidence: input.evidence,
+                },
+                { timeoutMs: 180_000 },
+              ),
+          ),
+        );
+      }
+      if (input.evidence !== undefined) {
+        throw new Error(
+          "Use upload_evidence for inspected media; other actions do not upload files.",
         );
       }
       if (input.action === "edit") {
