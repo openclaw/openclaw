@@ -422,11 +422,7 @@ it.each([
             );
             const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
               isInboundUserMessage: true,
-              toolAuthorityOverlay: {
-                senderIsOwner: run.run.senderIsOwner === true,
-                disableTools: false,
-                traceAuthorized: false,
-              },
+              toolAuthorityOverlay: toolAuthorityOverlay(run),
             });
             expect(interleaved).toBe(true);
             if (change === "unrelated deletion") {

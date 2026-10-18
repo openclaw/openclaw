@@ -6,7 +6,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveRequesterPrincipalKey } from "../../agents/requester-origin.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import {
   recordSessionParticipant,
@@ -306,7 +309,27 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
             throw refusal;
           }
         };
+        const ownerAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "projection-owner",
+          scopes: ["operator.write"],
+          gatewayAccessGrant: null,
+          assertCurrent: () => operation.abortSignal.throwIfAborted(),
+        });
+        params.operatorAuthority = createAdmittedRunOperatorAuthority({
+          ...ownerAuthority,
+          profileId: "projection-participant",
+          assertCurrent: params.assertCurrent,
+        });
+        vi.mocked(resolveInboundReplyToolAuthorityOverlay).mockReturnValueOnce({
+          operatorAuthority: params.operatorAuthority,
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
+        });
         operation.bindToolAuthoritySnapshot({
+          requesterPrincipalKey: resolveRequesterPrincipalKey({
+            operatorAuthority: ownerAuthority,
+          }),
           fingerprint: () => "authority",
           project: (caller) => (caller.allowCollaborativeSteering ? "authority" : "caller-policy"),
           projectAsync: async (caller) => {

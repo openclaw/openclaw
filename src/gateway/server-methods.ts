@@ -1,4 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { resolveChannelMessageActionFacts } from "../channels/plugins/message-action-names.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -305,9 +307,17 @@ export async function handleGatewayRequest(
       profileBinding && !opts.expectedProfileBinding
         ? profileBinding.guardResponse(opts.respond)
         : opts.respond;
+    const messageActionFacts =
+      req.method === "message.action" && isRecord(req.params)
+        ? resolveChannelMessageActionFacts(req.params.action)
+        : undefined;
+    // The message-operation owner fences new effects and preserves accepted write receipts.
+    // Reads still require current authority when their contents are released.
+    const preserveMessageWriteOutcome =
+      req.method === "send" || (messageActionFacts !== undefined && !messageActionFacts.readOnly);
     const respondUnobserved: GatewayRequestOptions["respond"] = runtimeAuthority
       ? (ok, ...response) => {
-          if (ok) {
+          if (ok && !preserveMessageWriteOutcome) {
             runtimeAuthority.assertCurrent();
           }
           profileRespond(ok, ...response);

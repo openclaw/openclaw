@@ -75,6 +75,7 @@ function gatewayContext(
   ]);
   return {
     getRuntimeConfig,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     getGatewayMethodRegistry: () => methods,
     trackExecution: <T>(run: () => Promise<T>) => run(),
     ...overrides,

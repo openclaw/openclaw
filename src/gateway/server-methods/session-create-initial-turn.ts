@@ -12,8 +12,7 @@ import {
   normalizeRpcAttachmentsToChatAttachments,
   type RpcAttachmentInput,
 } from "./attachment-normalize.js";
-import { normalizeChatSendRequest } from "./chat-send-request.js";
-import type { prepareSessionCreateOpening } from "./session-create-spawn.js";
+import { normalizeChatSendRequest, type NormalizedChatSendRequest } from "./chat-send-request.js";
 import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayClient,
@@ -49,7 +48,13 @@ export function resolveSessionCreateInitialTurn(params: {
 export async function dispatchSessionCreateInitialTurn(
   options: GatewayRequestHandlerOptions,
   params: {
-    opening: ReturnType<typeof prepareSessionCreateOpening>;
+    opening: {
+      client: GatewayClient | null;
+      internalInput?: Pick<
+        NormalizedChatSendRequest,
+        "systemInputProvenance" | "suppressCommandInterpretation"
+      >;
+    };
     session: Pick<CreatedGatewaySession, "key" | "agentId">;
     initialTurn: NonNullable<ReturnType<typeof resolveSessionCreateInitialTurn>>;
     request: Pick<SessionsCreateParams, "timeoutMs" | "mentions">;

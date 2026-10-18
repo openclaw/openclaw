@@ -261,11 +261,6 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
-  const runtimeAuthority = resolveSessionRuntimeAuthority({
-    method,
-    runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-    context,
-  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -277,6 +272,18 @@ export function resolveInProcessGatewayDispatch(
     method === "agent" ? options?.settleWakeReplay?.assertCurrent : undefined;
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
+  const assertTransferredSettleWakeCurrent =
+    assertSettleWakeCurrent && operatorRunAuthority
+      ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
+      : undefined;
+  assertTransferredSettleWakeCurrent?.();
+  const runtimeAuthority = assertTransferredSettleWakeCurrent
+    ? { assertCurrent: assertTransferredSettleWakeCurrent }
+    : resolveSessionRuntimeAuthority({
+        method,
+        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
+        context,
+      });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
     method === "sessions.create" &&

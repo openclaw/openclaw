@@ -99,7 +99,7 @@ export function prepareSessionCreateOpening(params: {
     client: principal,
     internalInput: {
       systemInputProvenance: {
-        kind: "inter_session",
+        kind: "inter_session" as const,
         sourceSessionKey: creation.requesterSessionKey,
         sourceTool: spawn ? "sessions_spawn" : "sessions_create",
       },
