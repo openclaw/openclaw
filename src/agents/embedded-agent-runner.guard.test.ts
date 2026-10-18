@@ -40,10 +40,11 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function assistantToolCall(id: string): AgentMessage {
+function assistantToolCall(id: string, name = "n", stopReason?: "toolUse"): AgentMessage {
   return {
     role: "assistant",
-    content: [{ type: "toolCall", id, name: "n", arguments: {} }],
+    content: [{ type: "toolCall", id, name, arguments: {} }],
+    ...(stopReason ? { stopReason } : {}),
   } as AgentMessage;
 }
 
@@ -58,12 +59,27 @@ function getMessages(sm: ReturnType<typeof guardSessionManager>): AgentMessage[]
     .map((entry) => (entry as { message: AgentMessage }).message);
 }
 
+function createGuard(options?: Parameters<typeof guardSessionManager>[1]) {
+  const sm = guardSessionManager(SessionManager.inMemory(), options);
+  return { sm, appendMessage: appender(sm) };
+}
+
+function queuedRuntime(
+  recorder: ReturnType<typeof createUserTurnTranscriptRecorder>,
+  content: string,
+  timestamp: number,
+) {
+  return attachRuntimeUserTurnTranscriptContext(makeUserMessage(content, timestamp), {
+    message: expectDefined(recorder.message, "expected prepared queued turn"),
+    recorder,
+  });
+}
+
 describe("guardSessionManager integration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = appender(sm);
+    const { sm, appendMessage } = createGuard();
 
     appendMessage(assistantToolCall("call_1"));
     appendMessage({
@@ -98,13 +114,11 @@ describe("guardSessionManager integration", () => {
       }
       return undefined;
     });
-    const sm = guardSessionManager(SessionManager.inMemory(), {
+    const { appendMessage } = createGuard({
       onUserMessagePersisted: (persisted, runtime) => {
         correlations.push({ persisted, runtime });
       },
     });
-    const appendMessage = appender(sm);
-
     appendMessage(outerRuntime);
 
     expect(correlations).toEqual([
@@ -118,7 +132,7 @@ describe("guardSessionManager integration", () => {
       { path: "/workspace/current.mp4", contentType: "video/mp4", kind: "video" },
     ]);
     const suppressed: Array<{ persisted: AgentMessage; runtime?: AgentMessage }> = [];
-    const sm = guardSessionManager(SessionManager.inMemory(), {
+    const { sm, appendMessage } = createGuard({
       preparedUserTurnMessage: {
         role: "user",
         content: "already durable",
@@ -131,7 +145,6 @@ describe("guardSessionManager integration", () => {
       },
     });
 
-    const appendMessage = appender(sm);
     appendMessage(runtimeMessage);
 
     expect(sm.getEntries()).toEqual([]);
@@ -223,12 +236,7 @@ describe("guardSessionManager integration", () => {
         target: createTestUserTurnTranscriptTarget(),
       });
       const sm = guardSessionManager(SessionManager.inMemory());
-      sm.appendMessage(
-        attachRuntimeUserTurnTranscriptContext(
-          { role: "user", content: "runtime", timestamp: 2 },
-          { message: recorder.message!, recorder },
-        ),
-      );
+      sm.appendMessage(queuedRuntime(recorder, "runtime", 2));
       expect(getMessages(sm)[0]).toMatchObject({
         __openclaw: { senderId: "author", senderIsOwner: true },
       });
@@ -296,11 +304,7 @@ describe("guardSessionManager integration", () => {
       input: { text: "queued prompt" },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const preparedMessage = expectDefined(recorder.message, "expected prepared queued turn");
-    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
-      makeUserMessage("runtime queued prompt", 456),
-      { message: preparedMessage, recorder },
-    );
+    const runtimeMessage = queuedRuntime(recorder, "runtime queued prompt", 456);
     const sm = guardSessionManager(SessionManager.inMemory());
 
     sm.appendMessage(runtimeMessage);
@@ -319,11 +323,9 @@ describe("guardSessionManager integration", () => {
       MediaType: "image/png",
       MediaTypes: ["image/png"],
     } as PersistedUserTurnMessage;
-    const sm = guardSessionManager(SessionManager.inMemory(), {
+    const { sm, appendMessage } = createGuard({
       preparedUserTurnMessage: structuredClone(prepared),
     });
-    const appendMessage = appender(sm);
-
     appendMessage({
       role: "user",
       content: [{ type: "text", text: "blocked" }],
@@ -357,13 +359,11 @@ describe("guardSessionManager integration", () => {
         redactPatterns: [String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`],
       },
     } satisfies OpenClawConfig;
-    const sm = guardSessionManager(SessionManager.inMemory(), {
+    const { sm, appendMessage } = createGuard({
       config: cfg,
       skipBeforeMessageWriteHooks: true,
     });
-    const appendMessage = appender(sm);
-
-    appendMessage({
+    const assistant = {
       role: "assistant",
       content: [
         { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
@@ -371,7 +371,8 @@ describe("guardSessionManager integration", () => {
         { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
       ],
       stopReason: "toolUse",
-    } as AgentMessage);
+    } as AgentMessage;
+    appendMessage(structuredClone(assistant));
     appendMessage(
       textToolResult("call_1", "read", "peter@dc.io\n", { isError: false }) as AgentMessage,
     );
@@ -379,46 +380,21 @@ describe("guardSessionManager integration", () => {
     const messages = getMessages(sm);
 
     expect(messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
-          { type: "text", text: "contact peter@dc.io" },
-          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
-        ],
-      },
+      { role: "assistant", content: assistant.content },
       { role: "toolResult", content: [{ type: "text", text: "peter@dc.io\n" }] },
     ]);
     expect(JSON.stringify(messages)).not.toContain("changed by hook");
   });
 });
 
-function idleToolCall(id: string): AgentMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "toolCall", id, name: "exec", arguments: {} }],
-    stopReason: "toolUse",
-  } as AgentMessage;
-}
-
-function toolResult(id: string, text: string): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: id,
-    content: [{ type: "text", text }],
-    isError: false,
-  } as AgentMessage;
-}
-
 describe("flushPendingToolResultsAfterIdle", () => {
   it("waits for idle so real tool results can land before flush", async () => {
     vi.useFakeTimers();
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = appender(sm);
+    const { sm, appendMessage } = createGuard();
     const idle = createDeferredCore();
     const agent = { waitForIdle: () => idle.promise };
 
-    appendMessage(idleToolCall("call_retry_1"));
+    appendMessage(assistantToolCall("call_retry_1", "exec", "toolUse"));
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent,
       sessionManager: sm,
@@ -428,7 +404,12 @@ describe("flushPendingToolResultsAfterIdle", () => {
     await Promise.resolve();
     expect(getMessages(sm).map((message) => message.role)).toEqual(["assistant"]);
 
-    appendMessage(toolResult("call_retry_1", "command output here"));
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_retry_1",
+      content: [{ type: "text", text: "command output here" }],
+      isError: false,
+    } as AgentMessage);
     idle.resolve();
     await flushPromise;
     expect(vi.getTimerCount()).toBe(0);
@@ -442,11 +423,10 @@ describe("flushPendingToolResultsAfterIdle", () => {
   });
 
   it("flushes pending on cleanup timeout instead of leaving orphaned tool calls", async () => {
-    const sm = guardSessionManager(SessionManager.inMemory());
-    const appendMessage = appender(sm);
+    const { sm, appendMessage } = createGuard();
     vi.useFakeTimers();
 
-    appendMessage(idleToolCall("call_orphan_2"));
+    appendMessage(assistantToolCall("call_orphan_2", "exec", "toolUse"));
     const flushPromise = flushPendingToolResultsAfterIdle({
       agent: { waitForIdle: () => new Promise<void>(() => {}) },
       sessionManager: sm,

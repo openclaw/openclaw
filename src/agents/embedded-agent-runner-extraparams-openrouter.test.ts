@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
-  isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
@@ -21,30 +20,9 @@ beforeEach(() => {
         return params.context.streamFn;
       }
 
-      const providerRouting =
-        params.context.extraParams?.provider != null &&
-        typeof params.context.extraParams.provider === "object"
-          ? (params.context.extraParams.provider as Record<string, unknown>)
-          : undefined;
-      let streamFn = params.context.streamFn;
-      if (providerRouting) {
-        const underlying = streamFn;
-        streamFn = (model, context, options) =>
-          (underlying as StreamFn)(
-            {
-              ...model,
-              compat: { ...model.compat, openRouterRouting: providerRouting },
-            },
-            context,
-            options,
-          );
-      }
-
-      const skipReasoningInjection =
-        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
-      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
+      // This fixture only exercises auto routing, which does not inject reasoning.
       return createOpenRouterSystemCacheWrapper(
-        createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
+        createOpenRouterWrapper(params.context.streamFn, undefined, params.context.extraParams),
         params.context.extraParams,
       );
     },
@@ -57,8 +35,6 @@ afterEach(() => {
 
 describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
   it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
-    // Model-level camelCase config is narrower than broad defaults and should
-    // override snake_case aliases from defaults.
     const calls: Array<{ headers?: Record<string, string> }> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push({ headers: options?.headers });
@@ -102,10 +78,11 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
       {},
     );
 
-    const headers = calls[0]?.headers;
-    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
-    expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
-    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
+    expect(calls[0]?.headers).toMatchObject({
+      "X-OpenRouter-Cache": "true",
+      "X-OpenRouter-Cache-Clear": "true",
+      "X-OpenRouter-Cache-TTL": "600",
+    });
   });
 
   it("forwards Fusion plugin config through extraBody", () => {
