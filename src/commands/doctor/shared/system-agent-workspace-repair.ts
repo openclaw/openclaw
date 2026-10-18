@@ -14,13 +14,6 @@ import { normalizeAgentId } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
 import {
-  canCarryCliConversation,
-  carryClaudeCliConversations,
-  cliConversationResumesIn,
-  listStoredCliConversations,
-  type StoredCliConversation,
-} from "./system-agent-cli-conversations.js";
-import {
   applyWorkspaceRestore,
   planWorkspaceRestore,
   type WorkspaceRestorePlan,
@@ -63,18 +56,14 @@ function authoredAgentWorkspacePin(params: {
   }
 }
 
-function countLabel(count: number, noun: string): string {
-  return count === 1 ? `1 ${noun}` : `${count} ${noun}s`;
-}
-
 function describeRestore(params: {
   plan: WorkspaceRestorePlan;
   applied: boolean;
-  launchDir: string;
-  agentDir: string;
+  from: string;
+  to: string;
 }): string[] {
-  const from = shortenHomePath(params.launchDir);
-  const to = shortenHomePath(params.agentDir);
+  const from = shortenHomePath(params.from);
+  const to = shortenHomePath(params.to);
   const lines: string[] = [];
   const copied = [...params.plan.copies, ...params.plan.links];
   if (copied.length > 0) {
@@ -91,13 +80,13 @@ function describeRestore(params: {
 }
 
 /**
- * Gateway startup runs the system agent's turns in the shared workspace, while an unpinned entry in
- * an explicit roster resolves its persona, bootstrap, and memory files to its own directory.
- * Pin the agent directory, after copying the agent's files there from the shared root. The root is
- * never assigned (it holds sibling workspaces), no file is moved or deleted, a customized file in
- * the agent directory is never replaced, and no pin lands while it would end a stored CLI-backend
- * conversation that Doctor cannot carry to the new directory. Without `applyFiles` the pin is left
- * out whenever files or conversations still have to be carried.
+ * An unpinned system agent in an explicit roster resolves its persona, bootstrap, and memory files
+ * to its own directory, while its files may sit in the launch workspace. Doctor pins one of the two
+ * after copying the agent's files into it. With `agents.defaults.workspace` set, the Gateway already
+ * runs the agent in its own directory and the root holds sibling workspaces, so that directory is
+ * pinned. Without it, the Gateway runs the agent in the launch workspace, which is pinned so the
+ * working directory does not move. No file is moved or deleted and a customized file in the pinned
+ * directory is never replaced. Without `applyFiles` the pin is left out while files must be copied.
  */
 export async function repairSystemAgentWorkspacePin(
   cfg: OpenClawConfig,
@@ -107,7 +96,6 @@ export async function repairSystemAgentWorkspacePin(
     authoredDefaultWorkspace?: string;
     /** Copy files now (Doctor repair); otherwise describe the copy and leave the pin out. */
     applyFiles?: boolean;
-    listCliConversations?: (agentId: string) => StoredCliConversation[];
   } = {},
 ): Promise<
   DoctorConfigMutationResult & {
@@ -136,10 +124,12 @@ export async function repairSystemAgentWorkspacePin(
   const launchOwned = listAgentIds(cfg).some(
     (id) => id !== agentId && resolveAgentWorkspaceDir(cfg, id, env) === launchDir,
   );
+  const keepLaunch = !launchOwned && !cfg.agents?.defaults?.workspace?.trim();
+  const [from, to] = keepLaunch ? [agentDir, launchDir] : [launchDir, agentDir];
   let restore: WorkspaceRestorePlan = { copies: [], links: [], conflicts: [] };
   try {
     if (!launchOwned) {
-      restore = await planWorkspaceRestore(launchDir, agentDir);
+      restore = await planWorkspaceRestore(from, to);
     }
   } catch (error) {
     return {
@@ -149,23 +139,26 @@ export async function repairSystemAgentWorkspacePin(
       ],
     };
   }
-  const workspace = authoredAgentWorkspacePin({
-    cfg,
-    agentId,
-    agentDir,
-    authoredRoot: options.authoredDefaultWorkspace ?? cfg.agents?.defaults?.workspace,
-    env,
-  });
-  const shownWorkspace =
-    workspace.startsWith("~") || containsEnvVarReference(workspace)
-      ? workspace
-      : shortenHomePath(workspace);
+  const workspace = keepLaunch
+    ? to
+    : authoredAgentWorkspacePin({
+        cfg,
+        agentId,
+        agentDir,
+        authoredRoot: options.authoredDefaultWorkspace ?? cfg.agents?.defaults?.workspace,
+        env,
+      });
   const copied = [...restore.copies, ...restore.links];
-  const copyHint =
-    copied.length > 0
-      ? ` after copying ${copied.join(", ")} from ${shortenHomePath(launchDir)} into ${shortenHomePath(agentDir)}`
-      : "";
+  const pinLine = `Set ${configPath} to ${workspace} so its working directory, persona, and memory use one workspace.`;
   if (options.includeOwnsRoster) {
+    const shownWorkspace =
+      workspace.startsWith("~") || containsEnvVarReference(workspace)
+        ? workspace
+        : shortenHomePath(workspace);
+    const copyHint =
+      copied.length > 0
+        ? ` after copying ${copied.join(", ")} from ${shortenHomePath(from)} into ${shortenHomePath(to)}`
+        : "";
     return {
       ...unchanged,
       warnings: [
@@ -173,68 +166,24 @@ export async function repairSystemAgentWorkspacePin(
       ],
     };
   }
-  let conversations: StoredCliConversation[];
-  try {
-    conversations = (
-      options.listCliConversations ?? ((id: string) => listStoredCliConversations(cfg, id, env))
-    )(agentId).filter((conversation) => cliConversationResumesIn(conversation, launchDir));
-  } catch (error) {
-    return {
-      ...unchanged,
-      warnings: [
-        `Could not read the stored sessions of agent "${agentId}": ${formatErrorMessage(error)}. Doctor did not set ${configPath}; set it to ${shownWorkspace}${copyHint} so its working directory, persona, and memory use one workspace.`,
-      ],
-    };
-  }
-  const stuck = conversations.filter(
-    (conversation) => !canCarryCliConversation(conversation, launchDir, agentDir, env),
-  );
-  if (stuck.length > 0) {
-    return {
-      ...unchanged,
-      warnings: [
-        `Agent "${agentId}" works in ${shortenHomePath(launchDir)} but resolves its persona and memory to ${shortenHomePath(agentDir)}. Doctor did not set ${configPath} because ${countLabel(stuck.length, "stored CLI-backend conversation")} of this agent would start fresh, without resuming history, once its working directory changes. Set ${configPath} to ${shownWorkspace}${copyHint} when that is acceptable.`,
-      ],
-    };
-  }
-  const carryLines = (applied: boolean) =>
-    conversations.length > 0
-      ? [
-          `${applied ? "Carried" : "Carry"} ${countLabel(conversations.length, "stored Claude CLI conversation")} of agent "${agentId}" to ${shortenHomePath(agentDir)}: ${conversations.length === 1 ? "its transcript is" : "their transcripts are"} copied into that directory's Claude project folder, the originals stay in place, and the next turn resumes with ${conversations.length === 1 ? "its" : "their"} history.`,
-        ]
-      : [];
   if (options.applyFiles !== true) {
-    if (copied.length > 0 || conversations.length > 0) {
+    if (copied.length > 0) {
       // The config stays unpinned until the copy runs: --fix, or this repair rerun with
       // applyFiles once the operator accepts the preview.
       return {
         ...unchanged,
         restorePending: true,
-        changes: [
-          ...describeRestore({ plan: restore, applied: false, launchDir, agentDir }),
-          `Set ${configPath} to ${workspace} so its working directory, persona, and memory use one workspace.`,
-          ...carryLines(false),
-        ],
+        changes: [...describeRestore({ plan: restore, applied: false, from, to }), pinLine],
       };
     }
   } else {
     try {
-      await applyWorkspaceRestore(launchDir, agentDir, restore);
+      await applyWorkspaceRestore(from, to, restore);
     } catch (error) {
       return {
         ...unchanged,
         warnings: [
-          `Could not copy the files of agent "${agentId}" from ${shortenHomePath(launchDir)} into ${shortenHomePath(agentDir)}: ${formatErrorMessage(error)}. Doctor did not set ${configPath}.`,
-        ],
-      };
-    }
-    try {
-      await carryClaudeCliConversations(conversations, launchDir, agentDir, env);
-    } catch (error) {
-      return {
-        ...unchanged,
-        warnings: [
-          `Could not carry the stored Claude CLI conversations of agent "${agentId}" to ${shortenHomePath(agentDir)}: ${formatErrorMessage(error)}. Doctor did not set ${configPath}.`,
+          `Could not copy the files of agent "${agentId}" from ${shortenHomePath(from)} into ${shortenHomePath(to)}: ${formatErrorMessage(error)}. Doctor did not set ${configPath}.`,
         ],
       };
     }
@@ -247,11 +196,7 @@ export async function repairSystemAgentWorkspacePin(
         entries: { ...entries, [entryKey]: { ...entries[entryKey], workspace } },
       },
     },
-    changes: [
-      ...describeRestore({ plan: restore, applied: true, launchDir, agentDir }),
-      `Set ${configPath} to ${workspace} so its working directory, persona, and memory use one workspace.`,
-      ...carryLines(true),
-    ],
+    changes: [...describeRestore({ plan: restore, applied: true, from, to }), pinLine],
     explicitSetPaths: [["agents", "entries", entryKey, "workspace"]],
   };
 }

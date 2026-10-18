@@ -2,16 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../agents/cli-session.js";
-import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  loadSessionEntryReadOnly,
-  upsertSessionEntryCore,
-} from "../config/sessions/session-accessor.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -317,29 +310,9 @@ const convergedRoster = (workspace: string) => ({
     entries: { main: {}, dev: {} },
   },
 });
-const mainSession = () => ({
-  agentId: "main",
-  sessionKey: "agent:main:main",
-  storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-});
 const mainLaunchDir = (config: OpenClawConfig, workspace: string) =>
   listConfiguredOwnerInputs(config, workspace).find((input) => input.agentId === "main")
     ?.workspaceDir;
-const claudeProject = (workspaceDir: string) =>
-  resolveClaudeCliProjectDirForWorkspace({ workspaceDir, homeDir: process.env.HOME });
-
-async function storeClaudeConversation(workspace: string) {
-  await fs.mkdir(claudeProject(workspace), { recursive: true });
-  await fs.writeFile(path.join(claudeProject(workspace), "claude-native-1.jsonl"), "turn 1\n");
-  await upsertSessionEntryCore(mainSession(), {
-    sessionId: "main-local",
-    updatedAt: Date.now(),
-    cliSessionBindings: {
-      "claude-cli": { sessionId: "claude-native-1", cwdHash: hashCliSessionText(workspace) },
-    },
-  });
-  closeOpenClawStateDatabaseForTest();
-}
 
 it(
   "copies shared-workspace files into a converged system agent's directory and pins it",
@@ -363,64 +336,13 @@ it(
 );
 
 it(
-  "pins a converged system agent to its directory and keeps the authored env root",
-  withHome(
-    async (home) => {
-      const workspace = path.join(home, "shared-workspace");
-      await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
-      await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
-      const configPath = await writeConfig(home, convergedRoster("${WORKSPACE_ROOT}"));
-
-      await writeInitial(configPath);
-
-      const written = await readJson(configPath);
-      expect(written.agents.defaults.workspace).toBe("${WORKSPACE_ROOT}");
-      expect(written.agents.entries.main.workspace).toBe("${WORKSPACE_ROOT}/main");
-      const after = (await readConfigFileSnapshot()).config;
-      expect(resolveAgentWorkspaceDir(after, "main")).toBe(path.join(workspace, "main"));
-      expect(mainLaunchDir(after, workspace)).toBe(path.join(workspace, "main"));
-      expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
-    },
-    (home) => ({ WORKSPACE_ROOT: path.join(home, "shared-workspace") }),
-  ),
-);
-
-it(
-  "keeps a carried Claude CLI conversation resumable in the root when the config is read-only",
-  withHome(
-    async (home) => {
-      const workspace = path.join(home, "shared-workspace");
-      await fs.mkdir(workspace, { recursive: true });
-      await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
-      const configPath = await writeConfig(home, convergedRoster(workspace));
-      const before = await readText(configPath);
-      await storeClaudeConversation(workspace);
-
-      await writeInitial(configPath);
-
-      expect(await readText(configPath)).toBe(before);
-      const binding = loadSessionEntryReadOnly(mainSession())?.cliSessionBindings?.["claude-cli"];
-      expect(
-        resolveCliSessionReuse({
-          binding,
-          authEpochVersion: 1,
-          cwdHash: hashCliSessionText(workspace),
-        }),
-      ).toEqual({ mode: "reuse", sessionId: "claude-native-1" });
-    },
-    () => ({ OPENCLAW_CONFIG_READONLY: "1" }),
-  ),
-);
-
-it(
-  "copies files and carries a Claude CLI conversation only once an interactive preview is accepted",
+  "copies files only once an interactive preview is accepted",
   withHome(async (home) => {
     const workspace = path.join(home, "shared-workspace");
     const agentDir = path.join(workspace, "main");
     await fs.mkdir(workspace, { recursive: true });
     await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
     const configPath = await writeConfig(home, convergedRoster(workspace));
-    await storeClaudeConversation(workspace);
     const preview = { options: { nonInteractive: false, repair: false } };
 
     await runInitialConfigWriteHealth(
@@ -436,43 +358,10 @@ it(
       await prepareDoctorContext(configPath, { ...preview, confirm: async () => true }),
     );
 
-    const after = (await readConfigFileSnapshot()).config;
-    expect(after.agents?.entries?.main?.workspace).toBe(agentDir);
+    expect((await readConfigFileSnapshot()).config.agents?.entries?.main?.workspace).toBe(agentDir);
     expect(await readText(path.join(agentDir, "SOUL.md"))).toBe("root persona");
-    expect(await readText(path.join(claudeProject(agentDir), "claude-native-1.jsonl"))).toBe(
-      "turn 1\n",
-    );
-    expect(loadSessionEntryReadOnly(mainSession())?.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "claude-native-1",
-    });
   }),
 );
-
-it(
-  "leaves a converged system agent unpinned while a stored CLI conversation would lose history",
-  withHome(async (home) => {
-    const workspace = path.join(home, "shared-workspace");
-    await fs.mkdir(path.join(workspace, "main", "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspace, "main", "SOUL.md"), "agent persona");
-    const configPath = await writeConfig(home, convergedRoster(workspace));
-    await upsertSessionEntryCore(mainSession(), {
-      sessionId: "main-local",
-      updatedAt: Date.now(),
-      cliSessionBindings: { "codex-cli": { sessionId: "codex-native-1" } },
-    });
-    closeOpenClawStateDatabaseForTest();
-
-    await writeInitial(configPath);
-
-    const after = (await readConfigFileSnapshot()).config;
-    expect(after.agents?.entries?.main?.workspace).toBeUndefined();
-    expect(mainLaunchDir(after, workspace)).toBe(workspace);
-    expect(
-      loadSessionEntryReadOnly(mainSession())?.cliSessionBindings?.["codex-cli"]?.sessionId,
-    ).toBe("codex-native-1");
-  }),
-);
-
 it(
   "keeps the authored env root when agents.defaults comes from an include",
   withHome(

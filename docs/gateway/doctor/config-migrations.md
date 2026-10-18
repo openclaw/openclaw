@@ -537,40 +537,26 @@ which agent owns existing legacy data. Keep the original markers until Doctor
 has completed both the config and state repairs.
 
 An already converged explicit roster can leave the system agent
-(`agents.defaults.systemAgent.agentId`) without `workspace`: its Gateway turns
-then run in the shared workspace root while its persona, bootstrap, and memory
-files resolve to `<root>/<agentId>`. `openclaw doctor --fix` records
-`agents.entries.<agentId>.workspace` as `<root>/<agentId>`, never as the shared
-root, which also holds the other agents' workspaces. The pin keeps the root as
-you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`), so changing that
-variable moves defaults and pin together, including when `agents.defaults`
-comes from an `$include` file.
+(`agents.defaults.systemAgent.agentId`) without `workspace`, so its persona,
+bootstrap, and memory files resolve to its own directory while older releases
+kept them in the launch workspace. `openclaw doctor --fix` copies the agent's
+files into one of the two and records it as `agents.entries.<agentId>.workspace`:
 
-When the root holds the agent's files, Doctor first copies them into
-`<root>/<agentId>`: a customized `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or
-`USER.md`, `MEMORY.md`, and the files under `memory/` and `skills/` (a symbolic
-link there is recreated pointing at the same target). A seeded
-template in `<root>/<agentId>` is replaced; a customized file there is kept,
-and Doctor names each file it kept whose root copy differs. Nothing is moved or
-deleted, so the root keeps every original. Doctor skips a root another agent
-already resolves to, and only warns when the roster lives in an included file.
+- With `agents.defaults.workspace` set, Doctor pins `<root>/<agentId>`, never
+  the shared root, which also holds the other agents' workspaces. The pin keeps
+  the root as you wrote it (`${WORKSPACE_ROOT}/<agentId>`, `~/x/<agentId>`), so
+  changing that variable moves defaults and pin together, including when
+  `agents.defaults` comes from an `$include` file.
+- Without it, Doctor pins the launch workspace, so the agent's working
+  directory does not change.
 
-A stored session of the agent can hold a CLI-backend conversation, which is
-tied to the working directory it started in. For a `claude-cli` conversation,
-Doctor copies its transcript into the Claude project folder of
-`<root>/<agentId>` (the original stays in place; an earlier copy that the
-conversation has since grown past is refreshed) and removes the recorded
-working directory from the session's binding. Both folders then hold the
-transcript, so the next turn resumes the same conversation with its history in
-whichever directory it runs, even if the config write is refused, and records
-that directory again. A `claude-cli` conversation recorded in another
-directory already starts fresh in the root, so Doctor leaves it unchanged. For
-any other backend, a `claude-cli` conversation whose transcript Doctor cannot
-read in the root's Claude project folder or whose copy in `<root>/<agentId>`
-holds turns the root's lacks or is not a regular file, or a conversation kept
-in a legacy `sessions.json` store, Doctor writes nothing and warns with the
-value to set, because that conversation would start fresh without resuming
-history.
+Doctor copies a customized `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, or `USER.md`,
+`MEMORY.md`, and the files under `memory/` and `skills/` (a symbolic link there
+is recreated pointing at the same target). A seeded template in the pinned
+directory is replaced; a customized file there is kept, and Doctor names each
+file it kept whose other copy differs. Nothing is moved or deleted. Doctor
+skips copying from a root another agent already resolves to, and only warns
+when the roster lives in an included file.
 
 `openclaw doctor` without `--fix` only describes the copies. If you accept its
 "Apply recommended config repairs now?" prompt, Doctor makes them before the
