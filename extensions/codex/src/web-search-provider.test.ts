@@ -4,6 +4,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
+import {
+  threadStartResult as baseThreadStartResult,
+  turnStartResult as baseTurnStartResult,
+} from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import {
   isJsonObject,
@@ -42,53 +46,21 @@ function codexModel(
 }
 
 function threadStartResult(model: string) {
+  const result = baseThreadStartResult("thread-1", "/tmp/openclaw-agent");
   return {
+    ...result,
     thread: {
-      id: "thread-1",
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
+      ...result.thread,
       ephemeral: true,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp/openclaw-agent",
-      projectId: null,
       cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
     },
     model,
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/tmp/openclaw-agent",
-    instructionSources: [],
     approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
   };
 }
 
 function turnStartResult(status = "inProgress") {
-  return {
-    turn: {
-      id: "turn-1",
-      status,
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  return baseTurnStartResult("turn-1", status);
 }
 
 function createFakeClient(options?: {
@@ -106,43 +78,27 @@ function createFakeClient(options?: {
       return threadStartResult(params.model);
     }
     if (method === "turn/start") {
-      for (const notify of notifications) {
+      const scope = { threadId: "thread-1", turnId: "turn-1" };
+      for (const handler of notifications) {
+        const notify = (eventMethod: string, eventParams: JsonValue) =>
+          handler({ method: eventMethod, params: eventParams });
         if (options?.emitWebSearch !== false) {
-          notify({
-            method: "item/completed",
-            params: {
-              threadId: "thread-1",
-              turnId: "turn-1",
-              item: {
-                id: "search-1",
-                type: "webSearch",
-                query: "plumbers in Edmonton Alberta",
-                action: {
-                  type: "search",
-                  query: "plumbers in Edmonton Alberta",
-                  queries: ["plumbers in Edmonton Alberta"],
-                },
-              },
+          notify("item/completed", {
+            ...scope,
+            item: {
+              id: "search-1",
+              type: "webSearch",
+              query,
+              action: { type: "search", query, queries: [query] },
             },
           });
         }
-        notify({
-          method: "item/agentMessage/delta",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "msg-1",
-            delta: "Two current providers: Example One and Example Two.",
-          },
+        notify("item/agentMessage/delta", {
+          ...scope,
+          itemId: "msg-1",
+          delta: "Two current providers: Example One and Example Two.",
         });
-        notify({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: turnStartResult("completed").turn,
-          },
-        });
+        notify("turn/completed", { ...scope, turn: turnStartResult("completed").turn });
       }
       return turnStartResult();
     }
@@ -164,6 +120,7 @@ function createFakeClient(options?: {
   return { client, requests };
 }
 
+const query = "plumbers in Edmonton Alberta";
 function createConfig(): OpenClawConfig {
   return {
     tools: {
@@ -196,6 +153,14 @@ function createSearchTool(provider: ReturnType<typeof createCodexWebSearchProvid
     searchConfig: config.tools?.web?.search,
     agentDir: "/tmp/openclaw-agent",
   });
+}
+
+function searchFixture(options?: Parameters<typeof createFakeClient>[0]) {
+  const fixture = createFakeClient(options);
+  const tool = createSearchTool(
+    createCodexWebSearchProvider({ clientFactory: async () => fixture.client }),
+  );
+  return { ...fixture, tool };
 }
 
 describe("codex web search provider", () => {
@@ -371,13 +336,9 @@ describe("codex web search provider", () => {
   });
 
   it("fails closed when the live catalog has no text-capable model", async () => {
-    const { client, requests } = createFakeClient({
+    const { tool, requests } = searchFixture({
       models: [codexModel({ id: "image-only", inputModalities: ["image"] })],
     });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const tool = createSearchTool(provider);
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex app-server has no model supporting text input.",
@@ -386,11 +347,7 @@ describe("codex web search provider", () => {
   });
 
   it("fails closed when Codex returns an ungrounded answer", async () => {
-    const { client } = createFakeClient({ emitWebSearch: false });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const tool = createSearchTool(provider);
+    const { tool } = searchFixture({ emitWebSearch: false });
 
     await expect(tool?.execute({ query: "plumbers in Edmonton Alberta" })).rejects.toThrow(
       "Codex hosted search completed without invoking web search.",

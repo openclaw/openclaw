@@ -26,6 +26,45 @@ const sharedClientMocks = vi.hoisted(() => ({
 
 vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
 
+type ToolOptions = Parameters<typeof createCodexSupervisionTools>[0];
+const sessionParams = { endpoint_id: "local", thread_id: "thread-1" };
+const readConfig = () => ({
+  appServer: { homeScope: "agent" as const },
+  supervision: { enabled: true, allowRawTranscripts: true },
+});
+const writeConfig = (command = "codex-a", allowWriteControls = true) => ({
+  supervision: {
+    enabled: true,
+    allowWriteControls,
+    endpoints: [{ id: "local", transport: "stdio-proxy" as const, command }],
+  },
+});
+
+function createTool(
+  name: string,
+  getPluginConfig: ToolOptions["getPluginConfig"],
+  options: Partial<ToolOptions> = {},
+) {
+  return createCodexSupervisionTools({
+    getPluginConfig,
+    senderIsOwner: true,
+    env: {},
+    resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
+    resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+    resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
+    ...options,
+  }).find((candidate) => candidate.name === name)!;
+}
+
+function respondingClient(result: (method: string) => unknown) {
+  return createClientHarness({
+    onWrite(line, send) {
+      const { id, method } = JSON.parse(line) as { id: number; method: string };
+      send({ id, result: result(method) });
+    },
+  });
+}
+
 describe("Codex supervision request lifetime", () => {
   beforeEach(() => {
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
@@ -33,33 +72,17 @@ describe("Codex supervision request lifetime", () => {
   });
 
   it("uses the injected account selection at the final request guard", async () => {
-    const pluginConfig = {
-      appServer: { homeScope: "agent" as const },
-      supervision: { enabled: true, allowRawTranscripts: true },
-    };
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const request = JSON.parse(line) as { id: number };
-        send({
-          id: request.id,
-          result: { thread: { id: "thread-1", status: { type: "idle" } } },
-        });
-      },
-    });
+    const harness = respondingClient(() => ({
+      thread: { id: "thread-1", status: { type: "idle" } },
+    }));
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     const resolveAuthProfileIdAtEffect = vi.fn(() => "synthetic:account");
-    const tool = createCodexSupervisionTools({
-      getPluginConfig: () => pluginConfig,
-      senderIsOwner: true,
-      env: {},
+    const tool = createTool("codex_session_read", readConfig, {
       resolveAuthProfileId: async () => "synthetic:account",
       resolveAuthProfileIdAtEffect,
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-    }).find((candidate) => candidate.name === "codex_session_read")!;
+    });
     try {
-      await expect(
-        tool.execute("read", { endpoint_id: "local", thread_id: "thread-1" }),
-      ).resolves.toMatchObject({
+      await expect(tool.execute("read", sessionParams)).resolves.toMatchObject({
         details: { response: { thread: { id: "thread-1" } } },
       });
       expect(resolveAuthProfileIdAtEffect).toHaveBeenCalled();
@@ -74,10 +97,7 @@ describe("Codex supervision request lifetime", () => {
     ),
   )("$toolName honors policy revocation at $timing", async ({ toolName, timing }) => {
     const privateText = "private transcript contents";
-    let pluginConfig = {
-      appServer: { homeScope: "agent" as const },
-      supervision: { enabled: true, allowRawTranscripts: true },
-    };
+    let pluginConfig = readConfig();
     let responseReturned = false;
     const revoke = () => {
       pluginConfig = {
@@ -88,37 +108,27 @@ describe("Codex supervision request lifetime", () => {
         },
       };
     };
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const request = JSON.parse(line) as { id: number; method: string };
-        if (request.method === "thread/read" || toolName === "codex_endpoint_probe") {
-          responseReturned = true;
-          if (timing === "response") {
-            revoke();
-          }
+    const harness = respondingClient((method) => {
+      if (method === "thread/read" || toolName === "codex_endpoint_probe") {
+        responseReturned = true;
+        if (timing === "response") {
+          revoke();
         }
-        send({
-          id: request.id,
-          result:
-            request.method === "thread/loaded/list"
-              ? { data: toolName === "codex_endpoint_probe" ? [] : ["thread-1"] }
-              : {
-                  thread: {
-                    id: "thread-1",
-                    status: { type: "idle" },
-                    preview: privateText,
-                    name: privateText,
-                    turns: [{ text: privateText }],
-                  },
-                },
-        });
-      },
+      }
+      return method === "thread/loaded/list"
+        ? { data: toolName === "codex_endpoint_probe" ? [] : ["thread-1"] }
+        : {
+            thread: {
+              id: "thread-1",
+              status: { type: "idle" },
+              preview: privateText,
+              name: privateText,
+              turns: [{ text: privateText }],
+            },
+          };
     });
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
-    const tool = createCodexSupervisionTools({
-      getPluginConfig: () => pluginConfig,
-      senderIsOwner: true,
-      env: {},
+    const tool = createTool(toolName, () => pluginConfig, {
       resolveAuthProfileId: async () => {
         if (responseReturned && timing === "final-auth") {
           revoke();
@@ -126,12 +136,9 @@ describe("Codex supervision request lifetime", () => {
         return "synthetic:account";
       },
       resolveAuthProfileIdAtEffect: () => "synthetic:account",
-      resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-    }).find((candidate) => candidate.name === toolName)!;
+    });
     try {
-      const { result, error } = await Promise.resolve(
-        tool.execute("read", { endpoint_id: "local", thread_id: "thread-1" }),
-      ).then(
+      const { result, error } = await Promise.resolve(tool.execute("read", sessionParams)).then(
         (value) => ({ result: value, error: undefined }),
         (cause: unknown) => ({ result: undefined, error: cause }),
       );
@@ -158,31 +165,18 @@ describe("Codex supervision request lifetime", () => {
     "keeps $method bound to current policy through client acquisition",
     async ({ toolName, method }) => {
       for (const change of ["none", "policy", "endpoint"] as const) {
-        let pluginConfig = {
-          supervision: {
-            enabled: true,
-            allowWriteControls: true,
-            endpoints: [{ id: "local", transport: "stdio-proxy" as const, command: "codex-a" }],
-          },
-        };
-        const harness = createClientHarness({
-          onWrite(line, send) {
-            const request = JSON.parse(line) as { id: number; method: string };
-            send({
-              id: request.id,
-              result:
-                request.method === "thread/read"
-                  ? {
-                      thread: {
-                        id: "thread-1",
-                        status: { type: "active" },
-                        turns: [{ id: "turn-1", status: "inProgress" }],
-                      },
-                    }
-                  : {},
-            });
-          },
-        });
+        let pluginConfig = writeConfig();
+        const harness = respondingClient((requestMethod) =>
+          requestMethod === "thread/read"
+            ? {
+                thread: {
+                  id: "thread-1",
+                  status: { type: "active" },
+                  turns: [{ id: "turn-1", status: "inProgress" }],
+                },
+              }
+            : {},
+        );
         const acquiringMutation = createDeferred<void>();
         const acquired = createDeferred<typeof harness.client>();
         sharedClientMocks.getLeasedSharedCodexAppServerClient
@@ -191,33 +185,15 @@ describe("Codex supervision request lifetime", () => {
             acquiringMutation.resolve();
             return acquired.promise;
           });
-        const tool = createCodexSupervisionTools({
-          getPluginConfig: () => pluginConfig,
-          senderIsOwner: true,
-          env: {},
-          resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-          resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
-          resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
-        }).find((candidate) => candidate.name === toolName)!;
-        const mutation = tool.execute("control", {
-          endpoint_id: "local",
-          thread_id: "thread-1",
-          text: "continue",
-        });
+        const tool = createTool(toolName, () => pluginConfig);
+        const mutation = tool.execute("control", { ...sessionParams, text: "continue" });
         void mutation.catch(() => {});
         try {
           await Promise.race([acquiringMutation.promise, mutation]);
           if (change === "policy") {
-            pluginConfig = {
-              supervision: { ...pluginConfig.supervision, allowWriteControls: false },
-            };
+            pluginConfig = writeConfig("codex-a", false);
           } else if (change === "endpoint") {
-            pluginConfig = {
-              supervision: {
-                ...pluginConfig.supervision,
-                endpoints: [{ id: "local", transport: "stdio-proxy", command: "codex-b" }],
-              },
-            };
+            pluginConfig = writeConfig("codex-b");
           }
           acquired.resolve(harness.client);
           if (change === "none") {
