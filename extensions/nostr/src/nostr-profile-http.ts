@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -91,12 +92,6 @@ function restoreProfileUpdateUrlInputs(profile: NostrProfile, value: unknown): N
     ...(typeof value.banner === "string" ? { banner: value.banner } : {}),
     ...(typeof value.website === "string" ? { website: value.website } : {}),
   };
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {

@@ -44,8 +44,9 @@ import type { FailoverReason } from "../failover/signal.js";
 import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
+import type { IsolatedCompletionPurpose } from "../isolated-completion-purpose.js";
 import type { ReplyExpectation } from "../reply-completion.js";
-import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
+import type { EmbeddedRunTrigger } from "../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -64,7 +65,6 @@ type CliSessionRetryParams = {
   sessionId: string;
 };
 
-/** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   /** Effective tool policy prepared by the trusted channel ingress owner. */
   conversationToolPolicy?: GroupToolPolicyConfig;
@@ -146,6 +146,8 @@ export type RunCliAgentParams = {
   onBeforeForkedCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+  /** An unbound scheduled run may use native login, never a host credential profile. */
+  nativeAuthOnly?: true;
   onBeforeFreshCliSessionRetry?: (params: CliSessionRetryParams) => boolean | Promise<boolean>;
   bootstrapContextMode?: BootstrapContextMode;
   chatId?: string;
@@ -232,7 +234,6 @@ export function captureCliRunStartTime() {
   return { started: Date.now(), startedMonotonicMs: performance.now() };
 }
 
-/** Fully prepared execution context consumed by the CLI runner executor. */
 export type PreparedCliRunContext = {
   params: RunCliAgentParams & { admittedRunContext: AdmittedRunContext };
   /** Original host policy, retained before native tool translation consumes runtime caps. */

@@ -46,9 +46,7 @@ function createToolHandlerCtx(params: {
       onBlockReplyFlush: params.onBlockReplyFlush,
     },
     hookRunner: hookMocks.runner,
-    state: {
-      ...createBaseToolHandlerState(),
-    },
+    state: createBaseToolHandlerState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,

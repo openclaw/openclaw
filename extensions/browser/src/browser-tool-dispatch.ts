@@ -32,6 +32,7 @@ import {
   type BrowserScreenshotOptions,
 } from "./browser-tool.screenshot.js";
 import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
+import type { BrowserActionOk } from "./browser/client-actions-types.js";
 import {
   browserAct,
   browserArmDialog,
@@ -96,8 +97,11 @@ export async function executeBrowserTabAction(context: {
     await sessionTabs.touch(targetId);
     await context.onTabActivity(targetId);
   };
-  const trackedTabResult = async (result: unknown, targetId?: string) => {
-    await touchTab(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
+  const trackedTabResult = async (
+    result: BrowserActionOk & { targetId?: string },
+    targetId?: string,
+  ) => {
+    await touchTab(readStringValue(result.targetId) ?? targetId);
     return jsonResult(result);
   };
   const target = proxyRequest ?? baseUrl;
@@ -133,8 +137,8 @@ export async function executeBrowserTabAction(context: {
       };
       await sessionTabs.trackOpened(opened, closeOpenedTab);
       await context.onTabActivity(
-        readStringValue(asNullableRecord(opened)?.targetId),
-        readStringValue(asNullableRecord(opened)?.resolvedProfile),
+        readStringValue(opened.targetId),
+        readStringValue(opened.resolvedProfile),
       );
       return formatBrowserExternalToolResult({
         kind: "tabs",
@@ -153,7 +157,7 @@ export async function executeBrowserTabAction(context: {
       const result = targetId
         ? await browserCloseTab(target, targetId, clientOptions)
         : await browserAct(target, { kind: "close" }, clientOptions);
-      await sessionTabs.untrack(readStringValue(asNullableRecord(result)?.targetId) ?? targetId);
+      await sessionTabs.untrack(readStringValue(result.targetId) ?? targetId);
       return jsonResult(result);
     }
     case "snapshot":
@@ -178,15 +182,15 @@ export async function executeBrowserTabAction(context: {
         profile,
         signal,
       });
-      const navigatedTargetId = readStringValue(asNullableRecord(result)?.targetId) ?? targetId;
+      const navigatedTargetId = readStringValue(result.targetId) ?? targetId;
       await touchTab(navigatedTargetId);
       const formatted = formatBrowserExternalToolResult({
-        kind: asNullableRecord(result)?.download ? "download" : "act",
+        kind: result.download ? "download" : "act",
         payload: result,
       });
       // A navigation that resolved to a download leaves the document
       // unchanged, so inline page state would describe the wrong thing.
-      if (asNullableRecord(result)?.download) {
+      if (result.download) {
         return formatted;
       }
       return await appendNavigatedPageState({

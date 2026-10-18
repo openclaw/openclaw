@@ -2,9 +2,8 @@ import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/str
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
-import { claimUnprocessedFeishuMessage, forgetProcessedFeishuMessage } from "./dedup.js";
+import { claimUnprocessedFeishuMessage } from "./dedup.js";
 import { botOpenIds } from "./monitor.state.js";
-import { isFeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 
 export function createFeishuBotMenuHandler(params: {
   cfg: ClawdbotConfig;
@@ -70,11 +69,9 @@ export function createFeishuBotMenuHandler(params: {
         return;
       }
       if (claim.kind === "duplicate") {
-        log(`feishu[${accountId}]: dropping duplicate bot-menu event for ${syntheticMessageId}`);
         return;
       }
       if (claim.kind === "inflight") {
-        log(`feishu[${accountId}]: dropping in-flight bot-menu event for ${syntheticMessageId}`);
         return;
       }
       const handleLegacyMenu = () =>
@@ -115,12 +112,7 @@ export function createFeishuBotMenuHandler(params: {
           return handleLegacyMenu();
         })
         .catch(async (err: unknown) => {
-          if (isFeishuRetryableSyntheticEventError(err)) {
-            await forgetProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            if (claim.kind === "claimed") {
-              claim.handle.release({ error: err });
-            }
-          } else if (claim.kind === "claimed") {
+          if (claim.kind === "claimed") {
             await claim.handle.commit();
           }
           throw err;

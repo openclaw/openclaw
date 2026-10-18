@@ -1,7 +1,3 @@
-/**
- * Session listing keeps whole-store materialization, sharing refreshes, and
- * transcript projection work bounded at their owning storage boundaries.
- */
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -13,6 +9,11 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+/**
+ * Session listing keeps whole-store materialization, sharing refreshes, and
+ * transcript projection work bounded at their owning storage boundaries.
+ */
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -122,19 +123,25 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
   const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
   const projection = await createSessionRowProjection({ cfg });
+  const context = {
+    getRuntimeConfig: () => cfg,
+    ...bindSessionRowProjection({}, () => projection),
+  };
   try {
+    const initial = await directSessionReq<SessionsListResult>(
+      "sessions.list",
+      { includeDerivedTitles: true, includeLastMessage: true, limit: agentIds.length },
+      { context },
+    );
+    expect(initial.ok).toBe(true);
+    expect(initial.payload?.sessions).toHaveLength(agentIds.length);
     await backfilled;
     await projection.ensureMaterialized();
     for (const limit of [undefined, 100]) {
       const result = await directSessionReq<SessionsListResult>(
         "sessions.list",
         { includeDerivedTitles: true, includeLastMessage: true, limit },
-        {
-          context: {
-            getRuntimeConfig: () => cfg,
-            ...bindSessionRowProjection({}, () => projection),
-          },
-        },
+        { context },
       );
 
       expect(result.ok).toBe(true);
@@ -235,9 +242,13 @@ test("sessions.list projects out prompt snapshots without changing full entry re
           )
           .run("agent:main:zz-malformed", "malformed", "{", Date.now());
       },
-      database.db,
+      requireNativeSqliteDatabase(database.db),
     );
-    reads = trackSqliteStatementExecutions(database.db, ["sessionStore"], () => "sessionStore");
+    reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["sessionStore"],
+      () => "sessionStore",
+    );
     decode.mockClear();
 
     const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {

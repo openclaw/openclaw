@@ -296,4 +296,14 @@ describe("addGatewayServiceCommands", () => {
       localPortOverride: 19002,
     });
   });
+
+  it("routes local runtime intent status without requesting the diagnostic graph", async () => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    await gateway.parseAsync(["status", "--runtime-intent-only", "--json"], { from: "user" });
+    expect(expectSingleDaemonCall(runDaemonStatus)).toMatchObject({
+      runtimeIntentOnly: true,
+      json: true,
+      deep: false,
+    });
+  });
 });

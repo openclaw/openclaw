@@ -18,6 +18,7 @@ import {
   runProviderChannelLoginFlow,
 } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
   prepareSessionEntryPatch,
@@ -26,9 +27,9 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
 
@@ -87,7 +88,7 @@ export async function executeTelegramLoginCommand(params: {
       String(++deliveredReply),
     );
   };
-  const assertCurrent = (config = dispatch.telegramDeps.getRuntimeConfig()) => {
+  const assertCurrent = (config = getRuntimeConfig()) => {
     dispatch.assertOwnerCurrent?.();
     const authorization = resolveCommandAuthorization({
       cfg: config,
@@ -124,7 +125,7 @@ export async function executeTelegramLoginCommand(params: {
     refreshAuth: () =>
       refreshProviderLoginAuthState({
         agentId: dispatch.route.agentId,
-        readConfig: dispatch.telegramDeps.getRuntimeConfig,
+        readConfig: getRuntimeConfig,
         assertCurrent: (config) => {
           dispatch.opts.accountAbortSignal?.throwIfAborted();
           assertCurrent(config);
@@ -136,7 +137,7 @@ export async function executeTelegramLoginCommand(params: {
         ...flow,
         command,
         agentId: dispatch.route.agentId,
-        readConfig: dispatch.telegramDeps.getRuntimeConfig,
+        readConfig: getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: dispatch.opts.accountAbortSignal,
         assertCurrent,
@@ -191,13 +192,10 @@ export async function executeTelegramLoginCommand(params: {
         }),
       });
       const loginResult = await runProviderChannelLoginFlow({
-        runLoginFlow:
-          dispatch.telegramDeps.runModelsAuthLoginFlow ??
-          defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
         choice: loginChoice,
         agentId: dispatch.route.agentId,
         config: dispatch.runtimeCfg,
-        readConfig: dispatch.telegramDeps.getRuntimeConfig,
+        readConfig: getRuntimeConfig,
         runtime: dispatch.runtime,
         signal: flowSignal,
         assertCurrent,
@@ -309,7 +307,8 @@ export async function executeTelegramLoginCommand(params: {
         });
         await sendLoginAction(() => sendLoginReply(reply));
       } else {
-        await dispatch.telegramDeps.sendMessageTelegram(
+        const { sendMessageTelegram } = await loadTelegramSendModule();
+        await sendMessageTelegram(
           buildTelegramRoutingTarget(dispatch.chatId, dispatch.threadSpec),
           terminalMessage,
           {

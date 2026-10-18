@@ -106,15 +106,20 @@ export async function enqueueRun(
   state: CronServiceState,
   id: string,
   mode?: CronRunMode,
-  opts?: { commitGuard?: () => void },
+  opts?: Pick<ManualRunOptions, "commitGuard" | "event" | "onEventTransferred" | "runId">,
 ) {
-  const runId = `cron-request.${randomUUID()}`;
+  const runId = opts?.runId ?? `cron-request.${randomUUID()}`;
   const releaseCaller = retainGatewayDeviceRevocation(opts?.commitGuard);
   const trackAdmission = captureCronRunAdmissionTracker();
   return runWithoutOwnedSessionTranscriptWrites(() =>
     runWithGatewayIndependentRootWorkContinuation(async () => {
+      let eventTransferred = false;
       const result = await requestManualCronRun(state, id, mode, {
         ...opts,
+        onEventTransferred: (receipt) => {
+          eventTransferred = true;
+          opts?.onEventTransferred?.(receipt);
+        },
         runId,
         scheduleOwnershipAtMs: state.deps.nowMs(),
         terminalTracker: { emitted: false },
@@ -143,6 +148,13 @@ export async function enqueueRun(
           state.queuedManualRuns.delete(runId);
         });
       state.queuedManualRuns.set(runId, completion);
+      if (opts?.event) {
+        // Ingress owns the immutable event until activation and tombstone commit together.
+        await result.requested.activation;
+        if (!eventTransferred) {
+          return result.requested.completion;
+        }
+      }
       return { ok: true, enqueued: true, runId } as const;
     }, "cron:manual-run"),
   ).catch((error: unknown) => {

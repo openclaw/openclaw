@@ -1,4 +1,5 @@
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it } from "vitest";
 import {
   installMockGateway,
@@ -6,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
   captureSidebarUiProof,
@@ -282,13 +284,17 @@ suite.define(() => {
       const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
       const selectedValue = await selected.getAttribute("data-value");
+      const selectedLabel = await picker.locator(".picker-select__trigger").textContent();
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
       await expect
         .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
         .toBe("false");
+      expect(await picker.locator(".picker-select__trigger").textContent()).toBe(selectedLabel);
+      await picker.locator(".picker-select__trigger").click();
       expect(await selected.getAttribute("data-value")).toBe(selectedValue);
+      await page.keyboard.press("Escape");
       expect(
         await picker
           .locator(".picker-select__trigger")
@@ -475,12 +481,23 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      awaitInitialRoster: false,
       featureMethods: ["system.info"],
       methodResponses: { "system.info": deviceSystemInfo },
     });
 
     try {
+      const routeModule = await holdModuleResponse(
+        page,
+        /\/assets\/connection-page-[^/]+\.js(?:\?|$)/u,
+      );
       await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await routeModule.request;
+      await page.bringToFront();
+      await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe("visible");
+      // The route must start diagnostics even when connection and focus precede its mount.
+      await gateway.waitForRequest("connect");
+      routeModule.release();
 
       const gatewayUrl = page.getByLabel("Gateway URL", { exact: true });
       const credential = page.getByLabel("Gateway secret", { exact: true });
@@ -504,7 +521,39 @@ suite.define(() => {
       expect(await credential.inputValue()).toBe("browser-proof-secret");
       expect(await credential.isEditable()).toBe(true);
 
-      await gateway.waitForRequest("system.info");
+      try {
+        await gateway.waitForRequest("system.info");
+      } catch (error) {
+        try {
+          const [browser, systemInfoRequestCount, heartbeatRequestCount] = await withTimeout(
+            Promise.all([
+              page.evaluate(() => {
+                const host = document.querySelector("openclaw-connection-page");
+                const systemInfoSection = host?.querySelector("#settings-connection-host");
+                return {
+                  visibilityState: document.visibilityState,
+                  hasFocus: document.hasFocus(),
+                  connectionHostPresent: host !== null,
+                  connectionHostConnected: host?.isConnected ?? null,
+                  systemInfoSectionPresent: Boolean(systemInfoSection),
+                  systemInfoSectionBusy: systemInfoSection?.getAttribute("aria-busy") === "true",
+                };
+              }),
+              gateway.getRequests("system.info").then((requests) => requests.length),
+              gateway.getRequests("last-heartbeat").then((requests) => requests.length),
+            ]),
+            5_000,
+            "connection system.info failure diagnostics",
+          );
+          console.error(
+            "[sidebar-settings] initial system.info wait failed",
+            JSON.stringify({ ...browser, systemInfoRequestCount, heartbeatRequestCount }),
+          );
+        } catch {
+          console.error("[sidebar-settings] initial system.info diagnostics unavailable");
+        }
+        throw error;
+      }
       const reads = (await gateway.getRequests("system.info")).length;
       const connections = (await gateway.getRequests("connect")).length;
       await gateway.deferNext("connect");

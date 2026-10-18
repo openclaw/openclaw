@@ -4,6 +4,24 @@ import { expect, it } from "vitest";
 import type { createQaGatewayChild } from "./gateway-child.js";
 import type { createTempDirHarness } from "./temp-dir.test-helper.js";
 
+export function makeQaRuntimeEnvParams(baseEnv?: NodeJS.ProcessEnv) {
+  return {
+    configPath: "/tmp/openclaw-qa/openclaw.json",
+    gatewayToken: "qa-token",
+    homeDir: "/tmp/openclaw-qa/home",
+    stateDir: "/tmp/openclaw-qa/state",
+    tempRoot: "/tmp/openclaw-qa",
+    xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
+    xdgDataHome: "/tmp/openclaw-qa/xdg-data",
+    xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
+    bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
+    stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
+    compatibilityHostVersion: "2026.4.8",
+    developmentSourceRoot: "/repo/openclaw",
+    baseEnv,
+  };
+}
+
 export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): string {
   return [
     'const fs = require("node:fs");',
@@ -166,8 +184,7 @@ process.exit(17);
 }
 
 export async function readJsonLines(filePath: string): Promise<Array<Record<string, unknown>>> {
-  const contents = await readFile(filePath, "utf8");
-  return contents
+  return (await readFile(filePath, "utf8"))
     .trim()
     .split("\n")
     .filter(Boolean)

@@ -55,7 +55,7 @@ describe("persistent sidebar projections", () => {
     vi.unstubAllGlobals();
   });
 
-  it("discards pre-rail-identity sidebar snapshots while retaining cached transcripts", async () => {
+  it("retires pre-rail-identity sidebars and unbounded transcripts", async () => {
     const request = indexedDB.open(CHAT_SNAPSHOT_DB_NAME, 6);
     request.addEventListener("upgradeneeded", () => {
       for (const name of [
@@ -88,9 +88,9 @@ describe("persistent sidebar projections", () => {
       throw new Error("expected snapshot database");
     }
     const read = upgraded.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-    expect(await requestResult(read.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey))).toEqual(
-      transcript,
-    );
+    expect(
+      await requestResult(read.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey)),
+    ).toBeUndefined();
     await transactionComplete(read);
     upgraded.close();
   });

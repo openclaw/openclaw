@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -18,7 +18,7 @@ import {
   type CanonicalSessionValidationRow,
 } from "./session-canonical-row.js";
 
-type ValidationDatabase = { agentId: string; db: DatabaseSync };
+type ValidationDatabase = { agentId: string; db: EngineConnection };
 type PendingDatabase = Pick<DB, "session_nodes" | "session_canonical_validation_pending">;
 
 export type CanonicalSessionValidationBatch = {
@@ -97,7 +97,7 @@ export function readPendingCanonicalSessionValidationBatch(
         .select("pending.session_key")
         .select(
           // kysely-allow-raw: bound native TEXT bytes before materializing saved prompt payloads.
-          sql<number>`length(CAST(pending.session_key AS BLOB)) + coalesce(length(CAST(node.entry_json AS BLOB)), 0) + coalesce(length(CAST(node.current_session_id AS BLOB)), 0) * 2 + coalesce(length(CAST(node.parent_session_key AS BLOB)), 0) + coalesce(length(CAST(node.spawned_by AS BLOB)), 0) + coalesce(length(CAST(node.fork_source_session_key AS BLOB)), 0)`.as(
+          sql<number>`octet_length(pending.session_key) + coalesce(octet_length(node.entry_json), 0) + coalesce(octet_length(node.current_session_id), 0) * 2 + coalesce(octet_length(node.parent_session_key), 0) + coalesce(octet_length(node.spawned_by), 0) + coalesce(octet_length(node.fork_source_session_key), 0)`.as(
             "bytes",
           ),
         )

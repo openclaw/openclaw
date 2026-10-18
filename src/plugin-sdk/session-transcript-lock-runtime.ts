@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
+import { warnSessionTranscriptPreparationDeprecation } from "../plugins/compat/session-transcript-preparation-deprecation.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -51,9 +52,18 @@ export async function withProjectedSessionTranscriptWriteLock<
     locked: SessionTranscriptWriteLockAccessorContext,
   ) => TContext,
   mode: "lock" | "sequence" = "lock",
+  legacyMethod:
+    | "withSessionTranscriptWriteLock"
+    | "withCodexSessionTranscriptMirrorWriteLock" = "withSessionTranscriptWriteLock",
 ): Promise<T> {
   if (mode === "lock") {
     assertLegacyTranscriptPreparation(params);
+    warnSessionTranscriptPreparationDeprecation(
+      legacyMethod,
+      legacyMethod === "withCodexSessionTranscriptMirrorWriteLock"
+        ? "withCodexSessionTranscriptMirrorWrite"
+        : "withSessionTranscriptWrite",
+    );
   }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(params, params.config);
   const agentId = normalizeAgentId(storageTarget.agentId);

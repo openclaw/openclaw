@@ -61,6 +61,7 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   readonly creationIdentity?: DatabasePathIdentity;
+  getPendingPreparation(): Promise<void> | undefined;
   borrow(
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
@@ -73,16 +74,19 @@ export type AgentDatabaseFileExecutionOwner = {
 };
 
 export type AgentDatabaseNativeGeneration = {
-  failure(): "open-refused" | "native" | undefined;
+  /** Established worker loss permits later native replacement; fatal opening failure does not. */
+  failure(): "open-refused" | "native" | "lost" | undefined;
   isPrepared(): boolean;
-  captureClaim(): AgentDatabaseGenerationClaim;
+  /** Settle a canceled caller's initial open before a successor can replace its generation. */
+  getPendingNativeOpen(): Promise<void> | undefined;
+  getPendingPreparation(): Promise<void> | undefined;
+  captureClaim(assertBorrowed: () => void): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
-    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };

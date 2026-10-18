@@ -529,7 +529,6 @@ describe("cron run receipt store", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId!,
       }),
     );
     await saveCronStore(storePath, {

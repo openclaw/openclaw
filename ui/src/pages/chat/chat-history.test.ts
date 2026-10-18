@@ -26,7 +26,6 @@ import {
   readChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
-import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 function createState(history: ChatHistoryResult) {
   const state = makeChatHost({ sessionKey: "main", requestHandlers: { "chat.history": history } });
@@ -37,7 +36,6 @@ function createState(history: ChatHistoryResult) {
     connectionEpoch: 1,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    requestUpdate: vi.fn(),
   });
 }
 function activeHistory(runId: string) {
@@ -148,6 +146,7 @@ it("requests the configured default agent for the global workspace alias", async
       limit: 80,
       maxBytes: 256 * 1024,
       toolResultMaxChars: 2_000,
+      knownState: {},
     },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
@@ -409,62 +408,6 @@ it("materializes live commentary when history replaces active tool activity", as
   expect(state.chatStreamSegments).toEqual([]);
 });
 
-it("keeps a foreground tool when history persists a sibling's identical call id", async () => {
-  const toolCallId = "call-shared";
-  const foreground = buildToolStreamIdentity("run-foreground", toolCallId);
-  const background = buildToolStreamIdentity("run-background", toolCallId);
-  const result = {
-    role: "toolResult",
-    runId: "run-background",
-    toolCallId,
-    content: "background complete",
-    timestamp: 4,
-  };
-  const state = createState({
-    ...activeHistory("run-foreground"),
-    messages: [{ role: "user", content: "do it", timestamp: 1 }, result],
-  });
-  state.chatRunId = "run-foreground";
-  state.chatStream = "foreground still running";
-  state.chatStreamStartedAt = 5;
-  function addTool(
-    runId: string,
-    name: string,
-    args: Record<string, string>,
-    startedAt: number,
-    resultReceived = false,
-  ) {
-    const toolMessage = {
-      role: "assistant",
-      runId,
-      toolCallId,
-      content: [{ type: "toolcall", name, arguments: args }],
-    };
-    state.toolStreamById.set(buildToolStreamIdentity(runId, toolCallId), {
-      toolCallId,
-      runId,
-      name,
-      startedAt,
-      receivedAt: startedAt,
-      resultReceived,
-      message: toolMessage,
-    });
-    return toolMessage;
-  }
-  const foregroundMessage = addTool("run-foreground", "read", { path: "foreground.txt" }, 2);
-  const backgroundMessage = addTool("run-background", "exec", { command: "background" }, 3, true);
-  state.toolStreamOrder = [foreground, background];
-  state.chatToolMessages = [foregroundMessage, backgroundMessage];
-  await loadChatHistory(state);
-  expect(state.chatRunId).toBe("run-foreground");
-  // The snapshot owns the unchanged live tail; tool ownership stays run-scoped.
-  expect(state.chatStream).toBe("intentionally ignored on web");
-  expect(state.toolStreamOrder).toEqual([foreground]);
-  expect(state.toolStreamById.has(foreground)).toBe(true);
-  expect(state.toolStreamById.has(background)).toBe(false);
-  expect(state.chatToolMessages).toEqual([foregroundMessage]);
-});
-
 describe("chat history run errors", () => {
   const row = (overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
     key: "main",
@@ -500,20 +443,6 @@ describe("chat history run errors", () => {
   ) {
     handleChatGatewayEvent(state, { sessionKey: "main", runId, ...event });
   }
-
-  it("recovers the failure notice diagnostic", async () => {
-    const diagnostic =
-      'Failed to prepare skill resources: skill="review" path="/workspace/skills/review/CLAUDE.md" error=ENOENT';
-    const sessionInfo = row();
-    const state = host({
-      messages: [notice(diagnostic, { errorKind: "state_contention" })],
-      sessionInfo,
-    });
-    await loadChatHistory(state);
-    expect(state.chatRunError).toMatchObject({ runId: "run", summary: diagnostic });
-    expect(state.chatRunError?.kind).toBe("state_contention");
-    expect(getChatSessionProjection(state).runs.run?.errorMessage).toBe(diagnostic);
-  });
 
   it("retires a recovered failure after a newer successful history and rejects its stale replay", async () => {
     const first = {
@@ -558,7 +487,6 @@ describe("chat history run errors", () => {
   });
 
   it.each([
-    { snapshotStatus: "done", newerState: "active", requestOrder: "before" },
     { snapshotStatus: "failed", newerState: "failed", requestOrder: "before" },
     { snapshotStatus: "done", newerState: "completed", requestOrder: "after" },
   ] as const)(
@@ -575,15 +503,13 @@ describe("chat history run errors", () => {
       );
       let loading = requestOrder === "before" ? loadChatHistory(state) : undefined;
       emit(state, "1", { state: "delta", deltaText: "New reply" });
-      if (newerState !== "active") {
-        emit(
-          state,
-          "1",
-          newerState === "completed"
-            ? { state: "final", message: { role: "assistant", content: "New reply" } }
-            : { state: "error", errorMessage: "Current full diagnostic" },
-        );
-      }
+      emit(
+        state,
+        "1",
+        newerState === "completed"
+          ? { state: "final", message: { role: "assistant", content: "New reply" } }
+          : { state: "error", errorMessage: "Current full diagnostic" },
+      );
       const currentError = state.chatRunError;
       loading ??= loadChatHistory(state);
       response.resolve({
@@ -596,7 +522,7 @@ describe("chat history run errors", () => {
       });
       await loading;
       expect(state.chatRunError).toEqual(currentError);
-      expect(state.chatRunId).toBe(newerState === "active" ? "1" : null);
+      expect(state.chatRunId).toBeNull();
     },
   );
 

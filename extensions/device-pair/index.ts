@@ -648,8 +648,8 @@ export default definePluginEntry({
 
         if (channel === "telegram" && target) {
           try {
-            const runtimeKeys = Object.keys(api.runtime ?? {});
-            const channelKeys = Object.keys(api.runtime?.channel ?? {});
+            const runtimeKeys = Object.keys(api.runtime);
+            const channelKeys = Object.keys(api.runtime.channel);
             api.logger.debug?.(
               `device-pair: runtime keys=${runtimeKeys.join(",") || "none"} channel keys=${
                 channelKeys.join(",") || "none"

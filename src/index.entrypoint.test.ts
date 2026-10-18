@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -13,6 +14,11 @@ const compileCache = vi.hoisted(() => ({
   enable: vi.fn<typeof import("node:module").enableCompileCache>(),
   directory: vi.fn<() => string | undefined>(),
   respawn: vi.fn<typeof import("../node-runtime-recovery.mjs").runRespawnedChild>(async () => true),
+}));
+// mock-isolation: These cases simulate different processes; real immutable roles have subprocess coverage.
+vi.mock("./infra/database-engine/admission-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/database-engine/admission-scope.js")>()),
+  installDatabaseProcessRole: vi.fn(),
 }));
 vi.mock("../node-runtime-recovery.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../node-runtime-recovery.mjs")>()),
@@ -194,9 +200,7 @@ describe("legacy package executable entrypoint", () => {
       }
       handler(new Error("owned failure"), "uncaughtException");
       expect(owner).toHaveBeenCalledExactlyOnceWith(1, "uncaught exception");
-      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception", {
-        resumeStdinIfPaused: false,
-      });
+      expect(runtime.restoreRuntimeTerminalState).toHaveBeenCalledWith("uncaught exception");
     } finally {
       releaseOwner();
       for (const listener of process.listeners("uncaughtException")) {
@@ -220,12 +224,18 @@ describe("legacy package executable entrypoint", () => {
     compileCache.directory.mockReturnValue(path.join(base, "node-version-leaf"));
     await import("./index.js?inherited-compile-cache" as "./index.js");
     expect(compileCache.respawn).toHaveBeenCalledOnce();
-    const [command, args, env] = expectDefined(
+    const [{ command, args, env }] = expectDefined(
       compileCache.respawn.mock.calls[0],
       "cache respawn call",
     );
     expect(command).toBe(process.execPath);
-    expect(args).toEqual([...process.execArgv, expect.stringMatching(/[\\/]index\.ts$/), "status"]);
+    expect(args).toEqual([
+      "--import",
+      CLI_PARENT_BOUND_PRELOAD,
+      ...process.execArgv,
+      expect.stringMatching(/[\\/]index\.ts$/),
+      "status",
+    ]);
     expect(env.NODE_COMPILE_CACHE).toContain(path.join(base, "openclaw"));
     expect(env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED).toBe("1");
     expect(compileCache.enable).not.toHaveBeenCalled();

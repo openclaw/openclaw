@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +86,10 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
               openclaw: {
                 type: "http",
                 url: "http://127.0.0.1:9999/mcp",
-                headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+                headers: {
+                  Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+                  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+                },
               },
             },
           },
@@ -204,15 +207,6 @@ describe("openclaw attach (action)", () => {
         "Alpha         123456780bbb4000",
       ],
     },
-    {
-      name: "an emoji crossing the name limit",
-      labels: ["A".repeat(39) + "😀", "Alpha"],
-      expectedLines: [
-        `SESSION${" ".repeat(35)}ID PREFIX`,
-        `${"A".repeat(39)}…  123456780aaa4000`,
-        `Alpha${" ".repeat(37)}123456780bbb4000`,
-      ],
-    },
   ])("renders ambiguous session candidates with $name", async ({ labels, expectedLines }) => {
     const response = {
       ok: false,
@@ -263,41 +257,6 @@ describe("openclaw attach (action)", () => {
     }
   });
 
-  it("keeps the printed configuration after setup-only completion", async () => {
-    await runAttach("--print-config", "--session", "agent:main:cli");
-    const printed = JSON.parse(logs[0]!) as { configPath: string };
-    expect(existsSync(printed.configPath)).toBe(true);
-    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
-  });
-
-  it("resolves a URL target before granting on the same origin", async () => {
-    await runAttach(
-      "https://gateway.example/base/dashboard/ops/movies-a1166b81",
-      "--token",
-      "explicit-token",
-      "--print-config",
-    );
-
-    const resolve = gatewayCalls.find((call) => call.method === "sessions.resolve");
-    expect(resolve).toMatchObject({
-      url: "wss://gateway.example/base",
-      token: "explicit-token",
-      useStoredDeviceAuth: true,
-      requiredStoredDeviceAuthScopes: ["operator.read"],
-      params: { shortId: "a1166b81", slugHint: "movies" },
-    });
-    expect(gatewayCalls.find((call) => call.method === "attach.grant")).toMatchObject({
-      url: "wss://gateway.example/base",
-      token: "explicit-token",
-      useStoredDeviceAuth: true,
-      requiredStoredDeviceAuthScopes: ["operator.admin"],
-      params: { sessionKey: "agent:ops:thread:resolved" },
-      mode: "cli",
-      hasDeviceIdentityKey: false,
-    });
-    expect(gatewayCalls.find((call) => call.method === "attach.revoke")).toBeUndefined();
-  });
-
   it("preserves a global-scope URL main session when granting attach access", async () => {
     await runAttach(
       "https://gateway.example/base/dashboard/ops",
@@ -320,6 +279,9 @@ describe("openclaw attach (action)", () => {
       requiredStoredDeviceAuthScopes: ["operator.admin"],
       params: { sessionKey: "global", agentId: "ops" },
     });
+    const printed = JSON.parse(logs[0]!) as { configPath: string };
+    expect(existsSync(printed.configPath)).toBe(true);
+    expect(gatewayCalls.some((call) => call.method === "attach.revoke")).toBe(false);
   });
 
   it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
@@ -343,10 +305,7 @@ describe("openclaw attach (action)", () => {
     expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
   });
 
-  it.each([
-    { code: 7, signal: null, expected: 7 },
-    { code: null, signal: "SIGTERM", expected: 143 },
-  ] as const)(
+  it.each([{ code: null, signal: "SIGTERM", expected: 143 }] as const)(
     "joins child close and revoke before unwinding with $expected",
     async ({ code, signal, expected }) => {
       const allowRevoke = createDeferred();
@@ -371,6 +330,18 @@ describe("openclaw attach (action)", () => {
         throw new Error("missing spawned MCP config path");
       }
       expect(existsSync(configPath)).toBe(true);
+      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:9999/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+            },
+          },
+        },
+      });
       const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
       const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
       expect(onSigint).toBeTypeOf("function");

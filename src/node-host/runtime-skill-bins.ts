@@ -2,7 +2,6 @@ import fs from "node:fs";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import type { NodeHostClient } from "./client.js";
-import type { SkillBinsProvider } from "./invoke-types.js";
 
 export function resolveExecutableTrustPathFromEnv(bin: string, pathEnv: string): string | null {
   if (bin.includes("/") || bin.includes("\\")) {
@@ -38,7 +37,7 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
   );
 }
 
-export class SkillBinsCache implements SkillBinsProvider {
+export class SkillBinsCache {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
   private refreshInFlight: Promise<void> | undefined;
@@ -70,3 +69,5 @@ export class SkillBinsCache implements SkillBinsProvider {
     }
   }
 }
+
+export type SkillBinsProvider = Pick<SkillBinsCache, "current">;

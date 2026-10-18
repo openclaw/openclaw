@@ -400,7 +400,7 @@ export function createReplyMediaSourcePreparer(
           );
         }
         prepared.push({ source, outcome: { failure } });
-        logVerbose(`dropping blocked reply media ${source}: ${String(error)}`);
+        logVerbose(`dropping blocked reply media: reason=${failure.code}`);
       }
     }
     return prepared;

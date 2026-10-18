@@ -40,10 +40,10 @@ describe("doctor bundled provider catalog validation", () => {
           if (!Array.isArray(rawModels) || models?.length !== rawModels.length) {
             throw new Error("Manifest catalog normalization dropped a provider or model row");
           }
-          // Runtime catalogs supply their own endpoints; only static catalogs
-          // are converted directly into provider configurations by discovery.
+          // Runtime catalogs supply endpoints; empty catalogs only declare credential
+          // ownership. Discovery converts only populated static catalogs into configs.
           const discovery = normalized?.discovery?.[providerId];
-          if (discovery !== "runtime" && discovery !== "refreshable") {
+          if (models.length > 0 && discovery !== "runtime" && discovery !== "refreshable") {
             buildManifestModelProviderConfig({ providerId, catalog });
           }
         } catch (error) {

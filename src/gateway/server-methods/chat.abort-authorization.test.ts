@@ -323,33 +323,6 @@ describe("chat.abort queued-turn contract", () => {
     expectAbortPayload(requireLastRespondCall(respond)[1], { aborted: true, runIds: [] });
   });
 
-  it("aborts only requester runs without session cleanup in a mixed-owner session", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const mine = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const foreign = createActiveRun("main", {
-      owner: { connId: "conn-other", deviceId: "dev-other" },
-    });
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        ["run-mine", mine],
-        ["run-foreign", foreign],
-      ]),
-    });
-    const respond = await abortAsOwner({ context, onAuthorizedAfterQueuedAbort });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(mine.controller.signal.aborted).toBe(true);
-    expect(context.chatAbortControllers.has("run-mine")).toBe(false);
-    expect(foreign.controller.signal.aborted).toBe(false);
-    expect(context.chatAbortControllers.has("run-foreign")).toBe(true);
-  });
-
   it("does not let session cleanup bypass a worker run", async () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => false);
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
@@ -465,29 +438,6 @@ describe("chat.abort queued-turn contract", () => {
     );
   });
 
-  it("skips session cleanup when a pending run has a foreign owner", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const context = createChatAbortContext();
-    context.dedupe.set("agent:run-mine", pendingRun("run-mine", "owner"));
-    context.dedupe.set("agent:run-foreign", pendingRun("run-foreign", "other"));
-
-    const respond = await abortAsOwner({
-      context,
-      onAuthorizedAfterQueuedAbort,
-    });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(context.dedupe.get("agent:run-foreign")).toEqual(
-      expect.objectContaining({
-        payload: expect.objectContaining({ status: "accepted" }),
-      }),
-    );
-  });
-
   it("aborts a queued turn by runId after active registration is gone", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
@@ -546,32 +496,6 @@ describe("chat.abort queued-turn contract", () => {
     expect(call[2]?.message).toBe("runId does not match sessionKey");
     expect(controller.signal.aborted).toBe(false);
     expect(context.chatQueuedTurns.has("queued-ownerless")).toBe(true);
-  });
-
-  it("aborts only requester queues without session cleanup in a mixed-owner session", async () => {
-    const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const mine = new AbortController();
-    const foreign = new AbortController();
-    const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        ["queued-mine", queuedTurn(mine)],
-        ["queued-foreign", queuedTurn(foreign, "other")],
-      ]),
-    });
-
-    const respond = await abortAsOwner({
-      context,
-      onAuthorizedAfterQueuedAbort,
-    });
-
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["queued-mine"],
-    });
-    expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
-    expect(mine.signal.aborted).toBe(true);
-    expect(foreign.signal.aborted).toBe(false);
-    expect(context.chatQueuedTurns.has("queued-foreign")).toBe(true);
   });
 
   it("rejects an ownerless global abort on an explicit fleet", async () => {

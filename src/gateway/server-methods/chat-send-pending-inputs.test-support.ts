@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEventsSync,
@@ -36,10 +35,11 @@ import type { GatewayClient, RespondFn } from "./types.js";
 export function setClientProfile(
   client: GatewayClient,
   profile: { id: string; updatedAt: number },
+  displayName: string | null = null,
 ) {
   client.authenticatedUserProfile = {
     profileId: profile.id,
-    displayName: null,
+    displayName,
     hasAvatar: false,
     updatedAt: profile.updatedAt,
   };
@@ -129,12 +129,13 @@ export function useBrowserFollowupFixture() {
     } else {
       await seedTranscript();
     }
+    const memoryLocation = { agentId: scope.agentId, path: scope.storePath };
     const readTranscript = () => {
       if (!memoryIncognito) {
         return loadTranscriptEventsSync(scope);
       }
       const snapshot = memorySessionActorOwners
-        .read({ agentId: scope.agentId, path: scope.storePath })
+        .read(memoryLocation)
         ?.readStorage(
           scope.sessionKey,
           { type: "session.history.hydrate", input: { sessionId: scope.sessionId } },
@@ -201,8 +202,6 @@ export function useBrowserFollowupFixture() {
     });
     // The process-local placement fallback would retain the previous case's deleted home.
     const context = createDirectChatContext({
-      getRuntimeConfig,
-      chatQueuedTurns: new Map(),
       workerSessionPlacementService: createWorkerSessionPlacementStore(),
     });
     const client: GatewayClient = {
@@ -228,10 +227,12 @@ export function useBrowserFollowupFixture() {
         signal?: AbortSignal;
         sessionMutationCommitGuard?: () => void;
       },
+      p = params,
+      handler = handleChatSend,
     ) => {
       const request = {
-        req: { type: "req", id: params.idempotencyKey, method: "chat.send", params },
-        params,
+        req: { type: "req", id: p.idempotencyKey, method: "chat.send", params: p },
+        params: p,
         client,
         context,
         respond,
@@ -243,12 +244,12 @@ export function useBrowserFollowupFixture() {
           req: { ...request.req, expectedProfileId: binding.expectedProfileId },
           signal: binding.signal,
           sessionMutationCommitGuard: binding.sessionMutationCommitGuard,
-          extraHandlers: { "chat.send": handleChatSend },
+          extraHandlers: { "chat.send": handler },
         });
       } else {
         await withPluginRuntimeGatewayRequestScope(
           { context, isWebchatConnect: request.isWebchatConnect },
-          () => handleChatSend(request),
+          () => handler(request),
         );
       }
       return respond;
@@ -261,6 +262,13 @@ export function useBrowserFollowupFixture() {
       dispatchRelease.resolve();
       activeRun?.complete();
       await completion;
+    };
+    const cleanup = async () => {
+      await finishDispatch();
+      dispatchInboundMessageMock.mockReset();
+      if (memoryIncognito) {
+        memorySessionActorOwners.closeSession(memoryLocation, scope.sessionKey);
+      }
     };
     return {
       scope,
@@ -275,16 +283,8 @@ export function useBrowserFollowupFixture() {
       send,
       dispatchedRecorder: dispatchedRecorder.promise,
       finishDispatch,
-      cleanup: async () => {
-        await finishDispatch();
-        dispatchInboundMessageMock.mockReset();
-        if (memoryIncognito) {
-          memorySessionActorOwners.closeSession(
-            { agentId: scope.agentId, path: scope.storePath },
-            scope.sessionKey,
-          );
-        }
-      },
+      cleanup,
+      [Symbol.asyncDispose]: cleanup,
     };
   };
 }

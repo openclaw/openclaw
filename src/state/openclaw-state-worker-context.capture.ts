@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
@@ -17,6 +18,7 @@ export function captureOpenClawStateReadContextWithAdmission(
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
+  | "databaseEngineSelection"
   | "maintenanceScope"
   | "existingSchemaPath"
   | "runInCapturedSchemaScope"
@@ -50,6 +52,7 @@ export function captureOpenClawStateReadContextWithAdmission(
       });
   }
   return {
+    databaseEngineSelection: getDatabaseEngineSelection(),
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
     assertPublicationCurrent,

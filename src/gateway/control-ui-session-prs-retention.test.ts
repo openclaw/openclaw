@@ -21,7 +21,11 @@ let cacheEpochMs = Date.now();
 function localGitReads() {
   return vi
     .mocked(runGitWorkerOperation)
-    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
+    .mock.calls.filter(
+      ([operation]) =>
+        operation.type !== "checkout.revision" &&
+        operation.type !== "pull-request.branch-comparison",
+    );
 }
 
 beforeEach(() => {
@@ -36,6 +40,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("watched session PR retention", () => {
@@ -46,7 +51,11 @@ describe("watched session PR retention", () => {
       { match: "/pulls?head=", response: () => githubJson([]) },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return revision;
       }
@@ -72,7 +81,6 @@ describe("watched session PR retention", () => {
       load: (params, cacheSignal) =>
         loadControlUiSessionPullRequests(params, {
           cacheSignal,
-          fetchImpl,
           resolveGitRoot: async () => "/watched/shared-checkout",
         }),
     });
@@ -142,6 +150,7 @@ describe("watched session PR retention", () => {
             : githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]),
       },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     const snapshots = new Map<
       string,
       { rateLimited: boolean; pullRequests: unknown[]; repository: unknown }
@@ -171,7 +180,6 @@ describe("watched session PR retention", () => {
       load: (params, cacheSignal) =>
         loadControlUiSessionPullRequests(params, {
           cacheSignal,
-          fetchImpl,
           resolveGitContext: async () => ({
             owner: "openclaw",
             repo: "openclaw",
@@ -225,8 +233,12 @@ describe("watched session PR retention", () => {
         response: () => githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z" })]),
       },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     const signals = new Set<AbortSignal>();
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return "unchanged";
       }
@@ -254,7 +266,6 @@ describe("watched session PR retention", () => {
         }
         return loadControlUiSessionPullRequests(params, {
           cacheSignal,
-          fetchImpl,
           resolveGitRoot: async () => `/watched/${params.sessionKey}`,
         });
       },
@@ -311,7 +322,11 @@ describe("watched session PR retention", () => {
       },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+      if (operation.type === "pull-request.branch-comparison") {
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      }
       if (operation.type === "checkout.revision") {
         return branch;
       }
@@ -336,7 +351,6 @@ describe("watched session PR retention", () => {
         { sessionKey: "retained", refresh: true },
         {
           cacheSignal: cacheLifetime.signal,
-          fetchImpl,
           resolveGitRoot: async () => {
             if (rootFailure) {
               throw new Error("session unavailable");

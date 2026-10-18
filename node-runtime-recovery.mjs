@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
@@ -17,6 +18,8 @@ import {
 } from "./node-sqlite.mjs";
 
 export { consumeLauncherRootOptionToken };
+
+export { watchCliRespawnParent } from "./cli-parent-lifetime.mjs";
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 
 // Mirror the entry's foreground Gmail policy: a wrapper would kill that run before descendant cleanup finishes.
@@ -43,7 +46,7 @@ const respawnSignals =
 const respawnSignalForceKillGraceMs = RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS;
 
 /** Resolve true only after the replacement and its stdio close; the caller must return. */
-export const runRespawnedChild = (command, args, env) => {
+export const runRespawnedChild = ({ command, args, env }) => {
   // The serving Gateway owns drain and cleanup. Reap a stuck child only in the
   // supervisor's exit margin, after that owner has had its full shutdown budget.
   // An already-running older macOS launcher can still enforce its shorter timer;
@@ -55,7 +58,7 @@ export const runRespawnedChild = (command, args, env) => {
   const signalExitGraceMs = launcherStopTimeoutMs - respawnSignalForceKillGraceMs;
   const stdioIsTerminal = process.stdin.isTTY || process.stdout.isTTY;
   const child = spawn(command, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "inherit", "inherit", "ipc"],
     env,
     windowsHide: !stdioIsTerminal,
   });
@@ -759,8 +762,9 @@ export async function recoverNodeRuntime({
     `openclaw: Retrying with ${JSON.stringify(nodePath)} (${reason}; current Node failed runtime admission).\n`,
   );
   return await runRespawnedChild(
-    nodePath,
-    [...process.execArgv, process.argv[1], ...process.argv.slice(2)],
-    { ...withNodeRuntimePath(env, nodePath), OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+    resolveOpenClawCliRespawn({
+      execPath: nodePath,
+      env: { ...withNodeRuntimePath(env, nodePath), OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+    }),
   );
 }

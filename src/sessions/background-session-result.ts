@@ -168,6 +168,7 @@ export async function commitBackgroundResultToSession(params: {
           },
         ],
         touchSessionEntry: true,
+        sessionLifecyclePatch: { lastInteractionAt: message.timestamp },
         updateMode: "inline",
         // A retry can finish media ownership after a committed append failed to publish.
         publishWhen: params.prepareDisplayContent ? "always" : undefined,

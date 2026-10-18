@@ -1,11 +1,19 @@
+import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { getEventListeners, once } from "node:events";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createApiRegistry } from "../api-registry.js";
-import { configureAiTransportHost } from "../host.js";
+import {
+  configureAiTransportHost,
+  createAiTransportHost,
+  runWithAiTransportHost,
+} from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createNodeLlmRuntime } from "../stream.js";
@@ -41,6 +49,7 @@ const model = {
 const simpleContext = {
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
 } satisfies Context;
+const runDetached = AsyncLocalStorage.snapshot();
 
 function createJwt(): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -90,6 +99,61 @@ describe("ChatGPT Responses cached transport", () => {
     vi.unstubAllGlobals();
     resetOpenAICodexWebSocketStateForTest();
     configureAiTransportHost({});
+  });
+
+  it("keeps an idle socket reusable without retaining its completed caller", async () => {
+    const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
+    const callers = new AsyncLocalStorage<object>();
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    const requests: Array<Record<string, unknown>> = [];
+    let connections = 0;
+    server.on("connection", (socket) => {
+      connections++;
+      socket.on("message", (data) => {
+        assert.ok(Buffer.isBuffer(data));
+        requests.push(JSON.parse(data.toString("utf8")) as Record<string, unknown>);
+        socket.send(JSON.stringify(completion(`resp_${requests.length}`)));
+      });
+    });
+    await once(server, "listening");
+    vi.stubGlobal("WebSocket", WebSocket);
+    const loopbackModel = createLoopbackModel(server);
+    const options = {
+      apiKey: createJwt(),
+      sessionId: "caller-retention",
+      transport: "websocket-cached" as const,
+    };
+    let reference: WeakRef<object> | undefined;
+    const completeTurn = () => {
+      const caller = { turn: 1 };
+      reference = new WeakRef(caller);
+      return runWithAiTransportHost(host, () =>
+        callers.run(caller, () =>
+          streamOpenAICodexResponses(loopbackModel, simpleContext, options).result(),
+        ),
+      );
+    };
+    try {
+      await expectStopped(completeTurn());
+      const control = new WeakRef({ unowned: true });
+      // The cached native socket and its real expiry timer remain live through GC.
+      await nextEventLoopTurn();
+      queryObjects(WeakRef);
+      expect(control.deref()).toBeUndefined();
+      assert.ok(reference);
+      expect(reference.deref()).toBeUndefined();
+
+      await runWithAiTransportHost(host, () =>
+        expectStopped(streamOpenAICodexResponses(loopbackModel, simpleContext, options).result()),
+      );
+      expect(connections).toBe(1);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.previous_response_id).toBe("resp_1");
+    } finally {
+      cleanupSessionResources(undefined, host);
+      callers.disable();
+      await closeServer(server, server.clients);
+    }
   });
 
   it("keeps an authenticated replacement socket after aborting a reused lease", async () => {
@@ -368,50 +432,34 @@ describe("ChatGPT Responses cached transport", () => {
     }
   });
 
-  it("scopes sticky SSE fallback to the public runtime authority", async () => {
+  it("keeps fallback runtime-local while SSE uses the current credentials", async () => {
     const firstToken = createJwt();
     const secondToken = `${createJwt()}-other`;
-    const rotatedTokens = Array.from(
-      { length: 8 },
-      (_, index) => `${createJwt()}-rotated-${index}`,
-    );
     let activeFirstToken = firstToken;
-    const websocketUpgrades: Array<{
-      authorization?: string;
-      proxyKey?: string;
-    }> = [];
-    const sseRequests: Array<{ authorization?: string; proxyKey?: string }> = [];
+    const websocketAuthorizations: Array<string | undefined> = [];
+    const sseAuthorizations: Array<string | undefined> = [];
     const server = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
       request.on("end", () => {
-        sseRequests.push({
-          authorization: request.headers.authorization,
-          proxyKey: request.headers["x-proxy-key"] as string | undefined,
-        });
+        sseAuthorizations.push(request.headers.authorization);
         response.writeHead(200, {
           connection: "close",
           "content-type": "text/event-stream",
         });
-        response.end(`data: ${JSON.stringify(completion(`resp_sse_${sseRequests.length}`))}\n\n`);
+        response.end(
+          `data: ${JSON.stringify(completion(`resp_sse_${sseAuthorizations.length}`))}\n\n`,
+        );
       });
+      request.resume();
     });
     const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
     websocketServer.on("connection", (socket) => {
       socket.on("message", () => {
-        socket.send(JSON.stringify(completion(`resp_ws_${websocketUpgrades.length}`)));
+        socket.send(JSON.stringify(completion(`resp_ws_${websocketAuthorizations.length}`)));
       });
     });
     server.on("upgrade", (request, socket, head) => {
-      const upgrade = {
-        authorization: request.headers.authorization,
-        proxyKey: request.headers["x-proxy-key"] as string | undefined,
-      };
-      websocketUpgrades.push(upgrade);
-      if (
-        (upgrade.authorization === `Bearer ${firstToken}` && upgrade.proxyKey !== "fresh") ||
-        rotatedTokens.some((token) => upgrade.authorization === `Bearer ${token}`)
-      ) {
+      websocketAuthorizations.push(request.headers.authorization);
+      if (request.headers.authorization === `Bearer ${firstToken}`) {
         socket.end(
           "HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
@@ -444,45 +492,14 @@ describe("ChatGPT Responses cached transport", () => {
       await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
       await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
       await expectStopped(secondRuntime.stream(loopbackModel, simpleContext, options).result());
-      await expectStopped(
-        firstRuntime
-          .stream(loopbackModel, simpleContext, {
-            ...options,
-            headers: { "x-proxy-key": "fresh" },
-          })
-          .result(),
-      );
-      for (const [index, rotatedToken] of rotatedTokens.entries()) {
-        activeFirstToken = rotatedToken;
-        await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
-        if (index === 0) {
-          activeFirstToken = firstToken;
-          await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
-        }
-      }
-      activeFirstToken = firstToken;
+      activeFirstToken = secondToken;
       await expectStopped(firstRuntime.stream(loopbackModel, simpleContext, options).result());
 
-      expect(websocketUpgrades).toEqual([
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
-        { authorization: `Bearer ${secondToken}`, proxyKey: undefined },
-        { authorization: `Bearer ${firstToken}`, proxyKey: "fresh" },
-        ...rotatedTokens.map((token) => ({
-          authorization: `Bearer ${token}`,
-          proxyKey: undefined,
-        })),
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
-      ]);
-      expect(sseRequests).toEqual([
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
-        { authorization: `Bearer ${rotatedTokens[0]}`, proxyKey: undefined },
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
-        ...rotatedTokens.slice(1).map((token) => ({
-          authorization: `Bearer ${token}`,
-          proxyKey: undefined,
-        })),
-        { authorization: `Bearer ${firstToken}`, proxyKey: undefined },
+      expect(websocketAuthorizations).toEqual([`Bearer ${firstToken}`, `Bearer ${secondToken}`]);
+      expect(sseAuthorizations).toEqual([
+        `Bearer ${firstToken}`,
+        `Bearer ${firstToken}`,
+        `Bearer ${secondToken}`,
       ]);
     } finally {
       firstRuntime.cleanupSessionResources(sessionId);

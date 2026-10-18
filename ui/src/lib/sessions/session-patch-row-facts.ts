@@ -40,7 +40,7 @@ export function projectSessionPatchRowFields(
   if (patch.fastMode !== undefined) {
     fields.push({ fastMode: entry.fastMode });
   }
-  if (typeof patch.archived === "boolean") {
+  if (patch.archived !== undefined) {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
   for (const key of ["label", "category", "boardPresentation", "boardFace"] as const) {

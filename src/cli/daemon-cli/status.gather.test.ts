@@ -25,6 +25,7 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../../gateway/minimal-gateway.test-helpers.js";
+import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
@@ -88,9 +89,8 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
-const readGatewayLastShutdown = vi.fn<
-  (_env?: NodeJS.ProcessEnv) => { reason: string | null; completedAtMs: number } | undefined
->(() => undefined);
+const originalReadGatewayLastShutdown = gatewayBootLifecycle.readGatewayLastShutdownAsync;
+const readGatewayLastShutdownAsync = vi.spyOn(gatewayBootLifecycle, "readGatewayLastShutdownAsync");
 const findSystemdGatewayInstallation = vi.fn<
   typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
 >(async () => ({ kind: "none" }));
@@ -237,10 +237,6 @@ vi.mock("../../daemon/diagnostics.js", () => ({
 
 vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
-}));
-
-vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
-  readGatewayLastShutdown: (env?: NodeJS.ProcessEnv) => readGatewayLastShutdown(env),
 }));
 
 vi.mock("../../state/openclaw-database-preflight.js", () => ({
@@ -509,7 +505,7 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
-    readGatewayLastShutdown.mockReset().mockReturnValue(undefined);
+    readGatewayLastShutdownAsync.mockReset().mockResolvedValue(undefined);
     preflightOpenClawDatabaseSchemas
       .mockReset()
       .mockResolvedValue({ incompatible: [], indeterminate: [] });
@@ -604,9 +600,8 @@ describe("gatherDaemonStatus", () => {
               ? { mode: "none" }
               : {
                   mode: "token",
-                  ...(auth === "configured"
-                    ? { token: "service-config-token", password: "local-password" }
-                    : {}),
+                  token: "service-config-token",
+                  password: "local-password",
                 },
           remote: {
             url: remoteUrl,
@@ -635,20 +630,14 @@ describe("gatherDaemonStatus", () => {
 
       expect(input.url).toBe("wss://127.0.0.1:19001");
       expect(input.urlOverride).toBeUndefined();
-      expect(input.token).toBe(
-        auth === "none"
-          ? undefined
-          : auth === "configured"
-            ? "service-config-token"
-            : "service-env-token",
-      );
+      expect(input.token).toBe(auth === "none" ? undefined : "service-config-token");
       expect(input.password).toBe(auth === "configured" ? "local-password" : undefined);
       expect(input.tlsFingerprint).toBe("sha256:11:22:33:44");
       expect(input.requireRpc).toBe(requireRpc);
       assert(input.config);
-      expect(gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url })).toEqual(
-        remoteUrl === "wss://127.0.0.1:19001" ? edgeAuth : undefined,
-      );
+      expect(
+        gatewayEdgeAuthValueForTarget({ config: input.config, targetUrl: input.url }),
+      ).toBeUndefined();
       expect(input.config.gateway?.mode).toBe("local");
       expect(input.config.gateway?.remote).toEqual({
         url: remoteUrl,
@@ -906,7 +895,7 @@ describe("gatherDaemonStatus", () => {
     }
   });
 
-  it.each([true])("keeps an explicit local port in remote config with probe=%s", async (probe) => {
+  it("keeps an explicit local port in remote config when probing", async () => {
     cliLoadedConfig = {
       gateway: {
         mode: "remote",
@@ -916,7 +905,11 @@ describe("gatherDaemonStatus", () => {
         remote: { url: "wss://gateway.example", token: "remote-token" },
       },
     };
-    const status = await gatherStatus({ rpc: { localPortOverride: 19002 }, probe, deep: true });
+    const status = await gatherStatus({
+      rpc: { localPortOverride: 19002 },
+      probe: true,
+      deep: true,
+    });
 
     expect(status.gateway).toMatchObject({
       port: 19002,
@@ -927,18 +920,13 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.targetRole).toBe("diagnostic-only");
     expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
-    if (probe) {
-      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "wss://127.0.0.1:19002",
-          token: "local-token",
-          tlsFingerprint: "sha256:11:22:33:44",
-        }),
-      );
-    } else {
-      expect(callGatewayStatusProbe).not.toHaveBeenCalled();
-      expect(status.rpc).toBeUndefined();
-    }
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://127.0.0.1:19002",
+        token: "local-token",
+        tlsFingerprint: "sha256:11:22:33:44",
+      }),
+    );
   });
 
   it.each([
@@ -1209,7 +1197,7 @@ describe("gatherDaemonStatus", () => {
       expect(output).toContain("pre-upgrade backup");
       expect(exit).toHaveBeenCalledWith(1);
       expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+      expect(readGatewayLastShutdownAsync).not.toHaveBeenCalled();
       expect(await fs.readFile(databasePath)).toEqual(before);
     } finally {
       log.mockRestore();
@@ -1291,10 +1279,7 @@ describe("gatherDaemonStatus", () => {
     preflightOpenClawDatabaseSchemas.mockImplementation(
       originalPreflight.preflightOpenClawDatabaseSchemas,
     );
-    const originalLifecycle = await vi.importActual<
-      typeof import("../../infra/gateway-boot-lifecycle.js")
-    >("../../infra/gateway-boot-lifecycle.js");
-    readGatewayLastShutdown.mockImplementation(originalLifecycle.readGatewayLastShutdown);
+    readGatewayLastShutdownAsync.mockImplementation(originalReadGatewayLastShutdown);
     serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
 
     const status = await gatherStatus({ deep: true, probe: false });

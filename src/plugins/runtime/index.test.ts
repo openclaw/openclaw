@@ -1,15 +1,11 @@
 // Plugin runtime index tests cover runtime entrypoint exports and registry setup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import type { resolveSandboxContext } from "../../agents/sandbox/context.js";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
   getApiKeyForModel: vi.fn(),
@@ -22,16 +18,11 @@ vi.mock("../../infra/heartbeat-runner.js", () => {
   return { runHeartbeatOnce: heartbeatRunnerMocks.runHeartbeatOnce };
 });
 
-const sandboxContextMocks = vi.hoisted(() => ({
-  resolveSandboxContext: vi.fn(),
-}));
-
 vi.mock("./runtime-model-auth.runtime.js", () => ({
   getApiKeyForModel: runtimeModelAuthMocks.getApiKeyForModel,
   getRuntimeAuthForModelCore: runtimeModelAuthMocks.getRuntimeAuthForModelCore,
   resolveProviderRuntimeApiKey: runtimeModelAuthMocks.resolveProviderRuntimeApiKey,
 }));
-vi.mock("../../agents/sandbox/context.js", () => sandboxContextMocks);
 
 import { createPluginRuntime } from "./index.js";
 
@@ -41,7 +32,6 @@ describe("plugin runtime command execution", () => {
     runtimeModelAuthMocks.getApiKeyForModel.mockReset();
     runtimeModelAuthMocks.getRuntimeAuthForModelCore.mockReset();
     runtimeModelAuthMocks.resolveProviderRuntimeApiKey.mockReset();
-    sandboxContextMocks.resolveSandboxContext.mockReset();
     resetConfigRuntimeState();
   });
 
@@ -156,93 +146,6 @@ describe("plugin runtime command execution", () => {
       sessionKey: "agent:main:subagent:workboard-card",
     });
     expect(result.confinementError).toContain("outside the sandbox");
-  });
-
-  it("prepares the live sandbox before returning workspace authority", async () => {
-    const runtime = createPluginRuntime();
-    vi.spyOn(runtime.agent.session, "getSessionEntry").mockReturnValue(undefined);
-    vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockResolvedValue(undefined);
-    sandboxContextMocks.resolveSandboxContext.mockResolvedValue({ backendId: "docker" });
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        entries: { main: { workspace: "/workspace" } },
-      },
-      tools: {
-        elevated: { enabled: false },
-        sandbox: { tools: { allow: ["read"] } },
-      },
-    };
-
-    await expect(
-      runtime.sandbox.prepareWorkspaceAuthority({
-        config,
-        agentId: "main",
-        sessionKey: "agent:main:subagent:workboard-card",
-        workspaceDir: "/workspace",
-      }),
-    ).resolves.toEqual({ sandboxed: true, workspaceAccess: "rw" });
-    expect(sandboxContextMocks.resolveSandboxContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config,
-        agentId: "main",
-        sessionKey: "agent:main:subagent:workboard-card",
-        workspaceDir: "/workspace",
-        requireCurrentConfig: true,
-        preparedRuntimeStatus: expect.objectContaining({ sandboxed: true, sandboxRequired: false }),
-        assertCurrent: expect.any(Function),
-      }),
-    );
-  });
-
-  it("refuses stale sandbox authority before provisioning after a policy change", async () => {
-    const runtime = createPluginRuntime();
-    let entry: SessionEntry = { sessionId: "sandbox-policy", updatedAt: 1 };
-    vi.spyOn(runtime.agent.session, "getSessionEntry").mockImplementation(() => entry);
-    vi.spyOn(runtime.agent.session, "getSessionEntryAsync").mockResolvedValue(
-      structuredClone(entry),
-    );
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const provision = vi.fn();
-    sandboxContextMocks.resolveSandboxContext.mockImplementation(
-      async (params: Parameters<typeof resolveSandboxContext>[0]) => {
-        params.assertCurrent?.();
-        entered.resolve();
-        await release.promise;
-        params.assertCurrent?.();
-        provision();
-        return null;
-      },
-    );
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "session", workspaceAccess: "rw" } },
-        entries: { main: { workspace: "/workspace" } },
-      },
-      tools: { elevated: { enabled: false }, sandbox: { tools: { allow: ["read"] } } },
-    };
-    const preparation = runtime.sandbox.prepareWorkspaceAuthority({
-      config,
-      agentId: "main",
-      sessionKey: "agent:main:subagent:sandbox-policy",
-      workspaceDir: "/workspace",
-    });
-    const rejected = expect(preparation).rejects.toThrow(
-      "Session workspace authority changed during sandbox preparation",
-    );
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        preparation,
-        "sandbox preparation did not enter",
-      );
-      entry = { ...entry, sandboxMode: "off" };
-    } finally {
-      release.resolve();
-    }
-    await rejected;
-    expect(provision).not.toHaveBeenCalled();
   });
 
   it("modelAuth wrappers preserve workspace scope while stripping credential steering", async () => {

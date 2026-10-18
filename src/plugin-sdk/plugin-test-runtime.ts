@@ -166,11 +166,13 @@ export {
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
 export {
+  clearActivePluginRegistry,
   createPluginRegistryOwner,
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
+  waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 export {
   listImportedBundledPluginFacadeIds,

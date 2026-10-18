@@ -9,6 +9,16 @@
   white-space: pre-wrap;
 }
 
+.wizard-step__message p {
+  margin: 0;
+}
+
+.wizard-step__message p + p {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .wizard-step__sign-in {
   display: grid;
   justify-items: center;
@@ -74,13 +84,13 @@
   color: var(--muted);
 }
 
-.wizard-step__actions {
+.wizard-step__actions:not(openclaw-modal-actions) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.wizard-step__actions--split {
+.wizard-step__actions--split:not(openclaw-modal-actions) {
   align-items: center;
   justify-content: flex-end;
 }
@@ -94,6 +104,14 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg);
+}
+
+.wizard-step__waiting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 24px;
 }
 
 .wizard-step__spinner {

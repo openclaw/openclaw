@@ -30,7 +30,7 @@ async function selectSessionPlacementTarget(params: {
   row: GatewaySessionRow;
   requiredProfile?: string;
 }): Promise<SessionMoveTarget | null> {
-  const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.ts");
+  const { showSessionPlacementTargetDialog } = await import("./session-placement-move-dialog.tsx");
   const runtime = params.row.agentRuntime;
   const gatewayAccess = readSessionMethodAccess(params.gatewaySnapshot, {
     method: params.mode === "restart" ? "sessions.reclaim" : "sessions.move",
@@ -99,7 +99,6 @@ export async function changeSessionPlacement(params: {
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
-  requestUpdate: () => void;
 }): Promise<void> {
   const client = params.client;
   const placement = params.row.placement;
@@ -300,6 +299,5 @@ export async function changeSessionPlacement(params: {
     }
   } finally {
     params.onPendingChange(null);
-    params.requestUpdate();
   }
 }

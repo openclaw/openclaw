@@ -49,6 +49,7 @@ export type SessionActorTransport = {
       native: NativeAdmission,
       grant: () => boolean,
     ) => void,
+    concurrentBoardReads?: "transcript-only",
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -162,15 +163,11 @@ export function createSqliteSessionActorExecutor(
           authority.assertCurrent();
           let snapshot = params.replica.read();
           if (!snapshot) {
-            const pending = params.replica.beginRead();
-            try {
-              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-              pending.install(snapshot);
-              // Disclose the immutable installed revision, including a superseding receipt.
-              snapshot = params.replica.read();
-            } finally {
-              pending.cancel();
-            }
+            const install = params.replica.beginRead();
+            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+            install(snapshot);
+            // Disclose the immutable installed revision, including a superseding receipt.
+            snapshot = params.replica.read();
           }
           if (!snapshot) {
             throw new SessionActorReadInvalidatedError();
@@ -393,6 +390,13 @@ export function createSqliteSessionActorExecutor(
             transfer.accept(publication.transfer);
           }
         }),
+        (name === "appendTranscriptEvent" || name === "appendToolResult") &&
+          "append" in captured &&
+          captured.append !== undefined &&
+          captured.append.initialization === undefined &&
+          !captured.reducers?.length
+          ? "transcript-only"
+          : undefined,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps

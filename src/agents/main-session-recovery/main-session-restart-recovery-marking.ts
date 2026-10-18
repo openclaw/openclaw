@@ -354,11 +354,18 @@ type OrphanMarkParams = {
 };
 
 function hasOrphanedMainSessionWork(entry: SessionEntry, sessionKey: string): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
   return (
+    entry.archivedAt === undefined &&
     isMainRestartRecoveryCandidate(entry, sessionKey) &&
     (hasMainSessionRecoveryClaim(entry) ||
       entry.abortedLastRun === true ||
-      entry.status === "interrupted")
+      (entry.status === "interrupted" && !settledInterruption))
   );
 }
 
@@ -416,7 +423,6 @@ async function markOrphanedMainSessionStore(
       params.assertCommitAllowed?.();
       if (
         !hasOrphanedMainSessionWork(entry, sessionKey) ||
-        entry.archivedAt !== undefined ||
         isRetryableUnadoptedChatClaim(entry) ||
         entry.mainRestartRecovery?.tombstone ||
         (params.expectedSessionId !== undefined && entry.sessionId !== params.expectedSessionId) ||
@@ -542,13 +548,12 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
       result.marked += storeResult.marked;
       result.skipped += storeResult.skipped;
       params.startupCheckedStorePaths?.add(key);
-      recordStartupRecoveryStoreResult({ target, lifecycleGeneration, outcome: { ok: true } });
+      recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
     } catch (error) {
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       failedTargets.push(target);
       recordStartupRecoveryStoreResult({
         target,
-        lifecycleGeneration,
         outcome: { ok: false, error },
       });
       mainSessionRecoveryLog.warn(

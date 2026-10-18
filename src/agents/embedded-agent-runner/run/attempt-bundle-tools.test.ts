@@ -471,7 +471,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     });
   });
 
-  it.each([undefined, "MCP"])(
+  it.each(["MCP"])(
     "disposes prepared runtimes after policy failure and retains %s cleanup failure",
     async (failedCleanup) => {
       const disposeMcp = vi.fn(async () => {

@@ -32,7 +32,7 @@ it("recovers a deleted Chat through the shell's router subscription without recu
       path: "/chat/main",
       aliases: ["/chat/main/deleted-thread"],
       loaderDeps: chatPages[0].loaderDeps,
-      component: () => ({ render: () => null }),
+      component: () => ({ renderSolid: () => null }),
       loader: (_context, options) => ({
         kind: "session",
         sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,

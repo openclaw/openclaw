@@ -90,7 +90,7 @@ export function renderUsageRefreshStatus(
             })
           : undefined
       }
-      {...{ className: `usage-callout usage-detail-error--${kind}` }}
+      {...{ className: ["usage-callout", `usage-detail-error--${kind}`] }}
     />
   );
 }

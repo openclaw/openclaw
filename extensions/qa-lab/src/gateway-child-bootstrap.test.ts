@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import fsSync, { existsSync, readFileSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearRealTimeout, setTimeout as realTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
@@ -12,6 +13,13 @@ import { createQaGatewayChild } from "./gateway-child.js";
 import { inspectLinuxProcessGroup, isQaPosixProcessGroupAlive } from "./posix-process-group.js";
 import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+// Intercept the named ESM export consumed by the bootstrap owners; the default
+// fs object remains native so unrelated fixture writes still reach the filesystem.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+});
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
 vi.mock("./gateway-rpc-client.js", () => ({
@@ -145,6 +153,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.mocked(writeSync).mockReset();
   try {
     const results = await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()));
     for (const result of results) {
@@ -157,6 +166,23 @@ afterEach(async () => {
     vi.unstubAllEnvs();
   }
 });
+
+function captureBootstrapBoundaries(failSink = false) {
+  const messages: Array<{ command: string; event: string; [key: string]: unknown }> = [];
+  const write = fsSync.writeSync;
+  vi.mocked(writeSync).mockImplementation((...args) => {
+    const line = args[1];
+    if (args[0] === 2 && typeof line === "string" && line.startsWith("[qa-bootstrap] ")) {
+      messages.push(JSON.parse(line.slice("[qa-bootstrap] ".length)));
+      if (failSink) {
+        throw new Error("diagnostic sink unavailable");
+      }
+      return Buffer.byteLength(line);
+    }
+    return Reflect.apply(write, fsSync, args);
+  });
+  return messages;
+}
 
 async function fixture(phase: string, mode: string) {
   const root = await dirs.makeTempDir("qa-bootstrap-lifetime-");
@@ -272,6 +298,7 @@ async function fixture(phase: string, mode: string) {
 
 describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", () => {
   it("uses the direct candidate CLI while its Gateway owns the state", async () => {
+    const messages = captureBootstrapBoundaries();
     vi.stubEnv("OPENCLAW_PROFILE", "operator-parent");
     const f = await fixture("hang", "running");
     const repoRoot = path.join(f.root, "harness");
@@ -325,6 +352,28 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       "message",
       "message",
     ]);
+    expect(messages.map(({ command, event }) => `${command}:${event}`)).toEqual([
+      "mock-auth:start",
+      "mock-auth:exit",
+      "mock-auth:settled",
+      "mock-auth:start",
+      "mock-auth:exit",
+      "mock-auth:settled",
+      "repair-help:start",
+      "repair-help:exit",
+      "repair-help:settled",
+      "repair:start",
+      "repair:exit",
+      "repair:settled",
+      "gateway:spawn",
+    ]);
+    expect(JSON.stringify(messages)).not.toMatch(
+      /operator-parent|operator-patch|sk-qa-mock|fixture\.mjs/u,
+    );
+    for (const message of messages.filter(({ event }) => event !== "spawn")) {
+      expect(message.elapsedMs).toEqual(expect.any(Number));
+      expect(message.elapsedMs).toBeGreaterThanOrEqual(0);
+    }
     const profiles = new Set(f.records().map((entry) => entry.profile));
     expect(profiles.size).toBe(1);
     const [profile] = profiles;
@@ -445,13 +494,23 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
   it.each(["leader-exited", "closed-pipes"])(
     "settles descendants after successful CLI exit (%s)",
     async (mode) => {
+      const messages = captureBootstrapBoundaries();
       const f = await fixture("probe", mode);
       const lifetime = new QaGatewayChildLifecycle();
+      const drainObserved = createDeferred<void>();
+      const releaseDrain = createDeferred<void>();
+      const waitForClose = lifetime.waitForClose.bind(lifetime);
+      vi.spyOn(lifetime, "waitForClose").mockImplementation(async (owned) => {
+        await waitForClose(owned);
+        drainObserved.resolve();
+        await releaseDrain.promise;
+      });
       const command = f.track(
         runQaGatewayCliCommand({
           ...f.command,
           lifetime,
           args: ["probe"],
+          bootstrapPhase: "repair-help",
           cwd: f.root,
           env: { HOME: f.root },
         }),
@@ -459,14 +518,26 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
       cleanups.push(async () => {
         await lifetime.stop();
       });
-      await f.ready();
+      try {
+        await f.ready();
+        await bounded(drainObserved.promise);
+        expect(messages.map(({ event }) => event)).toEqual(["start", "exit"]);
+        expect(messages[1]).toMatchObject({ exitCode: 0, signalled: false });
+        f.assertStopped();
+      } finally {
+        releaseDrain.resolve();
+      }
       expect(await bounded(command)).toBe("fixture-output");
+      expect(messages.map(({ event }) => event)).toEqual(["start", "exit", "settled"]);
+      expect(messages[2]).toMatchObject({ processStopped: true, pipesClosed: true });
+      expect(Number(messages[2]!.elapsedMs)).toBeGreaterThanOrEqual(Number(messages[1]!.elapsedMs));
       f.assertStopped();
       await expect(lifetime.stop()).resolves.toEqual({ process: "confirmed-stopped", errors: [] });
     },
   );
 
   it("allows progressing repair phases past the whole-command deadline and settles descendants", async () => {
+    const messages = captureBootstrapBoundaries();
     const f = await fixture("repair", "progress");
     const lifetime = new QaGatewayChildLifecycle();
     cleanups.push(async () => {
@@ -481,6 +552,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
           ...f.command,
           lifetime,
           args: ["update", "repair", "--json"],
+          bootstrapPhase: "repair",
           cwd: f.root,
           env: { HOME: f.root },
         }),
@@ -506,6 +578,9 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     }
     child.kill("SIGUSR2");
     expect(await bounded(command)).toBe("repair-complete");
+    expect(
+      messages.filter(({ event }) => event === "repair-phase").map(({ phase }) => phase),
+    ).toEqual(["preflight", "doctor", "plugins", "completionCache"]);
     f.assertStopped();
   });
 
@@ -547,6 +622,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
   it.each(["timeout", "cancel", "stdout", "stderr", "stdin", "process"] as const)(
     "retains bounded redacted diagnostics after %s failure and settles the real CLI tree",
     async (failure) => {
+      const messages = captureBootstrapBoundaries(failure === "process");
       const f = await fixture("probe", "running");
       const lifetime = new QaGatewayChildLifecycle();
       const registration = vi.spyOn(lifetime, "register");
@@ -558,6 +634,7 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
           ...f.command,
           lifetime,
           args: ["probe", "unlabeled-argv-secret"],
+          bootstrapPhase: "mock-auth",
           cwd: f.root,
           env: { HOME: f.root, QA_SYNTHETIC_SECRET: "unlabeled-env-secret" },
           stdin: failure === "stdin" ? "unlabeled-stdin-secret" : undefined,
@@ -617,6 +694,13 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
             : `${failure} failed`,
       );
       expect(error.message).not.toContain("later failure");
+      expect(error.message).not.toContain("diagnostic sink unavailable");
+      expect(JSON.stringify(messages)).not.toMatch(/secret|apiKey|spawnargs|stdin|HOME/u);
+      expect(messages.at(-1)).toMatchObject({
+        event: "settled",
+        processStopped: true,
+        pipesClosed: true,
+      });
       expect(error.message).toContain("plugin registry still pending apiKey=<redacted>");
       expect(error.message).toContain("plugin scan still pending Authorization: Bearer <redacted>");
       expect(error.message.indexOf("plugin registry")).toBeLessThan(

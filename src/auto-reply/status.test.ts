@@ -13,7 +13,6 @@ import { createSuccessfulImageMediaDecision } from "./media-understanding.test-f
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
-  buildHelpMessage,
   buildToolsMessage,
 } from "./status.js";
 
@@ -556,12 +555,6 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/models - List model providers/models.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
-  });
-});
-
-describe("buildHelpMessage", () => {
-  it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|auto|on|off|ultrafast|default");
   });
 });
 

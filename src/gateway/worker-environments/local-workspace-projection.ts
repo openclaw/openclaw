@@ -19,6 +19,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { projectionOperations } from "./local-workspace-state.js";
 import { withLocalWorkspaceStore, type LocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
   prepareArchive?: (snapshot: string) => Promise<void>;
@@ -141,10 +142,11 @@ export async function withLocalWorkspaceProjection<T>(
       >
     >,
   ) => Promise<T>,
-  options: { provision?: boolean } = {},
+  options: { provision?: boolean; signal?: AbortSignal } = {},
 ) {
-  return await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, (store) =>
-    runLocalWorkspaceProjection(owner, store, run, options),
+  return await withLocalWorkspaceStore(
+    { ...owner, worktreeId: owner.worktree.id, signal: options.signal },
+    (store) => runLocalWorkspaceProjection(owner, store, run, options),
   );
 }
 
@@ -204,7 +206,11 @@ async function runLocalWorkspaceProjection<T>(
   } finally {
     // Only acknowledged journal changes allow the frozen guest to resume.
     const retained = store.get();
-    if (retained && !retained.journal_json) {
+    if (
+      retained &&
+      !retained.journal_json &&
+      !(retained.pending_target && isLocalWorkspaceBaseRefreshRef(retained.pending_ref))
+    ) {
       await quiescence?.resume();
     }
   }

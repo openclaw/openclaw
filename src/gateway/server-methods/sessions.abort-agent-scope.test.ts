@@ -423,7 +423,11 @@ describe("sessions.abort agent scope", () => {
         reason: "abort",
       }),
       new Set(["conn-1"]),
-      { agentId: "work", dropIfSlow: true },
+      {
+        agentId: "work",
+        dropIfSlow: true,
+        sessionEventSubscriptionKeys: ["agent:work:global"],
+      },
     );
   });
 
@@ -486,6 +490,7 @@ describe("sessions.abort agent scope", () => {
           agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
+          sessionEventSubscriptionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
           prepareSessionProjection: expect.any(Function),
         },
       );
@@ -502,14 +507,14 @@ describe("sessions.abort agent scope", () => {
   ])(
     "applies MCP stop ownership (clearQueued=$clearQueued, global=$globalScope)",
     async ({ clearQueued, globalScope }) => {
-      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+      const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
         await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+      const { setSessionMcpRuntimeScheduler } =
         await import("../../agents/agent-bundle-mcp-manager-api.js");
       const scheduler = createTestGatewayScheduler();
       onTestFinished(() => scheduler.stop());
       await setSessionMcpRuntimeScheduler(scheduler);
-      const manager = getSessionMcpRuntimeManagerForTesting();
+      const manager = getSessionMcpRuntimeTestManager();
       const sessionKey = globalScope ? "global" : "agent:main:idle-mcp";
       mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
       loadSessionEntryMock.mockImplementationOnce(() => ({

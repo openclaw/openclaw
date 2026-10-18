@@ -417,7 +417,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             agentId: sessionAgentId,
             sessionEntry,
           });
-          const fastMode = params.opts.fastMode ?? fastModeState.mode;
+          const fastMode = params.opts.fastMode ?? fastModeState.requestMode;
           const configuredAuthProfileId =
             providerOverride === defaultProvider && modelOverride === defaultModel
               ? configuredDefaultAuthProfileId
@@ -564,6 +564,8 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 params.onLifecycleGenerationChanged(nextLifecycleGeneration);
               },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
+              onAttemptStart: attemptLifecycleCallbacks.onAttemptStart,
+              onAttemptTerminalReplaced: attemptLifecycleCallbacks.onAttemptTerminalReplaced,
               deferTerminalLifecycle: true,
               deferredLifecycle,
             });

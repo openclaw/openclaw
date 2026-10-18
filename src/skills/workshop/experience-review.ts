@@ -26,7 +26,6 @@ import {
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -39,8 +38,6 @@ import { listWorkshopChanges } from "./library.js";
 import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
 import { runSkillWorkshopReview } from "./review-run.js";
 import { workshopReviewRunId } from "./review-undo.js";
-
-const log = createSubsystemLogger("skills/workshop");
 
 /** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
@@ -133,8 +130,8 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     },
   };
 
-  // Fork the foreground model context through the completed turn; the review's tool
-  // schemas and prefix match the foreground so the provider prompt cache is reused.
+  // Read only a bounded suffix through the completed turn. The review does not
+  // need to repay the entire conversation's token budget to learn one procedure.
   const prepare = async (
     source: typeof candidate.source,
     assertPhysicalCurrent: () => void,
@@ -144,6 +141,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
     const sessionManager = await SessionManager.openModelContextAsync(source, {
       cwd: workspaceDir,
       through: candidate.source,
+      limits: { maxBytes: 32_768, maxEvents: 64, toolResultOverflow: "omit" },
       signal: abortSignal,
     });
     assertPreparationCurrent();
@@ -318,7 +316,6 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
   } finally {
     // Each skill_workshop call commits on its own, so a failed or aborted run may have changed skills.
     const changes = await listWorkshopChanges(agentId, { runId });
-    log.debug(`experience review finished: session=${sessionKey} changes=${changes.length}`);
     await postWorkshopChangeNotice({ config, generation, runId, changes });
   }
 }

@@ -158,6 +158,29 @@ export function readModelPromptProjection(message: unknown): string | undefined 
   return projection.text;
 }
 
+export function prepareModelPromptProjection(
+  message: unknown,
+  text: string,
+): PersistedUserTurnMessage | undefined {
+  if (!isUserMessage(message)) {
+    throw new Error("Model prompt projection lost its canonical user turn");
+  }
+  const existing = readModelPromptProjection(message);
+  if (existing !== undefined) {
+    if (existing !== text) {
+      throw new Error("A captured user-turn model prompt projection cannot be changed");
+    }
+    return undefined;
+  }
+  return {
+    ...message,
+    __openclaw: {
+      ...message["__openclaw"],
+      modelPromptProjection: { version: 1, text },
+    },
+  };
+}
+
 export function projectRecordedModelPrompt(
   message: PersistedUserTurnMessage,
   transcript?: AgentMessage,

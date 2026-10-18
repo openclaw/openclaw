@@ -9,7 +9,7 @@ import type {
 } from "../plugins/manifest-types.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { computeBaseConfigSchemaResponse } from "./schema-base.js";
+import { computeBaseConfigSchemaResponse, computeBaseConfigUiHints } from "./schema-base.js";
 import { applySharedChannelFieldHelp } from "./schema.channel-field-help.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
 import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
@@ -499,6 +499,28 @@ function buildBaseConfigSchema(): ConfigSchemaResponse {
   return next;
 }
 
+function mergeConfigUiHints(
+  base: ConfigUiHints,
+  plugins: PluginUiMetadata[],
+  channels: ChannelUiMetadata[],
+): ConfigUiHints {
+  const hints = applyMetadataHints(base, plugins, channels);
+  const keys = collectExtensionHintKeys(hints, plugins, channels);
+  return applySensitiveUrlHints(applySensitiveHints(hints, keys), keys);
+}
+
+/** Redaction consumes sensitivity metadata, not JSON schema or presentation tiers. */
+export function buildConfigRedactionHints(params: {
+  plugins: PluginUiMetadata[];
+  channels: ChannelUiMetadata[];
+}): ConfigUiHints {
+  const bundledChannels = getBundledChannelSchemaMetadata();
+  const base = applyMetadataHints(computeBaseConfigUiHints(), [], bundledChannels);
+  const baseHints = applySensitiveHints(base, collectExtensionHintKeys(base, [], bundledChannels));
+  const { plugins, channels } = limitExtensionSchemas(params);
+  return mergeConfigUiHints(baseHints, plugins, channels);
+}
+
 export function buildConfigSchemaCore(params?: {
   plugins?: PluginUiMetadata[];
   channels?: ChannelUiMetadata[];
@@ -520,16 +542,7 @@ export function buildConfigSchemaCore(params?: {
       return cached;
     }
   }
-  const mergedWithoutSensitiveHints = applyMetadataHints(base.uiHints, plugins, channels);
-  const extensionHintKeys = collectExtensionHintKeys(
-    mergedWithoutSensitiveHints,
-    plugins,
-    channels,
-  );
-  const mergedHints = applySensitiveUrlHints(
-    applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
-    extensionHintKeys,
-  );
+  const mergedHints = mergeConfigUiHints(base.uiHints, plugins, channels);
   const mergedSchema = mergeExtensionSchemas(structuredClone(base.schema), channels, plugins);
   const changedRoots = [
     ...(plugins.length ? ["plugins"] : []),

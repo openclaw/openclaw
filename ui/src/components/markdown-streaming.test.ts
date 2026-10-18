@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as markdownDetails from "./markdown-details.ts";
 import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import * as markdownText from "./markdown-text.ts";
@@ -26,6 +27,12 @@ vi.mock(import("dompurify"), async (importOriginal) => {
     return purifier;
   };
   return { ...actual, default: Object.assign(createDOMPurify, actual.default) };
+});
+
+beforeAll(async () => {
+  await waitForSolid(() =>
+    expect(toSanitizedMarkdownHtml("```ts\nconst ready = true;\n```")).toContain("hljs-keyword"),
+  );
 });
 
 describe("toStreamingMarkdownParts", () => {
@@ -62,7 +69,7 @@ A clear explanation with **important details** and an inline \`value\`. The brow
 
 \`\`\`typescript
 export function sample${index}(value: number): number {
-  const doubled = value * 2;
+  const doubled = value < 0 ? 0 : value * 2;
   return doubled + ${index};
 }
 \`\`\`

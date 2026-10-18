@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
+import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import type { PresentationValue } from "../../../lit/presentation-binding.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -14,9 +15,18 @@ import type { AssistantMessageDisclosure } from "./chat-message-text-preparation
 import type { ReplyLine } from "./chat-reply-attribution.ts";
 import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
+export type ActivityOperationProps = {
+  group: ToolCallGroup<ToolCard>;
+  options: Omit<ToolRenderOptions, "messageKey"> &
+    Pick<GroupedMessageOptions, "isToolExpanded" | "onToggleToolExpanded">;
+  contexts: ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
+};
+
 export type GroupedMessageOptions = {
   isStreaming: boolean;
   isForwarded?: boolean;
+  /** Search reveals matching transcript text inside disclosures. */
+  searchResult?: boolean;
   sessionKey?: string;
   presented?: boolean;
   transcriptVisible?: PresentationValue;
@@ -39,8 +49,8 @@ export type GroupedMessageOptions = {
   messageActions?: MessageActionDetails | null;
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
-  toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
-  onRequestUpdate?: () => void;
+  toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
+  mediaOwner?: object;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

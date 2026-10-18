@@ -482,13 +482,11 @@ export function TINFOIL_PARTS(showHat: boolean): JSX.Element {
         <path d="M35 86 L46 80 L58 87 L70 79 L84 85" />
       </g>
       {showHat ? (
-        <>
-          <g class="lob-tinfoil-hat">
-            <path d="M43 14 L57 0 L78 15 L60 11 Z" fill="#c0c9d1" />
-            <path d="M57 0 L60 11 L78 15" fill="none" stroke="#7f8992" stroke-width="1.5" />
-            <path d="M43 14 L60 11 L53 5" fill="none" stroke="#9aa4ad" stroke-width="1.5" />
-          </g>
-        </>
+        <g class="lob-tinfoil-hat">
+          <path d="M43 14 L57 0 L78 15 L60 11 Z" fill="#c0c9d1" />
+          <path d="M57 0 L60 11 L78 15" fill="none" stroke="#7f8992" stroke-width="1.5" />
+          <path d="M43 14 L60 11 L53 5" fill="none" stroke="#9aa4ad" stroke-width="1.5" />
+        </g>
       ) : (
         ""
       )}
@@ -519,15 +517,13 @@ export const NOTEXTURE_CHECKER = () => (
     <g class="lob-notexture" shape-rendering="crispEdges">
       {CHECKER_ROWS.flatMap((row, rowIndex) =>
         Array.from({ length: row.count }, (_, column) => (
-          <>
-            <rect
-              x={row.x + column * 8}
-              y={row.y}
-              width="8"
-              height="8"
-              fill={(rowIndex + column) % 2 === 0 ? "#ff00dc" : "#111111"}
-            />
-          </>
+          <rect
+            x={row.x + column * 8}
+            y={row.y}
+            width="8"
+            height="8"
+            fill={(rowIndex + column) % 2 === 0 ? "#ff00dc" : "#111111"}
+          />
         )),
       )}
     </g>

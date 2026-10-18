@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
@@ -9,6 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -90,7 +90,6 @@ export function readContextEngineThreadBootstrapProjection(
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
-  projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
   legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
@@ -118,13 +117,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
   }
-  const projectionChanged =
-    bindingProjection.mode !== "thread_bootstrap" ||
-    bindingProjection.epoch !== params.projection.epoch ||
-    bindingProjection.fingerprint !== params.projection.fingerprint;
-  return projectionChanged
-    ? { project: true, reason: "projection-mismatch" }
-    : { project: false, reason: "matching-thread-bootstrap-binding" };
+  return { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
 export function buildCodexSystemPromptReport(params: {
@@ -141,12 +134,8 @@ export function buildCodexSystemPromptReport(params: {
   const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
-  const bootstrapMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
-  );
-  const bootstrapTotalMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
-  );
+  const bootstrapMaxChars = params.attempt.config?.agents?.defaults?.bootstrapMaxChars;
+  const bootstrapTotalMaxChars = params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars;
   return {
     source: "run",
     generatedAt: Date.now(),
@@ -211,10 +200,6 @@ function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToo
     schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
-}
-
-function sha256Text(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function stableJsonHash(value: JsonValue): string {
@@ -305,12 +290,6 @@ function indexCodexContextFileContent(files: EmbeddedContextFile[]) {
       (baseName ? byBaseName.get(baseName) : undefined)
     );
   };
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 export function buildCodexOpenClawPromptContext(params: {

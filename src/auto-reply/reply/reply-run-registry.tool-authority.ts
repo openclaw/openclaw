@@ -4,6 +4,7 @@ import {
   bindReplyToolAuthorityCallerRead,
   prepareReplyToolAuthorityCallerRead,
 } from "../../agents/harness/host-private-capabilities.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type {
   ReplyOperation,
   ReplyToolAuthoritySnapshot,
@@ -215,6 +216,11 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     bindToolAuthoritySnapshot(value) {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.bindToolAuthoritySnapshot",
+        replacement: "await bindToolAuthoritySnapshotAsync()",
+      });
       if (canInstallSnapshot(value)) {
         installSnapshot(value, value.fingerprint());
       }
@@ -229,6 +235,13 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
       try {
         // Released plugins may still supply the original two-method snapshot.
+        if (!value.fingerprintAsync) {
+          warnPluginSdkDeprecation({
+            family: "reply-tool-authority-sync-preparation",
+            method: "ReplyToolAuthoritySnapshot.fingerprint",
+            replacement: "implement fingerprintAsync() and projectAsync()",
+          });
+        }
         const prepared = await (value.fingerprintAsync?.() ?? value.fingerprint());
         assertCurrent();
         installSnapshot(value, prepared);
@@ -238,6 +251,11 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     projectToolAuthorityFingerprint(overlay) {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.projectToolAuthorityFingerprint",
+        replacement: "await projectToolAuthorityFingerprintAsync()",
+      });
       if (!lifecycle.isOpen() || !snapshot || !route) {
         return undefined;
       }
@@ -278,6 +296,13 @@ export function createReplyOperationToolAuthority(lifecycle: {
           assertCurrent();
           return admittedFingerprint;
         }
+        if (!selected.fingerprintAsync || !selected.projectAsync) {
+          warnPluginSdkDeprecation({
+            family: "reply-tool-authority-sync-preparation",
+            method: "ReplyToolAuthoritySnapshot.fingerprint/project",
+            replacement: "implement fingerprintAsync() and projectAsync()",
+          });
+        }
         const current = await (selected.fingerprintAsync?.(selectedRoute) ??
           selected.fingerprint(selectedRoute));
         assertCurrent();
@@ -290,6 +315,11 @@ export function createReplyOperationToolAuthority(lifecycle: {
       }
     },
     bindToolAuthorityRoute(value) {
+      warnPluginSdkDeprecation({
+        family: "reply-tool-authority-sync-preparation",
+        method: "replyOperation.bindToolAuthorityRoute",
+        replacement: "await bindToolAuthorityRouteAsync()",
+      });
       if (!lifecycle.isOpen() || !snapshot || !lifecycle.ownsRunSlot()) {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
@@ -307,6 +337,13 @@ export function createReplyOperationToolAuthority(lifecycle: {
         throw new Error("Reply operation has no active tool authority snapshot");
       }
       const preparedRoute = normalizeToolAuthorityRoute(value);
+      if (!selected.fingerprintAsync) {
+        warnPluginSdkDeprecation({
+          family: "reply-tool-authority-sync-preparation",
+          method: "ReplyToolAuthoritySnapshot.fingerprint",
+          replacement: "implement fingerprintAsync() and projectAsync()",
+        });
+      }
       const prepared = await (selected.fingerprintAsync?.(preparedRoute) ??
         selected.fingerprint(preparedRoute));
       assertCurrent();

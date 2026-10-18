@@ -346,6 +346,7 @@ export async function executeRepositoryGitHubPublication(params: {
       row,
       storePath: params.storePath,
       accountId: identity.account.accountId,
+      host: identity.host ?? resolveGitHubHost(),
       assertCurrent: assertPublicationAction,
       readCurrentEntry: params.readCurrentEntry,
       description:

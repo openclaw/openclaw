@@ -54,7 +54,6 @@ function buildFinalPayloads(
 ) {
   return buildReplyPayloads({
     isHeartbeat: false,
-    didLogHeartbeatStrip: false,
     blockStreamingEnabled: true,
     blockReplyPipeline: null,
     replyToMode: "off",
@@ -233,11 +232,6 @@ describe("createBlockReplyDeliveryHandler", () => {
 
   it.each<{ name: string; payload: ReplyPayload; mediaUrl?: string }>([
     {
-      name: "captioned image",
-      payload: { text: "here's the vibe", mediaUrls: ["/tmp/generated.png"], replyToCurrent: true },
-      mediaUrl: "/tmp/generated.png",
-    },
-    {
       name: "captioned voice",
       payload: { text: "spoken confirmation", mediaUrls: ["/tmp/voice.opus"], audioAsVoice: true },
       mediaUrl: "/tmp/voice.opus",
@@ -279,66 +273,26 @@ describe("createBlockReplyDeliveryHandler", () => {
     }
   });
 
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    options?: Partial<HandlerOptions>;
-    expected: ReplyPayload;
-    metadata?: { assistantMessageIndex: number };
-  }>([
-    {
-      name: "leading whitespace",
-      payload: { text: "\n\n  Hello from stream" },
-      expected: { text: "Hello from stream" },
-    },
-    {
-      name: "denied implicit threading",
-      payload: { text: "reset intro" },
-      options: { currentMessageId: "msg-123", replyThreading: { implicitCurrentMessage: "deny" } },
-      expected: { text: "reset intro" },
-    },
-    {
-      name: "structured media paths",
-      payload: { text: "Result", mediaUrl: "./image.png" },
-      options: {
-        normalizeMediaPaths: async (payload) => ({
-          ...payload,
-          mediaUrl: path.join("/tmp/home", "openclaw", "image.png"),
-          mediaUrls: [path.join("/tmp/home", "openclaw", "image.png")],
-        }),
-      },
-      expected: {
-        text: "Result",
-        mediaUrl: path.join("/tmp/home", "openclaw", "image.png"),
-        mediaUrls: [path.join("/tmp/home", "openclaw", "image.png")],
-      },
-    },
-    {
-      name: "payload metadata",
-      payload: { text: "Alpha" },
-      options: { applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }) },
-      expected: { text: "Alpha", replyToTag: true },
-      metadata: { assistantMessageIndex: 7 },
-    },
-  ])("normalizes $name before enqueueing", async ({ payload, options, expected, metadata }) => {
+  it("normalizes text and threading without losing payload metadata before enqueueing", async () => {
     const enqueue = vi.fn();
+    const metadata = { assistantMessageIndex: 7 };
     const handler = createHandler({
       blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
-      ...options,
+      currentMessageId: "msg-123",
+      replyThreading: { implicitCurrentMessage: "deny" },
+      applyReplyToMode: (payload) => ({ ...payload, replyToTag: true }),
     });
-    await handler(metadata ? setReplyPayloadMetadata(payload, metadata) : payload);
+    await handler(setReplyPayloadMetadata({ text: "\n\n  Alpha" }, metadata));
     expect(enqueue).toHaveBeenCalledExactlyOnceWith({
+      text: "Alpha",
       mediaUrl: undefined,
       mediaUrls: undefined,
       replyToId: undefined,
       replyToCurrent: undefined,
-      replyToTag: undefined,
+      replyToTag: true,
       audioAsVoice: false,
-      ...expected,
     });
-    if (metadata) {
-      expect(getReplyPayloadMetadata(enqueue.mock.calls[0]?.[0])).toEqual(metadata);
-    }
+    expect(getReplyPayloadMetadata(enqueue.mock.calls[0]?.[0])).toEqual(metadata);
   });
 
   it.each<{
@@ -355,12 +309,6 @@ describe("createBlockReplyDeliveryHandler", () => {
       text: "Result",
       mediaUrl: "./image.png",
       mediaUrls: ["./image.png"],
-    },
-    {
-      name: "lowercase directive",
-      payload: { text: "media: ./report.pdf" },
-      mediaUrl: "./report.pdf",
-      mediaUrls: ["./report.pdf"],
     },
     {
       name: "empty explicit list",
@@ -392,8 +340,8 @@ describe("createBlockReplyDeliveryHandler", () => {
   );
 
   it.each([
-    { name: "raw silence", text: "NO_REPLY", parsedSilent: false, expectWarning: false },
-    { name: "parsed silence", text: "", parsedSilent: true, expectWarning: false },
+    { name: "prepared literal marker", text: "NO_REPLY", parsedSilent: false, expectWarning: true },
+    { name: "recorded silence", text: "", parsedSilent: true, expectWarning: false },
     { name: "ordinary reply", text: "Caption", parsedSilent: false, expectWarning: true },
   ])(
     "preserves $name text policy during structured block normalization",

@@ -17,6 +17,7 @@ type KeyboardShortcutsTestDialog = HTMLElement & {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("keyboard shortcuts dialog", () => {
@@ -76,9 +77,14 @@ describe("keyboard shortcuts dialog", () => {
     },
   );
 
-  it.each(["MacIntel", "Win32", "Linux x86_64"])(
-    "hands New Session off only after releasing the help modal on %s",
-    async (platform) => {
+  it.each(
+    ["MacIntel", "Win32", "Linux x86_64"].flatMap((platform) =>
+      [false, true].map((native) => ({ platform, native })),
+    ),
+  )(
+    "hands New Session off after releasing help on $platform (native=$native)",
+    async ({ platform, native }) => {
+      vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const restoreDialog = installDialogPolyfill();
       const dialog = document.body.appendChild(
@@ -117,9 +123,9 @@ describe("keyboard shortcuts dialog", () => {
         const key = (init: KeyboardEventInit) => {
           const event = new KeyboardEvent("keydown", {
             ...modifier,
-            key: "O",
-            code: "KeyO",
-            shiftKey: true,
+            key: native ? "n" : "O",
+            code: native ? "KeyN" : "KeyO",
+            shiftKey: !native,
             bubbles: true,
             composed: true,
             cancelable: true,

@@ -8,7 +8,7 @@ import type { RunCliAgentParams } from "./types.js";
 
 function buildGrant(
   overrides: Partial<RunCliAgentParams> = {},
-  delegationCapability?: "full" | "report_only",
+  delegationCapability?: "full" | "host_only" | "report_only",
 ) {
   const run = {
     sessionKey: "agent:main:telegram:group:chat123",
@@ -142,10 +142,8 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
 });
 
 describe("buildCliMcpGrantContext delegationCapability", () => {
-  it("stamps a report-only capability into the minted grant", () => {
-    expect(buildGrant({}, "report_only")).toMatchObject({
-      delegationCapability: "report_only",
-    });
+  it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
+    expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });
 
   it("leaves the grant shape untouched for ordinary runs", () => {

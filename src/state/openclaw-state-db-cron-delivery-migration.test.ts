@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
@@ -64,7 +65,19 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
         const observation = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(readStateSchemaContentVersion(db)).toBe(19);
-          expect(observation.queries).toEqual([]);
+          // Managed reads qualify the retained catalog once after sibling DDL.
+          const qualificationQueries =
+            kind === "managed transaction"
+              ? [
+                  "PRAGMA schema_version",
+                  "PRAGMA user_version",
+                  "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+                  'select "value_json" from "config_machine_state" where "state_key" = ?',
+                ]
+              : [];
+          expect(observation.queries).toEqual(qualificationQueries);
+          expect(readStateSchemaContentVersion(db)).toBe(19);
+          expect(observation.queries).toEqual(qualificationQueries);
         } finally {
           observation.restore();
         }
@@ -75,7 +88,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       if (kind === "managed transaction") {
         runSqliteDeferredTransactionSync(db, migrateWhileReading);
       } else {
-        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(requireNativeSqliteDatabase(db), migrateWhileReading);
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -110,7 +123,8 @@ it.each(["runtime open", "doctor repair"] as const)(
       if (entry === "runtime open") {
         expect(integrityChecks).toHaveLength(1);
       } else {
-        expect(integrityChecks.length).toBeGreaterThan(0);
+        expect(integrityChecks).toEqual([]);
+        expect(migration.queries).toContain("PRAGMA quick_check;");
       }
     } finally {
       migration.restore();

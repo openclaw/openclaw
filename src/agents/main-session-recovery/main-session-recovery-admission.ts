@@ -15,6 +15,7 @@ export const MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER = Symbol.for(
 
 export type MainSessionRecoveryAdmission = {
   handoffId: string;
+  lane: CommandLane.Main | CommandLane.RestartRecovery;
   shouldContinue: () => boolean;
   beginDispatch: () => boolean;
 };
@@ -27,6 +28,7 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
   canonicalSessionKey?: string;
   sessionId: string;
   admission?: MainSessionRecoveryAdmission;
+  lane?: MainSessionRecoveryAdmission["lane"];
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   signal?: AbortSignal;
@@ -47,9 +49,13 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
     return params.admission.shouldContinue() ? await params.run(params.admission) : undefined;
   }
 
+  const lane = params.lane ?? CommandLane.RestartRecovery;
+  // Demand-triggered recovery uses interactive capacity; unattended recovery stays
+  // in RestartRecovery. The backlog barrier and execution must use the same lane.
   // Backlog waits precede session ownership, retry charges and Gateway queue deadlines.
   // Exact retries must remain interruptible by reset without holding a session admission.
-  await enqueueCommandInLane(CommandLane.Background, async () => {}, {
+  await enqueueCommandInLane(lane, async () => {}, {
+    priority: lane === CommandLane.RestartRecovery ? "background" : "normal",
     abortSignal: params.signal
       ? AbortSignal.any([params.signal, getGatewayRestartDrainSignal()])
       : getGatewayRestartDrainSignal(),
@@ -88,6 +94,7 @@ export async function runWithMainSessionRecoveryAdmission<T>(params: {
     return await admission.run(() =>
       params.run({
         handoffId,
+        lane,
         shouldContinue,
         beginDispatch: () => {
           if (!shouldContinue()) {

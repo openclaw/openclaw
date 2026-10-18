@@ -1,9 +1,5 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
-import {
-  asDateTimestampMs,
-  resolveDateTimestampMs,
-  resolveExpiresAtMsFromDurationSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
+import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
@@ -11,6 +7,11 @@ import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
+import {
+  createFeishuPartialReplyDeliveryError,
+  createFeishuReplyDeliveryResult,
+  type FeishuReplyDeliveryResult,
+} from "./reply-delivery-result.js";
 import type { CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -31,29 +32,6 @@ type CardState = {
 
 type CardKitResponse = { code?: number; msg?: string };
 
-type FeishuStreamingCloseResult = {
-  visibleReplySent: boolean;
-  content?: string;
-  messageId?: string;
-  /**
-   * False when the card rejected the final text (for example after CardKit closed
-   * streaming mode). Earlier accepted preview text may still be visible, but it is
-   * not the completed answer, so the dispatcher must deliver that answer another way.
-   */
-  finalTextAccepted?: boolean;
-};
-
-/** Provider finalization failed after a streaming card may already be visible. */
-export class FeishuStreamingFinalizationError extends Error {
-  readonly result: FeishuStreamingCloseResult;
-
-  constructor(cause: unknown, result: FeishuStreamingCloseResult) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "FeishuStreamingFinalizationError";
-    this.result = result;
-  }
-}
-
 type StreamingStartOptions = {
   replyToMessageId?: string;
   replyInThread?: boolean;
@@ -69,16 +47,12 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
-  const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
-    return now;
+    return nowMs;
   }
   return (
-    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
-    resolveExpiresAtMsFromDurationSeconds(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, {
-      nowMs: now,
-    }) ??
-    now
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs }) ??
+    nowMs + FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS * 1000
   );
 }
 
@@ -133,11 +107,8 @@ async function assertSuccessfulCardKitResponse(
 async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
-  const rawNow = Date.now();
-  const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
-  const now = resolveDateTimestampMs(rawNow);
-  const minUsableExpiresAt = resolveExpiresAtMsFromDurationSeconds(60, { nowMs: now }) ?? now;
-  if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
+  const now = Date.now();
+  if (cached && cached.expiresAt > now + 60_000) {
     return cached.token;
   }
 
@@ -196,8 +167,8 @@ export function mergeStreamingText(
   previousText: string | undefined,
   nextText: string | undefined,
 ): string {
-  const previous = typeof previousText === "string" ? previousText : "";
-  const next = typeof nextText === "string" ? nextText : "";
+  const previous = previousText ?? "";
+  const next = nextText ?? "";
   if (!next) {
     return previous;
   }
@@ -501,7 +472,7 @@ export class FeishuStreamingSession {
   async closeWithResult(
     finalText?: string,
     options?: { note?: string },
-  ): Promise<FeishuStreamingCloseResult> {
+  ): Promise<FeishuReplyDeliveryResult> {
     if (!this.state || this.closed) {
       return { visibleReplySent: false };
     }
@@ -565,10 +536,13 @@ export class FeishuStreamingSession {
     this.pendingText = null;
 
     this.log?.(`Closed streaming: cardId=${finalState.cardId}`);
-    const result: FeishuStreamingCloseResult = {
-      visibleReplySent: visibleContentSent,
-      ...(visibleContentSent ? { content: finalState.sentText } : {}),
-      ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
+    const result: FeishuReplyDeliveryResult = {
+      ...createFeishuReplyDeliveryResult({
+        results: [finalState],
+        visibleReplySent: visibleContentSent,
+        ...(visibleContentSent ? { content: finalState.sentText } : {}),
+        kind: "card",
+      }),
       ...(finalWriteError === undefined ? {} : { finalTextAccepted: false }),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
@@ -579,12 +553,12 @@ export class FeishuStreamingSession {
               "Feishu streaming card finalization failed",
             )
           : (finalWriteError ?? closeError);
-      throw new FeishuStreamingFinalizationError(cause, result);
+      throw createFeishuPartialReplyDeliveryError(cause, result);
     }
     return result;
   }
 
-  async discard(): Promise<FeishuStreamingCloseResult> {
+  async discard(): Promise<FeishuReplyDeliveryResult> {
     if (!this.state || this.closed) {
       return { visibleReplySent: false };
     }

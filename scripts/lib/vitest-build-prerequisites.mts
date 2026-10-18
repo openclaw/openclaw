@@ -267,6 +267,7 @@ const runtimeConsumers = [
     "src/agents/agent-command-local.test.ts",
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
+    "src/cli/update-cli/update-command-migrated-schema.test.ts",
     "src/cli/update-cli/update-command-migrated.test.ts",
     "src/cli/update-cli/update-command-rollback.test.ts",
     "src/cli/update-cli/update-command-post-update-recovery.test.ts",
@@ -279,6 +280,8 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/infra/database-engine/cli-oneshot.postgres.test.ts",
+    "src/infra/database-engine/interactive-setup.integration.test.ts",
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     "src/plugin-state/plugin-state-store.runtime.test.ts",

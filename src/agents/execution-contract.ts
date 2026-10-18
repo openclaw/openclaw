@@ -1,6 +1,3 @@
-/**
- * Resolves strict agentic execution contracts for provider/model pairs.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentExecutionContract, resolveSessionAgentIds } from "./agent-scope.js";
@@ -24,7 +21,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
   if (provider !== "openai" && provider !== "mock-openai") {
     return false;
   }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
+  const modelId = params.modelId ?? "";
   const bareModelId = stripProviderPrefix(modelId);
   return STRICT_AGENTIC_MODEL_ID_PATTERN.test(bareModelId);
 }

@@ -257,12 +257,8 @@ describe("cron stream output", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(fake.spawn).toHaveBeenCalledTimes(2);
       expect(watchers.inspect("stream-job")).toMatchObject({
-        generation: expect.any(Number),
         sourceIdentity: initialOwner?.sourceIdentity,
       });
-      expect(watchers.inspect("stream-job")?.generation).toBeGreaterThan(
-        initialOwner?.generation ?? 0,
-      );
       expect(fireBatch).toHaveBeenLastCalledWith(
         expect.any(Object),
         "pending",

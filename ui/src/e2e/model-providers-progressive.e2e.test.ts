@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -49,6 +50,70 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("reuses a pending Models snapshot until discovery publishes completion", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const model = { provider: "fixture", id: "current", name: "Current model", available: true };
+    const pendingCatalog = { models: [model], pendingProviders: ["fixture"] };
+    const gateway = await installMockGateway(page, {
+      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
+      defaultAgentId: "main",
+      deferredMethods: ["agents.list"],
+      models: [model],
+      methodResponses: {
+        "models.list": pendingCatalog,
+        "models.authStatus": {
+          ts: 1,
+          providers: [{ provider: "fixture", profiles: [], apiKey: { source: "config" } }],
+        },
+      },
+    });
+    try {
+      await page.goto(server.baseUrl + "settings/model-providers");
+      await gateway.waitForRequest("agents.list");
+      const connect = await gateway.waitForRequest("connect");
+      const target = asNullableRecord(connect.params)?.modelCatalog;
+      expect(target).toBeDefined();
+      await gateway.emitGatewayEvent("models.snapshot", {
+        target,
+        scope: { agentId: "main" },
+        catalog: pendingCatalog,
+      });
+      const reads = (await gateway.getRequests("models.list")).length;
+      expect(reads).toBe(0);
+      await gateway.resolveDeferred("agents.list");
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      const badge = page.locator(
+        '[data-provider-id="fixture"] .model-providers__head .settings-status',
+      );
+      await expect.poll(() => badge.textContent()).toBe("Checking models…");
+      expect(await gateway.getRequests("models.list")).toHaveLength(reads);
+      await gateway.setMethodResponse("models.list", {
+        models: [model],
+        pendingProviders: [],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      });
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await expect.poll(() => badge.textContent()).toBe("Ready");
+      expect((await gateway.getRequests("models.list")).length).toBe(reads + 1);
+      await page.locator('a[href="/settings/appearance"]').first().click();
+      await waitForControlUiRoute(page, { routeId: "appearance" });
+      await page.locator('a[href="/settings/model-providers"]').first().click();
+      await waitForControlUiRoute(page, { routeId: "model-providers" });
+      expect(await badge.textContent()).toBe("Ready");
+      expect((await gateway.getRequests("models.list")).map((request) => request.params)).toEqual([
+        { view: "configured", agentId: "main" },
+        { view: "configured", preparedOnly: true, agentId: "main" },
+      ]);
+    } finally {
+      await context.close();
+    }
   });
 
   it.each(["fresh", "populated", "empty"] as const)(
@@ -255,17 +320,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       });
       await page.locator('a[href="/settings/model-providers"]').first().click();
       await gateway.waitForRequest("models.authStatus");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              document.querySelector<HTMLElement & { loaderPending: boolean }>(
-                "openclaw-model-providers-page",
-              )?.loaderPending,
-          ),
-        )
-        .toBe(true);
       const defaults = page.locator(".model-providers__defaults");
+      await defaults.waitFor({ state: "visible" });
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
@@ -343,17 +399,8 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       });
       await page.locator('a[href="/settings/model-providers"]').first().click();
       await gateway.waitForRequest("models.authStatus");
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              document.querySelector<HTMLElement & { loaderPending: boolean }>(
-                "openclaw-model-providers-page",
-              )?.loaderPending,
-          ),
-        )
-        .toBe(true);
       const defaults = page.locator(".model-providers__defaults");
+      await defaults.waitFor({ state: "visible" });
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
       await trigger.click();
@@ -431,6 +478,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       valid: true,
     });
     const gateway = await installMockGateway(page, {
+      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
       defaultAgentId: "main",
       models: [previousModel],
       methodResponses: {
@@ -579,6 +627,9 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const older = { ...prepared, id: "older", name: "Older model" };
       const added = { ...prepared, id: "added", name: "New model" };
       const gateway = await installMockGateway(page, {
+        ...(publicationKind === "snapshot"
+          ? { connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] }
+          : {}),
         defaultAgentId: "main",
         models: [older],
         heldMethods: ["models.list", "models.authStatus", "usage.status", "sessions.usage"],

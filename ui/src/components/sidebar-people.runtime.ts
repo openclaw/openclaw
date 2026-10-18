@@ -3,12 +3,14 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { presenceUserLabel, projectOnlinePresenceViewers } from "../lib/presence-users.ts";
-import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
 import {
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
+  presenceUserLabel,
+  projectOnlinePresenceViewers,
+  profilePresenceViewer,
+} from "../lib/presence-users.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
+import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
+import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
@@ -22,7 +24,7 @@ import {
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import { observePersonActivityData } from "./person-activity-data.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 let nextCardId = 0;
 
@@ -35,14 +37,21 @@ export class SidebarPeopleRuntime {
     gateway: ApplicationGateway;
     client: GatewayBrowserClient | null;
   } | null = null;
-  private readonly portal = new PortaledHovercardController(() => this.close(), 100);
+  private readonly portal = createPortaledHovercardOwner(() => this.close(), 100);
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
   private readonly stopLocale: () => void;
+  private readonly stopGateway: (() => void) | undefined;
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
     this.stopLocale = i18n.subscribe(() => this.sync());
+    // Retire connection-bound cards without waiting for a sidebar repaint.
+    this.stopGateway = host.sessionDataContext?.gateway.subscribe(() => {
+      if (!this.isCurrent()) {
+        this.close();
+      }
+    });
   }
 
   private scope(): string {
@@ -173,9 +182,7 @@ export class SidebarPeopleRuntime {
       active.gateway === gateway &&
       active.client === gateway.snapshot.client &&
       active.scope === this.scope() &&
-      this.host.contains(active.row) &&
-      (active.row.dataset.personCardSection === undefined ||
-        !this.host.collapsedSessionSections.has(active.row.dataset.personCardSection)),
+      this.host.contains(active.row),
     );
   }
 
@@ -200,6 +207,10 @@ export class SidebarPeopleRuntime {
     );
     if (!user && active.id.startsWith("profile:")) {
       const profileId = active.id.slice("profile:".length);
+      const profile = profileDirectory(context.gateway).get(profileId);
+      if (profile) {
+        user = profilePresenceViewer(profile);
+      }
       const actor = [data.sessionsResult, ...Object.values(data.sessionResultsByAgent)]
         .flatMap((result) => result?.sessions ?? [])
         .flatMap((row) => [row.owner?.actor, row.createdActor])
@@ -207,7 +218,7 @@ export class SidebarPeopleRuntime {
           (candidate) =>
             candidate?.identity?.type === "profile" && candidate.identity.id === profileId,
         );
-      if (actor) {
+      if (!user && actor) {
         user = {
           id: profileId,
           identity: { type: "profile", id: profileId },
@@ -250,16 +261,8 @@ export class SidebarPeopleRuntime {
           },
           () => this.close(),
         ),
-        openSession: (row, agentId) => {
+        openSession: (row, agentId, options) => {
           const face = resolveSessionPreferredFace(row);
-          const target = sessionNavigationTarget({
-            face,
-            sessionKey: row.key,
-            row,
-            fallbackAgentId: agentId,
-            basePath: this.host.basePath,
-            mainKey: resolveUiConfiguredMainKey(defaults),
-          });
           this.close();
           runSessionNavigationIntent(this.host, {
             agentId,
@@ -274,8 +277,8 @@ export class SidebarPeopleRuntime {
               ) {
                 return false;
               }
-              this.host.prepareSessionNavigation(row.key, target.options.pathname);
-              this.host.onNavigate?.(face, target.options);
+              this.host.prepareSessionNavigation(row.key, options.pathname);
+              this.host.onNavigate?.(face, options);
               selectApplicationSession({
                 selection: context.agentSelection,
                 gateway: context.gateway,
@@ -345,5 +348,6 @@ export class SidebarPeopleRuntime {
   dispose(): void {
     this.close();
     this.stopLocale();
+    this.stopGateway?.();
   }
 }

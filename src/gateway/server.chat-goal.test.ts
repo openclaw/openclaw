@@ -3,7 +3,11 @@ import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
@@ -16,16 +20,11 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
-import {
-  collectActiveSessionWorkAdmissions,
-  getSessionWorkAdmissionRelease,
-  isSessionWorkAdmissionActive,
-} from "../sessions/session-lifecycle-admission.js";
+import * as sessionLifecycle from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import * as skillLibrarySelection from "../skills/library/selection.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -67,6 +66,7 @@ import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resour
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
+const { getSessionWorkAdmissionRelease } = sessionLifecycle;
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
 installGatewayTestHooks({ scope: "suite" });
@@ -230,7 +230,7 @@ async function waitForModelRun(count = 1) {
     failureDiagnostic = JSON.stringify({
       warningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
       abortControllers: context.chatAbortControllers.size,
-      admissionScopes: [...collectActiveSessionWorkAdmissions()]
+      admissionScopes: [...sessionLifecycle.collectActiveSessionWorkAdmissions()]
         .filter(([, identities]) => identities.has(sessionKey))
         .slice(0, 5)
         .map(([activeScope, identities]) => ({
@@ -705,7 +705,7 @@ describe("Goal chat admission and continuation", () => {
         );
         expect(loadSessionEntry(scope())).toBeUndefined();
         expectNoDispatch();
-        expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+        expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
         if (change === "replaced") {
           expect(context.dedupe.get(key)?.payload).toMatchObject({
             attemptId: "successor-attempt",
@@ -862,26 +862,42 @@ describe("Goal chat admission and continuation", () => {
     expectNoDispatch();
   });
 
-  it("does not let ordinary chat displace a Goal reservation with the same run ID", async () => {
-    const writerStarted = createDeferred();
+  it("does not let ordinary chat displace a Goal reservation with the same run ID", async ({
+    signal,
+  }) => {
     const releaseWriter = createDeferred();
-    const writer = runExclusiveSessionStoreWrite(storePath, async () => {
-      writerStarted.resolve();
-      await releaseWriter.promise;
-    });
-    await writerStarted.promise;
+    const entered = createDeferred();
+    const beginAdmission = sessionLifecycle.beginSessionWorkAdmission;
+    using _ = vi
+      .spyOn(sessionLifecycle, "beginSessionWorkAdmission")
+      .mockImplementationOnce((params) => {
+        const revalidate = params.revalidateAllowed;
+        if (!revalidate) {
+          throw new Error("Expected writer-ordered chat admission validation");
+        }
+        return beginAdmission({
+          ...params,
+          revalidateAllowed: () => {
+            entered.resolve();
+            return releaseWriter.promise.then(revalidate);
+          },
+        });
+      });
     const request = goalStart("Finish the release checklist", "goal-chat-collision");
     const goal = rpc("chat.send", request);
     try {
-      await vi.waitFor(() =>
-        expect(isSessionWorkAdmissionActive(storePath, [sessionId])).toBe(true),
+      const waiting = awaitGateBeforeSettlement(entered.promise, goal, "Goal skipped admission");
+      await withinTest(waiting, signal);
+      expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [sessionId])).toBe(true);
+      await withinTest(
+        rpc("chat.send", {
+          sessionKey,
+          sessionId,
+          message: "An ordinary chat message",
+          idempotencyKey: request.idempotencyKey,
+        }),
+        signal,
       );
-      await rpc("chat.send", {
-        sessionKey,
-        sessionId,
-        message: "An ordinary chat message",
-        idempotencyKey: request.idempotencyKey,
-      });
       releaseWriter.resolve(undefined);
       const result = await goal;
       expect(result.mock.calls[0]?.[0]).toBe(true);
@@ -890,7 +906,7 @@ describe("Goal chat admission and continuation", () => {
       expect(userMessages()).toEqual([expect.objectContaining({ content: request.message })]);
     } finally {
       releaseWriter.resolve(undefined);
-      await Promise.allSettled([writer, goal]);
+      await goal.catch(() => undefined);
       await waitForDispatchEnd();
     }
   });

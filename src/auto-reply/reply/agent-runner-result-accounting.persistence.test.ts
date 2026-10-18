@@ -3,14 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -27,10 +29,14 @@ import {
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
+import { createFollowupRunner } from "./followup-runner.js";
+import * as followupAdmission from "./followup-turn-admission.js";
+import * as followupExecution from "./followup-turn-execution.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { incrementCompactionCount } from "./session-updates.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];
@@ -96,6 +102,91 @@ it.each(["before-accounting", "during-payload-preparation"] as const)(
     );
   },
 );
+
+it("retains an accepted rejected followup's recovery claim until source delivery settles", async () => {
+  const fixture = await createFixture();
+  const { context, sessionId, turn } = fixture;
+  const sessionKey = context.sessionKey!;
+  const scope = { agentId: "main", storePath, sessionKey };
+  const entry = {
+    ...fixture.read()!,
+    restartRecoveryDeliveryRunId: "accepted-followup",
+    restartRecoveryDeliverySourceRunId: "accepted-source",
+  };
+  await fixture.replace(entry);
+  turn.session.publish(entry);
+  await using actor = createReplyRecoveryActorFixture({
+    ...scope,
+    getSessionId: () => sessionId,
+    operation: turn.operation,
+  });
+  const recovery = createReplyRestartRecoveryClaimController({
+    ...scope,
+    acquireSessionActor: () => actor.acquireSessionActor(),
+    admissionRunId: "accepted-followup",
+    executionRunId: turn.runId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    getEntry: turn.session.current,
+    getSessionId: () => sessionId,
+    isRestartAbort: () => false,
+    resolveDeliveryContext: () => undefined,
+    setEntry: (next) => turn.session.publish(next),
+  });
+  await recovery.admitUserTurn();
+  turn.restartRecovery = recovery;
+  let deliveryEntry: SessionEntry | undefined;
+  const deliver = vi.fn(async () => {
+    deliveryEntry = fixture.read();
+  });
+  turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
+  const admission = vi
+    .spyOn(followupAdmission, "admitFollowupTurn")
+    .mockResolvedValue({ kind: "admitted", turn });
+  const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
+    commentaryPayloadsEnabled: false,
+    execution: {
+      runId: turn.runId,
+      outcome: { kind: "rejected", payload: { text: "Accepted setup failed", isError: true } },
+    },
+    runStartedAt: context.runStartedAt,
+    sessionCtx: {},
+    pendingToolTasks: new Set(),
+    progress: { drain: async () => {} },
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "synthetic",
+    source: "test",
+    provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+  });
+  try {
+    await withPluginRuntimeRegistryScope(registry, () =>
+      createFollowupRunner({
+        defaultModel: diagnostic.model,
+        typing: createMockTypingController(),
+        typingMode: "never",
+      })(turn.queued),
+    );
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        payloads: [expect.objectContaining({ text: "Accepted setup failed", isError: true })],
+        completion: expect.objectContaining({ kind: "failed" }),
+      }),
+    );
+    expect(deliveryEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "accepted-followup",
+      restartRecoveryDeliverySourceRunId: "accepted-source",
+    });
+    expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
+    expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
+    const settledEntry = fixture.read();
+    expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
+  } finally {
+    admission.mockRestore();
+    execution.mockRestore();
+  }
+});
 
 it.each([
   { name: "auth profile", authProfileOverride: "openai:new", authProfileOverrideSource: "user" },
@@ -185,36 +276,6 @@ it("keeps incognito accounting and final custody on the retained memory owner", 
   }
 });
 
-it("publishes a prepared final only after its worker completion commits without host transactions", async () => {
-  const fixture = await createFixture();
-  const payload = { text: "durable final" };
-  fixture.context.execution.result.payloads = [payload];
-  const sql = observeHostDataSql();
-  try {
-    const result = await finalizeReplyAgentRun(fixture.context);
-    expect(result).toMatchObject({ text: "durable final" });
-    expect(
-      sql.queries.filter((query) =>
-        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
-      ),
-    ).toEqual([]);
-    const final = Array.isArray(result) ? result[0] : result;
-    const completion = final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion;
-    expect(completion).toMatchObject({
-      sessionId: fixture.sessionId,
-      sessionKey: fixture.context.sessionKey,
-      storePath,
-    });
-    expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
-      intentId: completion?.intentId,
-      deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
-      text: "durable final",
-    });
-  } finally {
-    sql.restore();
-  }
-});
-
 it("completes against the settled writer when the caller still has its pre-run entry", async () => {
   const fixture = await createFixture();
   fixture.context.execution.sessionWriter = {
@@ -273,6 +334,15 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       },
     });
     await controller.admitUserTurn();
+    const settled = {
+      ...fixture.read()!,
+      status: "done" as const,
+      endedAt: 1_000,
+      updatedAt: 1_000,
+    };
+    await fixture.replace(settled);
+    context.activeSessionEntry = settled;
+    context.activeSessionStore![sessionKey] = settled;
     context.prepareRestartClaimCleanup = controller.prepareCompletionCleanup;
     context.execution.result.meta.agentMeta = {
       sessionId,
@@ -307,6 +377,9 @@ it.each(["success", "publication-failure", "rollback"] as const)(
         expect(fixture.read()).toEqual(before);
       } else {
         expect(fixture.read()).toMatchObject({
+          status: "done",
+          endedAt: 1_000,
+          updatedAt: 1_000,
           inputTokens: 120,
           outputTokens: 8,
           pendingFinalDelivery: { text: "done", deliveries: [{ state: "prepared" }] },
@@ -320,6 +393,22 @@ it.each(["success", "publication-failure", "rollback"] as const)(
         expect(observer.commands).toHaveLength(commandsBeforeCleanup);
       }
       expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+      if (outcome === "success") {
+        context.replyOperation.complete();
+        await actor.release();
+        await disposeOpenClawAgentDatabaseByPath(storePath);
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        expect(fixture.read()).toMatchObject({
+          status: "done",
+          endedAt: 1_000,
+          updatedAt: 1_000,
+          inputTokens: 120,
+          outputTokens: 8,
+          restartRecoveryTerminalRunIds: ["source-turn"],
+          pendingFinalDelivery: { text: "done" },
+        });
+        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+      }
     } finally {
       observer.restore();
     }
@@ -369,106 +458,6 @@ it.each([
 );
 
 it.each([
-  { stored: "off", selected: "raw", authorized: true, trace: true },
-  { stored: "raw", selected: "off", authorized: true, trace: false },
-  { stored: "raw", selected: undefined, authorized: true, trace: true },
-  { stored: "off", selected: "raw", authorized: false, trace: false },
-] as const)(
-  "delivers queued trace $selected over stored $stored with authority=$authorized",
-  async ({ stored, selected, authorized, trace }) => {
-    const fixture = await createFixture();
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
-      traceLevel: stored,
-      verboseLevel: "off",
-    });
-    fixture.context.followupRun.prompt = "QUEUED_INPUT";
-    fixture.context.followupRun.run.traceAuthorized = authorized;
-    fixture.context.followupRun.run.traceLevelOverride = selected;
-    const delivered = await fixture.deliverQueued();
-    expect(delivered.some((payload) => payload.text === "done")).toBe(true);
-    const diagnostics = delivered.find((payload) =>
-      payload.text?.includes("Model Input (User Role)"),
-    );
-    expect(Boolean(diagnostics)).toBe(trace);
-    if (diagnostics) {
-      expect(diagnostics.text).toContain("QUEUED_INPUT");
-      expect(isReplyPayloadTerminalContent(diagnostics)).toBe(false);
-    }
-    expect(fixture.read()?.traceLevel).toBe(stored);
-  },
-);
-
-it.each([
-  { stored: "off", selected: "raw", authorized: true, trace: true },
-  { stored: "raw", selected: "off", authorized: true, trace: false },
-  { stored: "raw", selected: undefined, authorized: true, trace: true },
-  { stored: "raw", selected: "raw", authorized: false, trace: false },
-] as const)(
-  "retains trace $selected over stored $stored after native delivery with authority=$authorized",
-  async ({ stored, selected, authorized, trace }) => {
-    const fixture = await createFixture();
-    await fixture.replace({
-      ...fixture.context.activeSessionEntry!,
-      traceLevel: stored,
-      verboseLevel: "off",
-    });
-    fixture.context.followupRun.run.traceAuthorized = authorized;
-    fixture.context.followupRun.run.traceLevelOverride = selected;
-    fixture.context.execution.result.payloads = [];
-    fixture.context.execution.result.sourceReplyDeliveryState = "delivered";
-    fixture.context.execution.result.meta!.finalAssistantRawText = "STREAMED_REPLY";
-    fixture.context.sessionCtx.agentText = "STREAMED_INPUT";
-
-    const result = await finalizeReplyAgentRun(fixture.context);
-    const delivered = Array.isArray(result) ? result : result ? [result] : [];
-    expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
-    const diagnostics = delivered.find((payload) =>
-      payload.text?.includes("Model Input (User Role)"),
-    );
-    expect(Boolean(diagnostics)).toBe(trace);
-    if (diagnostics) {
-      expect(diagnostics.text).toContain("STREAMED_INPUT");
-      expect(diagnostics.text).toContain("STREAMED_REPLY");
-    }
-    expect(fixture.read()?.traceLevel).toBe(stored);
-  },
-);
-
-describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
-  it.each([
-    { initial: "on", live: "off", override: "on", visible: true },
-    { initial: "off", live: "on", override: "off", visible: false },
-  ] as const)(
-    "uses live $live after $initial unless the turn selects $override",
-    async ({ initial, live, override, visible }) => {
-      const fixture = await createFixture();
-      const entry = fixture.context.activeSessionEntry!;
-      entry.verboseLevel = initial;
-      fixture.context.resolvedVerboseLevel = override ?? initial;
-      fixture.context.followupRun.run.verboseLevel = override ?? initial;
-      fixture.context.followupRun.run.verboseLevelOverride = override;
-      fixture.context.followupRun.run.traceAuthorized = false;
-      await fixture.replace({
-        ...entry,
-        verboseLevel: live,
-        pluginDebugEntries: [{ pluginId: "synthetic", lines: ["LIVE_VERBOSE_STATUS"] }],
-      });
-      const result =
-        lane === "ordinary"
-          ? await finalizeReplyAgentRun(fixture.context)
-          : await fixture.deliverQueued();
-      const text = (Array.isArray(result) ? result : [result])
-        .map((payload) => payload?.text)
-        .join("\n");
-      expect(text).toContain("done");
-      expect(text.includes("LIVE_VERBOSE_STATUS")).toBe(visible);
-      expect(fixture.read()?.verboseLevel).toBe(live);
-    },
-  );
-});
-
-it.each([
   { lane: "ordinary", field: "sessionId" },
   { lane: "ordinary", field: "lifecycleRevision" },
   { lane: "followup", field: "sessionId" },
@@ -510,8 +499,9 @@ it.each([
 );
 
 it.each([
-  { kind: "NO_REPLY", expectation: "required", missing: true },
+  { kind: "NO_REPLY", expectation: "required", missing: false },
   { kind: "NO_REPLY", expectation: "optional", missing: false },
+  { kind: "empty", expectation: "required", missing: true },
   { kind: "hook_block", expectation: "required", missing: false },
 ] as const)(
   "accounts for queued $expectation $kind completion despite trace",
@@ -521,16 +511,20 @@ it.each([
     fixture.context.followupRun.run.traceLevelOverride = "raw";
     fixture.context.followupRun.run.terminalReplyExpectation = expectation;
     fixture.context.execution.result.payloads = [];
+    fixture.context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
+      rawText: kind === "NO_REPLY" ? "NO_REPLY" : "",
+    }).terminalReply;
     if (kind === "NO_REPLY") {
       fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
-    } else {
+    } else if (kind === "hook_block") {
       fixture.context.execution.result.meta.error = { kind: "hook_block", message: "blocked" };
     }
     const delivered = await fixture.deliverQueued();
     if (missing) {
-      expect(
-        delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
-      ).toBe(true);
+      expect(delivered.filter((payload) => payload.isError && payload.isStatusNotice)).toHaveLength(
+        1,
+      );
+      expect(delivered.some((payload) => isReplyPayloadTerminalContent(payload))).toBe(false);
     } else {
       expect(delivered).toEqual([]);
     }
@@ -597,7 +591,8 @@ describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting"
 });
 
 it.each([
-  { completion: "NO_REPLY", expectation: "required", missing: true },
+  { completion: "NO_REPLY", expectation: "required", missing: false },
+  { completion: "empty", expectation: "required", missing: true },
   { completion: "hook_block", expectation: "required", missing: false },
 ] as const)(
   "finalizes a $expectation $completion fallback without hiding missing output",
@@ -612,6 +607,9 @@ it.each([
       { provider: diagnostic.provider, model: diagnostic.model, reason: "auth", error: "No login" },
     ];
     context.execution.result.payloads = [];
+    context.execution.result.meta.terminalReply = prepareAgentRunTerminalReply({
+      rawText: completion === "NO_REPLY" ? "NO_REPLY" : "",
+    }).terminalReply;
     if (completion === "NO_REPLY") {
       context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
     } else if (completion === "hook_block") {

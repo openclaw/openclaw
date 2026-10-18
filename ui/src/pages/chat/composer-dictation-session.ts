@@ -10,7 +10,7 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
-import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./talk/input.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -55,7 +55,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export class ComposerDictationSession {
-  private readonly input = new RealtimeTalkInputController((detail) => this.reportFailure(detail));
+  private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;

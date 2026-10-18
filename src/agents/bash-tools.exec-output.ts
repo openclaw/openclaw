@@ -1,5 +1,4 @@
 /**
- * Rendering helpers for exec output/status updates.
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
@@ -30,7 +29,7 @@ export function renderExecExitLabel(exit: {
   if (exit.exitSignal != null) {
     return `signal ${exit.exitSignal}`;
   }
-  return typeof exit.exitCode === "number" ? `code ${exit.exitCode}` : "unknown exit code";
+  return exit.exitCode != null ? `code ${exit.exitCode}` : "unknown exit code";
 }
 
 /** Render the text shown in exec progress updates, including warnings first. */
@@ -52,19 +51,17 @@ export function appendExecTimeoutRetryGuidance(
 
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 
-/** Normalizes notification snippets to a compact single-line form. */
 export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+export function compactNotifyOutput(value: string) {
   const normalized = normalizeNotifyOutput(value);
   if (!normalized) {
     return "";
   }
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= DEFAULT_NOTIFY_SNIPPET_CHARS) {
     return normalized;
   }
-  const safe = Math.max(1, maxChars - 1);
-  return `${truncateUtf16Safe(normalized, safe)}…`;
+  return `${truncateUtf16Safe(normalized, DEFAULT_NOTIFY_SNIPPET_CHARS - 1)}…`;
 }

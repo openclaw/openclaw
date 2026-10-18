@@ -115,6 +115,7 @@ export async function enqueueGoalContinuation(params: {
     disableCollectBatching: true,
     transcriptPrompt: undefined,
     userTurnTranscriptRecorder: undefined,
+    sourceTurnId: undefined,
     currentInboundContext: undefined,
     images: undefined,
     imageOrder: undefined,

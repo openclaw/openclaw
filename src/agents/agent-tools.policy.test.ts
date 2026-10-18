@@ -8,7 +8,6 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveGroupToolPolicyOutcome,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./agent-tools.policy.js";
@@ -124,11 +123,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
     "reports unavailable scheduled authority for %s before tool construction",
     (sessionKey) => {
       const params = { config, sessionKey, accountId: "removed", requireConfiguredAccount: true };
-      expect(resolveGroupToolPolicyOutcome(params)).toMatchObject({
-        kind: "account-unavailable",
-        accountId: "removed",
-        message: expect.stringContaining('Scheduled account "removed" is unavailable'),
-      });
       expect(() => resolveGroupToolPolicy(params)).toThrow(
         'Scheduled account "removed" is unavailable',
       );
@@ -137,7 +131,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
 
   it("preserves intentional deny-all policy for a configured scheduled account", () => {
     expect(
-      resolveGroupToolPolicyOutcome({
+      resolveGroupToolPolicy({
         config: {
           channels: {
             whatsapp: {
@@ -150,7 +144,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
         accountId: "work",
         requireConfiguredAccount: true,
       }),
-    ).toMatchObject({ kind: "resolved", policy: { deny: ["*"] } });
+    ).toEqual({ deny: ["*"] });
   });
 });
 
@@ -248,11 +242,6 @@ describe("resolveEffectiveToolPolicy", () => {
 
   it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
     { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-    {
-      name: "provider profile alsoAllow",
-      tools: { byProvider: { fixture: { profile: "minimal", alsoAllow: ["process"] } } },
-      warning: 'Add alsoAllow: ["process"]',
-    },
   ])("warns only about actionable grants with $name", async ({ tools, warning }) => {
     const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {

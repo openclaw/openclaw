@@ -82,7 +82,7 @@ async function withProbeRuntime(
   vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => ({
     ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
     externalCliDiscoveryScoped: () => undefined,
-    ensureAuthProfileStore: () => ({
+    ensureAuthProfileStoreAsync: async () => ({
       version: 1,
       order: {},
       profiles:

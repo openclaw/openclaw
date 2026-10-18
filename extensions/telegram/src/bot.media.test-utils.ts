@@ -111,7 +111,6 @@ async function loadTelegramBotHarness() {
   createTelegramBotRef = (opts) =>
     botModule.createTelegramBot({
       ...opts,
-      telegramDeps: harness.telegramBotDepsForTest,
     });
   replySpyRef = harness.mediaHarnessReplySpy;
 }

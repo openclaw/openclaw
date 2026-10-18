@@ -103,6 +103,11 @@ describe("openclaw-file-preview-modal", () => {
 
   it("emits controlled query, select, and close events", async () => {
     const modal = await renderPreview();
+    const actions = modal.querySelector(".foot > openclaw-modal-actions");
+    expect(actions?.querySelector("button")).not.toBeNull();
+    expect(actions?.parentElement?.lastElementChild).toBe(actions);
+    expect(actions?.querySelector(".foot-group")).toBeNull();
+    expect(modal.querySelector(".foot > .foot-group")).not.toBeNull();
     const onQuery = vi.fn();
     const onSelect = vi.fn();
     const onClose = vi.fn();
@@ -127,6 +132,22 @@ describe("openclaw-file-preview-modal", () => {
     expect(onSelect.mock.lastCall?.[0].detail).toBe("filters/auto-senders.txt");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["files", "document"] as const)(
+    "updates the active %s preview and focus without untracked reads",
+    async (layout) => {
+      const warning = vi.spyOn(console, "warn");
+      const modal = await renderPreview({ layout });
+      modal.activePath = files[1]!.path;
+      await modal.updateComplete;
+
+      expect(modal.querySelector(".detail-body")?.textContent).toContain("noreply@example.com");
+      expect(document.activeElement).toBe(
+        modal.querySelector(layout === "files" ? ".search" : ".item.is-active"),
+      );
+      expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
+    },
+  );
 
   it("restores modal focus when the same element reconnects", async () => {
     const modal = await renderPreview();

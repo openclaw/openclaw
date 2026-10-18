@@ -47,20 +47,24 @@ const provider: ProviderPlugin = {
   auth: [],
   staticCatalog: { order: "simple", run: async () => ({ provider: nativeCatalog }) },
 };
-const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "catalog-owner",
-      providers: ["fixture"],
-      providerEndpoints: [{ endpointClass: "openai-public", hosts: ["native.example"] }],
-    },
-  ],
-});
+function createMetadata() {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "catalog-owner",
+        providers: ["fixture"],
+        providerEndpoints: [{ endpointClass: "openai-public", hosts: ["native.example"] }],
+      },
+    ],
+  });
+}
 
 describe("provider endpoint source eligibility", () => {
   let state: OpenClawTestState;
+  let pluginMetadataSnapshot: ReturnType<typeof createMetadata>;
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "endpoint-eligibility" });
+    pluginMetadataSnapshot = createMetadata();
     resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
   });
   afterEach(async () => {

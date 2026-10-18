@@ -14,6 +14,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -109,8 +110,19 @@ it.each(["sessions.list", "sessions.subscribe"])(
       try {
         publish("activity-summary");
         expect(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        expect(payloadFor(peers[1]!)).toEqual(payloadFor(peers[0]!));
         publish();
         expect.soft(payloadFor(peers[0]!).ancestorSessions?.map((row) => row.key)).toEqual([root]);
+        publish();
+        expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
+        // Non-opted-in sockets preserve their existing reference behavior after a drop.
+        peers[0]!.client.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+        connection.broadcast(
+          "sessions.changed",
+          { sessionKey: child, agentId: "main", reason: "send" },
+          { dropIfSlow: true },
+        );
+        peers[0]!.client.socket.bufferedAmount = 0;
         publish();
         expect(payloadFor(peers[0]!).ancestorSessionRefs).toHaveLength(1);
         const ensure = projection.ensureMaterialized;

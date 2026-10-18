@@ -1,4 +1,3 @@
-// Doctor legacy config issue finder that combines core, channel, and plugin rules.
 import { collectChannelLegacyConfigRules } from "../../../channels/plugins/legacy-config.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { LegacyConfigRule } from "../../../config/legacy.shared.js";

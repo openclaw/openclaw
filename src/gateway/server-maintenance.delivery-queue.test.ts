@@ -54,7 +54,7 @@ async function stopMaintenanceTimers(
 
 describe("delivery queue maintenance", () => {
   beforeEach(() => {
-    clock = createGatewaySchedulerClock();
+    clock = createGatewaySchedulerClock(1_234);
     scheduler = createTestGatewayScheduler(clock.clock);
   });
 
@@ -64,12 +64,15 @@ describe("delivery queue maintenance", () => {
     pruneOrphanedDeliveryQueueMediaMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("runs tombstone expiry with default queue media cleanup at startup and hourly", async () => {
+  it("defers tombstone and queue media cleanup through reconnects, then runs hourly", async () => {
     const deps = createMaintenanceTimerDeps();
     const timers = startGatewayMaintenanceTimers(deps);
 
     await waitForMediaCleanupDrainsToSettle();
-    await clock.advanceBy(0);
+    await clock.advanceBy(120_000);
+    expect(pruneExpiredDeliveryQueueTombstonesMock).not.toHaveBeenCalled();
+    expect(pruneOrphanedDeliveryQueueMediaMock).not.toHaveBeenCalled();
+    await clock.advanceBy(10_000);
     expect(pruneExpiredDeliveryQueueTombstonesMock).toHaveBeenCalledTimes(1);
     expect(pruneOrphanedDeliveryQueueMediaMock).toHaveBeenCalledTimes(1);
     await clock.advanceBy(60 * 60_000);
@@ -88,7 +91,7 @@ describe("delivery queue maintenance", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     let stopped = false;
     await waitForMediaCleanupDrainsToSettle();
-    void clock.advanceBy(0);
+    void clock.advanceBy(130_000);
     const stopping = timers.stopMediaCleanup().then((result) => {
       stopped = true;
       return result;

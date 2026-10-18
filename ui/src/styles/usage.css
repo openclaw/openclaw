@@ -1695,13 +1695,6 @@
   color: var(--text-strong);
 }
 
-.usage-more-sessions {
-  padding: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .sessions-selected-group {
   display: grid;
   gap: 6px;

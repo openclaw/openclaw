@@ -44,7 +44,6 @@ import {
 import {
   createModelCatalogIdentityKeyResolver,
   openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
 } from "./openai-model-routes.js";
 
 /** Keep capability donors bound to one model and runtime without merging sibling metadata. */
@@ -95,11 +94,9 @@ export function createModelCatalogView(params: {
     variants.push(entry);
     variantsByKey.set(key, variants);
   }
-  // Deferred lookups can follow an await or owner reload; only the initial index shares policy.
-  const variantsOf = (
-    entry: Pick<ModelCatalogEntry, "provider" | "id">,
-    key = resolveModelCatalogIdentityKey(entry),
-  ) => variantsByKey.get(key);
+  // Identity lookups use the same captured policy as this view's physical index.
+  const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
+    variantsByKey.get(key);
   const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
@@ -146,11 +143,14 @@ export function createModelCatalogView(params: {
       return row;
     },
     implicitNativeRuntime(entry: Pick<ModelCatalogEntry, "provider" | "id">) {
-      const variants = variantsOf(entry);
-      const runtime = variants?.[0]?.nativeRuntime;
-      return runtime && variants?.every((variant) => variant.nativeRuntime === runtime)
-        ? runtime
-        : undefined;
+      // An API metadata donor is not evidence of API credentials. Host bindings
+      // and credentials still take precedence in evaluateNative below.
+      const runtimes = new Set(
+        variantsOf(entry)?.flatMap((variant) =>
+          variant.nativeRuntime ? [variant.nativeRuntime] : [],
+        ),
+      );
+      return runtimes.size === 1 ? runtimes.values().next().value : undefined;
     },
     project(
       entry: ModelCatalogEntry,
@@ -294,7 +294,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
         });
-        if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
+        if (
+          !policy.forcedByEnvironment &&
+          policy.runtimeSource === "implicit" &&
+          policy.runtime === "auto"
+        ) {
           policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
         }
         prepared = { policy };
@@ -346,15 +350,14 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
         prepared.hostConfigured ||
-        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative))
+        (host.selectedAuthMode &&
+          (host.selectedCredential?.source !== "harness" || !observedNative))
       ) {
         return host;
       }
-      const resolveRegistry = () =>
-        params.observationConfig
-          ? params.pluginRegistry
-          : (params.pluginRegistry ?? getActivePluginRegistry());
-      const registry = resolveRegistry();
+      const registry = params.observationConfig
+        ? params.pluginRegistry
+        : (params.pluginRegistry ?? getActivePluginRegistry());
       const harness = registry?.agentHarnesses.find(
         (registration) => registration.harness.id === runtime,
       )?.harness;
@@ -380,9 +383,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               endpointOverrides: "none",
               requestTransportOverrides: "none",
             },
-          }).supported &&
-          isCurrent() &&
-          resolveRegistry() === registry;
+          }).supported;
         const observation = ready
           ? harness?.readModelCatalogReadiness?.({
               config: params.observationConfig ?? params.cfg,
@@ -393,11 +394,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
               modelId: entry.id,
             })
           : undefined;
-        ready =
-          ready &&
-          (!harness?.readModelCatalogReadiness || observation !== undefined) &&
-          isCurrent() &&
-          resolveRegistry() === registry;
+        ready = ready && (!harness?.readModelCatalogReadiness || observation !== undefined);
         authMode = ready ? observation?.authMode : undefined;
       } catch {
         // A failed/disposed owner supplies no account observation; do not infer host readiness.

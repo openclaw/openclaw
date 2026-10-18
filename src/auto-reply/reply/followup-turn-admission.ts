@@ -30,19 +30,12 @@ import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { isGoalContinuationCurrent } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
-import {
-  admitFollowupRunLifecycle,
-  isFollowupRunAborted,
-  resolveFollowupAbortSignal,
-  type FollowupRun,
-} from "./queue.js";
+import { isFollowupRunAborted, resolveFollowupAbortSignal, type FollowupRun } from "./queue.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import {
-  createReplySessionEntryHandle,
-  ReplySessionGenerationInvalidatedError as FollowupSessionGenerationInvalidatedError,
-} from "./session-entry-handle.js";
+import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
 
 export type FollowupRunnerParams = {
@@ -75,6 +68,7 @@ export type AdmittedFollowupTurn = {
   preflightCompactionApplied: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: unknown;
+  restartRecovery?: ReplyRestartRecoveryClaimController;
 };
 
 type FollowupAdmissionResult =
@@ -160,6 +154,9 @@ export async function admitFollowupTurn(params: {
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
   });
   if (admission.status === "skipped") {
+    if (admission.error) {
+      params.queued.run.internalEventExecution?.onFailed?.(admission.error);
+    }
     if (admission.reason !== "active-run") {
       return { kind: "skipped", reason: admission.reason };
     }
@@ -173,7 +170,6 @@ export async function admitFollowupTurn(params: {
   let queuedFollowupAdmitted = false;
   let admissionFailed = false;
   try {
-    await admitFollowupRunLifecycle(params.queued);
     if (isFollowupRunAborted(params.queued)) {
       return { kind: "skipped", reason: "aborted", operation };
     }
@@ -188,23 +184,6 @@ export async function admitFollowupTurn(params: {
       admission.sessionEntry?.sessionId === operation.sessionId
         ? admission.sessionEntry
         : undefined;
-    const expectedPersistedEntry =
-      admissionEntry ??
-      (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
-    const assertPersistedGeneration = (entry: SessionEntry | undefined) => {
-      const matchesExpectedGeneration = isSameSessionGeneration(entry, expectedPersistedEntry);
-      const shouldValidateGeneration =
-        Boolean(params.defaults.storePath) || entry !== initialStoredEntry;
-      if (
-        shouldValidateGeneration &&
-        ((expectedPersistedEntry && !matchesExpectedGeneration) ||
-          (!expectedPersistedEntry && entry && entry.sessionId !== operation.sessionId))
-      ) {
-        throw new FollowupSessionGenerationInvalidatedError(
-          "Follow-up session generation changed after reply admission",
-        );
-      }
-    };
     let activeEntry =
       admissionEntry ??
       (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
@@ -248,9 +227,8 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      // Reconcile the probe against the same admitted preferences, not a newer
-      // selection published while source adoption awaited. Lifecycle checks and
-      // compaction still consume fresh session state independently above/below.
+      // Preferences stay fixed at admission; lifecycle checks and compaction
+      // independently consume current session state.
       entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
@@ -259,10 +237,6 @@ export async function admitFollowupTurn(params: {
       sessionEntry: activeEntry,
       sessionKey: replySessionKey,
       sessionStore: params.defaults.sessionStore,
-      generationFence: {
-        sessionId: operation.sessionId,
-        expectedStoreEntry: initialStoredEntry,
-      },
     });
     const session: FollowupSessionOwner = {
       ...(replySessionKey
@@ -342,7 +316,6 @@ export async function admitFollowupTurn(params: {
     let pendingTerminalCompactionNotice:
       | { phase: Exclude<CompactionNoticePhase, "start">; text?: string }
       | undefined;
-    let compactionNoticeGenerationInvalidated = false;
     const notifyPreflightCompaction =
       turn.sendPolicy === "allow" && queued.currentInboundEventKind !== "room_event"
         ? async (phase: CompactionNoticePhase, text?: string) => {
@@ -358,15 +331,6 @@ export async function admitFollowupTurn(params: {
               return;
             }
             const noticeEntry = await readNoticeSessionEntry();
-            try {
-              assertPersistedGeneration(noticeEntry);
-            } catch (error) {
-              if (error instanceof FollowupSessionGenerationInvalidatedError) {
-                compactionNoticeGenerationInvalidated = true;
-                operation.abortForRestart();
-              }
-              throw error;
-            }
             if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "deny") {
               return;
             }
@@ -400,11 +364,6 @@ export async function admitFollowupTurn(params: {
         onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
         onCompactionNotice: notifyPreflightCompaction,
       });
-      if (compactionNoticeGenerationInvalidated) {
-        throw new FollowupSessionGenerationInvalidatedError(
-          "Follow-up session generation changed during preflight notice delivery",
-        );
-      }
       if (activeEntry) {
         session.adopt(activeEntry);
         activeEntry = session.current() ?? activeEntry;
@@ -419,15 +378,7 @@ export async function admitFollowupTurn(params: {
         activeEntry = session.current() ?? failureEntry;
       }
       refreshTurnSessionState(activeEntry, preflightEntry);
-      if (compactionNoticeGenerationInvalidated) {
-        throw new FollowupSessionGenerationInvalidatedError(
-          "Follow-up session generation changed during preflight notice delivery",
-        );
-      }
-      if (error instanceof FollowupSessionGenerationInvalidatedError) {
-        throw error;
-      }
-      operation.fail("run_failed", error);
+      turn.preflightError = error;
       const admittedVerboseLevel =
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
@@ -437,9 +388,7 @@ export async function admitFollowupTurn(params: {
         buildPreflightCompactionFailureText(formatErrorMessage(error), {
           includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
         });
-      if (!text) {
-        turn.preflightError = error;
-      } else {
+      if (text) {
         turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
       }
     }
@@ -449,12 +398,6 @@ export async function admitFollowupTurn(params: {
       turn.queued.currentInboundEventKind !== "room_event"
     ) {
       const noticeEntry = await readNoticeSessionEntry();
-      const expectedEntry = session.current();
-      if ((noticeEntry || expectedEntry) && !isSameSessionGeneration(noticeEntry, expectedEntry)) {
-        throw new FollowupSessionGenerationInvalidatedError(
-          "Follow-up session generation changed before compaction notice delivery",
-        );
-      }
       if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "allow") {
         await params.onCompactionNoticePayload?.(
           createCompactionNoticePayload({

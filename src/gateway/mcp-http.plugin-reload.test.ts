@@ -39,7 +39,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 it.for(["plain", "shared"] as const)(
-  "serves %s results across registry replacement without observer interference",
+  "observes %s results by reference across registry replacement despite observer errors",
   async (variant, { signal }) =>
     fixtureLifetime.run(async () => {
       const root = tempDirs.make("mcp-plugin-generation-");
@@ -155,13 +155,13 @@ it.for(["plain", "shared"] as const)(
             path.join(pluginDir, "index.cjs"),
             `module.exports = { id: "generation-probe", register(api) {
       const fs = require("node:fs");
+      let lastResult;
       api.on("after_tool_call", (event, ctx) => {
         fs.appendFileSync(${JSON.stringify(observationsPath)}, JSON.stringify({
-          toolName: event.toolName, sessionKey: ctx.sessionKey, result: event.result
+          toolName: event.toolName, sessionKey: ctx.sessionKey,
+          sameResult: event.result === lastResult, result: event.result
         }) + "\\n");
         process.emit(${JSON.stringify(observationsEvent)}, ctx.sessionKey);
-        event.result.content[0].text = "observer mutation";
-        if (event.result.details.bytes) event.result.details.bytes[0] = 255;
         throw new Error("observer failure must not change the HTTP result");
       }, { matcher: ["generation_probe"] });
       api.registerWidgetPresenter({
@@ -172,12 +172,15 @@ it.for(["plain", "shared"] as const)(
       api.registerTool({
         name: "generation_probe", label: "Generation probe", description: "Return a generation-owned answer",
         parameters: { type: "object", properties: {} },
-        execute: async () => ({
-          content: [{ type: "text", text: "generation tool available" }],
-          details: ${JSON.stringify(variant)} === "shared"
-            ? { bytes: new Uint8Array(new SharedArrayBuffer(1)) }
-            : {}
-        })
+        execute: async () => {
+          lastResult = {
+            content: [{ type: "text", text: "generation tool available" }],
+            details: ${JSON.stringify(variant)} === "shared"
+              ? { bytes: new Uint8Array(new SharedArrayBuffer(1)) }
+              : {}
+          };
+          return lastResult;
+        }
       });
     } };`,
           );
@@ -199,12 +202,8 @@ it.for(["plain", "shared"] as const)(
           initializeGlobalHookRunner(replacement.pluginRegistry);
           await original.instance.dispose();
           await callTool("after");
-          if (variant !== "plain") {
-            expect(fs.existsSync(observationsPath)).toBe(false);
-            expect(await warnings.findText("after_tool_call")).toBeDefined();
-            return;
-          }
           await withinTest(Promise.all(observations.map((entry) => entry.promise)), signal);
+          expect(await warnings.findText("after_tool_call")).toBeDefined();
           expect(
             fs
               .readFileSync(observationsPath, "utf8")
@@ -215,9 +214,10 @@ it.for(["plain", "shared"] as const)(
             ["before", "after"].map((phase) => ({
               toolName: "generation_probe",
               sessionKey: `agent:main:generation-${phase}`,
+              sameResult: true,
               result: {
                 content: [{ type: "text", text: "generation tool available" }],
-                details: {},
+                details: variant === "shared" ? { bytes: { 0: 0 } } : {},
               },
             })),
           );

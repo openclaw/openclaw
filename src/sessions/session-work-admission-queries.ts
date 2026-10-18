@@ -72,7 +72,7 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
       identities.some((identity) => admissionsByIdentity.get(identity)?.has(admission));
     const admissions = collectSessionWorkAdmissions(
       identities,
-      (admission) => !current?.has(admission) && isCurrent(admission),
+      (admission) => !current?.has(admission),
     );
     return Array.from(admissions).flatMap((admission) => {
       const run = admission.run;

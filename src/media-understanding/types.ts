@@ -2,8 +2,8 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
-import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderResolveSyntheticAuthContext } from "../plugins/provider-external-auth.types.js";
 
 /** Agent-owned runtime handle carried opaquely through media provider requests. */
 type MediaPreparedModelRuntime = Readonly<{
@@ -187,11 +187,7 @@ type MediaUnderstandingDocumentModelDefaults = {
   image?: string | false;
 };
 
-export type MediaUnderstandingProviderAuthContext = {
-  config?: OpenClawConfig;
-  provider: string;
-  providerConfig?: ModelProviderConfig;
-};
+export type MediaUnderstandingProviderAuthContext = ProviderResolveSyntheticAuthContext;
 
 export type MediaUnderstandingProviderAuthResult =
   | { kind: "none"; source: string }

@@ -53,7 +53,7 @@ export class DraftSuggestedCloudProfile {
     const adoption = {};
     this.adoption = adoption;
     this.callbacks.onError(null);
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
     try {
       const profileId = await this.gateway.adoptSuggestedProfile();
       if (this.adoption === adoption && profileId) {
@@ -66,7 +66,7 @@ export class DraftSuggestedCloudProfile {
     } finally {
       if (this.adoption === adoption) {
         this.adoption = null;
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       }
     }
   }

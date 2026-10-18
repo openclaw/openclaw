@@ -17,15 +17,15 @@ describe("prompt cache request observer", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it("pairs a drop with the last measured wire request across missing usage and run boundaries", () => {
+  it("pairs a drop with the last measured wire request across missing usage and run boundaries", async () => {
     const sessionId = scopedKey("wire-pair");
     const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
-    const request = (key: string, cacheRead?: number) => {
+    const request = async (key: string, cacheRead?: number) => {
       const observer = createPromptCacheRequestObserver(
         { sessionId, streamStrategy: "test" },
         () => {},
       );
-      observer.onModelRequest(model, { systemPrompt: "stable", messages: [] });
+      await observer.onModelRequest(model, { systemPrompt: "stable", messages: [] });
       const { encoded: _encoded, ...fingerprint } = prepareProviderPrompt({
         payload: { prompt_cache_key: key, previous_response_id: "private-response", input: [] },
         encode: true,
@@ -36,9 +36,9 @@ describe("prompt cache request observer", () => {
       });
       return observer.getObservation();
     };
-    expect(request("private-first", 9_000)?.broke).toBe(false);
-    request("private-unmeasured");
-    const dropped = request("private-final", 2_000);
+    expect((await request("private-first", 9_000))?.broke).toBe(false);
+    await request("private-unmeasured");
+    const dropped = await request("private-final", 2_000);
     expect(dropped).toMatchObject({
       broke: true,
       requests: {
@@ -54,12 +54,12 @@ describe("prompt cache request observer", () => {
     });
     expect(JSON.stringify(dropped)).not.toContain("private-");
     // A fresh request with the original key must compare against the measured drop.
-    expect(request("private-first", 0)?.requests?.previous?.cacheKeyHash).toBe(
+    expect((await request("private-first", 0))?.requests?.previous?.cacheKeyHash).toBe(
       dropped?.requests?.current?.cacheKeyHash,
     );
   });
 
-  it("keeps concurrent review and foreground usage in their own diagnostic sessions", () => {
+  it("keeps concurrent review and foreground usage in their own diagnostic sessions", async () => {
     const promptCacheKey = scopedKey("shared-provider-affinity");
     const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
     const context = { systemPrompt: "stable", messages: [] };
@@ -73,12 +73,12 @@ describe("prompt cache request observer", () => {
       { sessionId: scopedKey("review"), promptCacheKey, streamStrategy: "test" },
       reviewResult,
     );
-    review.onModelRequest(model, context);
-    foreground.onModelRequest(model, context);
+    await review.onModelRequest(model, context);
+    await foreground.onModelRequest(model, context);
     foreground.onModelUsage({ cacheRead: 9_000 });
     review.onModelUsage({ cacheRead: 0, input: 1_000 });
     expect(review.getObservation()).toMatchObject({ broke: false });
-    foreground.onModelRequest(model, context);
+    await foreground.onModelRequest(model, context);
     foreground.onModelUsage({ cacheRead: 2_000 });
     expect(foreground.getObservation()).toMatchObject({
       broke: true,
@@ -90,15 +90,15 @@ describe("prompt cache request observer", () => {
 
   it.each(["omitted", "missing", "unavailable"] as const)(
     "retains the input change with %s usage",
-    (usage) => {
+    async (usage) => {
       const observer = createPromptCacheRequestObserver(
         { sessionId: scopedKey("unfinished-request"), streamStrategy: "test" },
         () => {},
       );
       const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
-      observer.onModelRequest(model, { systemPrompt: "before", messages: [] });
+      await observer.onModelRequest(model, { systemPrompt: "before", messages: [] });
       observer.onModelUsage({ cacheRead: 8_000 });
-      observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
+      await observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
       if (usage !== "omitted") {
         observer.onModelUsage(
           usage === "missing"
@@ -106,7 +106,7 @@ describe("prompt cache request observer", () => {
             : { cacheRead: 0, cacheTelemetry: { state: "unavailable" } },
         );
       }
-      observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
+      await observer.onModelRequest(model, { systemPrompt: "after", messages: [] });
       observer.onModelUsage({ cacheRead: 2_000 });
       expect(observer.getObservation()).toMatchObject({
         broke: true,
@@ -167,7 +167,7 @@ describe("prompt cache request observer", () => {
     ],
   ] as const)(
     "identifies final encoded %s changes despite unchanged assembled context",
-    (expected, replacement, dropCause?: string) => {
+    async (expected, replacement, dropCause?: string) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const observer = createPromptCacheRequestObserver(
         { sessionId: scopedKey(`wire-${expected}`), streamStrategy: "test" },
@@ -179,8 +179,8 @@ describe("prompt cache request observer", () => {
         input: [{ role: "user", content: "first" }],
         reasoning: { effort: "low" },
       };
-      const request = (body: unknown, cacheRead: number) => {
-        observer.onModelRequest(
+      const request = async (body: unknown, cacheRead: number) => {
+        await observer.onModelRequest(
           { provider: "openai", id: "test-model", api: "openai-responses" },
           { systemPrompt: "original system", messages: [] },
         );
@@ -198,9 +198,9 @@ describe("prompt cache request observer", () => {
         );
         expect(JSON.stringify(fingerprint)).not.toContain("private");
       };
-      request(payload, 9_000);
+      await request(payload, 9_000);
       clock.mockReturnValue(3_000);
-      request({ ...payload, ...replacement }, 2_000);
+      await request({ ...payload, ...replacement }, 2_000);
       expect(observer.getObservation()).toMatchObject({
         broke: true,
         changes: null,
@@ -231,7 +231,7 @@ describe("prompt cache request observer", () => {
       misses: ["2:1"],
     },
     { name: "a complete miss below the drop threshold", turns: [[500], [0]], misses: ["2:1"] },
-  ])("observes each request: $name", ({ turns, misses }) => {
+  ])("observes each request: $name", async ({ turns, misses }) => {
     const sessionId = scopedKey("request-usage");
     const observed: Array<{ request: string; cacheRead: number | undefined; broke: boolean }> = [];
     for (const [turnIndex, reads] of turns.entries()) {
@@ -245,7 +245,7 @@ describe("prompt cache request observer", () => {
           }),
       );
       for (const cacheRead of reads) {
-        observer.onModelRequest(
+        await observer.onModelRequest(
           { provider: "anthropic", id: "claude-sonnet-4-6", api: "anthropic-messages" },
           {
             messages: [],

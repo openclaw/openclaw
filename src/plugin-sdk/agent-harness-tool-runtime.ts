@@ -59,7 +59,7 @@ export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };
 
-/** @deprecated Await createAgentHarnessToolSurfaceRuntimeAsync. Removed in a later release after stable deprecation. */
+/** @deprecated Await createAgentHarnessToolSurfaceRuntimeAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSurfaceRuntimeParams) {
   warnPluginSdkDeprecation({
     family: "agent-harness-tool-surface",

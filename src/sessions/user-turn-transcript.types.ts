@@ -8,6 +8,7 @@ import type {
   SessionTranscriptTurnMutation,
   SessionTranscriptTurnMutationResult,
 } from "../config/sessions/goals-operations.types.js";
+import type { SessionInputLifecycleAdmission } from "../config/sessions/restart-resume.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -209,18 +210,20 @@ type UserTurnPersistenceOptions = {
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
-  /** Committed input, accepted pending custody, and blocked notices are exempt. */
+  /** Committed or delivered input, accepted pending custody, and blocked notices are exempt. */
   assertOriginalInputCommit?: SessionSourceAssertion;
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
+    storageTarget?: UserTurnPersistenceOptions["storageTarget"];
+    lifecycleAdmission?: SessionInputLifecycleAdmission;
     assertCurrent: () => void;
     assertAdmittedCurrent?: () => void;
     assertCompletionCurrent?: () => void;
     authority?: import("../config/sessions/session-pending-input-authority.js").SessionPendingInputAuthority;
   }) => Promise<boolean>;
   getProcessingCompletion?: () => AgentRunTerminalOutcome | undefined;
-  /** @deprecated Await completeProcessingAsync. Retained during stable deprecation. */
+  /** @deprecated Await completeProcessingAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   completeProcessing?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome | undefined;
   completeProcessingAsync?: (
     outcome: AgentRunTerminalOutcome,
@@ -265,6 +268,7 @@ export type UserTurnTranscriptRecorder = {
       expectedSessionId?: string;
       expectedSessionState?: SessionTranscriptTurnExpectedState;
       sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+      beforeFreshMessageCommit?: SessionSourceAssertion;
       /** Allow a later explicit persistence attempt when this attempt appends nothing. */
       retryIfUnpersisted?: boolean;
     },

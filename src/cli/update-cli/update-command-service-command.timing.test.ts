@@ -70,6 +70,7 @@ it("times the executor probe separately from the reconciliation install child", 
     });
   });
   const steps: UpdateStepResult[] = [];
+  const onGatewayStartAttempted = vi.fn();
   const executorFence: UpdateRecoveryFence = { assertCurrent: () => {} };
 
   await expect(
@@ -80,12 +81,14 @@ it("times the executor probe separately from the reconciliation install child", 
         invocationEnv: {},
         nodeRunner: "node",
         gatewayPort: 18809,
+        onGatewayStartAttempted,
         onTimedStep: (step) => steps.push(step),
       },
       "install",
     ),
   ).resolves.toBe("unverified");
 
+  expect(onGatewayStartAttempted).toHaveBeenCalledExactlyOnceWith("install");
   expect(steps).toEqual([
     {
       name: "managed-service-executor-check",
@@ -154,7 +157,7 @@ it.each(["", "UPDATE_NATIVE_AUTHORITY: exit 1"])(
     expect(failure instanceof UpdateCommandRecoveryPendingError).toBe(stderr !== "");
     expect(failure).toHaveProperty(
       "message",
-      `updated install refresh failed (/fixture/root/dist/entry.js): ${stderr || error}`,
+      `updated install refresh failed: ${stderr || error} (/fixture/root/dist/entry.js)`,
     );
     expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
   },

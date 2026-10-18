@@ -20,7 +20,6 @@ import {
   setDateOnlyFakeClockActive,
   waitForAssertion,
   expectRecordFields,
-  expectStringFieldContains,
   expectSqliteSessionFileMarkerForEntry,
   mockCallArg,
   expectRespondError,
@@ -36,6 +35,7 @@ import {
   cronMediaCompletionEvent,
   setupCronContinuationReleaseFixture,
   operatorWriteGatewayClient,
+  REAL_PNG,
   waitForAgentCommandCall,
   invokeAgent,
   describe0AfterEach0,
@@ -530,67 +530,54 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not bypass image support check for non-ACP sessions with acpTurnSource", async () => {
-    primeMainAgentRun();
-    mocks.agentCommand.mockClear();
+  it.each([
+    { name: "non-ACP session", sessionKey: "agent:main:main" },
+    { name: "ACP-shaped session without metadata", sessionKey: "agent:main:acp:missing-meta" },
+  ])("requires image understanding for a $name with acpTurnSource", async ({ sessionKey }) => {
+    mocks.loadConfigReturn = {
+      agents: { defaults: { model: { primary: "test/text-only" } } },
+    };
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.readAcpSessionMetaAsync.mockResolvedValue(undefined);
     const respond = vi.fn();
+    const context = makeContext();
+    context.loadGatewayModelCatalog = vi.fn<typeof context.loadGatewayModelCatalog>(async () => [
+      { id: "text-only", name: "Synthetic text model", provider: "test", input: ["text"] },
+    ]);
+    const runId = `image-offload-${sessionKey}`;
 
     await invokeAgent(
       {
         message: "describe this image",
         agentId: "main",
-        sessionKey: "agent:main:main",
+        sessionKey,
         acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-bypass-guard",
+        idempotencyKey: runId,
         attachments: [
           {
             type: "file",
             mimeType: "image/png",
             fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
+            content: REAL_PNG.toString("base64"),
           },
         ],
       },
-      { respond, reqId: "test-acp-image-bypass-guard" },
+      { context, respond, reqId: runId },
     );
 
-    // Non-ACP session (agent:main:main) with acpTurnSource="manual_spawn" must
-    // NOT bypass resolveGatewayModelSupportsImages. The image should be rejected
-    // by the normal image-support check since this is not an ACP session.
+    // A claimed ACP source cannot hand raw images to a text-only model.
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
-  });
-
-  it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
-    mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    mocks.agentCommand.mockClear();
-    const respond = vi.fn();
-
-    await invokeAgent(
-      {
-        message: "describe this image",
-        agentId: "main",
-        sessionKey: "agent:main:acp:missing-meta",
-        acpTurnSource: "manual_spawn",
-        idempotencyKey: "test-acp-image-metadata-bypass-guard",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
-          },
-        ],
-      },
-      { respond, reqId: "test-acp-image-metadata-bypass-guard" },
+    expect(respond).toHaveBeenLastCalledWith(
+      false,
+      expect.objectContaining({ status: "error" }),
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining(
+          "Configure agents.defaults.imageModel or tools.media.models",
+        ),
+      }),
+      expect.objectContaining({ runId }),
     );
-
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    const error = expectRespondError(respond, {});
-    expectStringFieldContains(error, "message", "does not accept image inputs");
   });
 
   it("rejects provider and model overrides for write-scoped callers", async () => {
