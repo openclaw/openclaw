@@ -43,6 +43,7 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
+import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
@@ -1585,6 +1586,94 @@ describe("executePreparedCliRun supervisor output capture", () => {
       });
       if (exitCode !== 0) {
         expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      }
+    },
+  );
+
+  it.each([
+    ["explicit final", true, "source", "required", "Delivery complete", true],
+    ["default final", undefined, "source", "required", "Delivery complete", true],
+    ["progress", false, "source", "required", "Final answer", false],
+    ["other conversation", true, "other", "required", "Final answer", false],
+    ["partial delivery", true, "partial", "required", "Final answer", false],
+    ["failed delivery", true, "failed", "required", "Final answer", false],
+    ["dry run", true, "dry-run", "required", "Final answer", false],
+    ["unconfirmed delivery", true, "unconfirmed", "required", "Final answer", false],
+    ["result obligation", true, "source", "result-required", "Private result", false],
+    ["authored silence", true, "source", "required", "NO_REPLY", true],
+  ] as const)(
+    "settles automatic external source delivery with %s evidence",
+    async (_label, final, delivery, terminalReplyExpectation, text, suppress) => {
+      const context = buildPreparedCliRunContext({ output: "text", provider: "local-cli" });
+      context.mcpDeliveryCapture = true;
+      context.params.sourceReplyDeliveryMode = "automatic";
+      context.params.messageChannel = TEST_MESSAGE_CHANNEL;
+      context.params.currentChannelId = "source-chat";
+      context.params.terminalReplyExpectation = terminalReplyExpectation;
+      mockCaptureSpawn((input, captureKey) => {
+        recordMcpLoopbackToolCallResult({
+          captureKey,
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: TEST_MESSAGE_CHANNEL,
+            target: delivery === "other" ? "other-chat" : "source-chat",
+            message: "Tool-authored answer",
+            ...(final !== undefined ? { final } : {}),
+            ...(delivery === "dry-run" ? { dryRun: true } : {}),
+          },
+          result: {
+            details: {
+              ...(delivery !== "other" ? { sourceReplyRoute: "current-source" } : {}),
+              ...(delivery !== "unconfirmed"
+                ? {
+                    messageDelivery: {
+                      status:
+                        delivery === "failed"
+                          ? "failed"
+                          : delivery === "dry-run"
+                            ? "dryRun"
+                            : "settled",
+                      partialDelivery: delivery === "partial",
+                      createdThreadIds: [],
+                      ...(delivery === "source" ? { sourceReplyDelivered: true } : {}),
+                    },
+                  }
+                : {}),
+            },
+          },
+          isError: delivery === "failed" || delivery === "partial",
+        });
+        input.onStdout?.(text);
+      });
+      const output = await executePreparedCliRun(context);
+      expect(output.messagingToolSourceReplyPayloads).toBeUndefined();
+      const preparedReply = prepareCliRunTerminalReply(context, output);
+      const result = buildCliRunResult({
+        context,
+        output,
+        preparedReply,
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: true,
+        preparedContextAgentMeta: {},
+      });
+      expect(result.payloads).toEqual(suppress ? undefined : [{ text }]);
+      if (text === "NO_REPLY") {
+        expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+      }
+      if (terminalReplyExpectation === "result-required") {
+        expect(preparedReply.completedFinalSource).toBe(false);
+      } else {
+        expect(
+          buildEmbeddedRunPayloads({
+            ...output,
+            assistantTexts: [text],
+            lastAssistant: undefined,
+            sessionKey: context.params.sessionKey ?? "",
+            sourceReplyDeliveryMode: "automatic",
+          }),
+        ).toEqual(suppress ? [] : [{ text, replyToTag: false }]);
       }
     },
   );

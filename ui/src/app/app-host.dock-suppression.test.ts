@@ -16,6 +16,7 @@ import {
 // This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
 import "../components/app-sidebar.tsx";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import { readShellView } from "./app-shell-view-state.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings } from "./settings.ts";
@@ -223,6 +224,11 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   context.navigation.snapshot.navCollapsed = true;
   expectHomeAvailable(true);
   expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
+  for (const phase of ["connected", "reconnecting", "offline", "connected"] as const) {
+    context.gateway.snapshot.phase = phase;
+    refreshShellView(shell);
+    expect(readShellView(shell).desktopPanelAvailable).toBe(phase === "connected");
+  }
   context.gateway.snapshot.hello!.auth = {
     role: "operator",
     scopes: ["operator.read", "operator.write"],
@@ -231,9 +237,13 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   context.gateway.snapshot.phase = "offline";
   expectHomeAvailable(true);
+  const acceptedHello = context.gateway.snapshot.hello!;
   context.gateway.connection.gatewayUrl = "ws://another-gateway.test";
+  // The Gateway owner clears the previous identity's hello on connection replacement.
+  context.gateway.snapshot.hello = null;
   expectHomeAvailable(false, false);
   context.gateway.snapshot.phase = "connected";
+  context.gateway.snapshot.hello = { ...acceptedHello };
   expectHomeAvailable(true);
   context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
   expectHomeAvailable(false, false);

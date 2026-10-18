@@ -561,9 +561,10 @@ async function checkPostgresCatalog(connection: string): Promise<void> {
     );
     await client.query(`SET search_path = ${quote(`${prefix}_agent`)}`);
     await client.query("BEGIN");
-    await client.query(`CREATE OR REPLACE FUNCTION openclaw_memory_index_sources_trigger()
+    await client.query(`CREATE OR REPLACE FUNCTION openclaw_session_entry_snapshots_trigger()
       RETURNS trigger LANGUAGE plpgsql SET search_path FROM CURRENT AS $broken$
-      BEGIN UPDATE memory_index_state SET revision = revision + 2 WHERE id = 1; RETURN NULL; END;
+      BEGIN UPDATE session_nodes SET snapshot_revision = snapshot_revision + 2
+      WHERE session_key IN (OLD.session_key, NEW.session_key); RETURN NULL; END;
       $broken$`);
     await assert.rejects(
       () =>

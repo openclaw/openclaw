@@ -6,7 +6,6 @@ import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { clearActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -48,6 +47,11 @@ import {
   verifyDecisionSelectionIsolation,
   verifyDecisionEarlyReloadRecovery,
 } from "./server-plugin-reload.decisions.test-support.js";
+import {
+  pluginInstance,
+  rejectWith,
+  observeSettlement,
+} from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   verifyManagedCandidateRetirement,
   verifyExpandedReplacementTargets,
@@ -143,6 +147,98 @@ function createRecoveryFixture(
   return createPluginReloadRecoveryFixture({ cleanups, logMocks: mocks.log }, options);
 }
 
+function transcriptSource(providerId: string, channelId = "original-room") {
+  return { providerId, guildId: "guild", channelId, whenOccupied: true };
+}
+
+type RecoveryFixture = Awaited<ReturnType<typeof createRecoveryFixture>>;
+type TranscriptProvider = ReturnType<typeof registerTranscriptFixture>;
+
+function publicationFailure(outcome: string, failure: Error) {
+  const reject = rejectWith(failure);
+  return {
+    ...(outcome === "rollback" ? { beforePublish: reject } : {}),
+    ...(outcome === "after-commit error" ? { afterPublish: reject } : {}),
+  };
+}
+
+function expectSiblingRetained(fixture: RecoveryFixture) {
+  expect(fixture.siblingStart).toHaveBeenCalledOnce();
+  expect(fixture.siblingStop).not.toHaveBeenCalled();
+}
+
+async function startDiscovery(fixture: RecoveryFixture, minimal = false) {
+  const discovery = await startGatewayDiscovery({
+    ...(minimal ? { discovery: { mdns: { mode: "minimal" as const } } } : {}),
+    gatewayDiscoveryServices: fixture.previousRegistry.gatewayDiscoveryServices,
+    pluginRuntimeClaim: fixture.owner.currentClaim(),
+    machineDisplayName: "fixture-gateway",
+    port: 0,
+    tailscaleMode: "off",
+    logDiscovery: mocks.log,
+  });
+  fixture.runtime.runtimeState.discovery = discovery;
+  return discovery;
+}
+
+async function createTranscriptRecoveryFixture(
+  stateDir: string,
+  config: OpenClawConfig,
+  options: NonNullable<Parameters<typeof createRecoveryFixture>[0]> & {
+    ready?: Promise<void>;
+    onlySibling?: boolean;
+  } = {},
+) {
+  const { ready, onlySibling, ...fixtureOptions } = options;
+  const { providers, register } = createTranscriptFixtures();
+  const fixture = await createRecoveryFixture({
+    config,
+    abortOnCandidateStart: false,
+    register: (api, owner) => {
+      if (!onlySibling || owner === "sibling") {
+        register(api, owner);
+      }
+    },
+    ...fixtureOptions,
+  });
+  const sidecars = await withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>
+    startTranscriptReloadFixtureSidecars(
+      fixture,
+      stateDir,
+      mocks.log,
+      cleanups,
+      ready ? () => ready : undefined,
+    ),
+  );
+  return {
+    fixture,
+    sidecars,
+    providers,
+    first: providers.first[0]!,
+    sibling: providers.sibling[0]!,
+  };
+}
+
+function expectWatch(
+  provider: TranscriptProvider,
+  config: OpenClawConfig,
+  channelId: string,
+  index = -1,
+) {
+  const watch = provider.watches.at(index);
+  expect(watch?.cfg).toEqual(config);
+  expect(watch?.source.channelId).toBe(channelId);
+}
+
+async function stopTranscripts(
+  sidecars: Awaited<ReturnType<typeof createTranscriptRecoveryFixture>>["sidecars"],
+  sibling: TranscriptProvider,
+) {
+  await sidecars.stop();
+  expect(activeSessions.size).toBe(0);
+  expect(sibling.unwatch).toHaveBeenCalledOnce();
+}
+
 it.each(["gateway_stop", "runtime-lifecycle"] as const)(
   "reopens a shared resource closed by %s after a setting changes without restarting its sibling",
   (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
@@ -178,15 +274,8 @@ it.each(["commit", "rollback"] as const)(
     assert(first && next);
     const fixture = await createRecoveryFixture({
       abortOnCandidateStart: false,
-      beforePublish: async () => {
-        if (outcome === "rollback") {
-          throw new Error("Cron getter rollback");
-        }
-      },
-      register(api, owner) {
-        if (owner !== "first") {
-          return;
-        }
+      ...publicationFailure(outcome, new Error("Cron getter rollback")),
+      registerFirst(api) {
         api.registerService({
           id: "cron-getter",
           start(ctx) {
@@ -231,9 +320,8 @@ it.each(["commit", "rollback"] as const)(
   },
 );
 
-it("validates expanded replacement targets before draining their live owners", async () => {
-  await verifyExpandedReplacementTargets(createRecoveryFixture);
-});
+it("validates expanded replacement targets before draining their live owners", () =>
+  verifyExpandedReplacementTargets(createRecoveryFixture));
 
 it.each([
   "channel-retry",
@@ -338,24 +426,15 @@ it.each(["rejection", "timeout"] as const)(
 
 it("does not reopen a sibling fenced before this replacement rolls back", async () => {
   const fixture = await createRecoveryFixture();
-  const first = getPluginInstance(
-    fixture.previousRegistry.plugins.find((record) => record.id === "first")!,
-  );
-  const sibling = getPluginInstance(
-    fixture.previousRegistry.plugins.find((record) => record.id === "sibling")!,
-  );
-  assert(first && sibling);
+  const first = pluginInstance(fixture.previousRegistry);
+  const sibling = pluginInstance(fixture.previousRegistry, "sibling");
   sibling.quiesce();
   await expect(fixture.reload()).rejects.toMatchObject({ details: { committed: false } });
   expect(() => sibling.run(() => "stale")).toThrow("reloaded or disabled");
   expect(() => first.run(() => "stale")).toThrow("reloaded or disabled");
-  const restored = getPluginInstance(
-    fixture.registryOwner.registry.plugins.find((record) => record.id === "first")!,
-  );
-  assert(restored);
+  const restored = pluginInstance(fixture.registryOwner.registry);
   expect(restored.run(() => "restored")).toBe("restored");
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
+  expectSiblingRetained(fixture);
 });
 
 it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
@@ -365,16 +444,13 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     const startAccount = vi.fn(async () => {});
     const fixture = await createRecoveryFixture({
       env: { [flag]: "1" },
-      register: (api, owner) => {
-        if (owner === "first") {
-          api.registerChannel({
-            plugin: {
-              ...createChannelTestPluginBase({ id: channelId }),
-              gateway: { startAccount },
-            },
-          });
-        }
-      },
+      registerFirst: (api) =>
+        api.registerChannel({
+          plugin: {
+            ...createChannelTestPluginBase({ id: channelId }),
+            gateway: { startAccount },
+          },
+        }),
     });
     const manager = createRecoveryChannelManager(fixture);
     fixture.runtime.channelManager = manager;
@@ -398,9 +474,7 @@ it("retains unrelated discovery after the selected service refuses cleanup", asy
       const stops = { first: vi.fn(), sibling: vi.fn() };
       const starts = { first: vi.fn(), sibling: vi.fn() };
       const fixture = await createRecoveryFixture({
-        initialStop: async () => {
-          throw new Error("cleanup refused");
-        },
+        initialStop: rejectWith(new Error("cleanup refused")),
         register: (api, owner) => {
           api.registerGatewayDiscoveryService({
             id: owner,
@@ -411,15 +485,7 @@ it("retains unrelated discovery after the selected service refuses cleanup", asy
           });
         },
       });
-      const discovery = await startGatewayDiscovery({
-        gatewayDiscoveryServices: fixture.previousRegistry.gatewayDiscoveryServices,
-        pluginRuntimeClaim: fixture.owner.currentClaim(),
-        machineDisplayName: "fixture-gateway",
-        port: 0,
-        tailscaleMode: "off",
-        logDiscovery: mocks.log,
-      });
-      fixture.runtime.runtimeState.discovery = discovery;
+      const discovery = await startDiscovery(fixture);
       cleanups.push(() => discovery.stop());
       try {
         await expect(fixture.reload()).rejects.toMatchObject({ details: { committed: false } });
@@ -535,13 +601,10 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
         const releaseStartup = createDeferredCore();
         const registrations: OpenClawPluginApi[] = [];
         const handles: Array<{ api: OpenClawPluginApi; stops: number }> = [];
-        const publicationFailure = new Error("publication rejected");
+        const failure = new Error("publication rejected");
         const fixture = await createRecoveryFixture({
           abortOnCandidateStart: false,
-          register: (api, owner) => {
-            if (owner !== "first") {
-              return;
-            }
+          registerFirst: (api) => {
             registrations.push(api);
             api.registerGatewayDiscoveryService({
               id: "fixture-discovery",
@@ -559,37 +622,19 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
               },
             });
           },
-          beforePublish: async () => {
-            if (outcome === "rollback") {
-              throw publicationFailure;
-            }
-          },
-          afterPublish: async () => {
-            if (outcome === "after-commit error") {
-              throw publicationFailure;
-            }
-          },
+          ...publicationFailure(outcome, failure),
         });
         cleanups.push(async () => {
           releaseStartup.resolve();
           await fixture.runtime.runtimeState.discovery?.stop();
         });
-        const discovery = await startGatewayDiscovery({
-          discovery: { mdns: { mode: "minimal" } },
-          gatewayDiscoveryServices: fixture.previousRegistry.gatewayDiscoveryServices,
-          pluginRuntimeClaim: fixture.owner.currentClaim(),
-          machineDisplayName: "fixture-gateway",
-          port: 0,
-          tailscaleMode: "off",
-          logDiscovery: mocks.log,
-        });
-        fixture.runtime.runtimeState.discovery = discovery;
+        const discovery = await startDiscovery(fixture, true);
         try {
           expect(handles).toHaveLength(1);
           if (outcome === "rollback" || outcome === "after-commit error") {
             await expect(fixture.reload()).rejects.toMatchObject({
               details: { committed: outcome === "after-commit error" },
-              cause: publicationFailure,
+              cause: failure,
             });
           } else {
             const reloading = fixture.reload();
@@ -610,8 +655,7 @@ it.each(["rollback", "after-commit error", "late startup"] as const)(
           expect(
             handles.filter((handle) => handle.stops === 0).map((handle) => handle.api),
           ).toEqual([registrations.at(-1)]);
-          expect(fixture.siblingStart).toHaveBeenCalledOnce();
-          expect(fixture.siblingStop).not.toHaveBeenCalled();
+          expectSiblingRetained(fixture);
         } finally {
           releaseStartup.resolve();
           await discovery.stop();
@@ -635,40 +679,19 @@ it.for([
   async (outcome, { signal }) => {
     const stateDir = makeTrackedTempDir("gateway-transcript-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const entry = (owner: string, channelId = "original-room") => ({
-        providerId: owner === "sibling" ? "sibling-capture" : `${owner}-room`,
-        guildId: "guild",
-        channelId,
-        whenOccupied: true,
-      });
+      const entry = (owner: string, channelId?: string) =>
+        transcriptSource(owner === "sibling" ? "sibling-capture" : `${owner}-room`, channelId);
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },
         transcripts: { autoStart: [entry("first"), entry("sibling")] },
       };
-      const { providers, register } = createTranscriptFixtures();
       const failure = new Error("fixture publication rejected");
-      const reject = async () => {
-        throw failure;
-      };
-      const fixture = await createRecoveryFixture({
-        config,
-        abortOnCandidateStart: false,
-        register,
-        ...(outcome === "rollback" ? { beforePublish: reject } : {}),
-        ...(outcome === "after-commit error" ? { afterPublish: reject } : {}),
-      });
       const startupReady = outcome === "deferred startup" ? createDeferredCore() : undefined;
-      const sidecars = await withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>
-        startTranscriptReloadFixtureSidecars(
-          fixture,
-          stateDir,
-          mocks.log,
-          cleanups,
-          startupReady ? () => startupReady.promise : undefined,
-        ),
-      );
-      const first = providers.first[0]!;
-      const sibling = providers.sibling[0]!;
+      const { fixture, sidecars, providers, first, sibling } =
+        await createTranscriptRecoveryFixture(stateDir, config, {
+          ...publicationFailure(outcome, failure),
+          ready: startupReady?.promise,
+        });
       const acceptedConfig = {
         ...config,
         transcripts: { autoStart: [entry("first", "replacement-room"), entry("sibling")] },
@@ -687,14 +710,10 @@ it.for([
           const current = providers.first[1]!;
           await current.waitForActiveCapture(1, signal);
           await sibling.waitForActiveCapture(1, signal);
-          expect(first.watches).toHaveLength(0);
-          expect(first.captures).toHaveLength(0);
-          expect(current.watches[0]?.cfg).toEqual(acceptedConfig);
-          expect(current.watches[0]?.source.channelId).toBe("replacement-room");
+          expect(first).toMatchObject({ watches: [], captures: [] });
+          expectWatch(current, acceptedConfig, "replacement-room", 0);
           expect(sibling.watches).toHaveLength(1);
-          await sidecars.stop();
-          expect(activeSessions.size).toBe(0);
-          expect(sibling.unwatch).toHaveBeenCalledOnce();
+          await stopTranscripts(sidecars, sibling);
           return;
         }
         const oldCapture = await first.waitForActiveCapture(1, signal);
@@ -731,14 +750,8 @@ it.for([
               manualStop.then(() => expect(first.stop).toHaveBeenCalledOnce()),
             ]);
           }
-          let reloadSettled = false;
-          pendingReload = fixture
-            .reload(acceptedConfig)
-            .catch((error: unknown) => error)
-            .then((value) => {
-              reloadSettled = true;
-              return value;
-            });
+          const reload = observeSettlement(fixture.reload(acceptedConfig));
+          pendingReload = reload.result;
           // An old owner may return before it attempts provider cleanup. Race that
           // result as well as provider entry so the pre-fix test cannot deadlock.
           await Promise.race([
@@ -748,13 +761,13 @@ it.for([
           await vi.advanceTimersByTimeAsync(5_000);
           vi.useRealTimers();
           if (outcome === "manual stop") {
-            await vi.waitFor(() => expect(reloadSettled).toBe(true));
+            await vi.waitFor(() => expect(reload.state.settled).toBe(true));
             expect(await pendingReload).toMatchObject({
               details: { phase: "drain", committed: false },
             });
           } else {
             // Acquired capture cleanup has no startup deadline; publication still waits for it.
-            expect(reloadSettled).toBe(false);
+            expect(reload.state.settled).toBe(false);
           }
           expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
           expect(fixture.firstStop).not.toHaveBeenCalled();
@@ -785,8 +798,7 @@ it.for([
           expect(first.stop).toHaveBeenCalledOnce();
           expect(activeSessions.get(oldCapture.session.sessionId)).toBe(oldOwner);
           expect(oldOwner?.cleanupPending).toBe(true);
-          expect(first.watches).toHaveLength(1);
-          expect(first.captures).toHaveLength(1);
+          expect([first.watches.length, first.captures.length]).toEqual([1, 1]);
           expect(providers.first).toHaveLength(1);
           expect(sibling.watches).toHaveLength(1);
           expect(sibling.unwatch).not.toHaveBeenCalled();
@@ -813,14 +825,12 @@ it.for([
         expect(first.stop).toHaveBeenCalledTimes(outcome === "stop refused" ? 2 : 1);
         const current = providers.first.at(-1)!;
         const currentCapture = await current.waitForActiveCapture(1, signal);
-        expect(current.watches.at(-1)?.source.channelId).toBe(
+        expectWatch(
+          current,
+          outcome === "rollback" ? config : acceptedConfig,
           outcome === "rollback" ? "original-room" : "replacement-room",
         );
-        expect(current.watches.at(-1)?.cfg).toEqual(
-          outcome === "rollback" ? config : acceptedConfig,
-        );
-        expect(sibling.watches).toHaveLength(1);
-        expect(sibling.captures).toHaveLength(1);
+        expect([sibling.watches.length, sibling.captures.length]).toEqual([1, 1]);
         expect(sibling.unwatch).not.toHaveBeenCalled();
         expect(sibling.stop).not.toHaveBeenCalled();
         expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);
@@ -855,9 +865,7 @@ it.for([
           expect(sibling.watches).toHaveLength(1);
           expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);
         }
-        await sidecars.stop();
-        expect(activeSessions.size).toBe(0);
-        expect(sibling.unwatch).toHaveBeenCalledOnce();
+        await stopTranscripts(sidecars, sibling);
       } finally {
         stopRelease.resolve();
         startupReady?.resolve();
@@ -877,46 +885,33 @@ registerPluginServiceRecoveryTests(createRecoveryFixture);
 it("starts the first configured transcript capture after plugin reload", async ({ signal }) => {
   const stateDir = makeTrackedTempDir("gateway-transcript-first-start-", tempDirs);
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-    const providers: ReturnType<typeof registerTranscriptFixture>[] = [];
-    const fixture = await createRecoveryFixture({
-      config: { plugins: { allow: ["first", "sibling"] } },
-      abortOnCandidateStart: false,
-      register: (api, owner) => {
-        if (owner === "sibling") {
-          providers.push(registerTranscriptFixture(api, owner));
-        }
-      },
-    });
-    const sidecars = await withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>
-      startTranscriptReloadFixtureSidecars(fixture, stateDir, mocks.log, cleanups),
+    const {
+      fixture,
+      sidecars,
+      sibling: provider,
+    } = await createTranscriptRecoveryFixture(
+      stateDir,
+      { plugins: { allow: ["first", "sibling"] } },
+      { onlySibling: true },
     );
     try {
-      const provider = providers[0]!;
       expect(provider.watches).toHaveLength(0);
       const config: OpenClawConfig = {
         ...fixture.getConfig(),
         transcripts: {
-          autoStart: [
-            {
-              providerId: "sibling-capture",
-              guildId: "guild",
-              channelId: "room",
-              whenOccupied: true,
-            },
-          ],
+          autoStart: [transcriptSource("sibling-capture", "room")],
         },
       };
       await fixture.reload(config, [], ["transcripts.autoStart"]);
       await vi.waitFor(() => expect(provider.watches).toHaveLength(1));
       await provider.waitForCapture(1, signal);
       expect(provider.watches[0]?.cfg).toEqual(config);
-      expect(fixture.siblingStart).toHaveBeenCalledOnce();
-      expect(fixture.siblingStop).not.toHaveBeenCalled();
+      expectSiblingRetained(fixture);
     } finally {
       await sidecars.stop();
     }
-    expect(providers[0]!.unwatch).toHaveBeenCalledOnce();
-    expect(providers[0]!.stop).toHaveBeenCalledOnce();
+    expect(provider.unwatch).toHaveBeenCalledOnce();
+    expect(provider.stop).toHaveBeenCalledOnce();
   });
 });
 
@@ -929,30 +924,23 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
     });
     const stateDir = makeTrackedTempDir("gateway-transcript-config-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const entry = (owner: string, channelId = "original-room") => ({
-        providerId: `${owner}-capture`,
-        guildId: "guild",
-        channelId,
-        whenOccupied: true,
-      });
+      const entry = (owner: string, channelId?: string) =>
+        transcriptSource(`${owner}-capture`, channelId);
       const retainedSource = { ...entry("sibling", "retained-room"), guildId: "other-guild" };
       const config: OpenClawConfig = {
         plugins: { allow: ["first", "sibling"] },
         transcripts: { autoStart: [entry("first"), entry("sibling"), retainedSource] },
       };
-      const { providers, register } = createTranscriptFixtures();
       const events: string[] = [];
-      const fixture = await createRecoveryFixture({
-        config,
-        abortOnCandidateStart: false,
-        register,
-        beforePublish: async () => {
-          events.push("publish");
-          if (change === "rollback") {
-            throw new Error("fixture publication rejected");
-          }
-        },
-      });
+      const { fixture, sidecars, providers, first, sibling } =
+        await createTranscriptRecoveryFixture(stateDir, config, {
+          beforePublish: async () => {
+            events.push("publish");
+            if (change === "rollback") {
+              throw new Error("fixture publication rejected");
+            }
+          },
+        });
       const nextConfig: OpenClawConfig = {
         ...config,
         transcripts:
@@ -974,11 +962,6 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
           candidateConfig: nextConfig,
         }),
       ).toMatchObject({ restartGateway: false, reloadPlugins: true });
-      const sidecars = await withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>
-        startTranscriptReloadFixtureSidecars(fixture, stateDir, mocks.log, cleanups),
-      );
-      const first = providers.first[0]!;
-      const sibling = providers.sibling[0]!;
       sibling.unwatch.mockImplementation(() => {
         events.push("unwatch-sibling");
       });
@@ -1004,21 +987,20 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
         ]);
         expect(sibling.stop).toHaveBeenCalledTimes(change === "disable" ? 2 : 1);
         expect(first.stop).toHaveBeenCalledTimes(change === "disable" ? 1 : 0);
-        expect(fixture.siblingStart).toHaveBeenCalledOnce();
-        expect(fixture.siblingStop).not.toHaveBeenCalled();
+        expectSiblingRetained(fixture);
         expect(fixture.firstStart).toHaveBeenCalledOnce();
         expect(fixture.firstStop).not.toHaveBeenCalled();
         expect(providers.sibling).toHaveLength(1);
         if (change === "replace" || change === "rollback") {
           await sibling.waitForCapture(3, signal);
           expect(sibling.watches).toHaveLength(3);
-          expect(sibling.watches[2]?.source.channelId).toBe(
+          expectWatch(
+            sibling,
+            change === "rollback" ? config : nextConfig,
             change === "rollback" ? "original-room" : "replacement-room",
           );
-          expect(sibling.watches[2]?.cfg).toEqual(change === "rollback" ? config : nextConfig);
         } else {
-          expect(sibling.watches).toHaveLength(2);
-          expect(sibling.captures).toHaveLength(2);
+          expect([sibling.watches.length, sibling.captures.length]).toEqual([2, 2]);
         }
         expect(activeSessions.get(retainedCapture.session.sessionId)).toBe(
           change === "disable" ? undefined : retainedCapture,

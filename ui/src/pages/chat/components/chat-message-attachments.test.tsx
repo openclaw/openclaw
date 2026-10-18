@@ -5,7 +5,7 @@ import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
@@ -183,17 +183,20 @@ describe("attachment sidebar source ownership", () => {
       "application/octet-stream; charset=binary",
       `${window.location.origin}/download/photo.png`,
     ],
-  ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
-    const onOpenImage = vi.fn();
-    draw([makeAttachment(source, label, mimeType)], { onOpenImage });
+  ])(
+    "renders document-shaped %s attachments as expandable images",
+    async (label, mimeType, source) => {
+      const onOpenImage = vi.fn();
+      draw([makeAttachment(source, label, mimeType)], { onOpenImage });
 
-    expect(card("")).toBeNull();
-    expect(imageNode()?.getAttribute("src")).toBe(source);
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-    expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: source, title: label }),
-    );
-  });
+      expect(card("")).toBeNull();
+      await waitForSolid(() => expect(imageNode()?.getAttribute("src")).toBe(source));
+      container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+      expect(onOpenImage).toHaveBeenCalledWith(
+        expect.objectContaining({ src: source, title: label }),
+      );
+    },
+  );
 
   it.each([
     { kind: "image", outcome: "offline" },

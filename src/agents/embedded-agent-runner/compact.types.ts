@@ -7,10 +7,7 @@ import type { AgentHarnessCompactionSourceAuthority } from "../harness/host-sour
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
-import type {
-  CompactionAppendPersistence,
-  CompactionAppendPersistenceAsync,
-} from "../sessions/session-compaction-persistence.js";
+import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import type { AcceptedCompactionSuccessor } from "./compaction-successor.js";
 import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
@@ -162,10 +159,7 @@ export type QueuedCompactionHostOptions = CompactionRequestConstraints & {
   sourceAuthority: AgentHarnessCompactionSourceAuthority;
   assertActive?: SessionSourceAssertion;
   preparedSession?: PreparedCompactionSession;
-  transcriptBytePreflightHarness?: "codex";
-  withCompactionPersistence?: CompactionAppendPersistence;
   withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   onCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onHostCompactionCommitted?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
-  onHostCompactionTranscriptSettled?: (commit: QueuedCompactionHostCommit) => Promise<void> | void;
 };

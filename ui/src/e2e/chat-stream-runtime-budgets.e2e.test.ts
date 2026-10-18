@@ -128,6 +128,28 @@ function renderedChunkText(index: number): string {
   return `delta ${index} with bold${index} and code${index} tail`;
 }
 
+async function settleInitialModelCatalog(
+  page: ChatFlowPage,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+) {
+  const name = "Runtime budget model";
+  await gateway.waitForRequest("models.list");
+  await gateway.resolveDeferred("models.list", {
+    models: [{ id: "gpt-5.5", name, provider: "openai" }],
+  });
+  // A usable cached catalog can still be refreshing. Join this reply's rendered receipt.
+  await waitForCommittedState(
+    page,
+    (modelName) =>
+      document
+        .querySelector(
+          'openclaw-chat-pane.chat-pane-cache__pane--active [data-chat-model-select="true"]',
+        )
+        ?.textContent?.includes(modelName) === true,
+    name,
+  );
+}
+
 async function installRenderProbe(page: ChatFlowPage) {
   await page.evaluate(async () => {
     const scope = window as ScopedWindow;
@@ -585,9 +607,12 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, { deferredMethods: ["sessions.describe"] });
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["sessions.describe", "models.list"],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
+      await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
       // Release the startup fact read after Send so it observes the running turn,
@@ -768,10 +793,12 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+        deferredMethods: ["models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
+      await settleInitialModelCatalog(page, gateway);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const scopeKey = "chat:v3:agent:main:main\u0000agent:main";

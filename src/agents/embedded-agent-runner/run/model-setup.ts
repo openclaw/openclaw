@@ -42,7 +42,6 @@ import {
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -427,20 +426,10 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
-    const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider,
-      harnessRuntime: agentHarness.id,
-      agentHarnessId: agentHarness.id,
-      authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
-      authProfileId: runParams.authProfileId,
-      config: runParams.config,
-      workspaceDir: params.workspaceDir,
-    });
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
-      provider: selectedRuntimeProvider,
-      ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
+      provider,
       modelId,
       agentDir: params.agentDir,
       requestedRouteResolution: modelSelectionChangedByHook

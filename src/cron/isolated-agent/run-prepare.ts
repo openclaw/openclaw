@@ -593,7 +593,6 @@ export async function prepareCronRunContext(params: {
               resolvedModelSelection.configuredProfileId
                 ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
                 : {}),
-              harnessRuntime: effectiveAgentRuntime,
               agentDir,
               cronSession,
               sessionKey: agentSessionKey,

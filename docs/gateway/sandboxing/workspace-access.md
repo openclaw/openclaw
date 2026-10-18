@@ -63,10 +63,27 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+At the checkout root, `.cache/vitest/` caches and `.artifacts/dist-artifacts.lock/`
+runtime ownership files stay with the runtime that produced them. Synchronization
+and recovery of older pending results exclude these exact paths. Other
+guest-created files under `.cache/` and `.artifacts/` still reconcile; an ignore
+rule alone does not make a file disposable. Source changes cannot remove a
+runtime-owned lock subtree by replacing its parent directory.
+
+If you are a guest, you can ask the agent:
+
+> Bring this workspace up to date with the latest project changes, keeping my
+> edits. Resolve any conflicts, rerun the relevant checks and Auto Review, and
+> update the same draft PR. Do not merge it.
+
 Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
 current selected repository base into this session's existing local managed
-workspace. The Gateway fetches with its host identity and preserves saved guest
-files, ignored guest data, and empty directories. The operation returns the exact
+workspace. The Gateway fetches with its host identity and prepares any missing
+file contents from the selected repository before offline merge and snapshot
+operations, including the ancestor versions needed to merge diverged branches.
+This also works when a partial clone already knows the base commit. A
+content-fetch failure leaves saved work available for retry. Refresh preserves
+saved guest files, ignored guest data, and empty directories. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.

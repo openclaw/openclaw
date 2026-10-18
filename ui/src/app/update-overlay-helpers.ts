@@ -10,7 +10,6 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
 
 export type ApplicationStatusBanner = {
@@ -293,11 +292,11 @@ function projectUpdateCheckoutResponse(
   current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
 ) {
   const updateSchedule = Object.hasOwn(response, "schedule")
-    ? readUpdateScheduleValue(response.schedule)
+    ? (response.schedule ?? null)
     : undefined;
   return {
     ...(Object.hasOwn(response, "updateAvailable")
-      ? { updateAvailable: readUpdateAvailableValue(response.updateAvailable) }
+      ? { updateAvailable: response.updateAvailable ?? null }
       : {}),
     ...(updateSchedule !== undefined
       ? {

@@ -686,7 +686,16 @@ describe("VoiceCallWebhookServer replay handling", () => {
         authToken,
       },
     });
-    const server = createServer(config, manager, plivoProvider);
+    const { logger, messages } = createCapturingLogger();
+    const server = createServer(
+      config,
+      manager,
+      plivoProvider,
+      undefined,
+      undefined,
+      undefined,
+      logger,
+    );
 
     try {
       const baseUrl = await server.start();
@@ -724,6 +733,9 @@ describe("VoiceCallWebhookServer replay handling", () => {
 
       processEvent.mockRejectedValueOnce(new Error("synthetic SQLite persistence failure"));
       expect((await postCallback(body, signatureFor("a"))).status).toBe(500);
+      expect(messages).toContain(
+        "[voice-call] Webhook error: Error: synthetic SQLite persistence failure",
+      );
       processEvent.mockClear();
       parseWebhookEvent.mockClear();
       const first = await postCallback(body, signatureFor("a"));

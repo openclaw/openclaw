@@ -5,6 +5,7 @@ import type {
   ChannelReadReceiptConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -72,8 +73,4 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     };
   };
 
-export type SignalConfig = {
-  accounts?: Record<string, SignalAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & SignalAccountConfig;
+export type SignalConfig = MultiAccountChannelConfig<SignalAccountConfig>;

@@ -30,9 +30,10 @@ type PublicationOwner = {
 };
 type Presentation = {
   scope: GitHubPublicationPresentation | null;
-  changed: (() => void) | null;
+  listeners: Set<() => void>;
 };
 export type GitHubPublicationPresentationBinding = {
+  subscribe: (listener: () => void) => () => void;
   sync: (scope: GitHubPublicationPresentation) => void;
   view: () => GitHubPublicationView | undefined;
   reset: () => void;
@@ -152,7 +153,9 @@ export class GitHubPublicationOwner {
   }
 
   private changed(): void {
-    this.presentations.forEach((presentation) => presentation.changed?.());
+    this.presentations.forEach((presentation) =>
+      presentation.listeners.forEach((listener) => listener()),
+    );
   }
 
   private presented(presentation: Presentation): boolean {
@@ -173,11 +176,15 @@ export class GitHubPublicationOwner {
     }
   }
 
-  bind(changed: () => void): GitHubPublicationPresentationBinding {
-    const presentation: Presentation = { scope: null, changed };
+  bind(): GitHubPublicationPresentationBinding {
+    const presentation: Presentation = { scope: null, listeners: new Set() };
     this.presentations.add(presentation);
     const getResult = () => this.result;
     return {
+      subscribe: (listener) => {
+        presentation.listeners.add(listener);
+        return () => presentation.listeners.delete(listener);
+      },
       sync: (scope) => {
         if (!this.presentations.has(presentation)) {
           return;
@@ -207,7 +214,7 @@ export class GitHubPublicationOwner {
       },
       detach: () => {
         presentation.scope = null;
-        presentation.changed = null;
+        presentation.listeners.clear();
         this.presentations.delete(presentation);
         this.retireIdleOptions();
         if (!this.hasBindings) {

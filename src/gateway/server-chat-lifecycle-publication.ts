@@ -186,10 +186,8 @@ export function createSessionLifecyclePublisher(
             .persistGatewaySessionLifecycleEventForEvent({
               sessionKey,
               agentId,
-              event: {
-                ...event,
-                ...(clientRunId !== event.runId ? { clientRunId } : {}),
-              },
+              event,
+              ...(clientRunId !== event.runId ? { clientRunId } : {}),
             })
             .catch((err: unknown) => {
               logError(

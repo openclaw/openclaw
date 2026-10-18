@@ -226,7 +226,10 @@ export async function prepareCodexAttemptContext(
     promptContextRange: CodexProjectedContextRange | undefined;
     developerInstructions: string;
     contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
-    historyBootstrapItems: JsonValue[] | undefined;
+    historyBootstrapItems:
+      | JsonValue[]
+      | ((assertCurrent: () => void) => Promise<JsonValue[]>)
+      | undefined;
     historyDeltaItems: JsonValue[] | undefined;
     noEngineContinuityProjectionApplied: boolean;
   } = {

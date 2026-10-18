@@ -30,7 +30,6 @@ import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import {
-  UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   withUpdateAdmissionReporting,
 } from "./update-command-result.js";
@@ -483,6 +482,7 @@ async function updateCommandInternal(
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,
+        signal: run.deadline?.signal,
         assertCurrent: () => fence.assertCurrent(),
       });
       retainedRuntimeStep = {
@@ -611,9 +611,8 @@ async function updateCommandInternal(
         return;
       }
       recoveryState.ledgerHandoffCompleted = true;
-      opts.onResult?.(continued.result);
-      if (continued.exitCode !== 0) {
-        throw new UpdateCommandFailure(continued.result, continued.exitCode);
+      if (continued.preparedFailure) {
+        throw continued.preparedFailure;
       }
       return;
     }

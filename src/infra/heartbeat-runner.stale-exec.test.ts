@@ -60,18 +60,15 @@ describe("stale exec heartbeat wakes", () => {
           lastTo: "-100155462274",
         });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        await test({
-          sessionKey,
-          replySpy,
-          run: (options = {}) =>
-            runHeartbeatOnce({
-              cfg,
-              agentId: "main",
-              ...execWake,
-              deps: { getReplyFromConfig: replySpy },
-              ...options,
-            }),
-        });
+        const run: Parameters<typeof test>[0]["run"] = (options = {}) =>
+          runHeartbeatOnce({
+            cfg,
+            agentId: "main",
+            ...execWake,
+            deps: { getReplyFromConfig: replySpy },
+            ...options,
+          });
+        await test({ sessionKey, replySpy, run });
       });
   }
   beforeEach(() => {
@@ -150,14 +147,11 @@ describe("stale exec heartbeat wakes", () => {
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
       enqueueSystemEvent("Unrelated queued event", { sessionKey });
       const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
-      expect(
-        (
-          await run({
-            scheduledEveryMs: 5 * 60_000,
-            deps: { getReplyFromConfig: replySpy, telegram },
-          })
-        ).status,
-      ).toBe("ran");
+      const result = await run({
+        scheduledEveryMs: 5 * 60_000,
+        deps: { getReplyFromConfig: replySpy, telegram },
+      });
+      expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
       expect(peekSystemEvents(sessionKey)).toEqual(["Unrelated queued event"]);
     }),

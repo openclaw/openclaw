@@ -8,6 +8,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  rewriteDoctorSessionEntries,
+  scanDoctorSessionEntryRecords,
+} from "../commands/doctor/shared/session-entry-rewrite.js";
+import { migrateLegacySessionEntryState } from "../commands/doctor/shared/session-entry-shape.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
@@ -27,6 +32,8 @@ import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -98,6 +105,172 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
 
+  it("reads persisted model catalogs through the worker without local application tables", async () => {
+    const { loadPersistedPluginModelCatalogs } =
+      await import("../agents/plugin-model-catalog-execution.js");
+    const agentId = "model-catalog";
+    const contents = JSON.stringify({ providers: { fixture: { models: [{ id: "synthetic" }] } } });
+    const databasePath = withEngineStoreAdmission(() => {
+      const database = owners.openOpenClawAgentDatabase({ agentId });
+      owners.runOpenClawAgentWriteTransaction(
+        ({ db }) =>
+          db
+            .prepare(
+              "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+            )
+            .run("plugin-model-catalog-v1", "fixture", contents, 1),
+        { agentId },
+      );
+      owners.closeOpenClawAgentDatabaseByPath(database.path);
+      return database.path;
+    });
+    expect(await loadPersistedPluginModelCatalogs(path.dirname(databasePath), ["fixture"])).toEqual(
+      [{ pluginId: "fixture", contents }],
+    );
+    using anchor = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+      { name: "openclaw_engine_anchor" },
+    ]);
+  });
+
+  it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
+    const target = {
+      agentId: "doctor-transcripts",
+      sessionId: "doctor-transcript",
+      sessionKey: "agent:doctor-transcripts:main",
+      storePath: path.join(root, "agents", "doctor-transcripts", "sessions", "sessions.json"),
+    };
+    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await owners.appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "Keep [[literal]] text." },
+      now: 1,
+    });
+    const database = withEngineStoreAdmission(() =>
+      owners.openOpenClawAgentDatabase({ agentId: target.agentId }),
+    );
+    const inspect = () => {
+      let result: ReturnType<typeof migrateHistoricalTranscriptDirectives> | undefined;
+      withEngineStoreAdmission(() => {
+        result = migrateHistoricalTranscriptDirectives({
+          env: process.env,
+          preparedTargets: [
+            {
+              agentId: target.agentId,
+              path: database.path,
+              realPath: fs.realpathSync.native(database.path),
+              source: "configured",
+            },
+          ],
+        });
+      });
+      return result!;
+    };
+    try {
+      expect(await inspect()).toEqual({ changes: [], warnings: [] });
+      const raw = withEngineStoreAdmission(() => {
+        const row = database.db
+          .prepare(
+            "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
+          )
+          .get();
+        const event = JSON.parse(String(row?.event_json));
+        event.message.content = [{ type: "text", text: "[[reply_to_current]] Legacy reply" }];
+        const next = JSON.stringify(event);
+        owners.runOpenClawAgentWriteTransaction(
+          ({ db }) =>
+            db
+              .prepare(
+                "UPDATE transcript_events SET event_json = ? WHERE message_role = 'assistant'",
+              )
+              .run(next),
+          { agentId: target.agentId },
+        );
+        return next;
+      });
+      const result = await inspect();
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining("PostgreSQL cannot use SQLite repair"),
+      ]);
+      withEngineStoreAdmission(() => {
+        expect(
+          database.db
+            .prepare(
+              "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
+            )
+            .get(),
+        ).toEqual({ event_json: raw });
+      });
+      using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
+      expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+        { name: "openclaw_engine_anchor" },
+      ]);
+    } finally {
+      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+    }
+  });
+
+  it("scans and repairs legacy Doctor state while retaining opaque PostgreSQL JSON numbers", () => {
+    withEngineStoreAdmission(() => {
+      const database = owners.openOpenClawAgentDatabase({ agentId: "doctor" });
+      const sessionKey = "agent:doctor:main";
+      const raw =
+        '{"sessionId":"doctor-session","updatedAt":42,"status":"queued","pendingFinalDelivery":true,"pendingFinalDeliveryText":"saved reply","opaqueCount":9007199254740993,"opaque":{"value":123456789012345678901234567890,"label":"retained"}}';
+      try {
+        database.db
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run(sessionKey, "doctor-session", raw, 42);
+        database.db
+          .prepare(
+            "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', ?, ?)",
+          )
+          .run("doctor-session", sessionKey, 42, 42);
+        const scope = { agentId: "doctor", storePath: database.path };
+        const expectedIdentity = readDatabasePathIdentitySync(database.path);
+        const scanned: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+        scanDoctorSessionEntryRecords(scope, (record) => scanned.push(record), expectedIdentity);
+        expect(scanned).toEqual([
+          {
+            sessionKey,
+            entry: expect.objectContaining({ status: "queued", pendingFinalDelivery: true }),
+          },
+        ]);
+        expect(
+          rewriteDoctorSessionEntries({
+            scope,
+            sessionKeys: [sessionKey],
+            expectedIdentity,
+            rawTransform: (entry, key, updatedAt) =>
+              migrateLegacySessionEntryState(entry, updatedAt, key),
+          }),
+        ).toBe(1);
+        const row = database.db
+          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+          .get(sessionKey);
+        const repairedRaw = row?.entry_json;
+        assert(typeof repairedRaw === "string");
+        expect(JSON.parse(repairedRaw)).toMatchObject({
+          sessionId: "doctor-session",
+          updatedAt: 42,
+          status: "interrupted",
+          pendingFinalDelivery: { kind: "replayable", text: "saved reply", createdAt: 42 },
+          opaque: { label: "retained" },
+        });
+        expect(repairedRaw).not.toContain("pendingFinalDeliveryText");
+        expect(repairedRaw).toContain("9007199254740993");
+        expect(repairedRaw).toContain("123456789012345678901234567890");
+        using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
+        expect(
+          anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
+        ).toEqual([{ name: "openclaw_engine_anchor" }]);
+      } finally {
+        owners.closeOpenClawAgentDatabaseByPath(database.path);
+      }
+    });
+  });
+
   it("opens default and explicit stores, retains identity, and closes both handles", () => {
     return withEngineStoreAdmission(() => {
       const {
@@ -146,7 +319,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     });
   });
 
-  it("migrates version 27 indexes and navigation validation while retaining rows and search", async () => {
+  it("migrates version 27 indexes and revision triggers while retaining rows and search", async () => {
     const target = {
       agentId: "migration",
       sessionId: "migration-session",
@@ -343,6 +516,20 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           indexdef: `CREATE INDEX idx_agent_session_windows_conversation ON ${facts.namespace}.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)`,
         },
       ]);
+      expect(
+        (
+          await client.query(
+            `SELECT p.proname FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = $1 AND p.proname IN
+                ('openclaw_memory_index_sources_trigger', 'openclaw_memory_index_chunks_trigger')`,
+            [facts.namespace],
+          )
+        ).rows,
+      ).toEqual([]);
+      expect(
+        (await client.query(`SELECT revision FROM "${facts.namespace}".memory_index_state`)).rows,
+      ).toEqual([{ revision: "1" }]);
       const navigationFunction = await client.query(
         `SELECT p.proisstrict, p.proconfig FROM pg_proc p
           JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -385,6 +572,16 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       owners.openOpenClawAgentDatabase({ agentId: "alternate", path: pathname });
       owners.closeOpenClawAgentDatabaseByPath(pathname);
     });
+    await owners.closeOpenClawAgentDatabaseByPathAsync(pathname);
+    const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
+      await import("./openclaw-agent-db-lease.js");
+    const activeLeases = () =>
+      withEngineStoreAdmission(() =>
+        readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: process.env }).filter(
+          (lease) => lease.path === pathname,
+        ),
+      );
+    expect(activeLeases()).toEqual([]);
     retireSqliteDatabaseAdmissionForPath(pathname);
     await using inspector = owners.createAgentSchemaInspectionWorker();
     expect(
@@ -404,6 +601,8 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       },
     });
     expect(inspector.snapshotCount).toBe(0);
+    expect(inspector.processCount).toBe(1);
+    expect(activeLeases()).toEqual([]);
   });
 
   it("appends and hydrates plain transcript JSON and drains interleaved turns through the agent worker in FIFO order", async () => {
@@ -494,6 +693,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         },
       });
       expect(inspector.snapshotCount).toBe(0);
+      expect(inspector.processCount).toBe(1);
     }
     const payloads = await client.query<{ event_json: string; event_zstd: Buffer | null }>(
       `SELECT event_json, event_zstd FROM "${facts.namespace}".transcript_events ORDER BY seq`,

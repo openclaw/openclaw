@@ -55,7 +55,6 @@ type ChatModelSettingsHost = ChatSessionRefreshHost & {
   sessions: SessionCapability;
   sessionsResult?: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
-  requestUpdate?: () => void;
 };
 
 const modelSelectionOwners = new WeakMap<object, AbortController>();
@@ -68,7 +67,7 @@ export function cancelChatModelRecovery(host: object): void {
 export function retireChatModelSelectionOwnership(
   host: Pick<
     ChatModelSettingsHost,
-    "agentsList" | "chatModelSwitchPromises" | "hello" | "requestUpdate" | "sessionKey" | "sessions"
+    "agentsList" | "chatModelSwitchPromises" | "hello" | "sessionKey" | "sessions"
   >,
 ): void {
   cancelChatModelRecovery(host);
@@ -87,7 +86,6 @@ export function retireChatModelSelectionOwnership(
   for (const key of ownedKeys) {
     host.sessions.retireModelOverride(key);
   }
-  host.requestUpdate?.();
 }
 
 function buildChatSessionListOptions(state: ChatSessionListHost): SessionListOptions {
@@ -201,7 +199,7 @@ async function applyChatSetting(
       sessionScope: true,
       session: captured.row(receipt),
     }).allowed;
-  setChatError(host, null, true);
+  setChatError(host, null);
   let receipt: SessionPatchResult | null = null;
   try {
     if (!canDispatch()) {
@@ -213,10 +211,9 @@ async function applyChatSetting(
       canDispatch,
       onRejected: (error, acknowledgement) => {
         if (captured.isCurrent() || captured.row(acknowledgement)) {
-          setChatError(host, `Failed to set ${settingName}: ${formatUiError(error)}`, true);
+          setChatError(host, `Failed to set ${settingName}: ${formatUiError(error)}`);
         }
       },
-      reconcile: () => refreshCurrentChatSessionList(host),
     });
     synchronize?.();
     receipt = await pending;
@@ -345,7 +342,7 @@ async function confirmChatNativeRuntimeRecovery(
     runtime: restriction.runtimeLabel,
   });
   const blocked = () =>
-    setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`, true);
+    setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`);
   const canRecover = () => ownsSelection() && selectionUnchanged();
   try {
     const materializedSessionId = restriction.recovery?.sessionId;
@@ -388,16 +385,11 @@ async function confirmChatNativeRuntimeRecovery(
       recovered.listRefreshError
         ? t("chat.nativeRuntimeRecovery.refreshFailed", { error: recovered.listRefreshError })
         : null,
-      true,
     );
     return true;
   } catch (error) {
     if (ownsSelection()) {
-      setChatError(
-        host,
-        t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }),
-        true,
-      );
+      setChatError(host, t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }));
     }
     return false;
   }
@@ -531,7 +523,7 @@ export async function switchChatModel(
   if (!canDispatch()) {
     return false;
   }
-  setChatError(host, null, true);
+  setChatError(host, null);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const switchPromise: Promise<boolean> = (async () => {
     try {
@@ -540,7 +532,6 @@ export async function switchChatModel(
         expectedSessionId: selection.expectedSessionId,
         ownsModelOverride,
         canDispatch,
-        reconcile: () => refreshCurrentChatSessionList(host),
       });
       return patched !== null;
     } catch (err) {
@@ -552,7 +543,7 @@ export async function switchChatModel(
           ? err.details
           : undefined;
       if (!restriction) {
-        setChatError(host, `Failed to set model: ${formatUiError(err)}`, true);
+        setChatError(host, `Failed to set model: ${formatUiError(err)}`);
         return false;
       }
       return await confirmChatNativeRuntimeRecovery(
@@ -569,7 +560,6 @@ export async function switchChatModel(
         delete nextSwitches[targetSessionKey];
         host.chatModelSwitchPromises = nextSwitches;
       }
-      host.requestUpdate?.();
     }
   })();
   switchPromiseRef.current = switchPromise;
@@ -577,6 +567,5 @@ export async function switchChatModel(
     ...host.chatModelSwitchPromises,
     [targetSessionKey]: switchPromise,
   };
-  host.requestUpdate?.();
   return switchPromise;
 }

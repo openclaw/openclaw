@@ -102,11 +102,16 @@ async function drain(stream: AsyncIterable<unknown>): Promise<void> {
   }
 }
 
-function withFinalResult<T>(stream: AsyncIterable<T>) {
-  return Object.assign(stream, {
-    result: async () =>
-      makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
-  });
+function completedChunks<T>(...chunks: T[]) {
+  return Object.assign(
+    (async function* () {
+      yield* chunks;
+    })(),
+    {
+      result: async () =>
+        makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined, content: [] }),
+    },
+  );
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
@@ -255,12 +260,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     let callSequence = 0;
     const requestTimeouts: Array<number | undefined> = [];
     const wrapped = wrap(
-      (() =>
-        withFinalResult(
-          (async function* () {
-            yield { type: "text", text: "ok" };
-          })(),
-        )) as unknown as StreamFn,
+      (() => completedChunks({ type: "text", text: "ok" })) as unknown as StreamFn,
       {
         runId: "run-timeouts",
         sessionKey: "session-key",
@@ -635,18 +635,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
   it("updates diagnostic run activity from throttled stream chunks", async () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    async function* stream() {
-      yield { type: "text_delta", delta: "first" };
-      yield { type: "text_delta", delta: "second" };
-      yield { type: "text_delta", delta: "third" };
-    }
+    const chunks = ["first", "second", "third"].map((delta) => ({ type: "text_delta", delta }));
     const runProgressEvents: DiagnosticEventPayload[] = [];
     const stop = onInternalDiagnosticEvent((event) => {
       if (event.type === "run.progress") {
         runProgressEvents.push(event);
       }
     });
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn, {
+    const wrapped = wrap((() => completedChunks(...chunks)) as unknown as StreamFn, {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "vllm",
@@ -687,9 +683,6 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
   });
 
   it("counts async onPayload replacements instead of raw payload content", async () => {
-    async function* stream() {
-      yield { type: "text_delta", delta: "safe" };
-    }
     const originalPayload = { input: "secret sk-original-secret" };
     const replacementPayload = { input: "redacted" };
     const wrapped = wrap((async (
@@ -698,7 +691,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       options: Parameters<StreamFn>[2],
     ) => {
       await options?.onPayload?.(originalPayload, model);
-      return withFinalResult(stream());
+      return completedChunks({ type: "text_delta", delta: "safe" });
     }) as unknown as StreamFn);
 
     const events = await collectModelCallEvents(async () => {
@@ -754,10 +747,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
               content: [{ type: "text", text: text.repeat(200_000) }],
             },
           }));
-      async function* stream() {
-        yield* sourceChunks;
-      }
-      const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
+      const wrapped = wrap((() => completedChunks(...sourceChunks)) as unknown as StreamFn);
       const chunks: unknown[] = [];
       const events = await collectModelCallEvents(async () => {
         for await (const chunk of wrapped(
@@ -906,10 +896,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
       },
     };
-    async function* stream() {
-      yield { type: "text_delta", delta: "ok" };
-    }
-    const wrapped = wrap((() => withFinalResult(stream())) as unknown as StreamFn);
+    const wrapped = wrap((() =>
+      completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
 
     await drain(
       wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,

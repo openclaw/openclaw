@@ -11,6 +11,22 @@ import {
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+const required = { "required-runtime": "1.0.0" };
+const packageManifest = (name: string) => JSON.stringify({ name, version: "1.0.0" });
+
+function expectRequired(
+  status: ReturnType<typeof buildPluginDependencyStatus>,
+  installed: boolean,
+  name = "required-runtime",
+) {
+  expect(status).toMatchObject({ installed, requiredInstalled: installed });
+  expect(status.missing).toEqual(installed ? [] : [name]);
+}
+
+function dependencyStatus(rootDir: string, dependencyRootDir?: string) {
+  return buildPluginDependencyStatus({ rootDir, dependencyRootDir, dependencies: required });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
@@ -23,10 +39,7 @@ function createPluginRoot() {
 function writeDependency(rootDir: string, name: string) {
   const packageDir = path.join(rootDir, "node_modules", name);
   fs.mkdirSync(packageDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({ name, version: "1.0.0" }),
-  );
+  fs.writeFileSync(path.join(packageDir, "package.json"), packageManifest(name));
   return packageDir;
 }
 
@@ -72,77 +85,62 @@ describe("plugin dependency health", () => {
         fs.writeFileSync(manifest, payload === "empty-manifest" ? "" : "{");
       }
     }
-    const status = buildPluginDependencyStatus({
-      rootDir,
-      dependencies: { "required-runtime": "1.0.0" },
-    });
-    expect(status.installed).toBe(false);
-    expect(status.requiredInstalled).toBe(false);
-    expect(status.missing).toEqual(["required-runtime"]);
+    const status = dependencyStatus(rootDir);
+    expectRequired(status, false);
     expect(status.dependencies[0]?.resolvedPath).toBeUndefined();
   });
 
   it.each([
-    { name: "required-runtime", layout: "nested" },
-    { name: "@example/required-runtime", layout: "nested" },
-    { name: "required-runtime", layout: "hoisted" },
-    { name: "required-runtime", layout: "ancestor" },
-  ])("resolves $name from a $layout generic installation", ({ name, layout }) => {
-    const { parent, projectRoot, rootDir } = createHostFixture();
-    const availableDir = writeDependency(
-      layout === "nested" ? rootDir : layout === "hoisted" ? projectRoot : parent,
-      name,
-    );
-    if (layout === "hoisted") {
-      fs.mkdirSync(path.join(rootDir, "node_modules", name), { recursive: true });
-    }
-    const status = buildPluginDependencyStatus({ rootDir, dependencies: { [name]: "1.0.0" } });
-    expect(status.installed).toBe(true);
-    expect(status.requiredInstalled).toBe(true);
-    expect(status.missing).toEqual([]);
-    expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
-  });
-
-  it.each(["nested", "hoisted", "inside-symlink", "missing", "ancestor", "outside-symlink"])(
-    "keeps ordinary %s dependency lookup bounded when the canonical host is exempted",
-    async (layout) => {
-      const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
+    ["required-runtime", "nested", false],
+    ["@example/required-runtime", "nested", false],
+    ["required-runtime", "hoisted", false],
+    ["required-runtime", "ancestor", false],
+    ["required-runtime", "nested", true],
+    ["required-runtime", "hoisted", true],
+    ["required-runtime", "inside-symlink", true],
+    ["required-runtime", "missing", true],
+    ["required-runtime", "ancestor", true],
+    ["required-runtime", "outside-symlink", true],
+  ] as const)("resolves %s in %s layout (bounded: %s)", async (name, layout, bounded) => {
+    const { parent, projectRoot, rootDir, hostRoot } = createHostFixture();
+    const dependencyDir = path.join(rootDir, "node_modules", name);
+    const owner =
+      layout === "nested"
+        ? rootDir
+        : ["hoisted", "inside-symlink"].includes(layout)
+          ? projectRoot
+          : parent;
+    const availableDir = layout === "missing" ? undefined : writeDependency(owner, name);
+    if (bounded) {
       linkHost(rootDir, hostRoot);
-      const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
-      if (layout === "nested") {
-        writeDependency(rootDir, "required-runtime");
-      } else if (layout === "hoisted") {
-        fs.mkdirSync(dependencyDir);
-        writeDependency(projectRoot, "required-runtime");
-      } else if (layout !== "missing") {
-        const targetDir = writeDependency(
-          layout === "inside-symlink" ? projectRoot : parent,
-          "required-runtime",
-        );
-        if (layout.endsWith("symlink")) {
-          fs.symlinkSync(targetDir, dependencyDir, "junction");
-        }
-      }
-      const params = {
-        rootDir,
-        dependencyRootDir: projectRoot,
-        dependencies: { "required-runtime": "1.0.0" },
-        optionalDependencies: { "optional-runtime": "1.0.0" },
-      };
-      const installed = ["nested", "hoisted", "inside-symlink"].includes(layout);
-      const missing = installed ? [] : ["required-runtime"];
-      const status = buildPluginDependencyStatus(params);
-      expect(status.requiredInstalled).toBe(installed);
-      expect(status.missing).toEqual(missing);
+    }
+    if (layout === "hoisted") {
+      fs.mkdirSync(dependencyDir, { recursive: true });
+    } else if (layout.endsWith("symlink") && availableDir) {
+      fs.symlinkSync(availableDir, dependencyDir, "junction");
+    }
+    const params = {
+      rootDir,
+      dependencyRootDir: bounded ? projectRoot : undefined,
+      dependencies: { [name]: "1.0.0" },
+      optionalDependencies: bounded ? { "optional-runtime": "1.0.0" } : undefined,
+    };
+    const installed = !bounded || ["nested", "hoisted", "inside-symlink"].includes(layout);
+    const status = buildPluginDependencyStatus(params);
+    expectRequired(status, installed, name);
+    if (bounded) {
       expect(status.missingOptional).toEqual(["optional-runtime"]);
       expect(
         await findMissingRequiredPluginDependencies({
           ...params,
+          dependencyRootDir: projectRoot,
           dependencies: { ...params.dependencies, openclaw: "*" },
         }),
-      ).toEqual(missing);
-    },
-  );
+      ).toEqual(installed ? [] : [name]);
+    } else {
+      expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
+    }
+  });
 
   it.each(["hardlink", "inside-link", "outside-link", "malformed-shadow"] as const)(
     "checks a %s dependency manifest without hiding local corruption",
@@ -157,15 +155,11 @@ describe("plugin dependency health", () => {
         fs.writeFileSync(manifest, "{");
       } else {
         const target = path.join(layout === "inside-link" ? projectRoot : parent, "manifest.json");
-        fs.writeFileSync(target, JSON.stringify({ name: "required-runtime", version: "1.0.0" }));
+        fs.writeFileSync(target, packageManifest("required-runtime"));
         fs.unlinkSync(manifest);
         fs.symlinkSync(target, manifest);
       }
-      const status = buildPluginDependencyStatus({
-        rootDir,
-        dependencyRootDir: projectRoot,
-        dependencies: { "required-runtime": "1.0.0" },
-      });
+      const status = dependencyStatus(rootDir, projectRoot);
       expect(status.requiredInstalled).toBe(layout === "hardlink" || layout === "inside-link");
     },
   );
@@ -176,12 +170,9 @@ describe("plugin dependency health", () => {
   ])("bounds a $bytes-byte dependency manifest", ({ bytes, installed }) => {
     const rootDir = createPluginRoot();
     const dependencyDir = writeDependency(rootDir, "required-runtime");
-    const manifest = JSON.stringify({ name: "required-runtime", version: "1.0.0" });
+    const manifest = packageManifest("required-runtime");
     fs.writeFileSync(path.join(dependencyDir, "package.json"), manifest.padEnd(bytes, " "));
-    const status = buildPluginDependencyStatus({
-      rootDir,
-      dependencies: { "required-runtime": "1.0.0" },
-    });
+    const status = dependencyStatus(rootDir);
     expect(status.requiredInstalled).toBe(installed);
   });
 
@@ -202,12 +193,8 @@ describe("plugin dependency health", () => {
             ? createPluginRoot()
             : path.join(parent, "different-project"),
       };
-      const status = buildPluginDependencyStatus({
-        ...params,
-        dependencies: { "required-runtime": "1.0.0" },
-      });
-      expect(status.requiredInstalled).toBe(installed);
-      expect(status.missing).toEqual(installed ? [] : ["required-runtime"]);
+      const status = dependencyStatus(params.rootDir, params.dependencyRootDir);
+      expectRequired(status, installed);
       if (installed) {
         expect(fs.realpathSync(status.dependencies[0]?.resolvedPath ?? "<unresolved>")).toBe(
           availableDir,

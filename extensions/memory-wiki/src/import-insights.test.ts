@@ -1,4 +1,3 @@
-// Memory Wiki tests cover import insights plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,22 +9,11 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
-function hasLoneSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        return true;
-      }
-      index += 1;
-      continue;
-    }
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
+function createInsightVault() {
+  return createVault({
+    config: { render: { createBacklinks: false, createDashboards: false } },
+    initialize: true,
+  });
 }
 
 describe("projectMemoryWikiImportInsight", () => {
@@ -100,12 +88,7 @@ describe("projectMemoryWikiImportInsight", () => {
 
 describe("compiled import insights", () => {
   it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-import-insights-",
-      config: { render: { createBacklinks: false, createDashboards: false } },
-      initialize: true,
-    });
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const { rootDir, config } = await createInsightVault();
     await fs.writeFile(
       path.join(rootDir, "sources", "chatgpt-travel.md"),
       renderWikiMarkdown({
@@ -120,27 +103,7 @@ describe("compiled import insights", () => {
           createdAt: "2026-01-11T14:07:58.552Z",
           updatedAt: "2026-01-11T14:08:45.377Z",
         },
-        body: [
-          "# ChatGPT Export: BA flight receipts process",
-          "",
-          "## Auto Digest",
-          "- User messages: 2",
-          "- Assistant messages: 2",
-          "- First user line: how do i get receipts?",
-          "- Last user line: that option does not exist",
-          "- Preference signals:",
-          "  - prefers direct airline receipts",
-          "",
-          "## Active Branch Transcript",
-          "### User",
-          "",
-          "how do i get receipts?",
-          "",
-          "### Assistant",
-          "",
-          "Try the BA receipt request flow first.",
-          "",
-        ].join("\n"),
+        body: "# ChatGPT Export: BA flight receipts process\n\n## Auto Digest\n- User messages: 2\n- Assistant messages: 2\n- First user line: how do i get receipts?\n- Last user line: that option does not exist\n- Preference signals:\n  - prefers direct airline receipts\n\n## Active Branch Transcript\n### User\n\nhow do i get receipts?\n\n### Assistant\n\nTry the BA receipt request flow first.\n",
       }),
       "utf8",
     );
@@ -157,27 +120,7 @@ describe("compiled import insights", () => {
           labels: ["domain/personal", "area/health", "topic/health"],
           updatedAt: "2026-01-31T20:18:00.000Z",
         },
-        body: [
-          "# ChatGPT Export: Migraine Medication Advice",
-          "",
-          "## Auto Digest",
-          "- Auto digest withheld from durable-candidate generation until reviewed.",
-          "- Risk reasons: health content",
-          "- First user line: i have a migraine, pink or yellow?",
-          "- Last user line: should i take this now?",
-          "- Preference signals:",
-          "  - prefers color-coded medication guidance",
-          "",
-          "## Active Branch Transcript",
-          "### User",
-          "",
-          "i have a migraine, pink or yellow?",
-          "",
-          "### Assistant",
-          "",
-          "You're right, let's reset and stick to safe dosing guidance.",
-          "",
-        ].join("\n"),
+        body: "# ChatGPT Export: Migraine Medication Advice\n\n## Auto Digest\n- Auto digest withheld from durable-candidate generation until reviewed.\n- Risk reasons: health content\n- First user line: i have a migraine, pink or yellow?\n- Last user line: should i take this now?\n- Preference signals:\n  - prefers color-coded medication guidance\n\n## Active Branch Transcript\n### User\n\ni have a migraine, pink or yellow?\n\n### Assistant\n\nYou're right, let's reset and stick to safe dosing guidance.\n",
       }),
       "utf8",
     );
@@ -190,36 +133,44 @@ describe("compiled import insights", () => {
 
     const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
 
-    expect(result.sourceType).toBe("chatgpt");
-    expect(result.totalItems).toBe(2);
-    expect(result.totalClusters).toBe(2);
+    expect(result).toMatchObject({
+      sourceType: "chatgpt",
+      totalItems: 2,
+      totalClusters: 2,
+    });
     const healthCluster = result.clusters[0];
-    expect(healthCluster?.key).toBe("topic/health");
-    expect(healthCluster?.label).toBe("Health");
-    expect(healthCluster?.itemCount).toBe(1);
-    expect(healthCluster?.highRiskCount).toBe(1);
-    expect(healthCluster?.withheldCount).toBe(1);
+    expect(healthCluster).toMatchObject({
+      key: "topic/health",
+      label: "Health",
+      itemCount: 1,
+      highRiskCount: 1,
+      withheldCount: 1,
+    });
 
     const travelCluster = result.clusters[1];
-    expect(travelCluster?.key).toBe("topic/travel");
-    expect(travelCluster?.label).toBe("Travel");
-    expect(travelCluster?.itemCount).toBe(1);
-    expect(travelCluster?.preferenceSignalCount).toBe(1);
+    expect(travelCluster).toMatchObject({
+      key: "topic/travel",
+      label: "Travel",
+      itemCount: 1,
+      preferenceSignalCount: 1,
+    });
 
     const travelItem = travelCluster?.items[0];
-    expect(travelItem?.title).toBe("BA flight receipts process");
-    expect(travelItem?.riskReasons).toEqual([]);
-    expect(travelItem?.activeBranchMessages).toBe(0);
-    expect(travelItem?.userMessageCount).toBe(2);
-    expect(travelItem?.assistantMessageCount).toBe(2);
-    expect(travelItem?.firstUserLine).toBe("how do i get receipts?");
-    expect(travelItem?.lastUserLine).toBe("that option does not exist");
-    expect(travelItem?.assistantOpener).toBe("Try the BA receipt request flow first.");
-    expect(travelItem?.summary).toBe("Try the BA receipt request flow first.");
-    expect(travelItem?.candidateSignals).toEqual(["prefers direct airline receipts"]);
-    expect(travelItem?.correctionSignals).toEqual([]);
-    expect(travelItem?.preferenceSignals).toEqual(["prefers direct airline receipts"]);
-    expect(travelItem?.digestStatus).toBe("available");
+    expect(travelItem).toMatchObject({
+      title: "BA flight receipts process",
+      riskReasons: [],
+      activeBranchMessages: 0,
+      userMessageCount: 2,
+      assistantMessageCount: 2,
+      firstUserLine: "how do i get receipts?",
+      lastUserLine: "that option does not exist",
+      assistantOpener: "Try the BA receipt request flow first.",
+      summary: "Try the BA receipt request flow first.",
+      candidateSignals: ["prefers direct airline receipts"],
+      correctionSignals: [],
+      preferenceSignals: ["prefers direct airline receipts"],
+      digestStatus: "available",
+    });
 
     const healthItem = result.clusters
       .flatMap((cluster) => cluster.items)
@@ -227,23 +178,20 @@ describe("compiled import insights", () => {
     expect(healthItem?.summary).toBe(
       "Sensitive health chat withheld from durable-memory extraction because it touches health.",
     );
-    expect(healthItem?.candidateSignals).toEqual([]);
-    expect(healthItem?.correctionSignals).toEqual([]);
-    expect(healthItem?.preferenceSignals).toEqual([]);
-    expect(healthItem?.userMessageCount).toBe(1);
-    expect(healthItem?.assistantMessageCount).toBe(1);
+    expect(healthItem).toMatchObject({
+      candidateSignals: [],
+      correctionSignals: [],
+      preferenceSignals: [],
+      userMessageCount: 1,
+      assistantMessageCount: 1,
+    });
     expect(healthItem?.firstUserLine).toBeUndefined();
     expect(healthItem?.lastUserLine).toBeUndefined();
     expect(healthItem?.assistantOpener).toBeUndefined();
   });
 
   it("truncates import insight summaries without leaving lone surrogates", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-import-insights-surrogate-",
-      config: { render: { createBacklinks: false, createDashboards: false } },
-      initialize: true,
-    });
-    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const { rootDir, config } = await createInsightVault();
     const assistantOpener = `${"a".repeat(178)}😀${"b".repeat(20)}`;
     await fs.writeFile(
       path.join(rootDir, "sources", "chatgpt-emoji.md"),
@@ -258,27 +206,7 @@ describe("compiled import insights", () => {
           labels: ["domain/work", "area/memory", "topic/memory"],
           updatedAt: "2026-02-01T12:00:00.000Z",
         },
-        body: [
-          "# ChatGPT Export: Emoji truncation",
-          "",
-          "## Auto Digest",
-          "- User messages: 1",
-          "- Assistant messages: 1",
-          "- First user line: summarize this",
-          "- Last user line: summarize this",
-          "- Preference signals:",
-          "  - prefers emoji-safe summaries",
-          "",
-          "## Active Branch Transcript",
-          "### User",
-          "",
-          "summarize this",
-          "",
-          "### Assistant",
-          "",
-          assistantOpener,
-          "",
-        ].join("\n"),
+        body: `# ChatGPT Export: Emoji truncation\n\n## Auto Digest\n- User messages: 1\n- Assistant messages: 1\n- First user line: summarize this\n- Last user line: summarize this\n- Preference signals:\n  - prefers emoji-safe summaries\n\n## Active Branch Transcript\n### User\n\nsummarize this\n\n### Assistant\n\n${assistantOpener}\n`,
       }),
       "utf8",
     );
@@ -289,7 +217,5 @@ describe("compiled import insights", () => {
 
     const item = result.clusters[0]?.items[0];
     expect(item?.summary).toBe(`${"a".repeat(178)}…`);
-    expect(hasLoneSurrogate(item?.summary ?? "")).toBe(false);
-    expect(item?.summary).not.toContain("�");
   });
 });

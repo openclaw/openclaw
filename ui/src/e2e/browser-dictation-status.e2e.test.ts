@@ -563,7 +563,7 @@ suite.define(() => {
             composerBox: bounds(element),
             controls: [
               ".agent-chat__dictation-phase",
-              ".chat-send-btn--dictating",
+              ".chat-mobile-dictation-action .chat-send-btn--dictating",
               ".chat-send-btn--dictation-commit",
             ].map((selector) => {
               const control = element.querySelector(selector);

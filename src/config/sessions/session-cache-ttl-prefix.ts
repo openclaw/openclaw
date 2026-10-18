@@ -9,7 +9,11 @@ import {
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
-import { transcriptEventJsonSql, transcriptEventModelNavigationSql } from "./transcript-payload.js";
+import {
+  transcriptEventJsonSql,
+  transcriptEventModelNavigationSql,
+  transcriptPredicateSql,
+} from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Projection dependencies are metadata, separate from the byte-bounded model history. */
@@ -24,7 +28,7 @@ export function readCacheTtlProjectionPrefix(
   }
   const entryType =
     /* kysely-allow-raw: exact-row identities carry the parsed kind; legacy rows retain native navigation. */
-    sql`coalesce(identity.event_type, event.navigation_last_type)`;
+    sql`coalesce(identity.event_type, ${transcriptPredicateSql(projection.database.db, "navigation_last_type", "event")})`;
   const db = getActiveTranscriptKysely(projection.database);
   const indexed = db
     .selectFrom("transcript_event_identities")
@@ -68,7 +72,11 @@ export function readCacheTtlProjectionPrefix(
           .end()
           .as("event_json"),
       )
-      .select("event.navigation_valid")
+      .select(
+        transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
+          "navigation_valid",
+        ),
+      )
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.active_position", "<", anchor.activePosition)
       .$call((query) =>
@@ -83,11 +91,23 @@ export function readCacheTtlProjectionPrefix(
           .then(false)
           .else(
             eb.or([
-              eb("event.navigation_valid", "=", 0),
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
+                "=",
+                0,
+              ),
               eb(entryType, "=", "reset"),
               eb.and([
                 eb(entryType, "=", "custom"),
-                eb("event.navigation_last_custom_type", "=", "openclaw.cache-ttl"),
+                eb(
+                  transcriptPredicateSql(
+                    projection.database.db,
+                    "navigation_last_custom_type",
+                    "event",
+                  ),
+                  "=",
+                  "openclaw.cache-ttl",
+                ),
               ]),
             ]),
           )

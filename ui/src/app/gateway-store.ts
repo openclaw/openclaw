@@ -195,7 +195,6 @@ export function createApplicationGateway(
       snapshot.suspensionPhase = availability.hasSuspensionDeadline()
         ? snapshot.suspensionPhase
         : undefined;
-      snapshot.pluginCapabilities = null;
       snapshot.usagePublications = undefined;
       scheduleOfflineIndicator();
     }
@@ -206,6 +205,7 @@ export function createApplicationGateway(
   const setConnectionSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) =>
     setSnapshot({
       hello: null,
+      pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
       selfUser: undefined,
       lastError: null,
@@ -567,9 +567,20 @@ export function createApplicationGateway(
           : undefined;
         // Display-only evidence; admission is still re-derived from the next hello.
         setUnavailableDeadline("suspensionPhase", suspensionPhase ? 0 : undefined);
+        // Transport loss and announced unavailability keep this client's presentation;
+        // any connect rejection (auth, pairing, protocol, build) fails closed.
+        const transientClose =
+          !error ||
+          restartPending ||
+          Boolean(suspensionPhase) ||
+          isRetryableGatewayStartupUnavailableError(error);
+        const retainPresentation = transientClose && !nextClient.offlineRecoveryRetired;
         const closeReason = formatUiExternalText(reason);
         setConnectionSnapshot({
           client: nextClient,
+          // Retained capabilities describe this client, never its live dispatch authority.
+          hello: retainPresentation ? snapshot.hello : null,
+          pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
           phase:
             mismatchedBuildId !== null
               ? "reload-required"
@@ -585,15 +596,7 @@ export function createApplicationGateway(
           // Retain only established profileless display identity through transport loss.
           // Rejected admission and unresolved/replaced identities must stay fail-closed.
           selfUser:
-            everConnected &&
-            (!error ||
-              restartPending ||
-              suspensionPhase ||
-              isRetryableGatewayStartupUnavailableError(error)) &&
-            !nextClient.offlineRecoveryRetired &&
-            snapshot.selfUser === null
-              ? null
-              : undefined,
+            everConnected && retainPresentation && snapshot.selfUser === null ? null : undefined,
           restartPending: restartPending || snapshot.restartPending === true,
           suspensionPhase,
           lastError: startupPending

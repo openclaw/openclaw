@@ -200,6 +200,9 @@ describe("Models provider login", () => {
           page.querySelector<HTMLButtonElement>("[data-model-readiness] button")?.disabled,
         ).toBe(false);
       });
+      if (setup) {
+        expect(page.view.props.loading).toBe(true);
+      }
       page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
       await page.updateComplete;
     } else {

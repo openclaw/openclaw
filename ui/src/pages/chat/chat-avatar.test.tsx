@@ -797,7 +797,7 @@ describe("refreshSenderAgentAvatars", () => {
   });
 
   it("loads newly committed forwards and releases cleared senders", async () => {
-    const host = { ...senderHost(), requestUpdate: vi.fn() };
+    const host = senderHost();
     const fetchAvatar = mockAvatarFetch();
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:forwarded");
     await refreshSenderAgentAvatars(host);
@@ -807,7 +807,6 @@ describe("refreshSenderAgentAvatars", () => {
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.get("research")).toBe("blob:forwarded");
     expect(fetchAvatar).toHaveBeenCalledOnce();
-    expect(host.requestUpdate).toHaveBeenCalledOnce();
     host.chatMessages = [];
     await refreshSenderAgentAvatars(host);
     expect(host.senderAgentAvatars?.size).toBe(0);

@@ -3675,7 +3675,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/transcripts/library.test.ts",
   "src/transcripts/status.producer.test.ts",
   "src/tts/tts-entry-delivery.test.ts",
-  "src/tts/tts-request.preparation-resources.test.ts",
   "src/tts/tts-request.resources.test.ts",
   "src/tts/tts-runtime-routing.test.ts",
   "src/tts/tts-summary.selection.test.ts",

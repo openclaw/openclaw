@@ -124,8 +124,17 @@ describe("worker launch capabilities", () => {
         syncWorkspace: vi.fn(),
         reconcileWorkspace: vi.fn(),
       });
+      let publicationOffered = false;
+      const createGatewayTools: NonNullable<
+        WorkerTurnEnvironmentService["createGatewayTools"]
+      > = async ({ prepareTools }) => {
+        const tools = (await prepareTools?.([])) ?? [];
+        publicationOffered = tools.some((tool) => tool.name === "github_publish");
+        return tools;
+      };
       const environments = {
         ...unusedEnvironments(),
+        createGatewayTools,
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
         startTunnel: vi.fn(async () => tunnel),
@@ -143,6 +152,7 @@ describe("worker launch capabilities", () => {
         await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(dispatchLaunch).toHaveBeenCalledOnce();
       }
+      expect(publicationOffered).toBe(true);
       expect(controller.signal.aborted).toBe(available);
     },
   );

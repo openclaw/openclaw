@@ -132,8 +132,6 @@ type ChatAbortRunState = ChatAbortTargetState & {
   chatRunError?: ChatRunError | null;
   chatQueue?: readonly ChatQueueItem[];
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  /** Retained until the separately owned chatError accessor has a projection. */
-  requestUpdate?: () => void;
   /** Reloads history and the authoritative session row. */
   refreshCurrentChat?: () => Promise<void>;
 };
@@ -142,6 +140,7 @@ type ChatAbortHost = ChatAbortRunState &
   ChatInputHistoryState & {
     pendingAbort?: PendingChatAbort | null;
     chatReplyTarget?: ChatReplyTarget | null;
+    composerDraftChanged?: () => void;
     sessions?: Partial<Pick<SessionCapability, "deletionState">>;
   };
 
@@ -285,7 +284,6 @@ async function settleChatAbortResponse(
         setChatRunError(state, message, intent.runId ?? undefined, result.errorKind);
       } else if (state.chatRunId) {
         setChatError(state, message);
-        state.requestUpdate?.();
       } else {
         setChatRunError(state, message, intent.runId ?? undefined, "stop");
       }
@@ -382,6 +380,7 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.chatMentions = [];
     host.chatReplyTarget = null;
     resetChatInputHistoryNavigation(host);
+    host.composerDraftChanged?.();
   }
   if (pendingAbort) {
     host.pendingAbort = pendingAbort;

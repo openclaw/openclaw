@@ -13,7 +13,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -68,10 +68,13 @@ class ProfileState {
 
   client: GatewayBrowserClient | null = null;
   connected = false;
+  identityReady = false;
   connecting = false;
+  canRead = false;
   canWrite = false;
   connectionScopes: readonly string[] | null = null;
   identityRequestId = 0;
+  hello: ApplicationGatewaySnapshot["hello"] | undefined;
 
   constructor(
     readonly context: ApplicationContext,
@@ -81,42 +84,65 @@ class ProfileState {
     this.identityRequestId += 1;
     this.client = null;
     this.connected = false;
+    this.identityReady = false;
   }
   applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const nextConnected = snapshot.phase === "connected";
+    // Hello can precede users.self; unresolved identity is not a sign-out.
+    const identityReady = nextConnected && snapshot.selfUser !== undefined;
+    const nextCanRead = hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
-    const writeAccessChanged = nextCanWrite !== this.canWrite;
-    const connectionChanged = nextConnected !== this.connected;
-    const nextSelfUser = nextConnected
+    const connectionChanged =
+      nextConnected !== this.connected ||
+      identityReady !== this.identityReady ||
+      (nextConnected && this.hello !== snapshot.hello);
+    const nextSelfUser = identityReady
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-      : null;
+      : clientChanged
+        ? null
+        : this.selfUser;
     const selfProfileChanged =
       nextSelfUser?.id !== this.selfUser?.id ||
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
+    const writeAccessLost =
+      nextConnected &&
+      !nextCanWrite &&
+      this.connectionScopes?.some(
+        (scope) => scope === "operator.write" || scope === "operator.admin",
+      );
+    const readAccessLost = nextConnected && this.canRead && !nextCanRead;
     const identitySourceChanged =
-      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
+      clientChanged || selfProfileChanged || writeAccessLost || readAccessLost;
     this.client = snapshot.client;
     this.connected = nextConnected;
+    this.identityReady = identityReady;
+    this.hello = snapshot.hello;
     this.connecting = snapshot.phase === "connecting" || snapshot.phase === "reconnecting";
-    this.canWrite = nextCanWrite;
+    this.canRead = nextConnected ? nextCanRead : clientChanged ? false : this.canRead;
+    this.canWrite = nextCanWrite && identityReady;
     // Hello records this connection's negotiated grants, not the profile's role ceiling.
-    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
+    this.connectionScopes =
+      nextConnected || clientChanged
+        ? (snapshot.hello?.auth?.scopes ?? null)
+        : this.connectionScopes;
     this.selfUser = nextSelfUser;
-    if (identitySourceChanged) {
+    if (identitySourceChanged || connectionChanged) {
       this.identityRequestId += 1;
-      this.ownProfile = null;
-      this.displayName = "";
-      this.gitCoauthorEnabled = true;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
     }
+    if (identitySourceChanged) {
+      this.ownProfile = null;
+      this.displayName = "";
+      this.gitCoauthorEnabled = true;
+    }
     this.publish();
-    if (!nextConnected || !snapshot.client) {
+    if (!identityReady || !snapshot.client) {
       return;
     }
-    if (identitySourceChanged) {
+    if (identitySourceChanged || connectionChanged) {
       void this.loadIdentity();
     }
     void this.context.agents.ensureList().then((list) => {
@@ -128,7 +154,7 @@ class ProfileState {
 
   async loadIdentity() {
     const client = this.client;
-    if (!client || !this.connected || this.identityLoading) {
+    if (!client || !this.identityReady || !this.canRead || this.identityLoading) {
       return;
     }
     const requestId = ++this.identityRequestId;
@@ -289,7 +315,7 @@ class ProfileState {
   }
 
   refreshManually() {
-    if (this.connected && !this.identityBusy && !this.identityLoading) {
+    if (this.identityReady && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
         invalidateUserPreferences(this.client);
       }
@@ -348,6 +374,8 @@ export function ProfilePage() {
     state.dispose();
   });
   const connected = () => view().connected && view().client !== null;
+  const hasPresentation = () =>
+    connected() || view().connectionScopes !== null || view().selfUser !== null;
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -381,7 +409,9 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
-              disabled={view().identityLoading || view().identityBusy !== null}
+              disabled={
+                !view().identityReady || view().identityLoading || view().identityBusy !== null
+              }
               onClick={() => state.refreshManually()}
             >
               {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
@@ -392,7 +422,7 @@ export function ProfilePage() {
       <SettingsWorkspace>
         <SettingsPage>
           <Show
-            when={connected()}
+            when={hasPresentation()}
             fallback={
               <SettingsGroup>
                 {view().connecting ? (
@@ -460,7 +490,7 @@ export function ProfilePage() {
               fallback={
                 <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
                   <SettingsSection title={t("profilePage.identity.title")}>
-                    {view().identityLoading ? (
+                    {view().identityLoading || (view().connected && !view().identityReady) ? (
                       <SettingsLoadingSkeleton label={t("profilePage.identity.loading")} rows={2} />
                     ) : (
                       <SettingsEmpty
@@ -482,6 +512,7 @@ export function ProfilePage() {
                 config={context.config}
                 profile={view().ownProfile!}
                 canWrite={view().canWrite}
+                connected={view().identityReady}
                 avatarUrl={avatarUrl()}
                 displayName={view().displayName}
                 gitCoauthorEnabled={view().gitCoauthorEnabled}
@@ -501,12 +532,12 @@ export function ProfilePage() {
           </Show>
           <PersonalInstructions
             hidden={
-              !connected() ||
+              !hasPresentation() ||
               view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
                 true
             }
           />
-          <Show when={connected()}>
+          <Show when={hasPresentation()}>
             <ModelAccounts
               identityId={view().selfUser?.id ?? null}
               profileId={view().ownProfile?.id ?? null}

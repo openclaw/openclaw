@@ -12,8 +12,14 @@ import {
   memoryStandingIntentSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
+import { resolveVisibleHistoryEventCount } from "../../config/sessions/session-accessor.sqlite-history-projection.js";
+import { readSessionTranscriptHistoryEventPageFromProjection } from "../../config/sessions/session-accessor.sqlite-history-query.js";
+import { readCurrentProjectionSnapshot } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
+import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionColdArchivePath } from "../../config/sessions/session-cold-storage-codec.js";
 import { prepareTranscriptPayload } from "../../config/sessions/transcript-payload.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import {
   capturePostgresBackup,
   preparePostgresRestore,
@@ -24,11 +30,13 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-con
 import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { getOpenClawAgentMigrationSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   prepareTrajectoryPayload,
   readTrajectoryPayload,
   type TrajectoryPayloadRecord,
 } from "../../trajectory/runtime-payload.js";
+import type { DatabasePortManifest } from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { admitSqliteSchema } from "../sqlite-schema-facts.js";
@@ -37,6 +45,7 @@ import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { agentPortProvider } from "./agent-port.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { files } from "./port-command.integration.test-support.js";
 import { materializeDatabasePort } from "./port.worker.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { statePortProvider } from "./state-port.js";
@@ -80,8 +89,162 @@ describe.skipIf(!connection)("agent database port", () => {
     ).toEqual([]);
   });
 
-  it.each([27, 28, 29])(
-    "round-trips the text-only version %s before migration",
+  it("ports lazy raw and compressed predicates through the verified command into readable PostgreSQL history", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", prefix: "agent-port-lazy-" },
+      async (state) => {
+        await state.writeConfig({
+          database: { engine: "sqlite", postgres: { connection: connection! } },
+        });
+        const descriptor = await agentPortProvider.loadDescriptor();
+        const agentPath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
+        fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+        const events = [
+          {
+            type: "custom_message",
+            id: "raw-notice",
+            parentId: null,
+            customType: "synthetic-note",
+            display: true,
+            content: "raw notice",
+            timestamp: "2026-10-17T00:00:00.000Z",
+          },
+          {
+            type: "custom_message",
+            id: "compressed-notice",
+            parentId: "raw-notice",
+            customType: "synthetic-note",
+            display: true,
+            content: "compressed notice ".repeat(200),
+            timestamp: "2026-10-17T00:00:01.000Z",
+          },
+        ];
+        {
+          using source = openNodeSqliteDatabase(agentPath);
+          source.exec(descriptor.sqlite);
+          source.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+            INSERT INTO schema_meta VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', NULL, 1, 1);
+            INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+            INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+              VALUES ('agent:main:main', 'lazy-session', '{"sessionId":"lazy-session"}', 1);
+            INSERT INTO session_windows (session_id, session_key, created_at, updated_at, transcript_updated_at)
+              VALUES ('lazy-session', 'agent:main:main', 1, 1, 1);
+            INSERT INTO transcript_rewrite_watermarks VALUES ('lazy-session', 'lazy-generation', 1);`);
+          admitSqliteSchema(source);
+          for (const [seq, event] of events.entries()) {
+            const payload = prepareTranscriptPayload(source, JSON.stringify(event));
+            expect(payload.event_zstd !== null).toBe(seq === 1);
+            source
+              .prepare(`INSERT INTO transcript_events
+              (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
+              VALUES ('lazy-session', ?, ?, ?, ?, ?, 1)`)
+              .run(
+                seq,
+                payload.event_json,
+                payload.event_zstd,
+                payload.event_utf8_bytes,
+                payload.navigation_json,
+              );
+            source
+              .prepare(`INSERT INTO transcript_event_identities
+              (session_id, event_id, seq, event_type, created_at)
+              VALUES ('lazy-session', ?, ?, 'custom_message', 1)`)
+              .run(event.id, seq);
+          }
+          expect(
+            source
+              .prepare(
+                `SELECT navigation_type, navigation_display FROM transcript_events ORDER BY seq`,
+              )
+              .all(),
+          ).toEqual([
+            { navigation_type: null, navigation_display: 0 },
+            { navigation_type: null, navigation_display: 0 },
+          ]);
+        }
+        try {
+          const result = await doctorDatabasePort({ family: "agent", to: "postgres" });
+          expect(result).toMatchObject({
+            phase: "complete",
+            engine: "postgres",
+            stores: [agentPath],
+          });
+          if (!("manifest" in result)) {
+            throw new Error("Expected a completed, verified database port");
+          }
+          const manifest = JSON.parse(
+            fs.readFileSync(result.manifest, "utf8"),
+          ) as DatabasePortManifest;
+          expect(manifest).toMatchObject({ state: "complete", outcome: "ported" });
+          expect(manifest.targets[0]?.verification).toMatchObject({ ownerAdmitted: true });
+          expect(manifest.targets[0]?.verification?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+          const config = JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
+          withDatabaseEngineSelection(
+            {
+              effectiveEngines: resolveDatabaseFamilyEngines(config),
+              postgres: { connection: connection!, schemaPrefix: "test" },
+            },
+            () =>
+              withEngineStoreAdmission(() => {
+                using anchor = openNodeSqliteDatabase(agentPath);
+                const db = openAgentEngineStore(anchor, "main", agentPath, true);
+                try {
+                  expect(isPostgresSqlConnection(db)).toBe(true);
+                  const read = readCurrentProjectionSnapshot(
+                    { db, agentId: "main", path: agentPath },
+                    resolveSqliteTranscriptReadScope({
+                      agentId: "main",
+                      env: state.env,
+                      sessionId: "lazy-session",
+                      sessionKey: "agent:main:main",
+                      storePath: agentPath,
+                    }),
+                    (projection) => ({
+                      count: resolveVisibleHistoryEventCount(projection),
+                      page: readSessionTranscriptHistoryEventPageFromProjection(projection, {
+                        offset: 0,
+                        maxMessages: 10,
+                      }),
+                    }),
+                  );
+                  expect(read.kind).toBe("value");
+                  if (read.kind !== "value") {
+                    throw new Error("Expected the port to publish readable history");
+                  }
+                  expect(read.value.count).toBe(2);
+                  expect(read.value.page.totalMessages).toBe(2);
+                  expect(read.value.page.events.map(({ event }) => event)).toEqual(events);
+                } finally {
+                  db.close();
+                }
+              }),
+          );
+        } finally {
+          const directory = state.statePath("recovery", "database-port");
+          if (fs.existsSync(directory)) {
+            const ownedNamespaces = new Set<string>();
+            for (const file of await files(directory)) {
+              if (path.basename(file) !== "manifest.json") {
+                continue;
+              }
+              const manifest = JSON.parse(fs.readFileSync(file, "utf8")) as DatabasePortManifest;
+              for (const target of manifest.targets) {
+                if (target.intended.engine === "postgres") {
+                  ownedNamespaces.add(target.intended.namespace);
+                }
+              }
+            }
+            for (const namespace of ownedNamespaces) {
+              await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
+            }
+          }
+        }
+      },
+    );
+  }, 120_000);
+
+  it.each([27, 28, 29, 30])(
+    "round-trips version %s with its historical trajectory layout and revision triggers",
     async (version) => {
       const descriptor = await agentPortProvider.loadDescriptor(undefined, version);
       using source = openNodeSqliteDatabase(":memory:");
@@ -95,7 +258,8 @@ describe.skipIf(!connection)("agent database port", () => {
     `);
       const event = '{ "type": "legacy", "data": { "text": "café 🦞" } }';
       source
-        .prepare("INSERT INTO trajectory_runtime_events VALUES ('session', 0, NULL, ?, 1)")
+        .prepare(`INSERT INTO trajectory_runtime_events
+          (session_id, seq, run_id, event_json, created_at) VALUES ('session', 0, NULL, ?, 1)`)
         .run(event);
       const namespace = `agent_legacy_${randomUUID().replaceAll("-", "")}`;
       const storeId = randomUUID();
@@ -107,10 +271,25 @@ describe.skipIf(!connection)("agent database port", () => {
         storeId,
         assertCurrent() {},
       });
+      const trajectoryColumns =
+        version < 30
+          ? {}
+          : {
+              event_utf8_bytes: null,
+              event_payload: null,
+              event_codec: null,
+            };
       expect(
         (await client.query(`SELECT * FROM "${namespace}".trajectory_runtime_events`)).rows,
       ).toEqual([
-        { session_id: "session", seq: "0", run_id: null, event_json: event, created_at: "1" },
+        {
+          session_id: "session",
+          seq: "0",
+          run_id: null,
+          event_json: event,
+          created_at: "1",
+          ...trajectoryColumns,
+        },
       ]);
       expect(
         (
@@ -126,6 +305,11 @@ describe.skipIf(!connection)("agent database port", () => {
           ? { proisstrict: false, proconfig: null }
           : { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
       ]);
+      await client.query(`INSERT INTO "${namespace}".memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
+      expect(
+        (await client.query(`SELECT revision FROM "${namespace}".memory_index_state`)).rows,
+      ).toEqual([{ revision: "1" }]);
       using restored = openNodeSqliteDatabase(":memory:");
       await materializeDatabasePort({
         source: { engine: "postgres", db: client, namespace },
@@ -135,8 +319,20 @@ describe.skipIf(!connection)("agent database port", () => {
         assertCurrent() {},
       });
       expect(restored.prepare("SELECT * FROM trajectory_runtime_events").all()).toEqual([
-        { session_id: "session", seq: 0, run_id: null, event_json: event, created_at: 1 },
+        {
+          session_id: "session",
+          seq: 0,
+          run_id: null,
+          event_json: event,
+          created_at: 1,
+          ...trajectoryColumns,
+        },
       ]);
+      restored.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
+          VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
+      expect(restored.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
+        revision: 1,
+      });
     },
   );
 

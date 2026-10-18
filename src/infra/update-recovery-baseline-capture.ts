@@ -127,6 +127,7 @@ export function captureUpdateRecoveryBaseline(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  fullIntegrityCheck?: boolean;
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -342,6 +343,7 @@ export function captureUpdateRecoveryBaseline(params: {
         timeoutMs: params.timeoutMs,
         acquisition: params.acquisition,
         purpose: "original-state",
+        integrityCheck: params.fullIntegrityCheck ? "full" : "quick",
         preserveSourceArtifacts: true,
         additionalPaths: [...forcedSqlite],
         additionalFiles: [...files.keys()].filter((pathname) => !configPaths.has(pathname)),

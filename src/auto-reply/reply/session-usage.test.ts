@@ -37,12 +37,7 @@ describe("session actor usage accounting", () => {
     const storePath = seed.incognito
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env })
       : path.join(root, "agents", "main", "sessions", "sessions.json");
-    const scope = {
-      agentId: "main",
-      storePath,
-      sessionKey,
-      ...(seed.incognito ? { env } : {}),
-    };
+    const scope = { agentId: "main", storePath, sessionKey, ...(seed.incognito ? { env } : {}) };
     await replaceSessionEntry(scope, { sessionId: "s1", updatedAt: 1, ...seed });
     const read = () => expectDefined(loadSessionEntry(scope), "stored session");
     return {
@@ -317,9 +312,7 @@ describe("session actor usage accounting", () => {
         cacheWrite: 2,
         estimatedCostUsd: 0.5,
       },
-      update: {
-        usage: { input: 0, output: 0, total: 0, usageReport: { state: "available" } },
-      },
+      update: { usage: { input: 0, output: 0, total: 0, usageReport: { state: "available" } } },
       expected: {
         usageReport: { state: "available" },
         inputTokens: 0,
@@ -427,16 +420,10 @@ describe("session actor usage accounting", () => {
   });
 
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
-    const session = await usageSession({
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    });
+    const session = await usageSession({ sessionId: "s1", updatedAt: Date.now() });
 
     const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, other: {} },
-      },
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
       models: {
         providers: {
           openai: {

@@ -67,7 +67,7 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const [presented, setPresented] = createSignal(true);
   let root: ReturnType<typeof mountSolid> | undefined;
   const renderPane = () => {
-    setCurrent({ ...props, mediaOwner: renderPane, onRequestUpdate: renderPane });
+    setCurrent({ ...props, mediaOwner: renderPane });
     flush();
     root ??= mountSolid(
       () => (
@@ -592,6 +592,7 @@ describe("canonical image presentation handoff", () => {
           presentation === "canonical" ? [] : undefined,
         );
         fixture.publish();
+        await vi.advanceTimersByTimeAsync(0);
         fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-offline"));
         await vi.advanceTimersByTimeAsync(0);
         const displayed = expectDefined(fixture.images()[0], "loaded canonical image");

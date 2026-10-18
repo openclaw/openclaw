@@ -1113,7 +1113,11 @@ describe("tui session actions", () => {
         );
 
         expect(state.activeChatRunId).toBe(preservesOld ? previousRunId : null);
-        expect(setActivityStatus).toHaveBeenLastCalledWith(preservesOld ? "running" : "idle");
+        if (preservesOld) {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("running");
+        } else {
+          expect(setActivityStatus).toHaveBeenLastCalledWith("idle", "completed");
+        }
         vi.advanceTimersByTime(101);
         expect(addPendingSystem).toHaveBeenCalledTimes(preservesOld ? 1 : 0);
         if (sameSession && !preservesOld) {

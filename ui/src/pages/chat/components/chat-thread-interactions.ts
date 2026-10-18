@@ -195,7 +195,6 @@ export type ChatThreadProps = ChatSendStatusActions &
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     onAssistantAttachmentLoaded?: () => void;
     mediaOwner?: object;
-    onRequestUpdate?: () => void;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;

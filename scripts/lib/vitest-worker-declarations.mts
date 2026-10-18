@@ -122,6 +122,8 @@ export const vitestWorkerDeclarationEntries = {
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "extensions/memory-core/manager-publication-admission-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts",
+  "extensions/memory-core/manager-publication-crash-entrypoint.test-support":
+    "extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts",
   "extensions/memory-core/memory-forget-planning-observer-entrypoint.test-support":
@@ -185,6 +187,8 @@ export const vitestWorkerDeclarationEntries = {
     "src/gateway/session-child-cache-retention-entrypoint.test-support.ts",
   "gateway/session-title-retention.test-support":
     "src/gateway/session-title-retention.test-support.ts",
+  "gateway/dashboard-session-title-runtime.test-support":
+    "src/gateway/dashboard-session-title-runtime.test-support.ts",
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "worker/worker-runtime-background-exec-entrypoints.test-support":
     "src/worker/worker-runtime-background-exec-entrypoints.test-support.ts",

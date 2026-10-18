@@ -31,7 +31,6 @@ import type {
 } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
 /**
- * Bash exec runtime.
  * Spawns host/sandbox processes, manages session updates/backgrounding,
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
@@ -106,7 +105,6 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 /** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
@@ -263,7 +261,6 @@ export function buildApprovalPendingMessage(params: {
   return lines.join("\n");
 }
 
-/** Normalizes the delay before showing a running approval notice. */
 export function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
@@ -299,7 +296,6 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
-/** Formats a user-facing reason for a failed exec process exit. */
 function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
@@ -334,7 +330,6 @@ function formatExecFailureReason(params: {
   throw new Error("Unsupported exec failure kind");
 }
 
-/** Converts a supervisor exit record into a normalized exec process outcome. */
 function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -387,7 +382,6 @@ function buildExecExitOutcome(params: {
   };
 }
 
-/** Converts spawn/runtime errors into a normalized failed exec outcome. */
 export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;

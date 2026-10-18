@@ -52,13 +52,11 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     try {
       const branches = await listBranches.call(sessions, sessionKey, agentParams);
       if (isCurrent()) {
-        const previous = JSON.stringify(displayedChatSessionBranches(state));
-        state.chatBranches = branches;
+        if (JSON.stringify(state.chatBranches ?? []) !== JSON.stringify(branches)) {
+          state.chatBranches = branches;
+        }
         state.chatBranchesSessionKey = sessionKey;
         state.chatBranchesConnectionEpoch = connectionEpoch;
-        if (JSON.stringify(displayedChatSessionBranches(state)) !== previous) {
-          state.requestUpdate?.();
-        }
       }
     } catch {
       // Leave the success receipt unset so the next history load retries transient failures.

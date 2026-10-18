@@ -237,7 +237,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     return undefined;
   }
 
-  // protocol negotiation
   const { minProtocol, maxProtocol } = connectParams;
   const supportsCurrentProtocol =
     maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;

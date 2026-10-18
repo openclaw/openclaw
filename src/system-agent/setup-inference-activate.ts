@@ -120,10 +120,7 @@ async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | Stag
       const route = await resolveSystemAgentConfiguredRouteFromConfig(
         cfg,
         params.agentId,
-        {
-          loadAuthProfileStoreForRuntimeAsync: ctx.deps.loadAuthProfileStoreForRuntimeAsync,
-          ...(params.modelTarget ? { modelTarget: params.modelTarget } : {}),
-        },
+        params.modelTarget ? { modelTarget: params.modelTarget } : {},
         ctx.snapshot,
       );
       if (!route) {
@@ -398,7 +395,6 @@ async function verifyAndActivateCandidate(
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
-    loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
   };
   const requestedAgentId = params.agentId ? routeAgentId : undefined;
   // Saved model rows stay sparse; compare the same runtime defaults before and after writing.
@@ -437,10 +433,9 @@ async function verifyAndActivateCandidate(
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
-    (deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts)({
+    captureSystemAgentOwnerPluginArtifacts({
       config: route.runConfig,
       executionRoute: route,
-      deps,
     }),
   );
   params.onPreparationComplete?.();
@@ -450,7 +445,6 @@ async function verifyAndActivateCandidate(
     try {
       const native = await verifySetupHarness({
         route,
-        deps,
         cache,
         generation,
         signal: params.signal,
@@ -461,7 +455,6 @@ async function verifyAndActivateCandidate(
       }
       return await runSetupInferenceTurn({
         route,
-        deps,
         requireExecutionOwner: true,
         signal: params.signal,
         runtime: params.runtime,
@@ -515,7 +508,6 @@ async function verifyAndActivateCandidate(
         current = await withGeneration(() =>
           verifySetupHarness({
             route: candidateRoute,
-            deps,
             cache,
             generation,
             signal: params.signal,

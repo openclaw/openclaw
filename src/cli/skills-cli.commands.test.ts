@@ -270,7 +270,7 @@ describe("skills cli commands", () => {
     mocks.explicitAgent.mockImplementation((_config, agent) => agent);
     mocks.workspace.mockReturnValue("/tmp/workspace");
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
-    mocks.sourceInstall.mockResolvedValue({ ok: false, error: "source install disabled in test" });
+    mocks.sourceInstall.mockRejectedValue(new Error("source install disabled in test"));
     mocks.update.mockResolvedValue([]);
     mocks.tracked.mockResolvedValue([]);
     mocks.sourceUrl.mockReturnValue(undefined);
@@ -386,7 +386,6 @@ describe("skills cli commands", () => {
   it("installs a source under --as with noninteractive policy acknowledgement", async () => {
     setTty(false);
     mocks.sourceInstall.mockResolvedValue({
-      ok: true,
       slug: "tools",
       source: "git",
       targetDir: "/tmp/workspace/skills/tools",

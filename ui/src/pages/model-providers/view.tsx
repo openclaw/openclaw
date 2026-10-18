@@ -506,27 +506,12 @@ function renderProviderNoticeRow(text: string) {
 
 export function ModelProviders(props: ModelProvidersViewProps) {
   return (
-    <Show
-      when={props.connected}
-      fallback={
-        <SettingsPage>
-          <SettingsGroup>
-            <SettingsEmpty message={t("modelProviders.disconnected")} />
-          </SettingsGroup>
-        </SettingsPage>
-      }
-    >
-      <ConnectedModelProviders {...props} />
-    </Show>
-  );
-}
-
-function ConnectedModelProviders(props: ModelProvidersViewProps) {
-  return (
     <>
       <SettingsPage>
         <>
-          <ModelReadiness {...props} />
+          <Show when={props.connected || !props.loading}>
+            <ModelReadiness {...props} />
+          </Show>
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}

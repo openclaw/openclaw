@@ -350,6 +350,9 @@ describe("gateway-cli coverage", () => {
         arch: process.arch,
         node: process.versions.node,
         uptimeMs: 2000,
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "2026.4.22-abcdef012345-2026-04-22T12-00-00.000Z",
+        commit: "abcdef0",
       },
       host: { hostname: "test-host" },
       evidence: {
@@ -418,6 +421,9 @@ describe("gateway-cli coverage", () => {
     expect(callGateway).not.toHaveBeenCalled();
     expect(output).toContain("Stability bundle");
     expect(output).toContain("gateway.restart_startup_failed");
+    expect(output).toContain("openclaw=2026.4.22-beta.1+fixture");
+    expect(output).toContain("build=2026.4.22-abcdef012345-2026-04-22T12-00-00.000Z");
+    expect(output).toContain("commit=abcdef0");
     expect(output).toContain("Memory pressure");
     expect(output).toContain("rss_threshold");
     expect(output).toContain("Largest session files");
