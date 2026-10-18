@@ -1,3 +1,14 @@
+/* Details and the desktop menus share the same block-divider color. Keep the
+   token available before lazy menu/Details styles load, without changing other borders. */
+.chat-details-desktop-body,
+.chat-dashboard-menu__panel,
+.side-panel-position-menu,
+.chat-pr-menu,
+.chat-header-session-menu__panel,
+.session-menu__panel {
+  --details-separator: color-mix(in srgb, var(--border-strong) 70%, var(--border));
+}
+
 :root {
   --bg: #0e1015;
   --bg-accent: #13151b;
