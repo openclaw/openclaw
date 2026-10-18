@@ -92,13 +92,14 @@ export function createUnsupportedUpdate(params: {
   userId: string;
   userName: string;
   chatId: string;
+  chatType?: "PRIVATE" | "GROUP";
   text?: string;
 }) {
   return {
     event_name: "message.unsupported.received",
     message: {
       from: { id: params.userId, name: params.userName },
-      chat: { id: params.chatId, chat_type: "PRIVATE" as const },
+      chat: { id: params.chatId, chat_type: params.chatType ?? "PRIVATE" },
       message_id: params.messageId,
       date: Math.floor(Date.now() / 1000),
       ...(params.text === undefined ? {} : { text: params.text }),

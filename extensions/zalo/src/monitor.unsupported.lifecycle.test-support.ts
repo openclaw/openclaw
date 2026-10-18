@@ -211,4 +211,90 @@ describe("Zalo unsupported lifecycle", () => {
       await monitor.stop();
     }
   });
+
+  it("does not send fallback guidance to unmentioned group events", async () => {
+    const { account, config } = createLifecycleMonitorSetup({
+      accountId: "acct-zalo-unsupported-group",
+      dmPolicy: "open",
+    });
+    const monitor = await startWebhookLifecycleMonitor({
+      account,
+      config,
+      cacheKey: "zalo-unsupported-lifecycle",
+    });
+
+    try {
+      await withServer(
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
+        async (baseUrl) => {
+          const response = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createUnsupportedUpdate({
+              messageId: `zalo-unsupported-group-${Date.now()}`,
+              userId: "user-1",
+              userName: "User One",
+              chatId: "group-unsupported-1",
+              chatType: "GROUP",
+            }),
+            beforeReplay: monitor.waitForIdle,
+          });
+          expect(response.first.status).toBe(200);
+          await monitor.waitForIdle();
+        },
+      );
+
+      expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+      expect(recordInboundSessionMock).not.toHaveBeenCalled();
+      expect(sendMessageMock).not.toHaveBeenCalled();
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it("settles the event when guidance delivery fails", async () => {
+    sendMessageMock.mockRejectedValueOnce(new Error("zalo send failed"));
+    const { account, config } = createLifecycleMonitorSetup({
+      accountId: "acct-zalo-unsupported-send-failure",
+      dmPolicy: "open",
+    });
+    const monitor = await startWebhookLifecycleMonitor({
+      account,
+      config,
+      cacheKey: "zalo-unsupported-lifecycle",
+    });
+
+    try {
+      await withServer(
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
+        async (baseUrl) => {
+          const response = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createUnsupportedUpdate({
+              messageId: `zalo-unsupported-failure-${Date.now()}`,
+              userId: "user-1",
+              userName: "User One",
+              chatId: "dm-unsupported-1",
+            }),
+            beforeReplay: monitor.waitForIdle,
+          });
+          expect(response.first.status).toBe(200);
+          expect(response.replay.status).toBe(200);
+          await monitor.waitForIdle();
+        },
+      );
+
+      // A failed best-effort notice is not retried by the durable ingress.
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await monitor.stop();
+    }
+  });
 });

@@ -260,20 +260,35 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
       if (!authorization) {
         break;
       }
-      await sendMessage(
-        token,
-        {
-          chat_id: authorization.chatId,
-          text: ZALO_UNSUPPORTED_MESSAGE_GUIDANCE,
-        },
-        fetcher,
-      );
-      statusSink?.({ lastOutboundAt: Date.now() });
-      logVerbose(
-        core,
-        runtime,
-        `[${account.accountId}] Sent unsupported message guidance to ${message.from.id}`,
-      );
+      // Group traffic only reaches the agent pipeline when explicitly mentioned.
+      // Guidance for unsupported messages must not create unsolicited group replies.
+      if (authorization.isGroup) {
+        break;
+      }
+      try {
+        await sendMessage(
+          token,
+          {
+            chat_id: authorization.chatId,
+            text: ZALO_UNSUPPORTED_MESSAGE_GUIDANCE,
+          },
+          fetcher,
+        );
+        statusSink?.({ lastOutboundAt: Date.now() });
+        logVerbose(
+          core,
+          runtime,
+          `[${account.accountId}] Sent unsupported message guidance to ${message.from.id}`,
+        );
+      } catch (err) {
+        // Guidance is best effort: a failed notice must not turn the inbound
+        // event into a polling lifecycle error or a retryable webhook delivery.
+        logVerbose(
+          core,
+          runtime,
+          `[${account.accountId}] Unsupported message guidance failed for ${message.from.id}: ${String(err)}`,
+        );
+      }
       break;
     }
   }
