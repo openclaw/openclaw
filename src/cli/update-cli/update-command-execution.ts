@@ -62,6 +62,7 @@ import {
   recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
+  withUpdateStateRead,
 } from "./update-command-result.js";
 import { captureUpdateActivationSchemas } from "./update-command-schema.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -615,8 +616,10 @@ export async function executeMutableUpdate(
             target.postgresFamilies,
           );
           retentionInstallTarget = installTarget;
-          await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
-          assertExecutionCurrent();
+          await withUpdateStateRead(async () => {
+            await recordInspectedGitTarget(target, recordPhase, assertExecutionCurrent);
+            assertExecutionCurrent();
+          }, opts.run?.deadline?.remainingMs() ?? updateStepTimeoutMs);
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {
             await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");

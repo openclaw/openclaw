@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import { StateDatabaseOfflineMaintenanceError } from "../../infra/gateway-state-owner-record.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -206,6 +207,37 @@ describe("mutable update execution", () => {
         expect(mocks.serviceStopped).toBe(true);
         expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  it("waits for transient state maintenance before Git checkout", async () => {
+    await withTestDir({ prefix: "git-maintenance-before-checkout-" }, async (root) => {
+      const params = await runParams(root, "git", path.join(root, "state"));
+      params.updateStepTimeoutMs = 500;
+      const target = { schemaVersions: { state: 15, agent: 19 } };
+      let maintenancePending = false;
+      const assertCurrent = vi.fn(() => {
+        if (maintenancePending) {
+          maintenancePending = false;
+          throw new StateDatabaseOfflineMaintenanceError(
+            path.join(root, "state", "state", "openclaw.sqlite"),
+            "temporary offline maintenance",
+          );
+        }
+      });
+      params.opts.run.executorFence = { assertCurrent };
+      mocks.runGitUpdate.mockImplementationOnce(
+        async (options: Parameters<typeof updateGitInstall>[0]) => {
+          maintenancePending = true;
+          await options.inspectGitTarget?.(target);
+          return { ...successfulUpdate, mode: "git" };
+        },
+      );
+
+      const execution = await execute(params);
+
+      expect(execution?.result.status).toBe("ok");
+      expect(assertCurrent).toHaveBeenCalled();
     });
   });
 
