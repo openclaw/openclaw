@@ -411,7 +411,8 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
         <openclaw-terminal-panel
           ref={(element) => (props.host.terminalPanel = element)}
           inert={view().navDrawerOpen}
-          prop:client={view().gatewayConnected ? view().gatewaySnapshot.client : null}
+          prop:client={view().gatewaySnapshot.client}
+          prop:gatewayConnected={view().gatewayConnected}
           prop:available={view().terminalAvailable}
           prop:agentId={view().selectedAgentId}
           prop:sessionKey={view().sessionRoute ? props.host.activeSessionKey : null}

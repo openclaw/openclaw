@@ -5,7 +5,10 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  recordCommandProcessFailure,
+} from "../../process/exec-result.js";
 import * as processExec from "../../process/exec.js";
 import {
   ensureProjectCheckoutCommit,
@@ -214,36 +217,50 @@ it.each([
   expect(await ref(local ? clone : linked, ownerRef)).toBe(retired);
 });
 
-it.each(["unavailable", "uncertain"])("preserves local work on %s repair", async (failure) => {
-  const logs = createWarnLogCapture("missing-tip-repair");
-  onTestFinished(() => logs.cleanup());
-  const run = processExec.runCommandWithTimeout;
-  const uncertain = new CommandProcessCleanupError();
-  vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-    if (argv.includes("fetch") && argv.includes("--stdin")) {
-      if (failure === "uncertain") {
-        throw uncertain;
+it.each(["unavailable", "uncertain", "recorded uncertain"])(
+  "preserves local work on %s repair",
+  async (failure) => {
+    const logs = createWarnLogCapture("missing-tip-repair");
+    onTestFinished(() => logs.cleanup());
+    const run = processExec.runCommandWithTimeout;
+    const uncertain =
+      failure === "recorded uncertain"
+        ? recordCommandProcessFailure(new Error("synthetic repair capture failure"), {
+            code: null,
+            termination: "signal",
+            cleanup: "uncertain",
+          })
+        : new CommandProcessCleanupError();
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (argv.includes("fetch") && argv.includes("--stdin")) {
+        if (failure !== "unavailable") {
+          throw uncertain;
+        }
+        return {
+          stdout: "",
+          stderr: "remote object unavailable",
+          code: 128,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
       }
-      return {
-        stdout: "",
-        stderr: "remote object unavailable",
-        code: 128,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return run(argv, options);
+    });
+    const operation = fetch();
+    if (failure === "uncertain") {
+      await expect(operation).rejects.toBe(uncertain);
+    } else if (failure === "recorded uncertain") {
+      const error = await operation.catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(CommandProcessCleanupError);
+      expect(error).toHaveProperty("cause", uncertain);
+    } else {
+      expect((await operation).code).toBe(128);
+      expect(await logs.findText("Git repository repair failed")).toContain(
+        "Local branches and worktree HEADs were preserved",
+      );
     }
-    return run(argv, options);
-  });
-  const operation = fetch();
-  if (failure === "uncertain") {
-    await expect(operation).rejects.toBe(uncertain);
-  } else {
-    expect((await operation).code).toBe(128);
-    expect(await logs.findText("Git repository repair failed")).toContain(
-      "Local branches and worktree HEADs were preserved",
-    );
-  }
-  expect(await rawRef("refs/heads/retained")).toBe(`${tip}\n`);
-  expect(await ref(linked, "HEAD")).toBe(tip);
-});
+    expect(await rawRef("refs/heads/retained")).toBe(`${tip}\n`);
+    expect(await ref(linked, "HEAD")).toBe(tip);
+  },
+);

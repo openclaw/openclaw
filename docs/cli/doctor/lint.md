@@ -19,10 +19,11 @@ The setup assistant's `doctor` action uses this read-only lint posture in an iso
 process. It reports findings without applying repairs or migrations. Run
 `openclaw doctor --fix` separately on the Gateway host when you intend to repair state.
 
-Full reports reuse a private shared-state snapshot for ordinary reads within the
-report, preserving the live database and its WAL files. Each new report reads a
-fresh snapshot. Checks that need writable inspection state or independent database
-verification retain their own copies; `--only` checks prepare state on demand.
+Reports reuse a private shared-state snapshot for ordinary reads within the report,
+preserving the live database and its WAL files. `--only` reports prepare that shared
+snapshot on the first shared-state read.
+Each new report reads a fresh snapshot. Checks that need writable inspection state
+or independent database verification retain their own copies.
 
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
 including their modification times. An older shared-state schema produces a

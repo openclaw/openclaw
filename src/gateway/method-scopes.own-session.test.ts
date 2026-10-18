@@ -389,6 +389,7 @@ describe("session-scoped method admission", () => {
   );
 
   it.each([
+    ["sessions.diff", { sessionKey: "agent:main:own" }, true],
     [
       "sessions.files.assets",
       { sessionKey: "agent:main:own", path: "index.html", refs: ["a.png"] },

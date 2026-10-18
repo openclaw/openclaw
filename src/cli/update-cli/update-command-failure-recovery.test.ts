@@ -112,6 +112,50 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it.each(["managed-service-preflight", "gateway-stop-unverified"])(
+  "records untouched %s as no recovery needed and still serving before",
+  async (reason) => {
+    const { verifyUpdateFailureRecovery } = await import("./update-command-failure-recovery.js");
+    const env = { ...process.env };
+    const run = { runId: updateLedger.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const result = await verifyUpdateFailureRecovery({
+      result: {
+        status: "error",
+        mode: "npm",
+        reason,
+        before: { version: "2026.10.3" },
+        steps: [],
+        durationMs: 0,
+      },
+      root,
+      env,
+      opts: { json: true, run },
+      preManagedServiceStop: {
+        stopped: false,
+        inspected: false,
+        runtimeInspected: true,
+        running: true,
+        serviceUpdateVerdict: { kind: "unavailable", message: "inspection unavailable" },
+      },
+    });
+    completeUpdateCommandRun(result, run);
+    const recorded = updateLedger.getUpdateRun(run.runId, { env });
+    assert(recorded);
+    expect(recorded).toMatchObject({ status: "failed", reason });
+    expect(renderUpdateRunReport(recorded).markdown).not.toContain("restart-unhealthy");
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "gateway recovery observation",
+        exitCode: 0,
+        diagnostics: [
+          "No recovery needed; still serving 2026.10.3. No service was stopped or started.",
+        ],
+      }),
+    );
+    noCalls(mocks.activePort, mocks.managedService, verifyUpdatedGateway);
+  },
+);
+
 it("settles a headless package rollback without waiting for a Gateway", async () => {
   const { packageRoot, transaction } = await createRetainedPackageSwap(root);
   const configPath = path.join(process.env.OPENCLAW_STATE_DIR!, "openclaw.json");

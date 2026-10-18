@@ -25,9 +25,11 @@ import {
   captureOwnedManagedUpdatePreflightContext,
   resolveOwnedManagedUpdatePreflightEnv,
 } from "./update-command-managed-context.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -117,8 +119,14 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
             entry.packageIdentity &&
             canonicalPath(entry.packageIdentity.root) === canonicalPath(params.roots[0] ?? root)))
       ) {
-        const failure = createUpdatePreflightFailure("gateway-stop-unverified");
-        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, failure);
+        const detail = inspected.serviceUpdateVerdict.message;
+        const failure = createUpdatePreflightFailure("gateway-stop-unverified", detail);
+        throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
+          failureFacts: [
+            ...failure.failureFacts,
+            ...(collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) ?? []),
+          ],
+        });
       }
     }
     if (

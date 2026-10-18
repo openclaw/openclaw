@@ -13,6 +13,9 @@ import {
   assertSystemdAvailable,
   isSystemctlAvailable,
   isSystemdUserServiceAvailable,
+  execSystemctl,
+  execSystemctlUser,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
   uninstallLegacySystemdUnits,
@@ -69,6 +72,35 @@ printf 's "252.39"\\n'
       DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(dir, "bus")}`,
     };
   }
+
+  it.each([
+    { probe: "show", scope: "user" },
+    { probe: "cat", scope: "user" },
+    { probe: "is-active", scope: "user" },
+    { probe: "show", scope: "system" },
+  ])(
+    "retains the failed native probe $scope $probe and sanitized stderr",
+    async ({ probe, scope }) => {
+      await withTempDir("openclaw-systemctl-diagnostic-", async (dir) => {
+        await managerProbe(dir);
+        await commandFixture(
+          dir,
+          "systemctl",
+          "#!/bin/sh\nprintf '\\033[31mFailed to connect to user bus\\033[0m\\nPRIVATE_SECOND_LINE\\n' >&2\nexit 7\n",
+        );
+        const result =
+          scope === "user"
+            ? await execSystemctlUser(systemctlEnv(dir), [probe, "openclaw-gateway.service"], 5000)
+            : await execSystemctl([probe, "openclaw-gateway.service"], systemctlEnv(dir), 5000);
+        const error = systemdInspectionError(result, "inspection failed");
+        expect(error.message).toContain(
+          `systemctl --${scope} ${probe}: exit 7; Failed to connect to user bus`,
+        );
+        expect(error.message).not.toContain("PRIVATE_SECOND_LINE");
+        expect(error.message).not.toContain("\u001b");
+      });
+    },
+  );
 
   it("rejects unavailable systemctl with EACCES", async () => {
     await withTempDir("openclaw-systemctl-", async (dir) => {
@@ -169,7 +201,7 @@ printf 's "252.39"\\n'
         await expect(assertSystemdAvailable(env, timeout)).rejects.toThrow(
           termination === "timeout"
             ? "systemd manager inspection deadline expired"
-            : "systemctl --user unavailable",
+            : "systemctl --user status: signal; Command was terminated by SIGTERM",
         );
       });
       const result = await runAfterOutput(() =>

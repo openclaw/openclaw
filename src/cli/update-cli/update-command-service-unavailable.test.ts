@@ -138,7 +138,10 @@ it.each([
           message: expect.stringMatching(
             /Task Scheduler.*terminal.*openclaw gateway stop.*openclaw update/,
           ),
-          failureFacts: [expect.objectContaining({ code: "gateway-stop-unverified" })],
+          failureFacts: [
+            expect.objectContaining({ code: "gateway-stop-unverified" }),
+            expect.objectContaining({ code: "service-manager-unavailable" }),
+          ],
         });
         expect(isPublicUpdateFailureCode("gateway-stop-unverified")).toBe(true);
       } else {

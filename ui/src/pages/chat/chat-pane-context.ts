@@ -2,7 +2,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   isBrowserPanelSurfaceAvailable,
   isDesktopPanelAvailable,
@@ -18,7 +17,6 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -30,6 +28,7 @@ import {
   resolveUiConfiguredMainKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
+import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
@@ -375,11 +374,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (!state) {
       return;
     }
-    state.terminalAvailable =
-      config.terminalEnabled &&
-      state.connected &&
-      hasOperatorAdminAccess(state.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "terminal.open") === true;
+    state.terminalAvailable = isTerminalAvailable(
+      this.context.gateway.snapshot,
+      config.terminalEnabled,
+    );
     state.embedSandboxMode = config.embedSandboxMode;
     state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
     state.automaticallyFetchFavicons = config.automaticallyFetchFavicons;
@@ -535,11 +533,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       releaseChatMediaResourceOwner(state);
     }
     state.canvasPluginSurfaceUrl = snapshot.canvasPluginSurfaceUrl;
-    state.terminalAvailable =
-      this.context.config.current.terminalEnabled &&
-      snapshot.phase === "connected" &&
-      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-      isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
+    state.terminalAvailable = isTerminalAvailable(
+      snapshot,
+      this.context.config.current.terminalEnabled,
+    );
     state.browserPanelAvailable = isBrowserPanelSurfaceAvailable(snapshot);
     const desktopPanelAvailable = isDesktopPanelAvailable(snapshot);
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);

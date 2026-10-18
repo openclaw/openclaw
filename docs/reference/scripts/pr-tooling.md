@@ -31,6 +31,72 @@ intact until the command finishes. This setting applies at both dependency
 materialization handoffs; in-place wrappers keep their checkout's dependency
 context, and wrapper selection stays unchanged.
 
+## Recover a retained dependency projection
+
+When a retained anchor's pinned package directory disappears, changing
+`OPENCLAW_PR_TOOLING_ROOT` alone does not replace that pin. The current trusted
+wrapper can recover the complete projection without changing frozen wrapper code:
+
+```bash
+scripts/pr tooling-recover <PR> <plan.json> --plan-sha256 <sha256> --confirmed-quiescent
+```
+
+This Linux operation requires a healthy current wrapper installation. It acquires
+the ordinary supervised PR operation lock before reading the recovery plan. The
+target is a different retained anchor, never the executing wrapper. Developer
+wrapper opt-in cannot admit it. It neither installs packages nor refreshes a donor.
+
+Before dispatch, the native owner must exclude every consumer of the target
+anchor and donor installation, and qualify directory `RENAME_EXCHANGE` on the
+target device with GNU `mv --exchange --no-copy -T`. Hold that exclusion through
+outcome reconciliation. `--confirmed-quiescent` records this operator obligation;
+a plan file is not custody authority. The PR mutex alone does not exclude another
+consumer's dependency reads. The original creator PID/FD cleanup contract remains
+unchanged; recovery does not acquire deletion authority for the anchor.
+
+The SHA-256 binds exact UTF-8 JSON plan bytes. Version 1 contains:
+
+- `version: 1`, numeric `pr`, and the full frozen Git commit `revision`.
+- `runtime: { node, platform, arch }`, matching the qualified execution runtime.
+- `anchor: { path, identity, parentIdentity, projection }`.
+- `donor: { path, identity, parentIdentity, modulesSha256, installLockSha256, packages }`.
+
+An identity records decimal strings for `dev`, `ino`, `uid`, `gid`, and `mode`
+from `lstat`. `projection` maps relative names, including `""` for its root, to
+these identities; package symlinks also record their exact `target` string.
+Only physical scope directories and selective package symlinks are eligible.
+Package contents, workspace aliases, and unexpected entries refuse recovery.
+`packages` maps every package selected by the frozen materializer to its qualified
+physical donor path. The metadata hashes bind `node_modules/.modules.yaml` and
+`node_modules/.pnpm/lock.yaml` respectively.
+
+Qualify the donor as a clean, full checkout of the same repository at the frozen
+revision, with its own physical pnpm installation. Use its pinned package manager
+and frozen lockfile. Before sealing the plan, verify install completion, required
+peers, and native/loader imports for the matching runtime; metadata hashes alone
+do not establish those facts. Preserve the install through every remaining anchor consumer.
+Recovery verifies the checkout, runtime, install metadata, package versions, and
+the selected packages' transitive pnpm link closure. It verifies the complete
+frozen wrapper inventory against Git before executing the target materializer.
+
+The frozen helper builds an empty sibling projection under the same anchor,
+therefore reading the original manifests. Older parents' incomplete selective
+sets can be completed. The owner validates the complete replacement and original
+preimage, then issues one atomic directory exchange. It reads back **both** inode
+identities, independently of the command's exit code. The original projection
+remains at the sibling path; frozen source, package contents, donor aliases, and
+unrelated anchor entries remain unchanged.
+
+Retain the command's JSON-line stdout in the existing operation evidence. It names
+the sibling and original identities before exchange, then reports `exchanged`,
+`unchanged`, or `unknown`. Only `complete`, after full projection readback and the
+unchanged frozen validator, permits the native owner to continue normal admission.
+Any failure or lost response requires identity reconciliation before resume.
+Never retry an uncertain exchange, swap back, or delete either path based on exit
+status alone. Reusing a successfully exchanged plan refuses its stale preimage.
+The command never removes a projection; the native owner releases retained paths
+only after their consumers and recovery obligations finish.
+
 Provisioning failures print a redacted error graph to stderr. Preserve that output:
 the wrapper does not create a failure receipt. Lease heartbeat responsiveness
 errors include the verification, renewal, or acknowledgement phase, the failure

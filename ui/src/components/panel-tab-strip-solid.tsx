@@ -237,6 +237,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
   );
 
   async function closeTab(event: MouseEvent, tab: T) {
+    if (tab.closeDisabled) {
+      return;
+    }
     const button = event.currentTarget;
     const root = button instanceof Node ? button.getRootNode() : null;
     const renderRoot = root instanceof Document || root instanceof ShadowRoot ? root : null;
@@ -352,7 +355,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   onClick={tabs.onClick}
                   onKeyDown={tabs.onKeyDown}
                   onAuxClick={(event: MouseEvent) => {
-                    if (event.button === 1) {
+                    if (event.button === 1 && !tab().closeDisabled) {
                       event.preventDefault();
                       void props.onClose(tab().id);
                     }
@@ -397,6 +400,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                   type="button"
                   tabindex={selected() ? 0 : -1}
                   aria-label={tab().closeLabel}
+                  disabled={tab().closeDisabled}
                   onKeyDown={(event: KeyboardEvent) => {
                     if (
                       (event.key === "Enter" || event.key === " ") &&

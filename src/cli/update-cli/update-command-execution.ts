@@ -58,13 +58,15 @@ import {
   readOriginalUpdateRecovery,
 } from "./update-command-recovery.js";
 import {
-  collectServiceInspectionFailureFacts,
   recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
 import { captureUpdateActivationSchemas } from "./update-command-schema.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  GatewayServiceUpdateOwnershipError,
+} from "./update-command-service-plan.js";
 import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,

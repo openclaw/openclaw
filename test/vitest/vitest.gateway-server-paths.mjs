@@ -186,6 +186,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/nodes.test.ts",
   "src/gateway/server-methods/projects.test.ts",
   "src/gateway/server-methods/requester-cron-authority.integration.test.ts",
+  "src/gateway/server-methods/send.qa-reply-ambiguity.integration.test.ts",
   "src/gateway/server-methods/send.scheduled-reads.integration.test.ts",
   "src/gateway/server-methods/server-methods.test.ts",
   "src/gateway/server-methods/session-catalog.performance.test.ts",

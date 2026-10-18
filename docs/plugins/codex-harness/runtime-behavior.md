@@ -20,7 +20,12 @@ turn's dynamic-tool output budget cannot hold them. These tools do not change
 Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
-Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+Codex dynamic tools default to `searchable` loading when the native surface is
+enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
+including session UI tools and managed shell paths. Tool policy, argument
+validation, session authority, and effect ownership still apply. Dashboard and
+widget actions use these session-bound tools; a shell CLI connection and device
+pairing do not replace them. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,

@@ -191,20 +191,24 @@ vi.mock("../../agents/bootstrap-budget.js", async () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/embedded-agent-helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-helpers.js")>(
-    "../../agents/embedded-agent-helpers.js",
-  );
+vi.mock("../../agents/embedded-agent-helpers/context-overflow-observation.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-helpers/context-overflow-observation.js")
+  >("../../agents/embedded-agent-helpers/context-overflow-observation.js");
   return {
     ...actual,
-    formatBillingErrorMessage: actual.formatBillingErrorMessage,
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
-    isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-    isLikelyContextOverflowError: (message?: string) =>
-      state.isLikelyContextOverflowErrorMock(message),
-    sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });
+
+vi.mock("../../agents/failover/context-overflow.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/failover/context-overflow.js")>(
+    "../../agents/failover/context-overflow.js",
+  )),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
+}));
 
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),

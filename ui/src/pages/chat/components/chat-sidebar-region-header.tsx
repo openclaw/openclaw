@@ -221,6 +221,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
           badge: tab.badge,
           className: tab.className,
           closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+          closeDisabled: tab.closeDisabled,
           group: panel.id,
           draggable: false,
           reorderId: panel.id,

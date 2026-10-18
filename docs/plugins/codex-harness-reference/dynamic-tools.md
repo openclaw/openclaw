@@ -31,6 +31,13 @@ Codex's own tool-search surface:
 available through the OpenClaw dynamic-tool bridge as the durable session status
 surface.
 
+When the native surface is disabled, OpenClaw publishes allowed dynamic tools
+directly instead of requiring unavailable native discovery. This includes managed
+GitHub identity and sandbox-backed execution. Native-enabled threads retain
+searchable, direct, and code-mode-only loading. In native JavaScript `exec`,
+`ALL_TOOLS` and `tools` are JavaScript globals, never shell environment variables.
+OpenClaw shell tools execute operating-system commands.
+
 When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
 empty execution-environment selection. In that direct, unsandboxed case,
 OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
