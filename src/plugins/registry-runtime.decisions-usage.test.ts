@@ -277,6 +277,8 @@ function invoke(
         v1Batch,
         signal,
       );
+    case "prefilter":
+      break;
   }
   return evaluateAttemptDecisionToolPrefilter({
     config: host.config,
