@@ -62,10 +62,13 @@ export function canCreateChatSession(state: ChatPageHost) {
 
 const selectedRows = new WeakMap<
   NonNullable<ChatPageHost["sessionsResult"]>,
-  {
-    inputs: readonly unknown[];
-    row: NonNullable<ChatPageHost["sessionsResult"]>["sessions"][number] | undefined;
-  }
+  WeakMap<
+    ChatPageHost,
+    {
+      inputs: readonly unknown[];
+      row: NonNullable<ChatPageHost["sessionsResult"]>["sessions"][number] | undefined;
+    }
+  >
 >();
 
 export function selectedChatSessionRow(state: ChatPageHost) {
@@ -87,13 +90,18 @@ export function selectedChatSessionRow(state: ChatPageHost) {
     defaults?.mainSessionKey,
     result.sessions,
   ];
-  const cached = selectedRows.get(result);
+  let panes = selectedRows.get(result);
+  if (!panes) {
+    panes = new WeakMap();
+    selectedRows.set(result, panes);
+  }
+  const cached = panes.get(state);
   let row = cached?.row;
   if (!cached || !inputs.every((value, index) => value === cached.inputs[index])) {
     const matches = createUiSessionRowMatcher(state, state.sessionKey);
     row = result.sessions.find((candidate) => matches(candidate.key, candidate.agentId));
-    // One selection per immutable result; retired results are collected with their cached row.
-    selectedRows.set(result, { inputs, row });
+    // Panes keep independent selections; retired results and panes release their cached rows.
+    panes.set(state, { inputs, row });
   }
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;

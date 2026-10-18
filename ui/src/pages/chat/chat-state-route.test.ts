@@ -28,13 +28,15 @@ function createLookupState(overrides: Partial<LookupState> = {}): ChatPageHost {
   return state as ChatPageHost;
 }
 
-it("reuses the selected row without rescanning an unchanged session result", () => {
-  const readKey = vi.fn(() => "agent:main:other");
+it("reuses rows for interleaved panes without rescanning a shared session result", () => {
+  const readKey = vi.fn(() => "agent:main:unselected");
+  const other: SessionRow = { key: "agent:main:other", kind: "direct" };
   const selected: SessionRow = { key: "agent:main:current", kind: "direct" };
   const state = createLookupState({
     sessionsResult: {
       ts: 0,
-      count: 2,
+      path: "",
+      count: 3,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [
         {
@@ -43,14 +45,21 @@ it("reuses the selected row without rescanning an unchanged session result", () 
             return readKey();
           },
         },
+        other,
         selected,
       ],
     },
   });
   expect(selectedChatSessionRow(state)).toBe(selected);
+  const otherPane = createLookupState({
+    sessionKey: "agent:main:other",
+    sessionsResult: state.sessionsResult,
+  });
+  expect(selectedChatSessionRow(otherPane)).toBe(other);
   const initialReads = readKey.mock.calls.length;
   for (let i = 0; i < 10; i++) {
     expect(selectedChatSessionRow(state)).toBe(selected);
+    expect(selectedChatSessionRow(otherPane)).toBe(other);
   }
   expect(readKey).toHaveBeenCalledTimes(initialReads);
 
@@ -82,6 +91,7 @@ it("recomputes selected rows when routing defaults change in place", () => {
     sessionsResultAgentId: "work",
     sessionsResult: {
       ts: 0,
+      path: "",
       count: 3,
       defaults: { modelProvider: null, model: null, contextTokens: null },
       sessions: [home, work, global],
