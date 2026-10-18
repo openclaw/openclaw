@@ -89,9 +89,21 @@ export async function loadSessionDiff(
       if (!cwd) {
         return empty(checkoutPending ? undefined : "unknown_session");
       }
+      const managedBase = entry.worktree?.id
+        ? await (
+            await import("../worker-environments/local-workspace-review.js")
+          ).readLocalWorkspaceReviewBase({
+            agentId,
+            sessionKey: loaded.canonicalKey,
+            entry,
+            cwd,
+            assertCurrent,
+          })
+        : undefined;
+      assertCurrent();
       worktreeCount = 1;
       timing?.mark("git");
-      const input = { cwd, sessionKey: params.sessionKey };
+      const input = { cwd, sessionKey: params.sessionKey, baseCommit: managedBase?.baseCommit };
       let result: SessionsDiffResult;
       if (params.scope === "commit") {
         if (!params.commit) {
@@ -107,6 +119,7 @@ export async function loadSessionDiff(
         });
       }
       assertCurrent();
+      managedBase?.assertCurrent();
       returnedFileCount = result.files.length;
       timing?.mark("response");
       return result;
