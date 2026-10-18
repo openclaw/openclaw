@@ -3,11 +3,27 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
-import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox-source.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
+import {
+  abortSessionControllerInput,
+  captureSessionControllerSourceSettlement,
+  claimSessionControllerInput,
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./queue/lifecycle.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+} from "./queue/lifecycle.js";
 import {
   bindReplyReasoningVisibility,
   createReplyReasoningVisibility,
@@ -62,6 +78,18 @@ async function createTurn(
   const payload = { text: "Private reasoning", isReasoning: true };
   bindReplyReasoningVisibility(payload, owner);
   return { owner, payload, scope, entry };
+}
+
+async function createQueuedTurn() {
+  const turn = await createTurn();
+  const queued = createQueueTestRun({ prompt: "queued reasoning owner" });
+  Object.assign(queued.run, {
+    agentId: turn.scope.agentId,
+    sessionKey: turn.scope.sessionKey,
+    sessionId: turn.entry.sessionId,
+    reasoningVisibility: turn.owner,
+  });
+  return { ...turn, queued };
 }
 
 describe("durable reasoning visibility", () => {
@@ -225,6 +253,102 @@ describe("durable reasoning visibility", () => {
     expect(isReplyReasoningVisible(payload)).toBe(false);
     completeFollowupRunLifecycle(queued);
     await captureSessionControllerSourceSettlement(queued.controllerInput!);
+  });
+
+  it.each(["controller-cancel", "restart-clear"] as const)(
+    "revokes only the completed source and joins pending adoption (%s)",
+    async (route) => {
+      resetGatewayWorkAdmission();
+      const { owner, payload, queued } = await createQueuedTurn();
+      const unrelated = await createTurn();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const onSettled = vi.fn();
+      queued.turnAdoptionLifecycle = {
+        onAdopted: async () => {
+          entered.resolve();
+          await release.promise;
+        },
+        onSettled,
+      };
+      expect(markFollowupRunEnqueued(queued)).toBe(true);
+      owner.releaseDispatch();
+      const input = queued.controllerInput!;
+      const settlement = captureSessionControllerSourceSettlement(input);
+      let settled = false;
+      void settlement.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      const close = vi.spyOn(owner, "close");
+      const admission = admitFollowupRunLifecycle(queued);
+      try {
+        await entered.promise;
+        if (route === "controller-cancel") {
+          expect(abortSessionControllerInput(input, new Error("source cancelled"))).toBe(true);
+        } else {
+          markGatewayRestartDraining();
+        }
+        expect(isReplyReasoningVisible(payload)).toBe(false);
+        expect(close).toHaveBeenCalledOnce();
+        expect(isReplyReasoningVisible(unrelated.payload)).toBe(true);
+        expect(onSettled).not.toHaveBeenCalled();
+        expect(settled).toBe(false);
+        release.resolve();
+        await admission;
+        await settlement;
+        expect(onSettled).toHaveBeenCalledOnce();
+        completeFollowupRunLifecycle(queued);
+        retireSessionControllerInput(input);
+        expect(close).toHaveBeenCalledOnce();
+        expect(isReplyReasoningVisible(unrelated.payload)).toBe(true);
+      } finally {
+        release.resolve();
+        await admission.catch(() => {});
+        retireSessionControllerInput(input);
+        await settlement.catch(() => {});
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
+
+  it("retains reasoning across a pre-execution claim retry and closes only the final source", async () => {
+    const { owner, payload, queued } = await createQueuedTurn();
+    const unrelated = await createTurn();
+    expect(markFollowupRunEnqueued(queued)).toBe(true);
+    owner.releaseDispatch();
+    const input = queued.controllerInput!;
+    const close = vi.spyOn(owner, "close");
+    try {
+      const first = await claimSessionControllerInput(queued);
+      expect(deferSessionControllerClaimBeforeExecution(first)).toBe(true);
+      releaseSessionControllerClaim(first);
+      await first.settlement.promise;
+      expect(input.phase).toBe("waiting");
+      expect(close).not.toHaveBeenCalled();
+      expect(isReplyReasoningVisible(payload)).toBe(true);
+      const retried = await claimSessionControllerInput(queued);
+      expect(retried).not.toBe(first);
+      expect(retried.inputs).toContain(input);
+      releaseSessionControllerClaim(retried);
+      await retried.settlement.promise;
+      await captureSessionControllerSourceSettlement(input);
+      expect(close).toHaveBeenCalledOnce();
+      expect(isReplyReasoningVisible(payload)).toBe(false);
+      expect(isReplyReasoningVisible(unrelated.payload)).toBe(true);
+    } finally {
+      const remaining = input.mailbox.claim;
+      if (remaining) {
+        releaseSessionControllerClaim(remaining);
+        await remaining.settlement.promise.catch(() => {});
+      }
+      retireSessionControllerInput(input);
+      await captureSessionControllerSourceSettlement(input).catch(() => {});
+    }
   });
 
   it("does not authorize an old payload when a newer turn enables reasoning", async () => {
