@@ -9,12 +9,36 @@ import {
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
+function query<T extends Element = Element>(parent: ParentNode, selector: string): T {
+  const element = parent.querySelector<T>(selector);
+  expect(element instanceof Element, selector).toBe(true);
   if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
+    throw new Error(`missing ${selector}`);
   }
   return element;
+}
+
+function edit(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function fieldFixture() {
+  const container = document.createElement("div");
+  const onPatch = vi.fn();
+  return {
+    container,
+    onPatch,
+    text: (
+      options: Omit<Parameters<typeof renderTextInputFixture>[1], "onPatch" | "inputType"> & {
+        inputType?: "text" | "number";
+      },
+    ) => renderTextInputFixture(container, { inputType: "text", ...options, onPatch }),
+    number: (options: Omit<Parameters<typeof renderNumberInputFixture>[1], "onPatch">) =>
+      renderNumberInputFixture(container, { ...options, onPatch }),
+    selectField: (options: Omit<Parameters<typeof renderSelectFixture>[1], "onPatch">) =>
+      renderSelectFixture(container, { ...options, onPatch }),
+  };
 }
 
 const multilinePlaceholder = "Default guidance.\nSecond line.";
@@ -29,28 +53,20 @@ const multilineHints = {
 
 describe("config form scalar integrity", () => {
   it.each([false, true])("edits multiline string hints with commitOnBlur=%s", (commitOnBlur) => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
+    const { container, onPatch, text } = fieldFixture();
     const path = ["reviewInstructions"];
-    renderTextInputFixture(container, {
+    text({
       schema: multilineSchema,
       value: undefined,
       path,
-      inputType: "text",
       hints: multilineHints,
       commitOnBlur,
-      onPatch,
     });
-    const textarea = expectElement(
-      container.querySelector<HTMLTextAreaElement>("textarea"),
-      "review instructions",
-    );
+    const textarea = query<HTMLTextAreaElement>(container, "textarea");
     expect(textarea.getAttribute("aria-label")).toBe("Review instructions");
-    expect(textarea.placeholder).toBe(multilinePlaceholder);
-    expect(textarea.value).toBe("");
+    expect(textarea).toMatchObject({ placeholder: multilinePlaceholder, value: "" });
     expect(onPatch).not.toHaveBeenCalled();
-    textarea.value = "Look for scope drift.\nPreserve required checks.";
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(textarea, "Look for scope drift.\nPreserve required checks.");
     if (commitOnBlur) {
       expect(onPatch).not.toHaveBeenCalled();
       textarea.dispatchEvent(new FocusEvent("blur"));
@@ -91,7 +107,7 @@ describe("config form scalar integrity", () => {
     "revalidates a focused %s draft through snapshot refresh without untracked reads",
     (inputType) => {
       const warning = vi.spyOn(console, "warn");
-      const container = document.createElement("div");
+      const { container, text } = fieldFixture();
       document.body.append(container);
       const schema: JsonSchema =
         inputType === "text" ? { type: "string", minLength: 3 } : { type: "integer", minimum: 1 };
@@ -99,18 +115,17 @@ describe("config form scalar integrity", () => {
       const draft = inputType === "text" ? "x" : "0";
       const refreshedValue = inputType === "text" ? "remote-api" : 9000;
       const renderValue = (current: string | number, sourceIdentity: unknown) => {
-        renderTextInputFixture(container, {
+        text({
           schema,
           value: current,
           path: ["laboratory", "endpoint"],
           sourceIdentity,
           inputType,
-          onPatch: vi.fn(),
         });
       };
       try {
         renderValue(value, { snapshot: 1 });
-        const input = expectElement(container.querySelector<HTMLInputElement>("input"), "input");
+        const input = query<HTMLInputElement>(container, "input");
         // A background snapshot must revalidate, not replace, uncommitted native text.
         input.focus();
         input.value = draft;
@@ -135,42 +150,30 @@ describe("config form scalar integrity", () => {
   );
 
   it("shows inherited defaults without turning them into stored overrides", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
+    const { container, onPatch, text, number } = fieldFixture();
     const onRemove = vi.fn();
 
-    renderTextInputFixture(container, {
+    text({
       schema: { type: "string", default: "balanced" },
       value: undefined,
       path: ["mode"],
-      inputType: "text",
-      onPatch,
       onRemove,
     });
 
-    const textInput = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='text']"),
-      "defaulted text input",
-    );
-    expect(textInput.value).toBe("");
-    expect(textInput.placeholder).toBe("Default: balanced");
+    const textInput = query<HTMLInputElement>(container, "input[type='text']");
+    expect(textInput).toMatchObject({ value: "", placeholder: "Default: balanced" });
     expect(container.textContent).not.toContain("Using default:");
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
-    renderNumberInputFixture(container, {
+    number({
       schema: { type: "integer", default: 3 },
       value: undefined,
       path: ["retries"],
-      onPatch,
       onRemove,
     });
-    const numberInput = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "defaulted number input",
-    );
-    expect(numberInput.value).toBe("");
-    expect(numberInput.placeholder).toBe("Default: 3");
+    const numberInput = query<HTMLInputElement>(container, "input[type='number']");
+    expect(numberInput).toMatchObject({ value: "", placeholder: "Default: 3" });
     expect(container.textContent).not.toContain("Using default:");
 
     const arrowUp = new KeyboardEvent("keydown", {
@@ -184,41 +187,31 @@ describe("config form scalar integrity", () => {
   });
 
   it("restores scalar and select defaults through clearing and default selection", () => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
+    const { container, onPatch, number, selectField } = fieldFixture();
     const onRemove = vi.fn();
 
-    renderNumberInputFixture(container, {
+    number({
       schema: { type: "integer", default: 3, description: "Controls retry attempts." },
       value: 9,
       path: ["retries"],
-      onPatch,
       onRemove,
     });
     expect(container.textContent).toContain("Default: 3");
     expect(container.textContent).toContain("Controls retry attempts. Default: 3");
-    const numberInput = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "number input",
-    );
-    numberInput.value = "";
-    numberInput.dispatchEvent(new Event("input", { bubbles: true }));
+    const numberInput = query<HTMLInputElement>(container, "input[type='number']");
+    edit(numberInput, "");
     expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
     expect(onRemove).not.toHaveBeenCalled();
 
     onPatch.mockClear();
-    renderSelectFixture(container, {
+    selectField({
       schema: { type: "string", default: "balanced" },
       value: "fast",
       path: ["mode"],
       options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
-      onPatch,
       onRemove,
     });
-    const select = expectElement(
-      container.querySelector<HTMLSelectElement>("select"),
-      "default-aware select",
-    );
+    const select = query<HTMLSelectElement>(container, "select");
     expect(container.textContent).toContain("Default: balanced");
     expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("fast");
@@ -227,19 +220,15 @@ describe("config form scalar integrity", () => {
     expect(onRemove).toHaveBeenCalledWith(["mode"]);
     expect(onPatch).not.toHaveBeenCalled();
 
-    renderSelectFixture(container, {
+    selectField({
       schema: { type: "string", default: "balanced" },
       value: undefined,
       path: ["mode"],
       options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
-      onPatch,
       onRemove,
     });
     expect(
-      expectElement(
-        container.querySelector<HTMLSelectElement>("select"),
-        "inherited select",
-      ).selectedOptions[0]?.textContent?.trim(),
+      query<HTMLSelectElement>(container, "select").selectedOptions[0]?.textContent?.trim(),
     ).toBe("Default: balanced");
   });
 
@@ -248,18 +237,13 @@ describe("config form scalar integrity", () => {
     // mid-keystroke ("0." on the way to "0.5"). Committing undefined here
     // deleted the stored value and wiped the input. jsdom never sets
     // badInput, so simulate the browser tuple explicitly.
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    renderNumberInputFixture(container, {
+    const { container, onPatch, number } = fieldFixture();
+    number({
       schema: { type: "number" },
       value: 0,
       path: ["sampleRate"],
-      onPatch,
     });
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "partial numeric input",
-    );
+    const input = query<HTMLInputElement>(container, "input[type='number']");
     Object.defineProperty(input, "validity", {
       value: { badInput: true },
       configurable: true,
@@ -288,21 +272,15 @@ describe("config form scalar integrity", () => {
     ["lossy decimal", { type: "number" }, "1.0000000000000001"],
     ["underflow", { type: "number" }, "1e-324"],
   ])("rejects %s text before a pure numeric input can round it", (_name, schema, raw) => {
-    const container = document.createElement("div");
-    const onPatch = vi.fn();
-    renderNumberInputFixture(container, {
+    const { container, onPatch, number } = fieldFixture();
+    number({
       schema,
       value: 0,
       path: ["numeric"],
-      onPatch,
     });
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input[type='number']"),
-      "lossless number input",
-    );
+    const input = query<HTMLInputElement>(container, "input[type='number']");
 
-    input.value = raw;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
+    edit(input, raw);
     input.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onPatch).not.toHaveBeenCalled();
@@ -313,8 +291,7 @@ describe("config form scalar integrity", () => {
   it.each(["mixed", "number"] as const)(
     "renders an exact large integer as parser-valid text in a %s input",
     (kind) => {
-      const container = document.createElement("div");
-      const onPatch = vi.fn();
+      const { container, onPatch, text, number } = fieldFixture();
       const exactValue = Number("1000000000000000128");
       const params = {
         value: exactValue,
@@ -322,22 +299,18 @@ describe("config form scalar integrity", () => {
         hints: {},
         unsupported: new Set<string>(),
         disabled: false,
-        onPatch,
       };
       if (kind === "mixed") {
-        renderTextInputFixture(container, {
+        text({
           ...params,
           schema: { anyOf: [{ type: "string" }, { type: "number" }] },
-          inputType: "text",
         });
       } else {
-        renderNumberInputFixture(container, { ...params, schema: { type: "integer" } });
+        number({ ...params, schema: { type: "integer" } });
       }
-      const input = expectElement(
-        container.querySelector<HTMLInputElement>(
-          `input[type='${kind === "mixed" ? "text" : "number"}']`,
-        ),
-        `${kind} exact large number input`,
+      const input = query<HTMLInputElement>(
+        container,
+        `input[type='${kind === "mixed" ? "text" : "number"}']`,
       );
 
       expect(input.value).toBe("1000000000000000128");
@@ -349,16 +322,14 @@ describe("config form scalar integrity", () => {
   );
 
   it("conceals the default description while a sensitive value is concealed", () => {
-    const container = document.createElement("div");
+    const { container, text } = fieldFixture();
 
-    renderTextInputFixture(container, {
+    text({
       schema: { type: "string", default: "inherited" },
       value: "stored-secret",
       path: ["secret"],
       hints: { secret: { sensitive: true } },
-      inputType: "text",
       revealSensitive: false,
-      onPatch: vi.fn(),
       onRemove: vi.fn(),
     });
 
@@ -368,59 +339,47 @@ describe("config form scalar integrity", () => {
   it.each([false, true])(
     "keeps a server-redacted sentinel readonly (maskSensitive=%s)",
     (maskSensitive) => {
-      const container = document.createElement("div");
+      const { container, text } = fieldFixture();
 
-      renderTextInputFixture(container, {
+      text({
         schema: { type: "string" },
         value: "__OPENCLAW_REDACTED__",
         path: ["secret"],
         hints: { secret: { sensitive: true } },
-        inputType: "text",
         // Even with reveal forced on, the sentinel is not the stored value;
         // showing it editable would let a stray edit overwrite the credential.
         revealSensitive: !maskSensitive,
         maskSensitive,
         onToggleSensitivePath: vi.fn(),
-        onPatch: vi.fn(),
         onRemove: vi.fn(),
       });
 
-      const input = expectElement(
-        container.querySelector<HTMLInputElement>("input"),
-        "sentinel secret input",
-      );
+      const input = query<HTMLInputElement>(container, "input");
       expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
       expect(input.readOnly).toBe(true);
       if (maskSensitive) {
         expect(input.placeholder).toBe("••••••••");
       }
-      const eye = expectElement(
-        container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
-        "stored secret reveal toggle",
-      );
+      const eye = query<HTMLButtonElement>(container, ".settings-secret__toggle");
       expect(eye.disabled).toBe(true);
       expect(eye.getAttribute("aria-label")).toBe("This editor cannot reveal the stored value.");
     },
   );
 
   it("keeps an env placeholder readable in a masked sensitive field", () => {
-    const container = document.createElement("div");
+    const { container, text } = fieldFixture();
 
-    renderTextInputFixture(container, {
+    text({
       schema: { type: "string" },
       value: "${SLACK_BOT_TOKEN}",
       path: ["botToken"],
       hints: { botToken: { sensitive: true } },
-      inputType: "text",
       maskSensitive: true,
-      onPatch: vi.fn(),
       onRemove: vi.fn(),
     });
 
-    const input = expectElement(container.querySelector<HTMLInputElement>("input"), "input");
-    expect(input.type).toBe("text");
-    expect(input.value).toBe("${SLACK_BOT_TOKEN}");
-    expect(input.readOnly).toBe(false);
+    const input = query<HTMLInputElement>(container, "input");
+    expect(input).toMatchObject({ type: "text", value: "${SLACK_BOT_TOKEN}", readOnly: false });
   });
 
   it.each([
@@ -531,19 +490,14 @@ function fixture(
     async select(index: number | string) {
       const { userEvent } = await import("vitest/browser");
       if (control instanceof HTMLSelectElement) {
-        const option = control.querySelector<HTMLOptionElement>(`option[value="${index}"]`);
-        if (!option) {
-          throw new Error("Missing enum option");
-        }
-        await userEvent.selectOptions(control, option);
-      } else {
-        const radio = control.querySelector<HTMLInputElement>(
-          `input[type="radio"][value="${index}"]`,
+        await userEvent.selectOptions(
+          control,
+          query<HTMLOptionElement>(control, `option[value="${index}"]`),
         );
-        if (!radio) {
-          throw new Error("Missing enum radio");
-        }
-        await userEvent.click(radio);
+      } else {
+        await userEvent.click(
+          query<HTMLInputElement>(control, `input[type="radio"][value="${index}"]`),
+        );
       }
     },
   };

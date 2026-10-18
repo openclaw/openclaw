@@ -64,14 +64,10 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([["error", "danger"]])(
-    "maps plugin severity %s to the %s accent",
-    (pluginSeverity, expected) => {
-      const card = renderCard(approval({ pluginSeverity }));
-
-      expect(card?.classList.contains(`exec-approval-card--severity-${expected}`)).toBe(true);
-    },
-  );
+  it("maps plugin error severity to the danger accent", () => {
+    const card = renderCard(approval({ pluginSeverity: "error" }));
+    expect(card?.classList.contains("exec-approval-card--severity-danger")).toBe(true);
+  });
 
   it("expires a mounted sidebar approval and disables its decisions", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
@@ -97,9 +93,8 @@ describe("exec approval card", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     flush();
 
-    expect(timer.textContent).toBe("00:00");
+    expect(timer).toMatchObject({ textContent: "00:00", title: "expired" });
     expect(timer.getAttribute("aria-label")).toBe("expired");
-    expect(timer.getAttribute("title")).toBe("expired");
     expect(buttons.every((button) => button.disabled)).toBe(true);
     for (const button of buttons) {
       button.click();
@@ -200,36 +195,30 @@ describe("exec approval card", () => {
     },
   );
 
-  it.each(["modal"] as const)(
-    "shows the full plugin request detail as plain text in the %s card",
-    (variant) => {
-      const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;
-      const request = parseApprovalRequestedEvent("plugin.approval.requested", {
-        id: "plugin-detail",
-        request: {
-          title: "Review command",
-          description: "Run the test suite",
-          detail,
-        },
-        createdAtMs: 1,
-        expiresAtMs: 61_000,
-      });
-      expect(request).not.toBeNull();
-      if (!request) {
-        throw new Error("Plugin approval event was not parsed");
-      }
-
-      const card = renderCard(request, variant);
-      const previews = Array.from(card?.querySelectorAll("pre") ?? []);
-
-      expect(previews.map((preview) => preview.textContent)).toEqual([
-        "Run the test suite",
+  it("shows the full plugin request detail as plain text in the modal card", () => {
+    const detail = `  Command: pnpm test\n${"review context\n".repeat(700)}<script>blocked()</script>`;
+    const request = parseApprovalRequestedEvent("plugin.approval.requested", {
+      id: "plugin-detail",
+      request: {
+        title: "Review command",
+        description: "Run the test suite",
         detail,
-      ]);
-      expect(previews[1]?.closest("details")).toBeNull();
-      expect(card?.querySelector("script")).toBeNull();
-    },
-  );
+      },
+      createdAtMs: 1,
+      expiresAtMs: 61_000,
+    });
+    expect(request).not.toBeNull();
+    if (!request) {
+      throw new Error("Plugin approval event was not parsed");
+    }
+
+    const card = renderCard(request);
+    const previews = Array.from(card?.querySelectorAll("pre") ?? []);
+
+    expect(previews.map((preview) => preview.textContent)).toEqual(["Run the test suite", detail]);
+    expect(previews[1]?.closest("details")).toBeNull();
+    expect(card?.querySelector("script")).toBeNull();
+  });
 
   it("labels an approval projected from a child session", () => {
     const card = renderCard(approval({ sourceSessionKey: "agent:main:cloud-child" }), "inline");
