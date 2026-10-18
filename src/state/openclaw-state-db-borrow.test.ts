@@ -26,7 +26,6 @@ vi.mock("node:sqlite", () => ({
 }));
 
 function fixture(inTransaction = false) {
-  // This constructor is a pure JavaScript mock; no native database is opened.
   const database: OpenClawStateDatabase = {
     db: new DatabaseSync(":memory:"),
     path: "/fixture/state.sqlite",
@@ -43,7 +42,7 @@ function fixture(inTransaction = false) {
     source.db.close(),
   );
   const assertOpen = vi.fn();
-  const retirementResources = createOpenClawStateDatabaseAsyncLifecycle();
+  const resources = createOpenClawStateDatabaseAsyncLifecycle();
   const retainFailed = vi.fn();
   const touch = vi.fn();
   const retainer = createStateDatabaseRetainer(
@@ -54,7 +53,7 @@ function fixture(inTransaction = false) {
       retire,
       retainFailed,
       ownRetirement(_database, close) {
-        return retirementResources.register({ close });
+        return resources.register({ close });
       },
       touch,
     },
@@ -68,7 +67,7 @@ function fixture(inTransaction = false) {
     retainer,
     scope,
     assertOpen,
-    retirementResources,
+    resources,
     retainFailed,
     touch,
   };
@@ -77,16 +76,8 @@ function fixture(inTransaction = false) {
 it.each(["complete", "failed stop", "changed owner"] as const)(
   "retains async retirement when a synchronous read pin is released last (%s)",
   async (outcome) => {
-    const {
-      database,
-      borrowers,
-      retainer,
-      retire,
-      scope,
-      retirementResources,
-      retainFailed,
-      touch,
-    } = fixture();
+    const { database, borrowers, retainer, retire, scope, resources, retainFailed, touch } =
+      fixture();
     const released = createDeferredCore();
     const stop = vi.spyOn(database.walMaintenance, "stop").mockReturnValue(released.promise);
     const writer = retainer.retain(database);
@@ -116,7 +107,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
       if (outcome === "changed owner") {
         current = false;
       }
-      const closing = retirementResources.close(undefined, () => true);
+      const closing = resources.close(undefined, () => true);
       if (outcome === "failed stop") {
         const failure = new Error("WAL retirement failed");
         released.reject(failure);
@@ -129,7 +120,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
           "active native borrowers",
         );
         stop.mockResolvedValue();
-        await retirementResources.close(undefined, () => true);
+        await resources.close(undefined, () => true);
       } else {
         released.resolve();
         await closing;
@@ -146,7 +137,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
       current = true;
       released.resolve();
       stop.mockResolvedValue();
-      await retirementResources.close(undefined, () => true);
+      await resources.close(undefined, () => true);
       reader.release();
       await scope.close();
     }
@@ -154,7 +145,7 @@ it.each(["complete", "failed stop", "changed owner"] as const)(
 );
 
 it("keeps concurrent synchronous release fenced behind the same asynchronous WAL join", async () => {
-  const { database, borrowers, retainer, retire, scope, retirementResources } = fixture();
+  const { database, borrowers, retainer, retire, scope, resources } = fixture();
   const entered = createDeferredCore();
   const released = createDeferredCore();
   const stop = vi.spyOn(database.walMaintenance, "stop").mockImplementation(() => {
@@ -183,7 +174,7 @@ it("keeps concurrent synchronous release fenced behind the same asynchronous WAL
     expect(database.db.isOpen).toBe(false);
   } finally {
     released.resolve();
-    await retirementResources.close(undefined, () => true);
+    await resources.close(undefined, () => true);
     await scope.close();
   }
 });

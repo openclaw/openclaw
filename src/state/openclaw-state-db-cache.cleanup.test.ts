@@ -61,15 +61,9 @@ describe("shared-state disposal ownership", () => {
       live = false;
       if (process.platform === "win32") {
         const before = snapshot();
-        let renameError: unknown;
-        try {
-          fs.renameSync(databasePath, retiredPath);
-        } catch (error) {
-          renameError = error;
-        }
-        expect(renameError).toMatchObject({
-          code: expect.stringMatching(/^(?:EACCES|EBUSY|EPERM)$/u),
-        });
+        expect(() => fs.renameSync(databasePath, retiredPath)).toThrow(
+          expect.objectContaining({ code: expect.stringMatching(/^(?:EACCES|EBUSY|EPERM)$/u) }),
+        );
         expect(snapshot()).toEqual(before);
         await expect(scope.close()).resolves.toBeUndefined();
         expect(owner.db.isOpen).toBe(false);
@@ -197,16 +191,12 @@ describe("shared-state disposal ownership", () => {
     vi.spyOn(kyselyCache, "clearNodeSqliteKyselyCacheForDatabase").mockImplementationOnce(() => {
       throw cacheFailure;
     });
-    let caught: unknown;
-    try {
-      cache.closeOpenClawStateDatabase();
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toMatchObject({
-      cause: maintenanceFailure,
-      errors: [maintenanceFailure, cacheFailure],
-    });
+    expect(() => cache.closeOpenClawStateDatabase()).toThrow(
+      expect.objectContaining({
+        cause: maintenanceFailure,
+        errors: [maintenanceFailure, cacheFailure],
+      }),
+    );
     expect(owner.db.isOpen).toBe(false);
     expect(healthy.db.isOpen).toBe(false);
     expect(cache.getOpenClawStateDatabaseIfOpenAtPath(owner.path)).toBeUndefined();

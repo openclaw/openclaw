@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -29,6 +29,24 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const migrationPaths = ["runtime open", "doctor repair"] as const;
 const pluginTarget = "plugin-binding:fixture:shared";
+
+function inspectDatabase<T>(pathname: string, inspect: (db: EngineConnection) => T) {
+  const db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  try {
+    return inspect(db);
+  } finally {
+    db.close();
+  }
+}
+
+function expectVersion(db: EngineConnection, version = OPENCLAW_STATE_SCHEMA_VERSION) {
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
+}
+
+function expectReadOnlyAdmission(db: EngineConnection) {
+  expectVersion(db, 15);
+  expect(db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+}
 
 function readBindings(database: EngineConnection) {
   return database.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all();
@@ -130,13 +148,7 @@ function createVersion14Bindings() {
   }
 }
 
-async function holdGatewayLifecycle(
-  databasePath: string,
-  signal: AbortSignal,
-): Promise<{
-  child: ChildProcess;
-  release: () => Promise<void>;
-}> {
+async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
   signal.throwIfAborted();
   const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const source = `
@@ -189,7 +201,6 @@ async function holdGatewayLifecycle(
   }
   let releasing: Promise<void> | undefined;
   return {
-    child,
     release: () =>
       (releasing ??= fixture.verifyCleanup(async () => {
         child.stdin?.end();
@@ -225,26 +236,19 @@ describe("conversation binding target migration", () => {
           warnings: [],
         });
         const reader = openOpenClawStateDatabase(options);
-        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-        expect(reader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+        expectReadOnlyAdmission(reader.db);
         reader.db
           .prepare("UPDATE update_runs SET finished_at_ms = ? WHERE run_id = ?")
           .run(Date.now() - 5 * 60_000, run.runId);
         expect(() => reconcileOpenClawStateSchemaPublication(options)).not.toThrow();
         expect(openOpenClawStateDatabase(options).db).toBe(reader.db);
-        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+        expectVersion(reader.db, 15);
         closeOpenClawStateDatabaseForTest();
-        const agedReader = openOpenClawStateDatabase(options);
-        expect(agedReader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-        expect(agedReader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({
-          writes: 0,
-        });
+        expectReadOnlyAdmission(openOpenClawStateDatabase(options).db);
       } finally {
         await holder.release();
       }
-      expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
+      expectVersion(openOpenClawStateDatabase(options).db);
     }));
 
   it("refuses runtime and doctor schema mutation while another Gateway owns the state", ({
@@ -266,12 +270,7 @@ describe("conversation binding target migration", () => {
             }),
           );
         }
-        const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-        try {
-          expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
-        } finally {
-          preserved.close();
-        }
+        inspectDatabase(databasePath, (db) => expectVersion(db, 14));
       } finally {
         await holder.release();
       }
@@ -298,9 +297,7 @@ describe("conversation binding target migration", () => {
             ({ target_agent_id: _agent, target_session_id: _session, ...row }) => row,
           ),
         );
-        expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        });
+        expectVersion(migrated.db);
         expect(
           migrated.db
             .prepare(
@@ -346,13 +343,10 @@ describe("conversation binding target migration", () => {
           await holder.release();
         }
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
-        try {
+        inspectDatabase(databasePath, (repaired) => {
           expect(readBindings(repaired)).toEqual(after.rows);
           expect(readMigrationSnapshot(repaired).schema).toEqual(after.schema);
-        } finally {
-          repaired.close();
-        }
+        });
       }),
   );
 
@@ -391,12 +385,9 @@ describe("conversation binding target migration", () => {
           warnings: [expect.stringMatching(reason)],
         });
       }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
+      inspectDatabase(databasePath, (preserved) => {
         expect(readMigrationSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
+      });
     },
   );
 });

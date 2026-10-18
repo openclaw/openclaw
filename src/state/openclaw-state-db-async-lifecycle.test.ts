@@ -40,6 +40,24 @@ function databasePath(name = "state") {
   return path.join(dirs.make("openclaw-async-drain-"), `${name}.sqlite`);
 }
 
+function holdReader(
+  reader: ReturnType<typeof openOpenClawStateReadConnection>,
+  identity: DatabasePathIdentity,
+) {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  const unregister = registerOpenClawStateDatabaseAsyncResource({
+    async close(target) {
+      if (target === undefined || target.key === identity.key) {
+        entered.resolve();
+        await finish.promise;
+        reader.close();
+      }
+    },
+  });
+  return { entered, finish, unregister };
+}
+
 describe("canonical shared-state resource drainage", () => {
   it.each(["existing"] as const)(
     "reuses warm %s facts without resolving paths or allocating replacement tokens",
@@ -215,18 +233,7 @@ describe("canonical shared-state resource drainage", () => {
       // Successful native admission does not invalidate its own captured generation.
       admitted.assertCurrent();
       const reader = openOpenClawStateReadConnection(pathname, pathname);
-      const entered = createDeferredCore();
-      const finish = createDeferredCore();
-      const unregister = registerOpenClawStateDatabaseAsyncResource({
-        async close(target) {
-          if (target !== undefined && target.key !== admitted.identity.key) {
-            return;
-          }
-          entered.resolve();
-          await finish.promise;
-          reader.close();
-        },
-      });
+      const { entered, finish, unregister } = holdReader(reader, admitted.identity);
       const closing = drainGlobalSingletonLifecycleState("restart");
       try {
         expect(admitted.assertCurrent).toThrow(/admission is closed/);
@@ -459,17 +466,7 @@ describe("canonical shared-state resource drainage", () => {
     const owner = openOpenClawStateDatabase({ path: databasePath() });
     const identity = captureOpenClawStateDatabaseReadAdmission(owner.path).identity;
     const reader = openOpenClawStateReadConnection(owner.path, owner.path);
-    const entered = createDeferredCore();
-    const finish = createDeferredCore();
-    const unregister = registerOpenClawStateDatabaseAsyncResource({
-      async close(target) {
-        if (target === undefined || target.key === identity.key) {
-          entered.resolve();
-          await finish.promise;
-          reader.close();
-        }
-      },
-    });
+    const { entered, finish, unregister } = holdReader(reader, identity);
     const processOwner = acquireGatewayStateOwner({ databasePath: owner.path });
     const assertOwnerCurrent = () => processOwner.assertCurrent();
     const maintenance = createOpenClawDatabaseMaintenanceScope({

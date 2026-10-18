@@ -42,31 +42,90 @@ function seedLegacyReplay(db: EngineConnection) {
   );
 }
 
+function rows(db: EngineConnection, table: string, columns: string, order = "session_id") {
+  return db.prepare(`SELECT ${columns} FROM ${table} ORDER BY ${order}`).all();
+}
+
 function canonicalReplay(db: EngineConnection) {
   return {
-    sessions: db
-      .prepare(
-        "SELECT session_id, session_key, cwd, complete, created_at, updated_at, next_seq FROM acp_replay_sessions ORDER BY session_id",
-      )
-      .all(),
-    events: db
-      .prepare(
-        "SELECT session_id, seq, at, session_key, run_id, update_json FROM acp_replay_events ORDER BY session_id, seq",
-      )
-      .all(),
+    sessions: rows(
+      db,
+      "acp_replay_sessions",
+      "session_id, session_key, cwd, complete, created_at, updated_at, next_seq",
+    ),
+    events: rows(
+      db,
+      "acp_replay_events",
+      "session_id, seq, at, session_key, run_id, update_json",
+      "session_id, seq",
+    ),
   };
 }
 
 function estimates(db: EngineConnection) {
   return {
-    sessions: db
-      .prepare("SELECT estimated_bytes FROM acp_replay_sessions ORDER BY session_id")
-      .all(),
-    events: db
-      .prepare("SELECT estimated_bytes FROM acp_replay_events ORDER BY session_id, seq")
-      .all(),
+    sessions: rows(db, "acp_replay_sessions", "estimated_bytes"),
+    events: rows(db, "acp_replay_events", "estimated_bytes", "session_id, seq"),
     version: db.prepare("SELECT app_version FROM schema_meta WHERE meta_key = 'primary'").get(),
   };
+}
+
+type Options = { path: string };
+type Replay = ReturnType<typeof canonicalReplay>;
+const dropAccounting = `ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
+  ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`;
+const schemaChanges = {
+  current: "",
+  "missing-column": "ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path",
+  "ordered-column": "ALTER TABLE worktrees DROP COLUMN provisioned_paths_json",
+  "sandbox-column": "ALTER TABLE sandbox_registry_entries DROP COLUMN image",
+  "cron-description": "ALTER TABLE cron_jobs DROP COLUMN description",
+  "index-drift": `DROP INDEX idx_plugin_state_listing;
+    CREATE INDEX idx_plugin_state_listing
+      ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);`,
+};
+
+function expectRepaired(options: Options, before: Replay) {
+  const db = openOpenClawStateDatabase(options).db;
+  expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(db));
+  expect(canonicalReplay(db)).toEqual(before);
+  return db;
+}
+
+async function openWithoutReads(options: Options) {
+  return (
+    await withoutHistoricalPayloadReads(options.path, () => openOpenClawStateDatabase(options))
+  ).db;
+}
+
+function expectUnchanged(
+  db: EngineConnection,
+  before: Replay,
+  oldEstimates: ReturnType<typeof estimates>,
+) {
+  expect(estimates(db)).toMatchObject({
+    sessions: oldEstimates.sessions,
+    events: oldEstimates.events,
+  });
+  expect(canonicalReplay(db)).toEqual(before);
+}
+
+function withReplay(
+  operation: (options: Options, initial: EngineConnection, before: Replay) => Promise<void>,
+  encoding?: string,
+) {
+  return withTestDir({ prefix: "openclaw-acp-repair-" }, async (dir) => {
+    const options = { path: path.join(dir, "state.sqlite") };
+    if (encoding) {
+      using seed = new DatabaseSync(options.path);
+      seed.exec(
+        `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
+      );
+    }
+    const initial = openOpenClawStateDatabase(options).db;
+    seedLegacyReplay(initial);
+    await operation(options, initial, canonicalReplay(initial));
+  });
 }
 
 async function withoutHistoricalPayloadReads<T>(
@@ -122,14 +181,10 @@ describe("ACP replay accounting repair", () => {
   afterEach(() => closeOpenClawStateDatabaseForTest());
 
   it("reuses completed accounting repair and repairs newly restored legacy columns", async () => {
-    await withTestDir({ prefix: "openclaw-acp-repair-complete-" }, async (dir) => {
-      const options = { path: path.join(dir, "state.sqlite") };
-      seedLegacyReplay(openOpenClawStateDatabase(options).db);
+    await withReplay(async (options, _initial, before) => {
       closeOpenClawStateDatabaseForTest();
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      const repaired = openOpenClawStateDatabase(options).db;
-      const before = canonicalReplay(repaired);
-      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
+      expectRepaired(options, before);
       closeOpenClawStateDatabaseForTest();
 
       const repeated = await withoutHistoricalPayloadReads(
@@ -140,42 +195,26 @@ describe("ACP replay accounting repair", () => {
       expect(repeated.warnings).toEqual([]);
       {
         using legacy = new DatabaseSync(options.path);
-        legacy.exec(`ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
-          ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`);
+        legacy.exec(dropAccounting);
       }
-      const restored = openOpenClawStateDatabase(options).db;
-      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(restored));
-      expect(canonicalReplay(restored)).toEqual(before);
+      expectRepaired(options, before);
     });
   });
 
   it.each(["runtime", "automatic"])(
     "populates newly added accounting columns through %s without changing canonical rows",
     async (entrance) => {
-      await withTestDir({ prefix: "openclaw-acp-additive-" }, async (dir) => {
-        const options = { path: path.join(dir, "state.sqlite") };
-        const initial = openOpenClawStateDatabase(options).db;
-        seedLegacyReplay(initial);
-        const before = canonicalReplay(initial);
-        initial.exec(`
-          ALTER TABLE acp_replay_events DROP COLUMN estimated_bytes;
-          ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;
-        `);
+      await withReplay(async (options, initial, before) => {
+        initial.exec(dropAccounting);
         closeOpenClawStateDatabaseForTest();
 
         if (entrance === "automatic") {
           expect((await prepareOpenClawStateDatabaseSchema(options)).warnings).toEqual([]);
         }
-        const upgraded = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(upgraded));
-        expect(canonicalReplay(upgraded)).toEqual(before);
+        expectRepaired(options, before);
         closeOpenClawStateDatabaseForTest();
 
-        const reopened = (
-          await withoutHistoricalPayloadReads(options.path, () =>
-            openOpenClawStateDatabase(options),
-          )
-        ).db;
+        const reopened = await openWithoutReads(options);
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
         expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(reopened));
         expect(canonicalReplay(reopened)).toEqual(before);
@@ -185,43 +224,17 @@ describe("ACP replay accounting repair", () => {
 
   it.each(
     ["UTF-8", "UTF-16le"].flatMap((encoding) =>
-      [
-        "current",
-        "missing-column",
-        "ordered-column",
-        "sandbox-column",
-        "cron-description",
-        "index-drift",
-      ].flatMap((schema) =>
-        ["runtime", "automatic"].map((entrance) => ({ encoding, schema, entrance })),
+      Object.entries(schemaChanges).flatMap(([schema, sql]) =>
+        ["runtime", "automatic"].map((entrance) => ({ encoding, schema, sql, entrance })),
       ),
     ),
   )(
     "leaves $encoding replay repair to Doctor through $entrance with $schema schema",
-    async ({ encoding, schema, entrance }) => {
-      await withTestDir({ prefix: "openclaw-acp-repair-" }, async (dir) => {
-        const options = { path: path.join(dir, "state.sqlite") };
-        const seed = new DatabaseSync(options.path);
-        seed.exec(
-          `PRAGMA encoding = '${encoding}'; CREATE TABLE encoding_seed (id INTEGER); DROP TABLE encoding_seed;`,
-        );
-        seed.close();
-        const initial = openOpenClawStateDatabase(options).db;
-        seedLegacyReplay(initial);
-        const before = canonicalReplay(initial);
+    async ({ encoding, sql, entrance }) => {
+      await withReplay(async (options, initial, before) => {
         const oldEstimates = estimates(initial);
-        if (schema === "missing-column") {
-          initial.exec("ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path");
-        } else if (schema === "ordered-column") {
-          initial.exec("ALTER TABLE worktrees DROP COLUMN provisioned_paths_json");
-        } else if (schema === "sandbox-column") {
-          initial.exec("ALTER TABLE sandbox_registry_entries DROP COLUMN image");
-        } else if (schema === "cron-description") {
-          initial.exec("ALTER TABLE cron_jobs DROP COLUMN description");
-        } else if (schema === "index-drift") {
-          initial.exec(`DROP INDEX idx_plugin_state_listing;
-            CREATE INDEX idx_plugin_state_listing
-              ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);`);
+        if (sql) {
+          initial.exec(sql);
         }
         closeOpenClawStateDatabaseForTest();
         if (entrance === "automatic") {
@@ -238,70 +251,40 @@ describe("ACP replay accounting repair", () => {
           );
           closeOpenClawStateDatabaseForTest();
         }
-        const inspected = new DatabaseSync(options.path, { readOnly: true });
-        try {
-          expect(estimates(inspected)).toMatchObject({
-            sessions: oldEstimates.sessions,
-            events: oldEstimates.events,
-          });
-          expect(canonicalReplay(inspected)).toEqual(before);
-        } finally {
-          inspected.close();
+        {
+          using inspected = new DatabaseSync(options.path, { readOnly: true });
+          expectUnchanged(inspected, before, oldEstimates);
         }
-        const runtime = (
-          await withoutHistoricalPayloadReads(options.path, () =>
-            openOpenClawStateDatabase(options),
-          )
-        ).db;
-        expect(estimates(runtime)).toMatchObject({
-          sessions: oldEstimates.sessions,
-          events: oldEstimates.events,
-        });
-        expect(canonicalReplay(runtime)).toEqual(before);
+        expectUnchanged(await openWithoutReads(options), before, oldEstimates);
         closeOpenClawStateDatabaseForTest();
 
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        const repaired = openOpenClawStateDatabase(options).db;
-        expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
-        expect(canonicalReplay(repaired)).toEqual(before);
-        const repairedEstimates = estimates(repaired);
+        const repairedEstimates = estimates(expectRepaired(options, before));
         closeOpenClawStateDatabaseForTest();
 
-        const reopened = (
-          await withoutHistoricalPayloadReads(options.path, () =>
-            openOpenClawStateDatabase(options),
-          )
-        ).db;
+        const reopened = await openWithoutReads(options);
         expect(reopened.prepare("SELECT total_changes() AS count").get()?.count).toBe(0);
         expect(estimates(reopened)).toEqual(repairedEstimates);
-      });
+      }, encoding);
     },
   );
 
   it("rolls back event repairs and the release checkpoint when a later session repair fails, then doctor retries atomically", async () => {
-    await withTestDir({ prefix: "openclaw-acp-repair-" }, async (dir) => {
-      const options = { path: path.join(dir, "state.sqlite") };
-      const initial = openOpenClawStateDatabase(options).db;
-      seedLegacyReplay(initial);
-      const before = canonicalReplay(initial);
+    await withReplay(async (options, initial, before) => {
       const oldEstimates = estimates(initial);
       initial.exec(`CREATE TRIGGER reject_acp_session_repair BEFORE UPDATE OF estimated_bytes ON acp_replay_sessions
         BEGIN SELECT RAISE(ABORT, 'synthetic ACP repair failure'); END`);
       closeOpenClawStateDatabaseForTest();
       const failed = repairOpenClawStateDatabaseSchema(options);
       expect(failed.warnings.join(" ")).toContain("synthetic ACP repair failure");
-      const inspect = new DatabaseSync(options.path);
-      try {
+      {
+        using inspect = new DatabaseSync(options.path);
         expect(canonicalReplay(inspect)).toEqual(before);
         expect(estimates(inspect)).toEqual(oldEstimates);
         inspect.exec("DROP TRIGGER reject_acp_session_repair");
-      } finally {
-        inspect.close();
       }
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      const repaired = openOpenClawStateDatabase(options).db;
-      expectAcpReplayUtf8Accounting(requireNativeSqliteDatabase(repaired));
-      expect(canonicalReplay(repaired)).toEqual(before);
+      expectRepaired(options, before);
     });
   });
 });
