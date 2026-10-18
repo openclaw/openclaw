@@ -84,7 +84,7 @@ describe("tool terminal outcome observer", () => {
           stream.end();
           return stream;
         },
-        beforeToolCall: () =>
+        beforeToolCall: async () =>
           blocked ? { block: true, reason: "PRIVATE_POLICY_REASON" } : undefined,
       });
       const unsubscribe = agent.subscribe(emit);
