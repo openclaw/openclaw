@@ -27,6 +27,24 @@ export function resolveSourceReplySinkDeliveryMode(
     : configuredMode;
 }
 
+/** Whether this invocation carries the visible reply that steering must not skip. */
+export function messageToolCallCompletesBeforeSteering(params: {
+  args: unknown;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): boolean {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    !params.args ||
+    typeof params.args !== "object" ||
+    Array.isArray(params.args)
+  ) {
+    return false;
+  }
+  const args = params.args as Record<string, unknown>;
+  const action = readToolStringParam(args, "action");
+  return action === "send" ? args.final !== false : action === "react" && args.final === true;
+}
+
 function sourceReplyPolicyError(message: string): MessageActionDeniedError {
   return new MessageActionDeniedError(
     message,

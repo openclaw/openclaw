@@ -584,6 +584,40 @@ function hidesToolCallFromChannelProgress(
   return tool?.hideFromChannelProgress === true;
 }
 
+function executesBeforeSteering(
+  batch: ToolBatchContext,
+  toolCall: AgentToolCall,
+  args: unknown,
+): boolean {
+  const resolution = batch.resolved.get(toolCall);
+  const tool =
+    resolution?.kind === "resolved"
+      ? resolution.tool
+      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
+  if (!tool?.shouldExecuteBeforeSteering) {
+    return false;
+  }
+  try {
+    return tool.shouldExecuteBeforeSteering(args);
+  } catch {
+    return false;
+  }
+}
+
+function findExecutesBeforeSteering(
+  batch: ToolBatchContext,
+  toolCalls: AgentToolCall[],
+  cursor: number,
+): number | undefined {
+  for (let index = cursor; index < toolCalls.length; index++) {
+    const toolCall = toolCalls[index];
+    if (toolCall && executesBeforeSteering(batch, toolCall, toolCall.arguments)) {
+      return index;
+    }
+  }
+  return undefined;
+}
+
 async function executeToolCallGroups(
   batch: ToolBatchContext,
   toolCalls: AgentToolCall[],
@@ -602,8 +636,23 @@ async function executeToolCallGroups(
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
     if (steeringMessages.length > 0) {
-      batch.lifecycle?.releaseSkippedCalls?.(admittedIds(toolCalls.slice(cursor), batch.validated));
-      break;
+      const replyIndex = findExecutesBeforeSteering(batch, toolCalls, cursor);
+      if (replyIndex === undefined) {
+        batch.lifecycle?.releaseSkippedCalls?.(
+          admittedIds(toolCalls.slice(cursor), batch.validated),
+        );
+        break;
+      }
+      const skippedBeforeReply = toolCalls.slice(cursor, replyIndex);
+      batch.lifecycle?.releaseSkippedCalls?.(admittedIds(skippedBeforeReply, batch.validated));
+      for (const toolCall of skippedBeforeReply) {
+        const finalized = await completeUnstartedToolCall(batch, toolCall, {
+          reason: "steering",
+        });
+        messages.push(await emitToolResultMessage(finalized, batch.emit));
+        finalizedCalls.push(finalized);
+      }
+      cursor = replyIndex;
     }
 
     const entries: FinalizedToolCallEntry[] = [];
@@ -626,10 +675,23 @@ async function executeToolCallGroups(
       }
 
       const hasReady = entries.some((entry) => "kind" in entry);
-      if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
+      if (
+        sequential &&
+        batch.toolPlan.executionStarted &&
+        hasReady &&
+        !batch.signal?.aborted &&
+        steeringMessages.length === 0
+      ) {
         const steering = getSteeringAtCheckpoint(batch.config);
         steeringMessages = Array.isArray(steering) ? steering : await steering;
       }
+      const completesBeforeSteering =
+        sequential &&
+        steeringMessages.length > 0 &&
+        entries.some(
+          (entry) =>
+            "kind" in entry && executesBeforeSteering(batch, entry.toolCall, entry.execution.args),
+        );
       const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>
         "kind" in entry ? undefined : entry,
       );
@@ -657,7 +719,7 @@ async function executeToolCallGroups(
 
       // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
-        steeringMessages.length > 0
+        steeringMessages.length > 0 && !completesBeforeSteering
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle, batch.toolPlan);
       // Streamed batches serialize admission until source execution begins.
@@ -670,9 +732,14 @@ async function executeToolCallGroups(
       }
       fatal = launched?.rejected ? { error: launched.rejected.error } : undefined;
       const skippedIndex =
-        steeringMessages.length > 0 ? 0 : (launched?.rejected?.index ?? entries.length);
+        launched?.rejected?.index ??
+        (completesBeforeSteering
+          ? entries.length
+          : steeringMessages.length > 0
+            ? 0
+            : entries.length);
       if (steeringMessages.length > 0) {
-        for (const entry of entries) {
+        for (const entry of entries.slice(skippedIndex)) {
           if ("kind" in entry) {
             entry.execution.dispose();
           }

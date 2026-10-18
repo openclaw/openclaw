@@ -68,6 +68,7 @@ import {
   enforceSourceReplyOnlyMessageAction,
   enforceSourceReplyOnlyTextDirectives,
   enforceTrustedTurnExplicitAccount,
+  messageToolCallCompletesBeforeSteering,
   resolveSourceReplySinkDeliveryMode,
 } from "./message-tool-source-policy.js";
 import { createMessageToolTurnAuthority } from "./message-tool-turn-authority.js";
@@ -222,6 +223,11 @@ function* createMessageToolSteps(
     parameters: addSourceReplyFinalControl(baseSchema),
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
+    shouldExecuteBeforeSteering: (args) =>
+      messageToolCallCompletesBeforeSteering({
+        args,
+        sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
+      }),
     execute: async (toolCallId, args, signal) => {
       const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).

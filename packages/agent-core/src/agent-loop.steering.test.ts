@@ -678,6 +678,70 @@ describe("agentLoop steering", () => {
     },
   );
 
+  it.each([
+    { final: true, expectedExecuted: ["first", "reply"] },
+    { final: false, expectedExecuted: ["first"] },
+  ])(
+    "runs a steering-protected reply after skipping the earlier tail (final=$final)",
+    async ({ final, expectedExecuted }) => {
+      const executed: string[] = [];
+      const started = createDeferred();
+      const release = createDeferred();
+      const first = makeTool("first", executed);
+      first.executionMode = "sequential";
+      first.execute = async () => {
+        executed.push("first");
+        started.resolve();
+        await release.promise;
+        return emptyResult();
+      };
+      const tail = makeTool("tail", executed);
+      const replyTool = makeTool("reply", executed);
+      replyTool.parameters = Type.Object({ final: Type.Boolean() });
+      replyTool.shouldExecuteBeforeSteering = (args) =>
+        (args as { final?: boolean }).final === true;
+      const steer = user("answer the newer input", 2);
+      const { agent, requests, events } = makeAgent(
+        [first, tail, replyTool],
+        { toolExecution: "sequential" },
+        [
+          [makeCall("first"), makeCall("tail"), { ...makeCall("reply"), arguments: { final } }],
+          done,
+        ],
+      );
+
+      const run = agent.prompt("start");
+      await started.promise;
+      agent.steer(steer);
+      release.resolve();
+      await run;
+
+      expect(executed).toEqual(expectedExecuted);
+      expect(requests).toHaveLength(2);
+      expect(requests[1]?.filter((message) => message.role === "toolResult")).toMatchObject([
+        { role: "toolResult", toolCallId: "first", isError: false },
+        {
+          role: "toolResult",
+          toolCallId: "tail",
+          isError: true,
+          content: [{ type: "text", text: "Skipped to process an incoming message." }],
+          details: { status: "skipped", deniedReason: "steering" },
+        },
+        final
+          ? { role: "toolResult", toolCallId: "reply", isError: false }
+          : {
+              role: "toolResult",
+              toolCallId: "reply",
+              isError: true,
+              content: [{ type: "text", text: "Skipped to process an incoming message." }],
+              details: { status: "skipped", deniedReason: "steering" },
+            },
+      ]);
+      expect(requests[1]?.at(-1)).toBe(steer);
+      expectInjectedOnce(events, steer);
+    },
+  );
+
   it("drains again after an empty synchronous streamed checkpoint", async () => {
     const queued: AgentMessage[] = [];
     const getSteeringMessages = async () => queued.splice(0);

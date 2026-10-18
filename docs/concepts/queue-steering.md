@@ -20,9 +20,9 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
-3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped.
+3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped, except for a tool call that declares it owns the turn's still-undelivered visible reply. That call runs and the steer follows its result.
 4. In parallel mode, OpenClaw prepares and launches calls together without a steering checkpoint. Waiting steering never skips a parallel batch.
-5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**.
+5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**. Calls preserved to deliver the visible reply complete normally instead.
 6. After either kind of batch settles, OpenClaw checks steering before stop hooks or the next model call. It appends the exact drained steering messages after the tool results, before the next LLM call.
 
 This keeps every requested tool call paired with a result without discarding a freshly requested plan before any tool executes.
