@@ -47,29 +47,38 @@ function measurementClock() {
   vi.stubGlobal("cancelAnimationFrame", (frame: number) => frames.delete(frame));
   vi.stubGlobal("IntersectionObserver", ControlledIntersectionObserver);
   vi.stubGlobal("matchMedia", () => motion);
+  const flushFrames = () => {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach((callback) => callback(0));
+  };
   return {
     motion,
+    async settle() {
+      await Promise.resolve();
+      flushFrames();
+    },
     visible(isIntersecting: boolean, target?: Element) {
       for (const observer of visibilityObservers) {
         if (target ? observer.targets.has(target) : observer.targets.size > 0) {
           observer.callback([{ isIntersecting }]);
         }
       }
+      flushFrames();
     },
     observesSize(target: Element) {
       return [...observers].some((observer) => observer.targets.has(target));
     },
-    flush() {
-      const pending = [...frames.values()];
-      frames.clear();
-      pending.forEach((callback) => callback(0));
-    },
-    resize(target: Element) {
-      for (const observer of observers) {
-        if (observer.targets.has(target)) {
-          observer.callback([], observer);
+    flush: flushFrames,
+    resize(...targets: Element[]) {
+      for (const target of targets) {
+        for (const observer of observers) {
+          if (observer.targets.has(target)) {
+            observer.callback([], observer);
+          }
         }
       }
+      flushFrames();
     },
   };
 }
@@ -90,14 +99,14 @@ const duration = (label: HTMLElement) => label.style.getPropertyValue("--hover-m
 function reveal(clock: ReturnType<typeof measurementClock>) {
   clock.flush();
   clock.visible(true);
-  clock.flush();
 }
 function advance(clock: ReturnType<typeof measurementClock>, ms: number) {
   vi.advanceTimersByTime(ms);
   clock.flush();
 }
 
-function denseTitles(count: number, options: MarqueeOptions = {}) {
+function denseTitles(count = 1, options: MarqueeOptions = {}) {
+  const clock = measurementClock();
   const container = document.createElement("div");
   document.body.append(container);
   const initialTitle = "A long conversation title";
@@ -136,46 +145,46 @@ function denseTitles(count: number, options: MarqueeOptions = {}) {
       return toggle(name, force);
     });
   }
-  return { container, show, labels, operations };
+  return {
+    clock,
+    show,
+    labels,
+    operations,
+    label: labels[0]!,
+    host: container.querySelector("a")!,
+  };
 }
 
 describe("hover marquee measurement budget", () => {
   it.each([false, true])("defers unseen label measurement and observers (loop=%s)", (loop) => {
-    const clock = measurementClock();
-    const { labels, operations } = denseTitles(2, { loop });
+    const { clock, labels, operations } = denseTitles(2, { loop });
     const style = vi.spyOn(globalThis, "getComputedStyle");
     const observeContent = vi.spyOn(MutationObserver.prototype, "observe");
     clock.flush();
     clock.visible(false);
-    clock.flush();
     expect(operations).toEqual([]);
     expect(style).not.toHaveBeenCalled();
     expect(observeContent).not.toHaveBeenCalled();
     expect(labels.some((label) => clock.observesSize(label))).toBe(false);
     clock.visible(true, labels[0]);
-    clock.flush();
     expect(overflows(labels[0]!)).toBe(true);
     expect(clock.observesSize(labels[0]!)).toBe(true);
     expect(overflows(labels[1]!)).toBe(false);
     expect(clock.observesSize(labels[1]!)).toBe(false);
     expect(style.mock.calls.some(([element]) => element === labels[1])).toBe(false);
     clock.visible(true, labels[1]);
-    clock.flush();
     expect(overflows(labels[1]!)).toBe(true);
     expect(clock.observesSize(labels[1]!)).toBe(true);
   });
 
   it("reads a dense title batch before writing overflow styles", () => {
-    const clock = measurementClock();
-    const { labels, operations } = denseTitles(100);
+    const { clock, labels, operations } = denseTitles(100);
     reveal(clock);
     expect(labels.every(overflows)).toBe(true);
     expect(operations.lastIndexOf("read")).toBeLessThan(operations.indexOf("write"));
     Object.defineProperty(labels[0]!, "clientWidth", { configurable: true, value: 0 });
     operations.length = 0;
-    clock.resize(labels[0]!);
-    clock.resize(labels[1]!);
-    clock.flush();
+    clock.resize(labels[0]!, labels[1]!);
     expect(overflows(labels[0]!)).toBe(false);
     expect(overflows(labels[1]!)).toBe(true);
     expect(operations).toEqual(["read", "write", "write"]);
@@ -183,10 +192,7 @@ describe("hover marquee measurement budget", () => {
 
   it("avoids style resolution at zero width and resumes through the existing resize observer", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const clock = measurementClock();
-    const { labels, container } = denseTitles(1);
-    const label = labels[0]!;
-    const host = container.querySelector("a")!;
+    const { clock, label, host } = denseTitles();
     let width = 0;
     Object.defineProperty(label, "clientWidth", { configurable: true, get: () => width });
     const style = vi.spyOn(globalThis, "getComputedStyle");
@@ -214,7 +220,6 @@ describe("hover marquee measurement budget", () => {
     for (const revealBeforeHiding of [false, true]) {
       width = 100;
       clock.resize(label);
-      clock.flush();
       expect(overflows(label)).toBe(true);
       expect(shift(label)).not.toBe("");
       expect(duration(label)).not.toBe("");
@@ -226,7 +231,6 @@ describe("hover marquee measurement budget", () => {
       style.mockClear();
       width = 0;
       clock.resize(label);
-      clock.flush();
       expectResting();
       advance(clock, 500);
       expectResting();
@@ -235,68 +239,54 @@ describe("hover marquee measurement budget", () => {
   });
 
   it("skips unchanged titles but refreshes content, class, direction, and viewport changes", async () => {
-    const clock = measurementClock();
-    const { show, labels, operations } = denseTitles(100);
+    const { clock, show, labels, operations } = denseTitles(100);
     reveal(clock);
     operations.length = 0;
     for (let index = 0; index < 5; index += 1) {
       show();
-      await Promise.resolve();
-      clock.flush();
+      await clock.settle();
     }
     expect(operations).toHaveLength(0);
     show("Short");
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     expect(labels.every((label) => !overflows(label))).toBe(true);
     show("A long conversation title");
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     show("A long conversation title", "session-name renamed");
     clock.flush();
     expect(labels.every(overflows)).toBe(true);
     operations.length = 0;
     document.documentElement.dir = "rtl";
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     expect(operations.filter((operation) => operation === "read")).toHaveLength(100);
     Object.defineProperty(labels[0]!, "clientWidth", { configurable: true, value: 500 });
     operations.length = 0;
     clock.resize(labels[0]!);
-    clock.flush();
     expect(operations.filter((operation) => operation === "read")).toHaveLength(1);
     expect(overflows(labels[0]!)).toBe(false);
     const text = labels[0]!.querySelector<HTMLElement>(".hover-marquee__text")!;
     Object.defineProperty(text, "scrollWidth", { value: 800 });
     clock.resize(text);
-    clock.flush();
     expect(overflows(labels[0]!)).toBe(true);
   });
 
   it("follows touch menu intent, direction, visibility, and reduced motion for looping names", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const clock = measurementClock();
-    const { labels, container } = denseTitles(1, { loop: true, delay: 50 });
-    const label = labels[0]!;
-    const host = container.querySelector("a")!;
+    const { clock, label, host } = denseTitles(1, { loop: true, delay: 50 });
     reveal(clock);
     expect(scrolls(label)).toBe(false);
     host.setAttribute("aria-expanded", "true");
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     advance(clock, 50);
     expect(scrolls(label)).toBe(true);
     expect(Number.parseFloat(shift(label))).toBeLessThan(0);
     label.style.direction = "rtl";
     label.dir = "rtl";
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     expect(Number.parseFloat(shift(label))).toBeGreaterThan(0);
     clock.visible(false);
-    clock.flush();
     expect(scrolls(label)).toBe(false);
     clock.visible(true);
-    clock.flush();
     advance(clock, 50);
     expect(scrolls(label)).toBe(true);
     clock.motion.matches = true;
@@ -309,8 +299,7 @@ describe("hover marquee measurement budget", () => {
     advance(clock, 50);
     expect(scrolls(label)).toBe(true);
     host.setAttribute("aria-expanded", "false");
-    await Promise.resolve();
-    clock.flush();
+    await clock.settle();
     expect(scrolls(label)).toBe(false);
   });
 });
