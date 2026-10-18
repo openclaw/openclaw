@@ -958,7 +958,9 @@ updates, resizing, and temporarily hiding its pane. Selecting **Details** reopen
 **Session details** and **Task progress** have independent disclosure states.
 Session context groups workspace information, pull requests, people, subagents,
 and attached automations; it reuses their existing actions rather than duplicating
-their data. The former pull-request and task-progress bars are not repeated above
+their data. Attached automations appear only when the connected account can read
+automations; accounts with session-only access do not request that inventory.
+The former pull-request and task-progress bars are not repeated above
 the composer.
 
 The progress header shows the current step, not a completed-step total. Its

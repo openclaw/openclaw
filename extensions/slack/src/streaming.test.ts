@@ -176,6 +176,33 @@ describe("stopSlackStream finalize error handling", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it("routes custom identity expiry to ordinary delivery without replaying the prefix", async () => {
+    const { client, append, update } = createNativeStreamClient();
+    const session = await startSlackStream({
+      client,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "acknowledged prefix",
+      chunks: [],
+      identity: { username: "Research Agent", iconEmoji: ":mag:" },
+    });
+    append.mockRejectedValueOnce(slackApiError("message_not_in_streaming_state"));
+
+    await expect(
+      appendSlackStream({ session, text: " unacknowledged tail", chunks: [] }),
+    ).rejects.toMatchObject({
+      name: "SlackStreamNotDeliveredError",
+      pendingText: " unacknowledged tail",
+      slackCode: "message_not_in_streaming_state",
+    });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(session).toMatchObject({
+      stopped: true,
+      delivered: true,
+      pendingText: " unacknowledged tail",
+    });
+  });
   it.each(["before-recovery", "after-recovery"])(
     "honors Slack Stop %s without another update or final delivery",
     async (phase) => {

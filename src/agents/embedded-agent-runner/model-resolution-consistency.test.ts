@@ -100,10 +100,6 @@ vi.mock("../harness/selection.js", () => ({
   })),
 }));
 
-vi.mock("../openai-routing.js", () => ({
-  resolveSelectedOpenAIRuntimeProvider: ({ provider }: { provider: string }) => provider,
-}));
-
 vi.mock("../prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: vi.fn(),
 }));

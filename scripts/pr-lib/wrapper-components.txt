@@ -86,7 +86,6 @@ packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
-packages/model-catalog-core/src/model-catalog-context-windows.ts
 packages/model-catalog-core/src/model-catalog-normalize.ts
 packages/model-catalog-core/src/model-catalog-pricing.ts
 packages/model-catalog-core/src/model-catalog-reasoning.ts
@@ -462,7 +461,6 @@ src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
 src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
-src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
 src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
@@ -745,6 +743,7 @@ src/config/sessions/targets.ts
 src/config/sessions/transcript-payload-read.ts
 src/config/sessions/transcript-payload.ts
 src/config/sessions/transcript-predicate-fields.ts
+src/config/sessions/transcript-store-identity.ts
 src/config/sessions/transcript-target-binding.ts
 src/config/sessions/version.ts
 src/config/shell-env-expected-keys.ts
@@ -1129,11 +1128,13 @@ src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity-worker-error.ts
 src/infra/sqlite-integrity-worker.ts
 src/infra/sqlite-integrity.ts
+src/infra/sqlite-table-integrity-cache.ts
 src/infra/sqlite-jsonl-budget-error.ts
 src/infra/sqlite-jsonl-budget.ts
 src/infra/sqlite-live-snapshot.ts
 src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
+src/infra/sqlite-maintenance-integrity.ts
 src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
 src/infra/sqlite-number.ts
@@ -1678,7 +1679,6 @@ src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
-src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
@@ -2022,6 +2022,7 @@ src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/schema-migration-backup-scope.ts
 src/state/schema-migration-backup-tables.ts
+src/state/schema-migration-integrity-tables.ts
 src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
@@ -2029,7 +2030,6 @@ src/state/openclaw-state-read-operation-registry.ts
 src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
-src/state/openclaw-state-read-snapshot.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts

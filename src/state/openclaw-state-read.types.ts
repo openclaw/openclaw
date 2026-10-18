@@ -56,7 +56,6 @@ import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
 } from "../gateway/worker-environments/placement-workspace-journal.types.js";
-import type { WorkerEnvironmentPruneReadInput } from "../gateway/worker-environments/store.types.js";
 import type {
   DevicePairingReadCommand,
   DevicePairingReadReply,
@@ -217,7 +216,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
-  | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }

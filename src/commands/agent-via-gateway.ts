@@ -43,7 +43,6 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { READ_SCOPE } from "../gateway/operator-scopes.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import {
   createEmbeddedStateSignalBridge,
@@ -620,14 +619,6 @@ function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) 
   };
 }
 
-async function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
-  try {
-    await sleep(ms, signal);
-  } catch {
-    throw createAbortError("gateway agent retry aborted");
-  }
-}
-
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
   const response = asOptionalRecord(value);
   if (response?.aborted !== true) {
@@ -683,7 +674,7 @@ async function abortAcceptedGatewayAgentRunWithRetries(params: {
     if (isFinalAttempt) {
       return false;
     }
-    await delayMs(retryDelayMs);
+    await sleep(retryDelayMs);
   }
   return false;
 }
@@ -1019,7 +1010,7 @@ async function agentViaGatewayCommandWithTransientRetries(
       runtime.error?.(
         `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before failing.`,
       );
-      await delayMs(retryDelayMs, signalBridge.signal);
+      await sleep(retryDelayMs, signalBridge.signal);
     }
   }
   throw new Error("Gateway agent retry loop exhausted unexpectedly.");

@@ -435,7 +435,7 @@ describe("grouped chat rendering", () => {
     expect(view.textContent).toContain("Notice details");
   });
 
-  it("preserves reference links and one duplicate badge in recovered media", () => {
+  it("preserves reference links and one duplicate badge in recovered media", async () => {
     const fullText =
       "[Before][proof]\n\nMEDIA:https://example.com/comparison.png\n\n[After][proof]\n\n[proof]: https://example.com/proof";
     const fullMessage = createAssistantMessage(fullText, { timestamp: 1000 });
@@ -456,11 +456,13 @@ describe("grouped chat rendering", () => {
         onToggleAssistantMessageExpanded: vi.fn(),
       });
     });
-    expect(
-      [...view.querySelectorAll(".chat-text a, .chat-message-image")].map((element) =>
-        element instanceof HTMLImageElement ? "image" : element.textContent,
-      ),
-    ).toEqual(["Before", "image", "After"]);
+    await waitForSolid(() =>
+      expect(
+        [...view.querySelectorAll(".chat-text a, .chat-message-image")].map((element) =>
+          element instanceof HTMLImageElement ? "image" : element.textContent,
+        ),
+      ).toEqual(["Before", "image", "After"]),
+    );
     expect(
       [...view.querySelectorAll<HTMLAnchorElement>(".chat-text a")].map((link) => link.href),
     ).toEqual(["https://example.com/proof", "https://example.com/proof"]);
@@ -468,7 +470,7 @@ describe("grouped chat rendering", () => {
     expect(view.textContent).not.toContain("Loading preview");
   });
 
-  it("keeps list structure and its duplicate suffix across an assistant image", () => {
+  it("keeps list structure and its duplicate suffix across an assistant image", async () => {
     markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
       renderAssistantMessageEntries([
         {
@@ -482,7 +484,9 @@ describe("grouped chat rendering", () => {
     });
     const list = expectElement(view, ".chat-text ol", HTMLOListElement);
     expect(list.querySelectorAll(":scope > li")).toHaveLength(2);
-    expect(list.querySelector("li:first-child .chat-message-image")).not.toBeNull();
+    await waitForSolid(() =>
+      expect(list.querySelector("li:first-child .chat-message-image")).not.toBeNull(),
+    );
     expect(list.querySelector("li:last-child")?.textContent).toBe("Second\u00a0×2");
     expect(list.querySelector("li:last-child > .chat-duplicate-count")?.textContent).toBe("×2");
   });
@@ -498,16 +502,16 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-text")?.trim()).toBe("Visible answer");
   });
 
-  it("keeps literal media-marker text distinct from assistant image positions", () => {
+  it("keeps literal media-marker text distinct from assistant image positions", async () => {
     renderMarkdownAssistant(
       "Literal OPENCLAWMEDIASLOT0END\n\nMEDIA:https://example.com/real.png\n\nDone",
     );
     expect(view.textContent).toContain("Literal OPENCLAWMEDIASLOT0END");
     expect(view.textContent).not.toContain("OPENCLAWMEDIASLOTX");
-    expect(view.querySelectorAll(".chat-message-image")).toHaveLength(1);
+    await waitForSolid(() => expect(view.querySelectorAll(".chat-message-image")).toHaveLength(1));
   });
 
-  it("keeps an inline image mounted while the following paragraph streams and completes", () => {
+  it("keeps an inline image mounted while the following paragraph streams and completes", async () => {
     const renderTurn = (tail: string, isStreaming: boolean) => {
       const message = createAssistantMessage(
         `**Before**\nMEDIA:https://example.com/stream.png\n\n${tail}`,
@@ -519,10 +523,12 @@ describe("grouped chat rendering", () => {
         ),
       );
     };
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      streamingMarkdownRenderMock.withImplementation(renderStreamingMarkdown, () => {
+    await markdownRenderMock.withImplementation(renderMarkdownHtml, async () => {
+      await streamingMarkdownRenderMock.withImplementation(renderStreamingMarkdown, async () => {
         renderTurn("Checking", true);
-        const image = expectElement(view, ".chat-message-image", HTMLImageElement);
+        const image = await waitForSolid(() =>
+          expectElement(view, ".chat-message-image", HTMLImageElement),
+        );
         expect(expectElement(view, ".chat-bubble", HTMLElement).classList.contains("fade-in")).toBe(
           false,
         );
@@ -1641,8 +1647,10 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-reply-attribution")).toBeNull();
     expect(elementText(".chat-text", container)?.trim()).toBe("Here is the image.");
-    expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
-      "https://example.com/photo.png",
+    await waitForSolid(() =>
+      expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
+        "https://example.com/photo.png",
+      ),
     );
     expectElement(container, ".chat-message-image-button", HTMLButtonElement).click();
     expect(onOpenImage).toHaveBeenCalledWith(
@@ -2008,6 +2016,7 @@ describe("grouped chat rendering", () => {
     expect(download.tabIndex).toBe(0);
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
+    await vi.advanceTimersByTimeAsync(0);
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
     await vi.advanceTimersByTimeAsync(30_001);
     await flushAssistantAttachmentAvailabilityChecks();
@@ -2361,6 +2370,7 @@ describe("grouped chat rendering", () => {
       }),
     );
 
+    await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, fetchInit] = requireFetchCallForUrl(
       fetchMock,
@@ -2458,13 +2468,27 @@ describe("grouped chat rendering", () => {
 
     renderAssistantMessage({
       role: "assistant",
-      content: imageUrls.map((url, index) => ({
+      content: imageUrls.slice(0, 64).map((url, index) => ({
         type: "image",
         url,
         alt: `Missing image ${index + 1}`,
       })),
       timestamp: Date.now(),
     });
+    await waitForSolid(() =>
+      expect(view.querySelectorAll(".chat-image-frame--compact")).toHaveLength(64),
+    );
+    const overflowContainer = document.createElement("div");
+    renderAssistantMessage(
+      createAssistantMessage([
+        createMediaBlock({ url: imageUrls[64], alt: "Newest missing image" }),
+      ]),
+      {},
+      overflowContainer,
+    );
+    await waitForSolid(() =>
+      expect(overflowContainer.querySelector(".chat-image-frame--compact")).not.toBeNull(),
+    );
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length));
     await flushAssistantAttachmentAvailabilityChecks();
 
@@ -2480,7 +2504,7 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(imageUrls.length + 1));
   });
 
-  it("does not send auth to cross-origin managed-image-looking URLs", () => {
+  it("does not send auth to cross-origin managed-image-looking URLs", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("cross-origin image URL should not be fetched with Control UI auth");
     });
@@ -2497,9 +2521,10 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const image = view.querySelector<HTMLImageElement>(".chat-message-image");
-    expect(image?.getAttribute("src")).toBe(
-      "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+    await waitForSolid(() =>
+      expect(view.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src")).toBe(
+        "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+      ),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -2551,7 +2576,7 @@ describe("grouped chat rendering", () => {
     },
   );
 
-  it("opens only safe assistant image URLs in the lightbox", () => {
+  it("opens only safe assistant image URLs in the lightbox", async () => {
     const onOpenImage = vi.fn();
     const renderAssistantImage = (url: string) =>
       renderAssistantMessage(createAssistantMessage([{ type: "image_url", image_url: { url } }]), {
@@ -2559,8 +2584,10 @@ describe("grouped chat rendering", () => {
       });
 
     renderAssistantImage("https://example.com/cat.png");
+    await waitForSolid(() =>
+      expect(view.querySelector(".chat-message-image")).toBeInstanceOf(HTMLImageElement),
+    );
     let image = view.querySelector<HTMLImageElement>(".chat-message-image");
-    expect(image).toBeInstanceOf(HTMLImageElement);
     image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenImage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2571,8 +2598,10 @@ describe("grouped chat rendering", () => {
 
     onOpenImage.mockClear();
     renderAssistantImage("javascript:alert(1)");
+    await waitForSolid(() =>
+      expect(view.querySelector(".chat-message-image")).toBeInstanceOf(HTMLImageElement),
+    );
     image = view.querySelector<HTMLImageElement>(".chat-message-image");
-    expect(image).toBeInstanceOf(HTMLImageElement);
     image!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onOpenImage).not.toHaveBeenCalled();
 

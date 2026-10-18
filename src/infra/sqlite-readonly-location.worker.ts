@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { hostname } from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { deserialize } from "node:v8";
@@ -5,6 +7,11 @@ import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coe
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { parseGatewayLockPayload } from "./gateway-lock-payload.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  resolveGatewayStateOwnerPath,
+} from "./gateway-state-owner.js";
 import { jsonFieldBatches } from "./json-field-transfer.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
@@ -48,8 +55,32 @@ import {
   readDatabaseFileIdentity,
 } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
+import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
 const stagingTokens = new Map<string, SqliteStagingToken>();
+
+// Only this database's recorded process identity can authorize native live reads.
+function hasVerifiedLiveSqliteOwner(databasePath: string): boolean {
+  let owner;
+  try {
+    owner = parseGatewayLockPayload(
+      fs.readFileSync(resolveGatewayStateOwnerPath(databasePath), "utf8"),
+    );
+  } catch {
+    return false;
+  }
+  if (!owner || (owner.role && owner.role !== "gateway" && owner.role !== "agent-embedded")) {
+    return false;
+  }
+  return (
+    readStateLeaseProcessOwnerStatus({
+      pid: owner.pid,
+      host: owner.processNamespace?.host ?? hostname(),
+      startedAt: owner.startTime ?? null,
+      processNamespace: owner.processNamespace,
+    }) === "live"
+  );
+}
 
 // Artifact-preserving sync requests must not open SQLite on the source. Live
 // async backups pin committed pages with a read transaction and may update SHM.
@@ -60,6 +91,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   if (
     (mode !== "sync" &&
       mode !== "async" &&
+      mode !== "metadata" &&
       mode !== "consolidated" &&
       mode !== "reclaim" &&
       !isSqliteSnapshotStagingMode(mode)) ||
@@ -71,10 +103,8 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
     };
   }
   try {
-    if (args.length > 4 || (args[3] !== undefined && mode !== "sync")) {
-      throw new Error(
-        "SQLite source identity is supported only for artifact-preserving sync copies",
-      );
+    if (args.length > 4 || (args[3] !== undefined && mode !== "sync" && mode !== "metadata")) {
+      throw new Error("SQLite source identity is supported only for sync or metadata snapshots");
     }
     const expectedSourceIdentity =
       args[3] === undefined ? undefined : readDatabaseFileIdentity(JSON.parse(args[3]));
@@ -146,6 +176,31 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       // The backup owner admits a child staging token before reading the private
       // WAL family. Parent loss cannot let reclamation race its native backup.
       prepared = await createOnlineReadOnlyBackup(pathname, stagingRoot);
+    } else if (mode === "metadata") {
+      if (!expectedSourceIdentity) {
+        throw new Error("SQLite metadata snapshot requires a captured source identity");
+      }
+      const liveOwner = hasVerifiedLiveSqliteOwner(pathname);
+      assertExistingDatabaseIdentity(
+        pathname,
+        expectedSourceIdentity.key,
+        expectedSourceIdentity.birthtime,
+      );
+      assertStateDatabaseAccessAllowed(pathname);
+      prepared = liveOwner
+        ? await createOnlineReadOnlyBackup(pathname, stagingRoot)
+        : await prepareSqliteReadOnlyCopyInProcess(pathname, stagingRoot, expectedSourceIdentity);
+      try {
+        assertExistingDatabaseIdentity(
+          pathname,
+          expectedSourceIdentity.key,
+          expectedSourceIdentity.birthtime,
+        );
+        assertStateDatabaseAccessAllowed(pathname);
+      } catch (error) {
+        await prepared.cleanupAsync();
+        throw error;
+      }
     } else {
       prepared =
         mode === "sync"
@@ -323,7 +378,7 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = await sqliteReadOnlyOperations.execute(request, {
+          const value = sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
           });

@@ -581,14 +581,6 @@ export class DecisionProviderHost {
   }
 
   private fail(health: Health, reason: ProviderFailureReason, retryAfterMs?: number): void {
-    if (
-      this.health !== health ||
-      getActiveSecretsRuntimeSnapshotRevisionState() !== health.secretRevision ||
-      this.retired ||
-      this.reloadPause
-    ) {
-      return;
-    }
     // The provider resolves credentials per evaluation. Rejecting one credential
     // must not block other agents or a replacement credential at this shared host.
     if (

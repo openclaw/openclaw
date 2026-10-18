@@ -23,7 +23,6 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
-import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
 import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
@@ -370,7 +369,8 @@ function hashToolOutcome(
         : { resultHash: execHash };
     }
   }
-  if (toolName === "write" && isWriteNoProgressOutcome(details)) {
+  // Display text echoes the path; the structured flag owns the no-progress fact.
+  if (toolName === "write" && details.changed === false) {
     return { resultHash: digestToolOutcome({ status: "unchanged" }), noProgress: true };
   }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {

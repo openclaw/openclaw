@@ -2536,6 +2536,7 @@ export const en: TranslationMap & {
     suspending: "Suspending…",
     suspended: "Suspended",
     retryNow: "Retry now",
+    queued: "{count} queued",
     sessionMoveRefreshFailed: "The session move was saved, but refreshing the list failed: {error}",
     sessionMoveUncertain:
       "The session move could not be confirmed. Refresh and check its group before retrying. {error}",

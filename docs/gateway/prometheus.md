@@ -116,6 +116,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_ws_session_event_frames_total`          | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_session_event_bytes_total`           | counter   | `event`, `reason`, `delivery`                                                             |
 | `openclaw_gateway_ws_event_bytes_total`                   | counter   | `event`                                                                                   |
+| `openclaw_gateway_ws_presence_frames_total`               | counter   | `mode`                                                                                    |
+| `openclaw_gateway_ws_presence_bytes_total`                | counter   | `mode`                                                                                    |
 | `openclaw_gateway_ws_operator_connections`                | gauge     | none                                                                                      |
 | `openclaw_gateway_rpc_handler_heap_delta_bytes`           | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_handler_heap_delta_exclusive_total` | counter   | `method`                                                                                  |
@@ -261,6 +263,12 @@ by event name within one event-loop turn while preserving per-socket frame and
 byte totals. Connection counts update on
 connect/disconnect and refresh every 30 seconds so a late-starting exporter or
 dropped snapshot can recover.
+
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic by
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). They count the same accepted per-socket frames and
+encoded bytes as the aggregate counters.
 
 `openclaw_gateway_ws_session_event_frames_total` and
 `openclaw_gateway_ws_session_event_bytes_total` attribute session event traffic

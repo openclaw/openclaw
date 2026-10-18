@@ -698,7 +698,6 @@ describe("chat pane embedded panels", () => {
     const state = createPageState(
       createInitializationContext(),
       {
-        invalidate: vi.fn(),
         afterCommit: () => () => {},
       },
       mount,

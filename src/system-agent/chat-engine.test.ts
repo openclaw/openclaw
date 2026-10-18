@@ -1,13 +1,14 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-model-runtime.types.js";
 import type { SystemAgentSession } from "./agent-turn.js";
-import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
+  mocks,
   operationMocks,
   createSystemAgentVerifiedInferenceTestFixture,
   fakeOverviewLoader,
@@ -16,10 +17,15 @@ import {
   createAmbientVerifiedBinding,
   SystemAgentChatEngine,
   RuntimeSystemAgentChatEngine,
-  runSystemAgentTurnWithDeps,
+  runSystemAgentTurn,
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
+
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 async function driftFixture() {
   let config: OpenClawConfig = {
@@ -44,11 +50,8 @@ async function driftFixture() {
   };
 }
 
-function inferenceDeps(
-  inference: Awaited<ReturnType<typeof createSystemAgentVerifiedInferenceTestFixture>>,
-  config: OpenClawConfig,
-) {
-  return { ...inference.deps, readConfigFileSnapshot: async () => configSnapshot(config) };
+function inferenceDeps(config: OpenClawConfig) {
+  return { readConfigFileSnapshot: async () => configSnapshot(config) };
 }
 
 describe("SystemAgentChatEngine facade", () => {
@@ -61,27 +64,25 @@ describe("SystemAgentChatEngine facade", () => {
       },
     };
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
-    const deps = inferenceDeps(inference, config);
+    const deps = inferenceDeps(config);
     expect(inference.binding.execution.agentId).toBe("alternate");
     const inheritedGeneration = {} as PreparedModelRuntimePluginGeneration;
     const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
     const runEmbeddedAgent = vi.fn(async () => {
       observedGenerations.push(getPreparedModelRuntimePluginGeneration());
-      return { meta: { finalAssistantVisibleText: "ready" } };
+      return { meta: { durationMs: 0, finalAssistantVisibleText: "ready" } };
     });
     const planGreeting = vi.fn(async () => {
       observedGenerations.push(getPreparedModelRuntimePluginGeneration());
       return null;
     });
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    mocks.readConfigFileSnapshot.mockImplementation(deps.readConfigFileSnapshot);
     const engine = new SystemAgentChatEngine({
       requesterAgentId: requester,
       verifiedInference: inference.binding,
       planGreeting,
-      runAgentTurn: (params) =>
-        runSystemAgentTurnWithDeps(params, {
-          ...deps,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-        }),
+      runAgentTurn: runSystemAgentTurn,
       deps: {
         ...deps,
         loadOverview: fakeOverviewLoader(),
@@ -107,12 +108,12 @@ describe("SystemAgentChatEngine facade", () => {
       agents: { defaults: { model: "openai/gpt-5.6-luna" } },
     };
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
-    const deps = inferenceDeps(inference, config);
+    const deps = inferenceDeps(config);
     const planner = vi
       .spyOn(await import("./assistant.js"), "planSystemAgentCommand")
       .mockResolvedValue({ reply: "A second inference ran." });
     const runEmbeddedAgent = vi
-      .fn<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>()
+      .fn<typeof embeddedAgent.runEmbeddedAgent>()
       .mockResolvedValueOnce({
         meta: {
           durationMs: 120_000,
@@ -124,6 +125,8 @@ describe("SystemAgentChatEngine facade", () => {
       })
       .mockResolvedValue({ meta: { durationMs: 1, finalAssistantVisibleText: "Ready to retry." } });
     let failedSession: SystemAgentSession | undefined;
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    mocks.readConfigFileSnapshot.mockImplementation(deps.readConfigFileSnapshot);
     const engine = new SystemAgentChatEngine({
       verifiedInference: inference.binding,
       runAgentTurn: (params) => {
@@ -131,10 +134,7 @@ describe("SystemAgentChatEngine facade", () => {
         params.session.proposalRef.current = "unfinished-proposal";
         params.session.proposalRef.operation = { kind: "setup" };
         params.session.cliSession = { routeKey: "old", binding: { sessionId: "old" } };
-        return runSystemAgentTurnWithDeps(params, {
-          ...deps,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-        });
+        return runSystemAgentTurn(params);
       },
       deps: {
         ...deps,

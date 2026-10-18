@@ -149,6 +149,9 @@ export function requestSharedHistory(
           ...(historyState.sessionInfo
             ? { sessionInfo: historyState.stateRevision.sessionInfo }
             : {}),
+          ...(method === "chat.startup" && historyState.commands
+            ? { commands: historyState.stateRevision.commands }
+            : {}),
         }
       : {};
   requestKey += JSON.stringify(knownState);
@@ -211,6 +214,13 @@ export function requestSharedHistory(
       );
       if (!(isHistoryCursor(response) && response.kind === "reset") && historyState) {
         // Resolve omissions against this request's exact payload, never a later cache write.
+        if (
+          response.metadata &&
+          response.stateRevision?.commands &&
+          response.stateRevision.commands === historyState.stateRevision.commands
+        ) {
+          response.metadata.commands ??= historyState.commands;
+        }
         if (
           response.stateRevision?.pendingInputs &&
           response.stateRevision.pendingInputs === historyState.stateRevision.pendingInputs

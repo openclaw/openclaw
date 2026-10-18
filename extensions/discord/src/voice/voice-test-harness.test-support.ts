@@ -3,7 +3,8 @@ import { VoiceOpcodes } from "discord-api-types/voice/v8";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TranscriptStartRequest } from "openclaw/plugin-sdk/transcripts";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import {
   createDefaultVoiceStates,
@@ -30,6 +31,7 @@ import { voiceTestMocks as mocks } from "./voice-test-mocks.test-support.js";
 const { getDiscordAudioTestWorker } = await import("./audio-worker.test-support.js");
 // Parallel entry points can race Vitest's async audio mock and capture different exports.
 const managerModule = await import("./voice-runtime.js");
+const listenersModule = await import("./listeners.js");
 const realtimeModule = await import("./realtime-session.runtime.js");
 type Manager = InstanceType<typeof managerModule.DiscordVoiceManager>;
 type ManagerParams = ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0];
@@ -37,6 +39,12 @@ type DiscordConfig = ManagerParams["discordConfig"];
 type VoiceConfig = NonNullable<DiscordConfig["voice"]>;
 type AgentProxyConfigOverrides = Omit<Partial<DiscordConfig>, "voice"> & {
   voice?: Partial<VoiceConfig>;
+};
+
+export type DiscordVoiceRecordingFixture = {
+  manager: Manager;
+  onUtterance: Mock<TranscriptStartRequest["onUtterance"]>;
+  entry: VoiceSessionEntry;
 };
 
 const { configureVoiceStateGateway, createClient, createClientWithMember } =
@@ -369,9 +377,11 @@ function buildVoiceTestHarness() {
   };
 
   return {
-    createRecordingFixture: async (config?: AgentProxyConfigOverrides) => {
+    createRecordingFixture: async (
+      config?: AgentProxyConfigOverrides,
+    ): Promise<DiscordVoiceRecordingFixture> => {
       const manager = createAgentProxyManager(undefined, config);
-      const onUtterance = vi.fn();
+      const onUtterance = vi.fn<TranscriptStartRequest["onUtterance"]>();
       expect(await startTranscripts(manager, onUtterance)).toMatchObject({ ok: true });
       return { manager, onUtterance, entry: getSessionEntry(manager) };
     },
@@ -406,6 +416,7 @@ function buildVoiceTestHarness() {
     createDefaultVoiceStates,
     ...mocks,
     managerModule,
+    listenersModule,
     realtimeModule,
     configureVoiceStateGateway,
     createClient,

@@ -371,9 +371,7 @@ describe("worker turn execution", () => {
           ownerEpoch: request.plan.admission.ownerEpoch,
           turnClaim: request.turnClaim,
         });
-        expect(runtime?.getInheritedPublicationToolName()).toBe(
-          declared ? undefined : "github_publish",
-        );
+        expect(runtime?.getInheritedPublicationToolName()).toBeUndefined();
         throw new WorkerRunnerCapacityError();
       });
       const tunnel = createWorkerTurnTunnel({
@@ -456,7 +454,7 @@ describe("worker turn execution", () => {
         expect(authorized).toEqual(
           expect.arrayContaining([...allowed, "sessions_list", "github_identity_status"]),
         );
-        expect(authorized).not.toContain("github_publish");
+        expect(authorized?.includes("github_publish")).toBe(!declared);
         expect(authorize).toHaveBeenCalledExactlyOnceWith(
           request.turnClaim,
           authorized,

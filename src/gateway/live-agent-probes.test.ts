@@ -69,6 +69,7 @@ describe("live-agent-probes", () => {
     const spec = createLiveCronProbeSpec({
       agentId: "codex",
       sessionKey: "agent:codex:acp:test",
+      model: "openai/gpt-5.6-luna@openai:manual",
     });
     const claudeRetryPrompt = buildLiveCronProbeMessage({
       agent: "claude-cli",
@@ -107,12 +108,14 @@ describe("live-agent-probes", () => {
         agentId?: string;
         sessionKey?: string;
         delivery?: { mode?: string };
+        payload?: { model?: string };
       };
     };
     expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
     expect(args.job?.agentId).toBe("codex");
     expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
     expect(args.job?.delivery).toEqual({ mode: "none" });
+    expect(args.job?.payload?.model).toBe("openai/gpt-5.6-luna@openai:manual");
   });
 
   it("builds a cron probe spec when the process clock is outside the Date range", () => {

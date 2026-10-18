@@ -12,7 +12,6 @@ import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { resolveCoreToolFactoryFamily } from "./core-tool-factory-descriptors.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -26,6 +25,7 @@ import {
 import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { resolveCoreToolFactoryFamily } from "./tool-catalog.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,

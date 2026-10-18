@@ -75,29 +75,21 @@ it.each([true, false])(
       let executionError: unknown;
       vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
         try {
-          if (
-            !params.preparedRunAdmission ||
-            !params.replyOperation ||
-            !params.provider ||
-            !params.model ||
-            !params.sessionFile
-          ) {
+          const {
+            preparedRunAdmission,
+            replyOperation: operation,
+            provider,
+            model: modelId,
+            sessionFile,
+          } = params;
+          if (!preparedRunAdmission || !operation || !provider || !modelId || !sessionFile) {
             throw new Error("Missing real reply admission");
           }
-          const operation = params.replyOperation;
           registration.entry.sessionId = params.sessionId;
-          const admittedRunContext = await params.preparedRunAdmission.admit(
-            "embedded",
-            "talk-chat-test",
-          );
+          const admittedRunContext = await preparedRunAdmission.admit("embedded", "talk-chat-test");
           return await withPreparedEmbeddedRunToolAuthority(
-            { admittedRunContext, replyOperation: params.replyOperation },
-            {
-              ...params,
-              provider: params.provider,
-              modelId: params.model,
-              sessionFile: params.sessionFile,
-            },
+            { admittedRunContext, replyOperation: operation },
+            { ...params, provider, modelId, sessionFile },
             undefined,
             async (prepared) => {
               const handle = {
@@ -129,42 +121,42 @@ it.each([true, false])(
               operation.setPhase("running");
               setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
               const runTarget = beforePublication ? queuedTarget : captureTarget();
-              const overlay = (source: "reply" | "attempt" | undefined, current = authority) =>
-                prepareTalkClientControlAuthority({
-                  config,
-                  sessionTarget,
-                  authority: current,
-                  source,
-                  agentRuntime: createPluginRuntime().agent,
-                });
-              const steer = (incoming: ReturnType<typeof overlay>) =>
+              const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
                 controlRealtimeVoiceAgentRun({
                   sessionKey: sessionTarget.canonicalKey,
                   runTarget,
                   text: "use the release branch",
-                  getToolAuthorityOverlay: () => incoming,
+                  getToolAuthorityOverlay: () => {
+                    const overlay = prepareTalkClientControlAuthority({
+                      config,
+                      sessionTarget,
+                      authority: current,
+                      source,
+                      agentRuntime: createPluginRuntime().agent,
+                    });
+                    if (source !== "reply") {
+                      expect(overlay.traceAuthorized).toBe(false);
+                    }
+                    return overlay;
+                  },
                 });
               try {
                 // This is the old direct-voice overlay; it truthfully lacks GA trace/reviewer/client facts.
-                await expect(steer(overlay("attempt"))).resolves.toMatchObject({
+                await expect(steer("attempt")).resolves.toMatchObject({
                   queued: false,
                   reason: "tool_authority_mismatch",
                 });
-                await expect(steer(overlay(runTarget?.toolAuthoritySource))).resolves.toMatchObject(
-                  {
-                    queued: true,
-                  },
-                );
+                await expect(steer(runTarget?.toolAuthoritySource)).resolves.toMatchObject({
+                  queued: true,
+                });
                 const weaker = sharingPolicyClient({
                   deviceId: "caller-device",
                   scopes: ["operator.read"],
                 });
                 await expect(
                   steer(
-                    overlay(
-                      runTarget?.toolAuthoritySource,
-                      resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
-                    ),
+                    runTarget?.toolAuthoritySource,
+                    resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
                   ),
                 ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
                 expect(queueMessage).toHaveBeenCalledOnce();

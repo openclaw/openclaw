@@ -1,55 +1,17 @@
 import assert from "node:assert/strict";
-import type { EventFrame } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { GatewayProtocolClient, type GatewayProtocolSocketHandlers } from "./protocol-client.js";
-
-type SyntheticGatewayProtocolConnection = {
-  handlers: GatewayProtocolSocketHandlers;
-  send: ReturnType<typeof vi.fn<(data: string) => void>>;
-  close: ReturnType<typeof vi.fn<(code?: number, reason?: string) => void>>;
-};
-
-function createSyntheticGatewayProtocol(options?: {
-  onEvent?: (event: EventFrame) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-}): {
-  client: GatewayProtocolClient<Record<string, never>>;
-  connections: SyntheticGatewayProtocolConnection[];
-} {
-  const connections: SyntheticGatewayProtocolConnection[] = [];
-  let nextRequestId = 0;
-  const client = new GatewayProtocolClient<Record<string, never>>({
-    createSocket: (handlers) => {
-      let open = true;
-      const send = vi.fn<(data: string) => void>();
-      const close = vi.fn<(code?: number, reason?: string) => void>((code, reason) => {
-        open = false;
-        handlers.close(code ?? 1000, reason ?? "");
-      });
-      connections.push({ handlers, send, close });
-      return {
-        isOpen: () => open,
-        send: (data) => send(data),
-        close: (code, reason) => close(code, reason),
-      };
-    },
-    createRequestId: () => `request-${++nextRequestId}`,
-    buildConnectPlan: () => ({}),
-    buildConnectParams: (plan) => plan,
-    resolveClose: () => ({ retry: true, notify: true }),
-    onEvent: options?.onEvent,
-    onGap: options?.onGap,
-    handshake: { mode: "require-challenge", timeoutMs: 100 },
-    reconnect: { initialMs: 10, multiplier: 2, maxMs: 100 },
-  });
-  return { client, connections };
-}
+import {
+  createProtocolHarness as createSyntheticGatewayProtocol,
+  receive,
+  stopProtocolClients,
+} from "./protocol-client.test-support.js";
 
 describe("GatewayProtocolClient lifecycle and event delivery", () => {
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
   });
   afterEach(() => {
+    stopProtocolClients();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -79,71 +41,53 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
       // A real WebSocket's close notification arrives after close() returns.
       connection.close.mockImplementation(() => {});
 
-      connection.handlers.message(
-        JSON.stringify({
-          type: "event",
-          event: "board.command",
-          payload: { command: "retired" },
-          seq: 1,
-        }),
-      );
+      receive(connection, {
+        type: "event",
+        event: "board.command",
+        payload: { command: "retired" },
+        seq: 1,
+      });
 
       expect(onEvent).toHaveBeenCalledOnce();
       expect(firstListener).toHaveBeenCalledTimes(firstListenerCalls);
       expect(staleListener).not.toHaveBeenCalled();
       expect(connection.close).toHaveBeenCalledOnce();
-      client.stop();
     },
   );
 
-  test.each([{ replacement: "the same callback", reuseCallback: true }])(
-    "does not revive a removed subscription replaced with $replacement",
-    ({ reuseCallback }) => {
-      const removedListener = vi.fn();
-      const addedListener = removedListener;
-      let removeListener = () => {};
-      let isFirstEvent = true;
-      const onEvent = vi.fn(() => {
-        if (isFirstEvent) {
-          isFirstEvent = false;
-          removeListener();
-          client.addEventListener(addedListener);
-        }
-      });
-      const { client, connections } = createSyntheticGatewayProtocol({ onEvent });
-      removeListener = client.addEventListener(removedListener);
-      client.start();
-      const connection = connections[0];
-      if (!connection) {
-        throw new Error("synthetic protocol connection missing");
+  test("does not revive a removed subscription replaced with the same callback", () => {
+    const listener = vi.fn();
+    let removeListener = () => {};
+    let isFirstEvent = true;
+    const onEvent = vi.fn(() => {
+      if (isFirstEvent) {
+        isFirstEvent = false;
+        removeListener();
+        client.addEventListener(listener);
       }
+    });
+    const { client, connections } = createSyntheticGatewayProtocol({ onEvent });
+    removeListener = client.addEventListener(listener);
+    client.start();
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("synthetic protocol connection missing");
+    }
 
-      connection.handlers.message(
-        JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-      );
+    receive(connection, { type: "event", event: "board.changed", payload: {}, seq: 1 });
 
-      expect(removedListener).not.toHaveBeenCalled();
-      expect(addedListener).not.toHaveBeenCalled();
+    expect(listener).not.toHaveBeenCalled();
 
-      connection.handlers.message(
-        JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 2 }),
-      );
+    receive(connection, { type: "event", event: "board.changed", payload: {}, seq: 2 });
 
-      expect(addedListener).toHaveBeenCalledOnce();
-      if (!reuseCallback) {
-        expect(removedListener).not.toHaveBeenCalled();
-      }
+    expect(listener).toHaveBeenCalledOnce();
 
-      // Calling the retired subscription's disposer cannot remove its replacement.
-      removeListener();
-      connection.handlers.message(
-        JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 3 }),
-      );
+    // Calling the retired subscription's disposer cannot remove its replacement.
+    removeListener();
+    receive(connection, { type: "event", event: "board.changed", payload: {}, seq: 3 });
 
-      expect(addedListener).toHaveBeenCalledTimes(2);
-      client.stop();
-    },
-  );
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
 
   test.each(["replace", "reconnect"])(
     "drops gapped frames during %s recovery",
@@ -162,9 +106,7 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
       client.start();
       const first = connections[0];
       assert(first);
-      first.handlers.message(
-        JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 1 }),
-      );
+      receive(first, { type: "event", event: "board.changed", payload: {}, seq: 1 });
       onEvent.mockClear();
       listener.mockClear();
       const gapped = {
@@ -176,25 +118,21 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
             : { command: "stale" },
         seq: 3,
       };
-      first.handlers.message(JSON.stringify(gapped));
+      receive(first, gapped);
       expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 2, received: 3 });
       expect(onEvent).not.toHaveBeenCalled();
       expect(listener).not.toHaveBeenCalled();
       expect(connections).toHaveLength(recovery === "replace" ? 2 : 1);
       if (recovery === "reconnect") {
         expect(first.close).toHaveBeenCalledExactlyOnceWith(4000, "event sequence gap");
-        first.handlers.message(
-          JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 4 }),
-        );
+        receive(first, { type: "event", event: "board.changed", payload: {}, seq: 4 });
         expect(onGap).toHaveBeenCalledOnce();
         expect(onEvent).not.toHaveBeenCalled();
         expect(listener).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(10);
       }
       {
-        first.handlers.message(
-          JSON.stringify({ type: "event", event: "board.changed", payload: {}, seq: 10 }),
-        );
+        receive(first, { type: "event", event: "board.changed", payload: {}, seq: 10 });
         expect(onEvent).not.toHaveBeenCalled();
         const replacement = connections[1];
         assert(replacement);
@@ -211,12 +149,11 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
                   message: { role: "assistant", content: "complete prefix and suffix" },
                 },
               };
-        replacement.handlers.message(JSON.stringify(fresh));
+        receive(replacement, fresh);
         expect(onGap).toHaveBeenCalledOnce();
         expect(onEvent).toHaveBeenCalledExactlyOnceWith(fresh);
         expect(listener).toHaveBeenCalledExactlyOnceWith(fresh);
       }
-      client.stop();
     },
   );
 
@@ -233,22 +170,18 @@ describe("GatewayProtocolClient lifecycle and event delivery", () => {
     client.start();
     const connection = connections[0];
     assert(connection);
-    connection.handlers.message(
-      JSON.stringify({ type: "event", event: "board.changed", seq: 1, payload: {} }),
-    );
+    receive(connection, { type: "event", event: "board.changed", seq: 1, payload: {} });
     calls.length = 0;
-    connection.handlers.message(
-      JSON.stringify({
-        type: "event",
-        event: "chat",
-        seq: 3,
-        payload: {
-          runId: "run",
-          state: "aborted",
-          message: { role: "assistant", content: "complete" },
-        },
-      }),
-    );
+    receive(connection, {
+      type: "event",
+      event: "chat",
+      seq: 3,
+      payload: {
+        runId: "run",
+        state: "aborted",
+        message: { role: "assistant", content: "complete" },
+      },
+    });
     expect(calls).toEqual(["event", "listener", "gap"]);
     expect(connection.close).toHaveBeenCalledOnce();
   });

@@ -450,6 +450,11 @@ vi.mock("../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: vi.fn(),
 }));
 
+// mock-isolation: CLI routing uses fixture fetch results without the network, cache, and secret-owner runtime.
+vi.mock("../agents/tools/web-fetch.js", () => ({
+  createWebFetchTool: vi.fn(),
+}));
+
 describe("capability cli", () => {
   it.each([
     {
@@ -2242,6 +2247,74 @@ describe("capability cli", () => {
       }),
     );
   });
+
+  it.each([
+    { format: undefined, provider: undefined },
+    { format: "text", provider: "firecrawl" },
+  ])("fetches through the default tool with $format output", async ({ format, provider }) => {
+    const config = { tools: { web: { fetch: { maxChars: 1200 } } } };
+    const resolvedConfig = { ...config, resolved: true };
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig,
+      effectiveConfig: resolvedConfig,
+      diagnostics: [],
+    });
+    const result = {
+      title: "Example Domain",
+      text: "Example content",
+      externalContent: { untrusted: true, source: "web_fetch", wrapped: true, provider },
+    };
+    const execute = vi.fn(async () => ({ content: [], details: result }));
+    const { createWebFetchTool } = await import("../agents/tools/web-fetch.js");
+    vi.mocked(createWebFetchTool).mockReturnValueOnce({ execute } as never);
+
+    await runCap(
+      "infer",
+      "web",
+      "fetch",
+      "--url",
+      "https://example.com",
+      ...(format ? ["--format", format] : []),
+      "--json",
+    );
+
+    expect(createWebFetchTool).toHaveBeenCalledWith({ config: resolvedConfig });
+    expect(execute).toHaveBeenCalledExactlyOnceWith("infer-web-fetch", {
+      url: "https://example.com",
+      extractMode: format,
+    });
+    expect(firstJsonOutput()).toEqual({
+      ok: true,
+      capability: "web.fetch",
+      transport: "local",
+      provider: provider ?? "direct",
+      attempts: [],
+      outputs: [{ result }],
+    });
+  });
+
+  it.each([undefined, "firecrawl"])(
+    "rejects disabled web fetch with provider %s",
+    async (provider) => {
+      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
+
+      await expect(
+        runCap(
+          "infer",
+          "web",
+          "fetch",
+          "--url",
+          "https://example.com",
+          ...(provider ? ["--provider", provider] : []),
+          "--json",
+        ),
+      ).rejects.toThrow("exit 1");
+
+      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

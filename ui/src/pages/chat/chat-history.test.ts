@@ -36,7 +36,6 @@ function createState(history: ChatHistoryResult) {
     connectionEpoch: 1,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
-    requestUpdate: vi.fn(),
   });
 }
 function activeHistory(runId: string) {

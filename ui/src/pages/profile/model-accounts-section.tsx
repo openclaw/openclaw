@@ -327,7 +327,7 @@ export function ModelAccountsSection(props: StateProps) {
   const person = () =>
     snapshot().selfUser?.id === state().props.identityId ? snapshot().selfUser : null;
   const personLabel = () =>
-    person()
+    person() || state().target
       ? state().props.personLabel ||
         person()?.name ||
         person()?.email ||
@@ -358,7 +358,7 @@ export function ModelAccountsSection(props: StateProps) {
           <button
             type="button"
             class="btn btn--sm profile-auth-accounts-refresh"
-            disabled={state().inventoryLoading}
+            disabled={!state().connected || state().inventoryLoading}
             onClick={() => void state().loadAccounts()}
           >
             {t("common.refresh")}

@@ -4,7 +4,10 @@ import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSlackListenerWriteClient } from "./client.js";
-import { buildSlackMessageIdentityPayload } from "./post-message-identity.js";
+import {
+  buildSlackMessageIdentityPayload,
+  hasSlackMessageIdentity,
+} from "./post-message-identity.js";
 import type { SlackSendIdentity } from "./send.js";
 import { SlackStreamProjection } from "./streaming-projection.js";
 
@@ -93,6 +96,7 @@ const recoveryBySession = new WeakMap<
     client: WebClient;
     projection: SlackStreamProjection;
     updating: boolean;
+    preserveIdentity: boolean;
   }
 >();
 
@@ -173,6 +177,17 @@ async function recoverExpiredSlackStream(
     !recovery
   ) {
     return false;
+  }
+  if (recovery.preserveIdentity) {
+    // chat.update cannot carry username/icon overrides. Retire the expired
+    // stream so the caller sends only its unacknowledged tail through the
+    // ordinary identity-aware delivery owner instead of rewriting authorship.
+    session.stopped = true;
+    releaseSlackStream(session);
+    if (session.pendingText) {
+      throw new SlackStreamNotDeliveredError(session.pendingText, "message_not_in_streaming_state");
+    }
+    throw error;
   }
   recovery.updating = true;
   await updateSlackStreamMessage(session, metadata);
@@ -263,6 +278,7 @@ export async function startSlackStream(
     client: writeClient,
     projection: new SlackStreamProjection(taskDisplayMode),
     updating: false,
+    preserveIdentity: hasSlackMessageIdentity(identity),
   });
   // Stop events carry the listener identity; the derived writer only owns I/O.
   const state = getSlackClientStreams(client);

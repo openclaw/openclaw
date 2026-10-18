@@ -501,6 +501,7 @@ export function createAgentsPageState(
     githubIdentity.sync({
       client: state.client,
       connected: state.connected,
+      permissionsReady: snapshot.phase === "connected" && Boolean(snapshot.hello),
       target: agentId
         ? {
             kind: "shared",

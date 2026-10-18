@@ -37,6 +37,10 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
 
 /** Internal Doctor custody; never part of the plugin-facing database options. */
 export type OpenClawAgentDatabaseRepairAdmission = {
+  /** Doctor's requested SQLite coverage; ordinary runtime admission retains FULL. */
+  integrityCheck?: "quick" | "full";
+  /** Tables this repair callback mutates; pending schema migrations retain their own coverage. */
+  integrityTables?: readonly string[];
   /** Bind repair admission to the physical database inspected and backed up by its owner. */
   expectedIdentity?: DatabaseFileIdentity;
   /** Live caller authority for native open and schema/registry admission mutations. */

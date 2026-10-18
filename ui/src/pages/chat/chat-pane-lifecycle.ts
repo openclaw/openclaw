@@ -91,12 +91,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               state,
               linkReaders: availableLinkReaders(this.context.gateway.snapshot),
               pluginPanels: this.context.plugins.registrations("panels").map((entry) => entry.key),
-              updateComplete: this.updateComplete,
+              awaitDomCommit: () => this.awaitDomCommit(),
             }
           : null;
       },
-      pending: this.pendingPanelToggleRequests,
-      requestUpdate: () => this.invalidate(),
+      pending: this.pendingPanelToggles,
       updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
     });
 
@@ -207,7 +206,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.stagedAttachmentGatewayOwner ??= this.context.gateway.snapshot.client;
     focusBrowserAnnotationComposerAfterUpdate({
       composer: () => getChatComposerState(this.presentationId).composerTextarea,
-      updateComplete: this.updateComplete,
+      updateComplete: this.awaitDomCommit(),
     });
   }
 
@@ -261,7 +260,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     super.start();
     const mountGatewayOwner = this.context.gateway.snapshot.client;
     this.stagedAttachmentGatewayOwner = mountGatewayOwner;
-    this.invalidate();
     if (typeof ResizeObserver === "function") {
       this.paneResizeObserver = new ResizeObserver((entries) => {
         const width = entries.at(-1)?.contentRect.width;
@@ -269,7 +267,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
           this.transcript.syncViewportGeometry();
           this.paneWidth = width;
-          this.invalidate();
         }
       });
       this.paneResizeObserver.observe(this.element);
@@ -295,7 +292,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pageState.chatMetadataIsPresented = () =>
       this.presented && document.visibilityState !== "hidden";
     const refreshPresentedReads = () => {
-      this.invalidate();
       if (pageState.chatMetadataIsPresented?.()) {
         void refreshChatMetadata(pageState, { automatic: true });
         this.resumeDeferredSessionHydration();
@@ -421,6 +417,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         this.synchronizeSessionObservation();
         const agentChanged = this.state?.assistantAgentId !== previousAgentId;
         if (agentChanged) {
+          this.refreshBoardSubscriptions();
           this.swarm.hydrator?.dispose();
           this.swarm.hydrator = null;
         }
@@ -441,8 +438,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         if (state && modelAuthEventInvalidates(event)) {
           state.modelAuthStatusResult = null;
           state.modelAuthStatusError = null;
-          this.invalidate();
-          void refreshChatModelAuthStatus(state).finally(() => this.invalidate());
+          void refreshChatModelAuthStatus(state);
         }
         if (
           state &&
@@ -495,8 +491,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
           handlePageGatewayEvent(state, event, () => this.presented);
           if (event.event === "node.runnerInventory.changed") {
-            this.activeSessionResources.invalidate();
-            this.invalidate();
+            this.activeSessionResources.reconcileObservation();
           }
         }
       }),
@@ -574,16 +569,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // would vanish instead of offering a retry, and the accepted prompt would
         // stay hidden until the transcript bootstrap resolved.
         const rejectedTurn = admitInitialTurnHandoff(this.state, nextSessionKey);
-        const acceptedPrompt = admitChatSubmission(
-          this.state,
-          getChatPendingInputs(this.state)?.page.items,
-        );
+        admitChatSubmission(this.state, getChatPendingInputs(this.state)?.page.items);
         if (rejectedTurn) {
           this.state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
           this.state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-        }
-        if (rejectedTurn || acceptedPrompt) {
-          this.invalidate();
         }
       }
       if (nextSessionKey) {

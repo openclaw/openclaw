@@ -9,7 +9,6 @@ import type {
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,
-  SessionUsageTimePoint,
 } from "./data-types.ts";
 import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
@@ -49,8 +48,6 @@ export type UsageRouteData = {
   loadedAtMs: number | null;
   error: string | null;
 };
-
-export type TimeSeriesPoint = SessionUsageTimePoint;
 
 type UsageDataState = {
   loading: boolean;

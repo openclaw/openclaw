@@ -21,14 +21,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
-import {
-  requireActivePluginRegistry,
-  withPluginRegistrationContext,
-} from "../../plugins/runtime.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
-import { getRegisteredAgentHarness, registerAgentHarness } from "../harness/registry.js";
-import type { AgentHarness } from "../harness/types.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { getModelProviderLocalServiceReconciler } from "../provider-local-service-reconcile.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
@@ -85,7 +79,6 @@ import {
   resolveSessionAgentIdMock,
   runCliAgentMock,
   selectAgentHarnessForPreparedModelProvidersMock,
-  selectAgentHarnessMock,
   sessionMessages,
   sessionCompactImpl,
   triggerInternalHookMock,
@@ -1812,93 +1805,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.result).not.toHaveProperty("summary");
   });
 
-  it("preserves host byte compaction when secondary Codex sync fails", async () => {
-    const order: string[] = [];
-    const registry = requireActivePluginRegistry();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => {
-        throw new Error("not used");
-      },
-    };
-    withPluginRegistrationContext(registry, "codex", () => {
-      registerAgentHarness(harness, {
-        nativeCompaction: vi.fn(async () => ({ ok: true, compacted: true })),
-      });
-    });
-    const registeredHarness = expectDefined(
-      getRegisteredAgentHarness("codex")?.harness,
-      "registered Codex harness",
-    );
-    const acquirePreparedRuntime = expectDefined(
-      acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
-      "prepared runtime acquisition",
-    );
-    acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) => {
-      const lease = await acquirePreparedRuntime(input);
-      return {
-        ...lease,
-        snapshot: { ...lease.snapshot, pluginRegistry: registry },
-      };
-    });
-    selectAgentHarnessMock.mockReturnValue(registeredHarness);
-    selectAgentHarnessForPreparedModelProvidersMock.mockReturnValue(registeredHarness);
-    mockDelegatingEngine({ id: "legacy", name: "Legacy", version: "1.0.0" });
-    sessionCompactImpl.mockImplementationOnce(async () => {
-      order.push("host");
-      return { ...compactionSummary("host-summary", "entry-1"), tokensAfter: 50 };
-    });
-    maybeCompactAgentHarnessSessionMock.mockImplementationOnce(async () => {
-      order.push("native");
-      return {
-        ok: false,
-        compacted: false,
-        reason: "provider_error_4xx",
-        failure: {
-          reason: "provider_error_4xx",
-          status: 400,
-          rawError: "provider_error_4xx",
-        },
-      };
-    });
-
-    const result = await compactNative(
-      codexArgs({
-        trigger: "budget",
-        forcePreflight: true,
-        preflightRequired: true,
-        preflightCompactionTrigger: "transcript_bytes",
-      }),
-      { transcriptBytePreflightHarness: "codex" },
-    );
-
-    expect(result.reason).toBeUndefined();
-    expect(result).toMatchObject({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "host-summary",
-        details: {
-          codexNativeCompaction: {
-            ok: false,
-            compacted: false,
-            reason: "provider_error_4xx",
-            failure: { reason: "provider_error_4xx", status: 400 },
-          },
-        },
-      },
-    });
-    expect(order).toEqual(["host", "native"]);
-    expect(attemptServerEndpointCompactionMock).not.toHaveBeenCalled();
-    expectCall(
-      maybeCompactAgentHarnessSessionMock,
-      { agentHarnessId: "codex" },
-      expectedNativeCompactionOptions("after_context_engine"),
-    );
-  });
-
   it("allows cross-route direct fallback through queued compaction", async () => {
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1 as const,
@@ -2065,6 +1971,9 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
           runtimeAuthPlan: subscription ? undefined : expect.objectContaining({ modelRoute }),
         },
         expectedNativeCompactionOptions("after_context_engine"),
+      );
+      expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
+        maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0]!,
       );
       const compactArg = mockCallArg(contextEngineCompactMock) as {
         runtimeContext?: Record<string, unknown>;

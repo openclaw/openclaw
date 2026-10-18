@@ -1,10 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import {
-  buildSourceConversationContext,
-  buildGroupChatContext,
-  buildGroupIntro,
-} from "../../auto-reply/reply/groups.js";
+import { buildSourceConversationContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -380,13 +376,7 @@ it.each([
     };
     const normalContext = [
       buildInboundMetaSystemPrompt(ctx, {}),
-      shared
-        ? buildGroupChatContext({
-            sessionCtx: ctx,
-          })
-        : buildSourceConversationContext({
-            sessionCtx: ctx,
-          }),
+      buildSourceConversationContext({ sessionCtx: ctx }),
       shared && buildGroupIntro({ activation: "always", defaultActivation: "mention" }),
     ]
       .filter(Boolean)
