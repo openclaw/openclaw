@@ -13,6 +13,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -42,6 +44,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -56,6 +59,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
@@ -962,6 +966,35 @@ class WearChatEventFlowTest {
       runId?.let { put("runId", it) }
       put("text", text)
     }
+
+  @Test
+  fun fixtureDrainsOnlyItsOwnBackgroundLoopers() {
+    val earlierThread = HandlerThread("earlier-fixture").apply { start() }
+    var currentThread: HandlerThread? = null
+    val earlierRan = AtomicBoolean(false)
+    try {
+      val earlierLooper = earlierThread.looper
+      shadowOf(earlierLooper).pause()
+      Handler(earlierLooper).post { earlierRan.set(true) }
+      withFlow { flow ->
+        assertFalse("An earlier fixture's work was drained", earlierRan.get())
+        val thread = HandlerThread("current-fixture").apply { start() }
+        currentThread = thread
+        val currentLooper = thread.looper
+        shadowOf(currentLooper).pause()
+        val currentRan = AtomicBoolean(false)
+        Handler(currentLooper).post { currentRan.set(true) }
+        flow.idle()
+        assertTrue("Current fixture work was not drained", currentRan.get())
+        assertFalse("An earlier fixture's work was drained", earlierRan.get())
+      }
+    } finally {
+      val threads = listOfNotNull(currentThread, earlierThread)
+      threads.forEach { it.quitSafely() }
+      threads.forEach { it.join(5_000) }
+      threads.forEach { assertFalse("Fixture thread did not stop", it.isAlive) }
+    }
+  }
 
   private fun withFlow(block: (Flow) -> Unit) {
     val flow = Flow()
@@ -2708,6 +2741,7 @@ class WearChatEventFlowTest {
     }
 
   private class Flow {
+    private val existingLoopers = ShadowLooper.getAllLoopers().toSet()
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private var originalScale: Float? = null
     private val owner =
@@ -2776,7 +2810,8 @@ class WearChatEventFlowTest {
         shadowOf(Looper.getMainLooper()).idle()
         ShadowLooper
           .getAllLoopers()
-          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          // Earlier fixtures can leave a shutdown Looper whose thread is still alive.
+          .filter { it != Looper.getMainLooper() && it !in existingLoopers && it.thread.isAlive }
           .forEach { shadowOf(it).idle() }
       }
     }
