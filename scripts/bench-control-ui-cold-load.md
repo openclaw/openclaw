@@ -78,6 +78,10 @@ snapshots of the affected rows, chat viewers, and streaming text; `run-N.live.pn
 shows the synthetic final state. Row attachment and viewport visibility distinguish
 an absent row from a rendered row below the fold.
 
+`live.milliseconds` records Chrome's task, scripting, layout, and style CPU deltas across the
+replay. For unprofiled comparisons, divide `ScriptDuration` by `sentEvents` to report scripting
+milliseconds per event; keep sampled CPU captures separate.
+
 For the Solid sidebar, `solidSidebar.lifecycle` separately counts owner
 `invalidate` calls and `prepareRender`/`commitRender` projection lifecycle
 passes. Bounded owner and session-data origin stacks identify their callers. These

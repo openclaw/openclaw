@@ -99,6 +99,7 @@ import {
   sidebarRowsInputs,
   type SidebarProjectionHost,
   SidebarProjectionMemo,
+  SidebarSessionRowProjection,
 } from "./sidebar-projection-memo.ts";
 import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 
@@ -281,7 +282,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       .map((catalog) => catalog.id);
   };
 
-  private readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
+  private readonly rowProjection = new SidebarSessionRowProjection();
   readonly attentionQuestions = createQuestionPromptState(() => {});
   declare attention: SessionAttention;
 
@@ -365,7 +366,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
         projectSidebarNavigation(
           this,
           createSidebarSessionRowsComparator(this.readSidebarSessionSortOptions),
-          this.runtimeSampledAtByRow,
+          this.rowProjection,
           (row) => this.attention.resolveSessionAgentStatus(row)?.note,
         ),
     );

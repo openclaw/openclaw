@@ -87,6 +87,29 @@ export class SidebarProjectionMemo<T> {
   }
 }
 
+/** Formatting belongs to a row's lifetime, not the lifetime of a list publication. */
+export class SidebarSessionRowProjection {
+  readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
+  private readonly rows = new WeakMap<
+    GatewaySessionRow,
+    [SidebarProjectionMemo<SidebarRecentSession>, SidebarProjectionMemo<SidebarRecentSession>]
+  >();
+
+  read(
+    row: GatewaySessionRow,
+    isChild: boolean,
+    inputs: readonly unknown[],
+    project: () => SidebarRecentSession,
+  ): SidebarRecentSession {
+    let memos = this.rows.get(row);
+    if (!memos) {
+      memos = [new SidebarProjectionMemo(), new SidebarProjectionMemo()];
+      this.rows.set(row, memos);
+    }
+    return memos[isChild ? 1 : 0].read(() => inputs, project);
+  }
+}
+
 export function sidebarNavigationInputs(
   host: SidebarProjectionHost,
   result: SessionsListResult | null,
@@ -200,7 +223,7 @@ export function memoizedSidebarSections(
 export function projectSidebarNavigation(
   host: SidebarProjectionHost,
   compareSessions: (a: GatewaySessionRow, b: GatewaySessionRow) => number,
-  runtimeSampledAtByRow: WeakMap<GatewaySessionRow, number>,
+  rowProjection: SidebarSessionRowProjection,
   resolveAgentStatusNote: (row: GatewaySessionRow) => string | undefined,
 ) {
   const roster = host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
@@ -222,7 +245,7 @@ export function projectSidebarNavigation(
     statusFilter: host.sessionsStatusFilter,
     compareSessions,
     highlightCurrentSession: isSessionRouteId(host.activeRouteId) && !creating,
-    runtimeSampledAtByRow,
+    rowProjection,
     loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
     outboxAttentionCountForSessionKey: (key) =>
       host.storedOutboxes?.attentionCountForSession(key) ?? 0,
