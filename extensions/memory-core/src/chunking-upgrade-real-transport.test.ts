@@ -1,4 +1,4 @@
-// Exercise format-upgrade fallback through real HTTP, retry policy, and SQLite.
+import { once } from "node:events";
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -29,11 +29,6 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 
 type ServerMode = "ok" | "unauthorized" | "quota";
 
-type CapturedRequest = {
-  status: number;
-  body: Record<string, unknown>;
-};
-
 const closeServers: Array<() => Promise<void>> = [];
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -58,7 +53,7 @@ function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
 }
 
 async function startEmbeddingServer() {
-  const requests: CapturedRequest[] = [];
+  const requests: Array<{ status: number; body: Record<string, unknown> }> = [];
   let mode: ServerMode = "ok";
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
@@ -93,13 +88,9 @@ async function startEmbeddingServer() {
       }
     })();
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
   const address = server.address() as AddressInfo;
   const fixture = {
     baseUrl: `http://127.0.0.1:${address.port}/v1`,
@@ -118,18 +109,9 @@ async function startEmbeddingServer() {
 
 vi.setConfig({ testTimeout: 240_000 });
 
-afterAll(() => {
-  vi.resetConfig();
-});
-
 let root = "";
 let workspace = "";
 let memory = "";
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
-
-const setStateDir = (stateDir: string): void => {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-};
 
 async function acquireManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
   const result = await getMemorySearchManager({
@@ -164,8 +146,7 @@ function createConfig(params: {
   } as OpenClawConfig);
 }
 
-// Seeds a published index, then reopens its metadata as an older runtime's
-// index so the next search sees a pending OpenClaw format upgrade.
+// Downgrade published metadata so the next search must upgrade the index.
 async function seedPriorFormatIndex(
   cfg: OpenClawConfig,
   version: "chunkingVersion" | "embeddingInputFormatVersion" = "chunkingVersion",
@@ -180,33 +161,21 @@ async function seedPriorFormatIndex(
   await closeAllMemorySearchManagers();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
-  const db = new DatabaseSync(dbPath);
-  try {
-    const row = db
-      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
-      .get();
-    if (typeof row?.value !== "string") {
-      throw new Error("fixture index metadata is missing");
-    }
-    const meta = JSON.parse(row.value) as Record<string, unknown>;
-    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
-      JSON.stringify({
-        ...meta,
-        [version]: version === "chunkingVersion" ? MEMORY_CHUNKING_VERSION - 1 : 0,
-      }),
-    );
-  } finally {
-    db.close();
+  using db = new DatabaseSync(dbPath);
+  const row = db
+    .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+    .get();
+  if (typeof row?.value !== "string") {
+    throw new Error("fixture index metadata is missing");
   }
+  const meta = JSON.parse(row.value) as Record<string, unknown>;
+  db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+    JSON.stringify({
+      ...meta,
+      [version]: version === "chunkingVersion" ? MEMORY_CHUNKING_VERSION - 1 : 0,
+    }),
+  );
   return dbPath;
-}
-
-function createMemorySearchToolFor(cfg: OpenClawConfig) {
-  const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
-  if (!tool) {
-    throw new Error("memory_search tool missing");
-  }
-  return tool;
 }
 
 async function prepareUpgrade(
@@ -223,8 +192,12 @@ async function prepareUpgrade(
 }
 
 async function searchTool(cfg: OpenClawConfig, query: string) {
+  const tool = createMemorySearchTool({ config: cfg, agentId: "main", oneShotCliRun: true });
+  if (!tool) {
+    throw new Error("memory_search tool missing");
+  }
   try {
-    return await createMemorySearchToolFor(cfg).execute(query, { query, corpus: "memory" });
+    return await tool.execute(query, { query, corpus: "memory" });
   } finally {
     await closeAllMemorySearchManagers();
     closeOpenClawAgentDatabasesForTest();
@@ -251,6 +224,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  vi.resetConfig();
   if (root) {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -260,7 +234,7 @@ beforeEach(async () => {
   testing.resetMemorySearchToolCooldowns();
   rmSync(workspace, { recursive: true, force: true });
   mkdirSync(memory, { recursive: true });
-  setStateDir(path.join(workspace, ".state-memory-index"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspace, ".state-memory-index"));
   await configureMemoryCoreDreamingStateForTests();
 });
 
@@ -272,11 +246,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetMemoryCoreDreamingStateForTests();
-  if (originalStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalStateDir);
-  }
+  vi.unstubAllEnvs();
 });
 
 it.each([
@@ -303,13 +273,9 @@ it.each([
   const dbPath = await prepareUpgrade(seedCfg, "UpgradeKeywordFallback", version);
   if (mode === "missing-fts") {
     // A view occupies the FTS name, preventing schema repair during republish.
-    const sabotaged = new DatabaseSync(dbPath);
-    try {
-      sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
-      sabotaged.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
-    } finally {
-      sabotaged.close();
-    }
+    using sabotaged = new DatabaseSync(dbPath);
+    sabotaged.exec("DROP TABLE IF EXISTS memory_index_chunks_fts");
+    sabotaged.exec("CREATE VIEW memory_index_chunks_fts AS SELECT 1 AS text");
   }
   server.setMode("unauthorized");
   const result = await searchTool(cfg, "UpgradeKeywordFallback");
@@ -337,8 +303,6 @@ it("keeps keyword results readable when a real quota-exhausted server rate-limit
   server.setMode("quota");
   const manager = await acquireManager(cfg);
   try {
-    // A real quota rejection rate-limits the rebuild over the wire while the
-    // published keyword index stays readable.
     const results = await manager.search("UpgradeQuotaFallback");
     expect(results).toEqual(
       expect.arrayContaining([expect.objectContaining({ path: "memory/UpgradeQuotaFallback.md" })]),
