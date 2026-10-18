@@ -173,8 +173,6 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|2",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
-        // The worker spy saves postMessage unbound, then Reflect.apply preserves each receiver.
-        "src/config/sessions/session-native-binding.execution.test-support.ts|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.

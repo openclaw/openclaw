@@ -2595,6 +2595,7 @@ export const en: TranslationMap & {
     common: {
       emptyValue: "—",
       unknown: "unknown",
+      atLeast: "≥ {value}",
     },
     loading: {
       title: "Usage Overview",

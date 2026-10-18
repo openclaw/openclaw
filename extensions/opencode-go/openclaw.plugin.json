@@ -34,9 +34,9 @@
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 0.435,
-              "output": 0.87,
-              "cacheRead": 0.003625,
+              "input": 0.66,
+              "output": 1.98,
+              "cacheRead": 0.022,
               "cacheWrite": 0
             },
             "compat": {
@@ -50,8 +50,27 @@
             }
           },
           {
+            "id": "deepseek-v4.1-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": { "input": 0.15, "output": 0.6, "cacheRead": 0.003, "cacheWrite": 0 },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "high", "max"],
+              "maxTokensField": "max_tokens",
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false,
+              "codeMode": "capable"
+            }
+          },
+          {
             "id": "deepseek-v4-flash",
             "name": "DeepSeek V4 Flash",
+            "status": "deprecated",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1000000,
@@ -91,8 +110,23 @@
             }
           },
           {
+            "id": "kimi-k2.7-code",
+            "name": "Kimi K2.7 Code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 262144,
+            "cost": { "input": 0.95, "output": 4, "cacheRead": 0.19, "cacheWrite": 0 },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsDeveloperRole": false,
+              "supportsStrictMode": false
+            }
+          },
+          {
             "id": "kimi-k2.6",
             "name": "Kimi K2.6",
+            "status": "deprecated",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -147,16 +181,19 @@
             }
           },
           {
-            "id": "hy3-preview",
-            "name": "HY3 Preview",
-            "status": "preview",
+            "id": "hy3",
+            "name": "Hy3",
             "reasoning": true,
             "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 32768,
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 256000,
+            "contextTokens": 192000,
+            "maxTokens": 128000,
+            "cost": { "input": 0.14, "output": 0.58, "cacheRead": 0.035, "cacheWrite": 0 },
             "compat": {
               "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "low", "high"],
+              "maxTokensField": "max_tokens",
               "supportsDeveloperRole": false,
               "supportsStrictMode": false
             }
@@ -199,7 +236,7 @@
     "opencode-go": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "kimi-k2.6"
+        "image": "kimi-k2.7-code"
       }
     }
   },

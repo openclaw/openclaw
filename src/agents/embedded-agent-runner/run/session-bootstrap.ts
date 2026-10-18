@@ -218,6 +218,7 @@ export async function resetNoRealConversationTokenSnapshot(params: {
         },
       },
       {
+        result: "none",
         skipMaintenance: true,
         takeCacheOwnership: true,
         ...sessionEntryCommitGuardOptions(params.assertActive),

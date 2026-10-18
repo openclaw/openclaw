@@ -53,7 +53,7 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
+  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -206,6 +206,7 @@ export type SessionCatalogGroupsParams = {
     trigger?: HTMLElement,
   ) => void;
   onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
+  onMountRow: (sessionKey: string) => () => void;
   isMenuOpen: (key: CatalogSessionKey) => boolean;
 };
 

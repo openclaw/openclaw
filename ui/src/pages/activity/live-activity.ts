@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { notifyGatewayObservers } from "../../app/gateway-observers.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { currentWorkIdentity } from "./current-work.ts";
@@ -77,9 +78,9 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     visible = event.type !== "pagehide" && document.visibilityState !== "hidden";
     syncSubscriptions();
   };
-  document.addEventListener("visibilitychange", handleVisibility);
-  globalThis.addEventListener("pagehide", handleVisibility);
-  globalThis.addEventListener("pageshow", handleVisibility);
+  const stopVisibility = listen(document, "visibilitychange", handleVisibility);
+  const stopPageHide = listen(globalThis, "pagehide", handleVisibility);
+  const stopPageShow = listen(globalThis, "pageshow", handleVisibility);
   const listeners = new Set<(snapshot: LiveActivitySnapshot) => void>();
 
   const publish = (next: ActivityEntry[], reset = false) => {
@@ -167,9 +168,9 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
     dispose() {
       disposed = true;
       syncSubscriptions();
-      document.removeEventListener("visibilitychange", handleVisibility);
-      globalThis.removeEventListener("pagehide", handleVisibility);
-      globalThis.removeEventListener("pageshow", handleVisibility);
+      stopVisibility();
+      stopPageHide();
+      stopPageShow();
       stopGateway();
       stopEvents();
       entries = [];

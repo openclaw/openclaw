@@ -154,7 +154,6 @@ export function repairCanonicalSqliteIndexes(
       db.exec("SAVEPOINT repair_canonical_index;");
       try {
         db.exec(`DROP INDEX IF EXISTS main.${index.name};`);
-        assertSqliteIdentifier(index.name);
         const create = index.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX";
         db.exec(`${create} main.${index.name} ${index.definition};`);
       } catch (error) {
