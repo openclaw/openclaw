@@ -36,12 +36,7 @@ import type { ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
-export type {
-  ApplicationGateway,
-  ApplicationGatewayConnection,
-  ApplicationGatewayConnectOptions,
-  ApplicationGatewaySnapshot,
-} from "./gateway.ts";
+export type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 
 export type ApplicationThemeServerSelection = {
   readonly revision: number;
