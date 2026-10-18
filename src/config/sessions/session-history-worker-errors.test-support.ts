@@ -100,12 +100,9 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
       };
     },
     WorkerTaskPool: class {
-      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        return observed.run(prepare(), options);
-      }
-      rotate() {
-        return observed.rotate();
-      }
+      run = (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
+        observed.run(prepare(), options);
+      rotate = observed.rotate;
     },
   };
 });

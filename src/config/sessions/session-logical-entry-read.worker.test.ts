@@ -53,6 +53,23 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
   return { agentId: "ops", env: state.env, storePath, sessionKey: "global", ...scope };
 }
 
+function agentScope(agentId: string, suffix: string) {
+  return storedScope(path.join(state.sessionsDir(agentId), "sessions.json"), {
+    agentId,
+    sessionKey: `agent:${agentId}:${suffix}`,
+  });
+}
+
+function heartbeat(scope: ReturnType<typeof storedScope>) {
+  return resolveHeartbeatSession(
+    { session: { store: scope.storePath } },
+    scope.agentId,
+    undefined,
+    undefined,
+    state.env,
+  );
+}
+
 function holdAdmission(agentId: string) {
   const gate = {
     entered: createDeferredCore(),
@@ -98,45 +115,28 @@ async function readFirstSession(
 }
 
 it("shares cold database admission with an immediate heartbeat", async () => {
-  const agentId = "heartbeat-admission";
-  const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
-    agentId,
-    sessionKey: `agent:${agentId}:hook`,
-  });
-  const gate = holdAdmission(agentId);
+  const scope = agentScope("heartbeat-admission", "hook");
+  const gate = holdAdmission(scope.agentId);
   const first = readSessionEntryInWorker(scope);
-  let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
+  let beating: ReturnType<typeof heartbeat> | undefined;
   try {
     await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    heartbeat = Promise.resolve(
-      resolveHeartbeatSession(
-        { session: { store: scope.storePath } },
-        agentId,
-        undefined,
-        undefined,
-        state.env,
-      ),
-    );
-    void heartbeat.catch(() => {});
+    beating = heartbeat(scope);
+    void beating.catch(() => {});
     gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
-    await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
+    await expect(beating).resolves.toMatchObject({ entry: undefined });
   } finally {
     gate.release.resolve();
-    await Promise.allSettled([first, heartbeat]);
+    await Promise.allSettled([first, beating]);
     gate.restore();
   }
 });
 
 it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
-    const agentId = `heartbeat-${reader}`;
-    const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
-      agentId,
-      sessionKey: `agent:${agentId}:main`,
-    });
+    const scope = agentScope(`heartbeat-${reader}`, "main");
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
-    const cfg = { session: { store: scope.storePath } };
     const expected = {
       sessionKey: scope.sessionKey,
       storePath: scope.storePath,
@@ -146,9 +146,7 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
-      await expect(
-        resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-      ).resolves.toEqual({ ...expected, entry: undefined });
+      await expect(heartbeat(scope)).resolves.toEqual({ ...expected, entry: undefined });
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
@@ -163,9 +161,7 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     replaceSessionEntrySync(scope, entry);
     const native = loadSessionEntry(scope);
     expect(native).toMatchObject(entry);
-    await expect(
-      resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
-    ).resolves.toEqual({ ...expected, entry: native });
+    await expect(heartbeat(scope)).resolves.toEqual({ ...expected, entry: native });
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
@@ -283,14 +279,10 @@ it.each(["before-consume", "after-consume"])(
         }
         return "consumed";
       },
-    ).then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
     );
     try {
-      const result = await reading;
+      expect(await reading).toBe("consumed");
       expect(consumed).toBe(1);
-      expect(result).toEqual({ value: "consumed", error: undefined });
     } finally {
       await registryChange;
     }
@@ -369,10 +361,8 @@ it.for([
       if (!callerCurrent) {
         throw new Error("Captured caller was revoked");
       }
-    }).then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
-    );
+    });
+    void reading.catch(() => {});
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -398,9 +388,7 @@ it.for([
       }
       releaseWriter.resolve();
       await priorWriter;
-      const result = await reading;
-      expect(result.value).toBeUndefined();
-      expect(result.error).toBeInstanceOf(Error);
+      await expect(reading).rejects.toBeInstanceOf(Error);
     } finally {
       releaseWriter.resolve();
       intercept.mockRestore();

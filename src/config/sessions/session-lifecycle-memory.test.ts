@@ -18,7 +18,9 @@ import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
 } from "./session-accessor.sqlite-page-reclamation.js";
+import type { SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 
@@ -67,6 +69,8 @@ const authority = { assertCurrent() {}, authorize() {} };
 const admission = { assertCurrent() {}, assertReadable() {} };
 const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
 const registries: ReturnType<typeof createEmptyPluginRegistry>[] = [];
+const mutate = async (storage: SessionActorStorage, command: SessionActorStorageCommand) =>
+  readSessionActorStorageResult(await storage.mutate(command, authority));
 beforeEach(() => {
   external.prepareReceipt.mockResolvedValue(external.settleReceipt);
 });
@@ -80,38 +84,33 @@ afterEach(() => {
 async function fixture() {
   const owner = memorySessionActorOwners.get({ agentId: "main", path: storePath });
   const actor = await owner.acquire({ database: owner.identity, sessionKey }, admission);
-  readSessionActorStorageResult(
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: { sessionId: "session-1", lifecycleRevision: "revision-1", updatedAt: 1 },
-          transcriptEvents: [
-            {
-              type: "session",
-              id: "session-1",
-              version: 3,
-              cwd: "/synthetic",
-              timestamp: "2026-10-11T00:00:00.000Z",
-            },
-            {
-              type: "message",
-              id: "user",
-              parentId: null,
-              message: { role: "user", content: "Question" },
-            },
-            {
-              type: "message",
-              id: "answer",
-              parentId: "user",
-              message: { role: "assistant", content: "Answer", stopReason: "stop" },
-            },
-          ],
+  await mutate(actor.storage!, {
+    type: "session.entry.create",
+    input: {
+      entry: { sessionId: "session-1", lifecycleRevision: "revision-1", updatedAt: 1 },
+      transcriptEvents: [
+        {
+          type: "session",
+          id: "session-1",
+          version: 3,
+          cwd: "/synthetic",
+          timestamp: "2026-10-11T00:00:00.000Z",
         },
-      },
-      authority,
-    ),
-  );
+        {
+          type: "message",
+          id: "user",
+          parentId: null,
+          message: { role: "user", content: "Question" },
+        },
+        {
+          type: "message",
+          id: "answer",
+          parentId: "user",
+          message: { role: "assistant", content: "Answer", stopReason: "stop" },
+        },
+      ],
+    },
+  });
   await actor.release();
   return owner;
 }
@@ -122,15 +121,10 @@ async function patch(
 ) {
   const writer = await owner.acquireExisting(sessionKey, admission);
   try {
-    readSessionActorStorageResult(
-      await writer!.storage!.mutate(
-        {
-          type: "session.entry.patch",
-          input: { operation: { kind: "fields", patch: fields } },
-        },
-        authority,
-      ),
-    );
+    await mutate(writer!.storage!, {
+      type: "session.entry.patch",
+      input: { operation: { kind: "fields", patch: fields } },
+    });
   } finally {
     await writer!.release();
   }
@@ -150,6 +144,8 @@ const cleanup = (nowMs: number, sessionKeySegmentPrefix = "dashboard:incognito-"
     orphanTranscriptMinAgeMs: 30_000,
     nowMs,
   });
+const remove = (expectedSessionId: string | null = "session-1") =>
+  deleteSessionEntryLifecycle({ ...scope, target, archiveTranscript: false, expectedSessionId });
 
 function harness(failCommit = false) {
   const registry = createEmptyPluginRegistry();
@@ -227,32 +223,19 @@ it.each([false, true])(
   async (failCommit) => {
     const owner = await fixture();
     const externalOwner = harness(failCommit);
-    const remove = () =>
-      deleteSessionEntryLifecycle({
-        ...scope,
-        target,
-        archiveTranscript: false,
-        expectedSessionId: "session-1",
-      });
-    await expect(
-      externalOwner.run(() =>
-        deleteSessionEntryLifecycle({
-          ...scope,
-          target,
-          archiveTranscript: false,
-          expectedSessionId: null,
-        }),
-      ),
-    ).resolves.toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    await expect(externalOwner.run(() => remove(null))).resolves.toMatchObject({
+      deleted: false,
+      expectedEntryMismatch: true,
+    });
     expect(externalOwner.mutation.commit).not.toHaveBeenCalled();
     if (failCommit) {
-      await expect(externalOwner.run(remove)).rejects.toThrow("Companion commit refused");
+      await expect(externalOwner.run(() => remove())).rejects.toThrow("Companion commit refused");
       expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-1");
       expect(externalOwner.companion.present).toBe(true);
       expect(externalOwner.mutation.rollback).toHaveBeenCalledOnce();
       expect(external.settleReceipt).not.toHaveBeenCalled();
     } else {
-      await expect(externalOwner.run(remove)).resolves.toMatchObject({
+      await expect(externalOwner.run(() => remove())).resolves.toMatchObject({
         deleted: true,
         deletedSessionId: "session-1",
       });

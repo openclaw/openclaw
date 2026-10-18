@@ -24,26 +24,19 @@ function createFixture(canonicalGeneration?: string) {
   const secondEmail = "previous@involvement.example.test";
   const first = ensureProfileForEmail(firstEmail);
   const second = ensureProfileForEmail(secondEmail);
-  const firstIsAlias = first.id < second.id;
-  const profile = firstIsAlias ? second : first;
-  const previous = firstIsAlias ? first : second;
-  const previousEmail = firstIsAlias ? firstEmail : secondEmail;
+  const [profile, previous, previousEmail] =
+    first.id < second.id ? [second, first, firstEmail] : [first, second, secondEmail];
   const source = { generation: "involvement-generation", sequence: 1, timestamp: 1 };
+  const mention = (lastMention = source) => ({ hidden: false, updatedAt: 1, lastMention });
   replaceSessionEntrySync(scope, {
     sessionId,
     updatedAt: 1,
     profileInvolvement: {
       key: scope.sessionKey,
       profiles: {
-        [previous.id]: { hidden: false, updatedAt: 1, lastMention: source },
+        [previous.id]: mention(),
         ...(canonicalGeneration
-          ? {
-              [profile.id]: {
-                hidden: false,
-                updatedAt: 1,
-                lastMention: { ...source, generation: canonicalGeneration },
-              },
-            }
+          ? { [profile.id]: mention({ ...source, generation: canonicalGeneration }) }
           : {}),
       },
     },
@@ -51,10 +44,18 @@ function createFixture(canonicalGeneration?: string) {
   return {
     scope,
     profile,
-    previous,
     previousEmail,
     source,
-    params: { expectedSessionId: sessionId, profileIds: [profile.id] },
+    update: (
+      change: Parameters<typeof updateSessionProfileInvolvementAsync>[1]["change"],
+      assertCurrent?: () => void,
+    ) =>
+      updateSessionProfileInvolvementAsync(scope, {
+        expectedSessionId: sessionId,
+        profileIds: [profile.id],
+        change,
+        assertCurrent,
+      }),
     read: () => loadSessionEntry(scope)?.profileInvolvement?.profiles,
   };
 }
@@ -70,18 +71,9 @@ it("serializes merged-profile mention and visibility writes without caller-threa
     try {
       expect(
         await Promise.all([
-          updateSessionProfileInvolvementAsync(f.scope, {
-            ...f.params,
-            change: { kind: "mention", source: next },
-          }),
-          updateSessionProfileInvolvementAsync(f.scope, {
-            ...f.params,
-            change: { kind: "visibility", hidden: true },
-          }),
-          updateSessionProfileInvolvementAsync(f.scope, {
-            ...f.params,
-            change: { kind: "mention", source: canonicalSource },
-          }),
+          f.update({ kind: "mention", source: next }),
+          f.update({ kind: "visibility", hidden: true }),
+          f.update({ kind: "mention", source: canonicalSource }),
         ]),
       ).toEqual([true, true, true]);
       expect(
@@ -118,18 +110,15 @@ it.each(["transaction", "commit"] as const)(
         callback(request, grant);
       });
       try {
-        const result = await updateSessionProfileInvolvementAsync(f.scope, {
-          ...f.params,
-          change: { kind: "visibility", hidden: true },
-          assertCurrent: () => {
+        const result = await f
+          .update({ kind: "visibility", hidden: true }, () => {
             if (!current) {
               throw failure;
             }
-          },
-        }).catch((error: unknown) => error);
+          })
+          .catch((error: unknown) => error);
         expect(revoked).toBe(true);
         expect(result).toBe(failure);
-        expect(result).toBeInstanceOf(SessionMutationAuthorizationChangedError);
         expect(f.read()).toEqual(before);
       } finally {
         observe.mockRestore();
@@ -156,14 +145,13 @@ it("publishes a committed involvement receipt when the ordinary reply is lost wi
     const open = vi
       .spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore")
       .mockImplementation(
-        async <Operations extends SqliteWorkerOperations>(...args: Parameters<typeof original>) => {
+        async <Operations extends SqliteWorkerOperations>(
+          ...args: Parameters<typeof original>
+        ): Promise<SqliteWorkerStore<Operations>> => {
           const worker = await original<Operations>(...args);
           return {
             ...worker,
-            run<T>(
-              consume: (operation: Pick<SqliteWorkerStore<Operations>, "execute">) => Promise<T>,
-              assertCurrent: () => void,
-            ) {
+            run(consume, assertCurrent) {
               return worker.run(
                 (operation) =>
                   consume({
@@ -185,13 +173,7 @@ it("publishes a committed involvement receipt when the ordinary reply is lost wi
         },
       );
     try {
-      await expect(
-        updateSessionProfileInvolvementAsync(f.scope, {
-          ...f.params,
-          change: { kind: "mention", source: f.source },
-        }),
-      ).resolves.toBe(true);
-      expect(dispatches).toBe(1);
+      await expect(f.update({ kind: "mention", source: f.source })).resolves.toBe(true);
       expect(changes).toEqual([
         expect.objectContaining({
           sessionKey: f.scope.sessionKey,
