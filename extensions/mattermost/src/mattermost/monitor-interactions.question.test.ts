@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const resolveOptionMock = vi.hoisted(() => vi.fn());
 const authorizeMock = vi.hoisted(() => vi.fn());
@@ -8,7 +8,6 @@ type InteractionOptions = Parameters<
 const createInteractionHandlerMock = vi.hoisted(() =>
   vi.fn((_options: InteractionOptions) => async () => {}),
 );
-const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
 
 vi.mock("openclaw/plugin-sdk/question-gateway-runtime", () => ({
   questionGatewayRuntime: { resolveOption: resolveOptionMock },
@@ -23,7 +22,7 @@ vi.mock("./interactions.js", async (importOriginal) => ({
 }));
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
-  registerPluginHttpRoute: registerPluginHttpRouteMock,
+  registerPluginHttpRoute: vi.fn(() => () => {}),
 }));
 
 const { registerMattermostInteractions } = await import("./monitor-interactions.js");
@@ -59,17 +58,15 @@ function captureHandlers() {
 }
 let handlers: ReturnType<typeof captureHandlers>;
 function expectPrompt(response: Awaited<ReturnType<typeof handlers.dispatch>>, text: string) {
-  expect(response?.ephemeral_text).toBe(text);
-  expect(response?.update).toBeUndefined();
+  expect(response).toEqual({ ephemeral_text: text });
 }
 
-function questionInteraction(context: Record<string, unknown>) {
+function questionInteraction(context: Record<string, unknown> = questionContext) {
   return {
     payload: {
       channel_id: "chan-1",
       post_id: "post-1",
       user_id: "user-1",
-      user_name: "ada",
     },
     userName: "ada",
     actionId: "question-1",
@@ -80,115 +77,93 @@ function questionInteraction(context: Record<string, unknown>) {
   } as never;
 }
 
+const submit = () => handlers.dispatch(questionInteraction());
+
 const questionContext = {
   oc_question: true,
   question_id: QUESTION_ID,
   option_index: 1,
 };
 
-describe("mattermost question interactions", () => {
-  beforeEach(() => {
-    resolveOptionMock.mockReset();
-    resolveOptionMock.mockResolvedValue({ status: "answered" });
-    authorizeMock.mockReset();
-    authorizeMock.mockResolvedValue({ ok: true, roomLabel: "#town-square" });
-    resolveChannelInfoMock.mockClear();
-    createInteractionHandlerMock.mockClear();
-    error.mockReset();
-    picker.mockReset();
-    picker.mockResolvedValue(null);
-    handlers = captureHandlers();
+beforeEach(() => {
+  vi.clearAllMocks();
+  resolveOptionMock.mockReset().mockResolvedValue({ status: "answered" });
+  authorizeMock.mockReset().mockResolvedValue({ ok: true, roomLabel: "#town-square" });
+  picker.mockReset().mockResolvedValue(null);
+  handlers = captureHandlers();
+});
+
+it("submits the clicked option to the question Gateway and retires the prompt", async () => {
+  const response = await submit();
+  expect(resolveOptionMock).toHaveBeenCalledTimes(1);
+  expect([resolveOptionMock.mock.calls[0]?.[0], authorizeMock.mock.calls[0]?.[0]]).toMatchObject([
+    { questionId: QUESTION_ID, optionIndex: 1, senderId: "user-1" },
+    { senderId: "user-1", channelId: "chan-1", hasControlCommand: false },
+  ]);
+  expect(response?.ephemeral_text).toBe("Answer submitted.");
+  expect(response?.update?.props).toEqual({
+    attachments: [{ text: "✓ **production** selected by @ada" }],
   });
+  expect(picker).not.toHaveBeenCalled();
+  expect(authorizeMock).toHaveBeenCalledTimes(1);
+  expect(resolveChannelInfoMock).toHaveBeenCalledWith("chan-1");
+});
 
-  it("submits the clicked option to the question Gateway and retires the prompt", async () => {
-    const response = await handlers.dispatch(questionInteraction(questionContext));
+it("refuses a click current policy denies, before any Gateway I/O", async () => {
+  authorizeMock.mockResolvedValue(denied);
+  const response = await submit();
+  expect(resolveOptionMock).not.toHaveBeenCalled();
+  expectPrompt(response, "OpenClaw ignored this action for #town-square.");
+});
 
-    expect(resolveOptionMock).toHaveBeenCalledTimes(1);
-    expect(resolveOptionMock.mock.calls[0]?.[0]).toMatchObject({
-      questionId: QUESTION_ID,
-      optionIndex: 1,
-      senderId: "user-1",
-    });
-    expect(response?.ephemeral_text).toBe("Answer submitted.");
-    expect(response?.update?.props).toEqual({
-      attachments: [{ text: "✓ **production** selected by @ada" }],
-    });
-    expect(picker).not.toHaveBeenCalled();
-    expect(authorizeMock).toHaveBeenCalledTimes(1);
-    expect(authorizeMock.mock.calls[0]?.[0]).toMatchObject({
-      senderId: "user-1",
-      channelId: "chan-1",
-      hasControlCommand: false,
-    });
-    expect(resolveChannelInfoMock).toHaveBeenCalledWith("chan-1");
+// Updating a denied click would invalidate every rendered button for other users.
+it("leaves the post untouched when the transport refuses a click", async () => {
+  authorizeMock.mockResolvedValue(denied);
+  const result = await handlers.authorize({
+    payload: { channel_id: "chan-1", user_id: "mallory", user_name: "mallory" },
+    post: { id: "post-1", message: "Which environment?", props: { attachments: [] } },
+  } as never);
+
+  expect(result).toEqual({
+    ok: false,
+    response: { ephemeral_text: "OpenClaw ignored this action for #town-square." },
   });
+});
 
-  it("refuses a click current policy denies, before any Gateway I/O", async () => {
+it("refuses a click whose access is lost while the Gateway read is in flight", async () => {
+  resolveOptionMock.mockImplementation(async (params: { authorize?: () => unknown }) => {
     authorizeMock.mockResolvedValue(denied);
-
-    const response = await handlers.dispatch(questionInteraction(questionContext));
-
-    expect(resolveOptionMock).not.toHaveBeenCalled();
-    expectPrompt(response, "OpenClaw ignored this action for #town-square.");
+    return (await params.authorize?.()) === false ? { status: "denied" } : { status: "answered" };
   });
 
-  // Updating a denied click would invalidate every rendered button for other users.
-  it("leaves the post untouched when the transport refuses a click", async () => {
-    authorizeMock.mockResolvedValue(denied);
+  expectPrompt(await submit(), "OpenClaw ignored this action for #town-square.");
+});
 
-    const result = await handlers.authorize({
-      payload: { channel_id: "chan-1", user_id: "mallory", user_name: "mallory" },
-      post: { id: "post-1", message: "Which environment?", props: { attachments: [] } },
-    } as never);
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected transport authorization to refuse the click");
-    }
-    expect(result.response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
-    expect(result.response?.update).toBeUndefined();
-  });
-
-  it("refuses a click whose access is lost while the Gateway read is in flight", async () => {
-    // Re-check authority after the Gateway read, before its write.
-    resolveOptionMock.mockImplementation(async (params: { authorize?: () => unknown }) => {
-      authorizeMock.mockResolvedValue(denied);
-      return (await params.authorize?.()) === false ? { status: "denied" } : { status: "answered" };
+it.each(["terminal", "gateway failure"] as const)("keeps the prompt after %s", async (state) => {
+  if (state === "terminal") {
+    resolveOptionMock.mockResolvedValue({
+      status: "already-terminal",
+      reason: "already-terminal",
     });
-
-    const response = await handlers.dispatch(questionInteraction(questionContext));
-
-    expectPrompt(response, "OpenClaw ignored this action for #town-square.");
-  });
-
-  it("keeps the prompt when the question already reached a terminal state", async () => {
-    // The resolver reports both an answered and an expired question this way.
-    resolveOptionMock.mockResolvedValue({ status: "already-terminal", reason: "already-terminal" });
-
-    const response = await handlers.dispatch(questionInteraction(questionContext));
-
-    expectPrompt(response, "This question was already answered.");
-  });
-
-  it("keeps the prompt when the Gateway rejects the answer, and tells the clicker", async () => {
+  } else {
     resolveOptionMock.mockRejectedValue(new Error("gateway down"));
-
-    const response = await handlers.dispatch(questionInteraction(questionContext));
-
-    expectPrompt(response, "Could not submit this answer.");
+  }
+  expectPrompt(
+    await submit(),
+    state === "terminal" ? "This question was already answered." : "Could not submit this answer.",
+  );
+  if (state === "gateway failure") {
     expect(error).toHaveBeenCalledWith(expect.stringContaining("gateway down"));
-  });
+  }
+});
 
-  it("still hands every other click to the model picker", async () => {
-    picker.mockResolvedValue({ ephemeral_text: "picker" });
-
-    const response = await handlers.dispatch(
-      questionInteraction({ callback_data: "deploy_approve" }),
-    );
-
-    expect(authorizeMock).not.toHaveBeenCalled();
-    expect(resolveOptionMock).not.toHaveBeenCalled();
-    expect(picker).toHaveBeenCalledTimes(1);
-    expect(response?.ephemeral_text).toBe("picker");
-  });
+it("still hands every other click to the model picker", async () => {
+  picker.mockResolvedValue({ ephemeral_text: "picker" });
+  const response = await handlers.dispatch(
+    questionInteraction({ callback_data: "deploy_approve" }),
+  );
+  expect(authorizeMock).not.toHaveBeenCalled();
+  expect(resolveOptionMock).not.toHaveBeenCalled();
+  expect(picker).toHaveBeenCalledTimes(1);
+  expect(response?.ephemeral_text).toBe("picker");
 });

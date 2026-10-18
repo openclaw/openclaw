@@ -8,7 +8,7 @@ import {
   createMessageReceiptFromOutboundResults,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import * as clientModule from "./client.js";
 import type { MattermostClient } from "./client.js";
 import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
@@ -35,11 +35,16 @@ function createMattermostReceipt(messageId: string, kind: "text" | "preview" | "
   });
 }
 
-function createConfirmedPreviewDelivery(messageId: string, content: string) {
+function createDeliveryResult(
+  messageId: string,
+  content = "",
+  kind: "text" | "preview" | "media" = "preview",
+) {
+  const outcome = kind === "media" ? ("media" as const) : ("text" as const);
   return {
-    outcome: "text" as const,
+    outcome,
     messageIds: [messageId],
-    receipt: createMattermostReceipt(messageId, "preview"),
+    receipt: createMattermostReceipt(messageId, kind),
     visibleReplySent: true,
     content,
   };
@@ -58,13 +63,9 @@ function createDraftStreamMock(postId: string | null | undefined = "preview-post
 }
 
 function createDeliverFinalMock() {
-  return vi.fn(async (payload: { text?: string }) => ({
-    outcome: "text" as const,
-    messageIds: ["delivered-post-1"],
-    receipt: createMattermostReceipt("delivered-post-1", "text"),
-    visibleReplySent: true,
-    content: payload.text ?? "",
-  }));
+  return vi.fn(async (payload: { text?: string }) =>
+    createDeliveryResult("delivered-post-1", payload.text ?? "", "text"),
+  );
 }
 
 function resolvePreviewFinalText(text?: string) {
@@ -93,9 +94,11 @@ const ttsPayload = () => ({
 });
 
 function deliverDraftPreview(
-  params: Pick<DraftDeliveryParams, "payload"> & Partial<DraftDeliveryParams>,
+  payload: ReplyPayload,
+  params: Partial<Omit<DraftDeliveryParams, "payload">> = {},
 ) {
   return deliverMattermostReplyWithDraftPreview({
+    payload,
     info: { kind: "final" },
     kind: "channel",
     client: createMattermostClientMock(),
@@ -108,6 +111,22 @@ function deliverDraftPreview(
   });
 }
 
+function deliverPublished(
+  extra: Partial<ReplyPayload> = {},
+  options: Partial<DraftDeliveryParams> = {},
+) {
+  draftStream = createDraftStreamMock(null);
+  return deliverDraftPreview(
+    { text: "Already visible", ...extra },
+    {
+      resolvePreviewFinalText: () => ({
+        alreadyDelivered: true,
+        confirmedDelivery: createDeliveryResult("sealed-post-1", "Already visible"),
+      }),
+      ...options,
+    },
+  );
+}
 beforeEach(() => {
   vi.clearAllMocks();
   draftStream = createDraftStreamMock();
@@ -115,301 +134,234 @@ beforeEach(() => {
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
 });
 
-describe("deliverMattermostReplyWithDraftPreview", () => {
-  it("suppresses reasoning-prefixed finals before preview finalization", async () => {
-    const recordThreadParticipation = vi.fn();
+it("suppresses reasoning-prefixed finals before preview finalization", async () => {
+  const recordThreadParticipation = vi.fn();
+  await deliverDraftPreview(
+    { text: "  \n > Reasoning:\n> _hidden_" },
+    { recordThreadParticipation },
+  );
 
-    await deliverDraftPreview({
-      payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
-      recordThreadParticipation,
-    });
+  expect(deliverFinal).not.toHaveBeenCalled();
+  expect(draftStream.flush).not.toHaveBeenCalled();
+  expect(draftStream.discardPending).not.toHaveBeenCalled();
+  expect(draftStream.clear).not.toHaveBeenCalled();
+  expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  expect(recordThreadParticipation).not.toHaveBeenCalled();
+});
 
-    expect(deliverFinal).not.toHaveBeenCalled();
-    expect(draftStream.flush).not.toHaveBeenCalled();
-    expect(draftStream.discardPending).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
-    // No visible reply was sent, so the thread must not be marked as participated.
-    expect(recordThreadParticipation).not.toHaveBeenCalled();
+it("records thread participation when a same-thread final finalizes the preview in place", async () => {
+  const recording = createDeferred<void>();
+  const registered = createDeferred<void>();
+  const recordThreadParticipation = vi.fn(() => {
+    recording.resolve();
+    return registered.promise;
   });
+  let settled = false;
 
-  it("records thread participation when a same-thread final finalizes the preview in place", async () => {
-    const recording = createDeferred<void>();
-    const registered = createDeferred<void>();
-    const recordThreadParticipation = vi.fn(() => {
-      recording.resolve();
-      return registered.promise;
-    });
-    let settled = false;
-
-    const delivery = deliverDraftPreview({
-      payload: { text: "All good" } as never,
-      recordThreadParticipation,
-    }).finally(() => {
+  const delivery = deliverDraftPreview({ text: "All good" }, { recordThreadParticipation }).finally(
+    () => {
       settled = true;
-    });
-    try {
-      await recording.promise;
-      await setImmediate();
-      expect(settled).toBe(false);
-    } finally {
-      registered.resolve();
-      await delivery;
-    }
-    const result = await delivery;
+    },
+  );
+  try {
+    await recording.promise;
+    await setImmediate();
+    expect(settled).toBe(false);
+  } finally {
+    registered.resolve();
+    await delivery;
+  }
+  const result = await delivery;
 
-    // Default streaming finalizes by editing the preview post, bypassing deliverPayload —
-    // participation must still be recorded (regression: PR #95552 review P1).
-    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
-      message: "All good",
-    });
-    expect(deliverFinal).not.toHaveBeenCalled();
-    expect(draftStream.seal).toHaveBeenCalledTimes(1);
-    expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
-      updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      outcome: "text",
+  // Preview edits bypass deliverPayload; participation must still settle (PR #95552).
+  expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+    message: "All good",
+  });
+  expect(deliverFinal).not.toHaveBeenCalled();
+  expect(draftStream.seal).toHaveBeenCalledTimes(1);
+  expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
+    updateMattermostPostSpy.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+  );
+  expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({
+    outcome: "text",
+    messageIds: ["patched"],
+    visibleReplySent: true,
+    content: "All good",
+  });
+});
+
+it("delivers native value buttons instead of losing them in a preview edit", async () => {
+  const presentation = nativeControls();
+  const payload = { text: "Choose an option", presentation };
+
+  await deliverDraftPreview(payload);
+
+  expect(deliverFinal).toHaveBeenCalledExactlyOnceWith(payload);
+  expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  expect(draftStream.clear).toHaveBeenCalledTimes(1);
+});
+
+it("reports a final already published in a sealed preview generation", async () => {
+  const result = await deliverPublished();
+
+  expect(deliverFinal).not.toHaveBeenCalled();
+  expect(result).toMatchObject({
+    outcome: "text",
+    messageIds: ["sealed-post-1"],
+    visibleReplySent: true,
+    content: "Already visible",
+  });
+});
+
+it("delivers unsent presentation controls after preview text was already published", async () => {
+  const presentation = nativeControls();
+  const result = await deliverPublished({ presentation });
+
+  expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "", presentation });
+  expect(result.messageIds).toEqual(["sealed-post-1", "delivered-post-1"]);
+});
+
+it("still delivers media when the text is already published", async () => {
+  const deliverPayload = vi.fn(async () => createDeliveryResult("media-post-1", "", "media"));
+
+  const result = await deliverPublished(
+    { mediaUrl: "https://example.com/image.png" },
+    { deliverPayload },
+  );
+
+  expect(deliverPayload).toHaveBeenCalledExactlyOnceWith({
+    text: "",
+    mediaUrl: "https://example.com/image.png",
+  });
+  expect(result).toMatchObject({
+    outcome: "media",
+    messageIds: ["sealed-post-1", "media-post-1"],
+    visibleReplySent: true,
+    content: "Already visible",
+  });
+});
+
+it("keeps a finalized preview after a later warning when participation failed", async () => {
+  const previewLifecycle = createPreviewLifecycle(draftStream);
+  const recordThreadParticipation = vi.fn(async () => {});
+  recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
+  const params = {
+    kind: "direct" as const,
+    previewLifecycle,
+    effectiveReplyToId: undefined,
+    recordThreadParticipation,
+  };
+
+  const firstDelivery = deliverDraftPreview({ text: "Successful assistant final" }, params);
+  await expect(firstDelivery).rejects.toMatchObject({
+    code: "CHANNEL_PARTIAL_DELIVERY",
+    deliveryResult: {
       messageIds: ["patched"],
       visibleReplySent: true,
-      content: "All good",
-    });
+      content: "Successful assistant final",
+    },
+  });
+  await deliverDraftPreview({ text: "Tool error warning", isError: true }, params);
+
+  await previewLifecycle.cleanup();
+  expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+    text: "Tool error warning",
+    isError: true,
+  });
+  expect(draftStream.clear).not.toHaveBeenCalled();
+});
+
+it("preserves a completed normal send when preview cleanup fails", async () => {
+  draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
+
+  const result = await deliverDraftPreview(
+    { text: "Already visible", replyToId: "reply-1" },
+    { effectiveReplyToId: undefined },
+  );
+
+  expect(result).toMatchObject({
+    messageIds: ["delivered-post-1"],
+    visibleReplySent: true,
+    content: "Already visible",
+  });
+  expect(deliverFinal).toHaveBeenCalledTimes(1);
+  expect(draftStream.clear).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+  await deliverDraftPreview(ttsPayload());
+
+  expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+    message: "Spoken answer",
+  });
+  expect(draftStream.discardPending).not.toHaveBeenCalled();
+  expect(draftStream.clear).not.toHaveBeenCalled();
+  expect(deliverFinal).toHaveBeenCalledWith(ttsPayload());
+});
+
+it("retries an explicitly unsent TTS supplement through normal delivery", async () => {
+  let deliveryAttempt = 0;
+  const deliverPayload = vi.fn(async (payload: { text?: string }) => {
+    deliveryAttempt += 1;
+    if (deliveryAttempt === 1) {
+      return {
+        outcome: "empty" as const,
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result" as const },
+      };
+    }
+    return {
+      ...createDeliveryResult("supplement-post-1", payload.text ?? "", "media"),
+      outcome: "text" as const,
+    };
   });
 
-  it("delivers native value buttons instead of losing them in a preview edit", async () => {
-    const presentation = nativeControls();
-    const payload = { text: "Choose an option", presentation };
+  const result = await deliverDraftPreview(ttsPayload(), { deliverPayload });
 
-    await deliverDraftPreview({
-      payload,
-    });
-
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith(payload);
-    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  expect(deliverPayload).toHaveBeenCalledTimes(2);
+  expect(deliverPayload.mock.calls[1]?.[0]).not.toHaveProperty("text");
+  expect(result).toMatchObject({
+    messageIds: ["patched", "supplement-post-1"],
+    visibleReplySent: true,
+    content: "Spoken answer",
   });
+});
 
-  it("reports a final already published in a sealed preview generation", async () => {
-    draftStream = createDraftStreamMock(null);
-    const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
-
-    const result = await deliverDraftPreview({
-      payload: { text: "Already visible" },
-      resolvePreviewFinalText: () => ({
-        alreadyDelivered: true,
-        confirmedDelivery,
-      }),
-    });
-
-    expect(deliverFinal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({
-      outcome: "text",
-      messageIds: ["sealed-post-1"],
-      visibleReplySent: true,
-      content: "Already visible",
-    });
-  });
-
-  it("delivers unsent presentation controls after preview text was already published", async () => {
-    const presentation = nativeControls();
-    draftStream = createDraftStreamMock(null);
-    const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
-
-    const result = await deliverDraftPreview({
-      payload: { text: "Already visible", presentation },
-      resolvePreviewFinalText: () => ({ alreadyDelivered: true, confirmedDelivery }),
-    });
-
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "", presentation });
-    expect(result.messageIds).toEqual(["sealed-post-1", "delivered-post-1"]);
-  });
-
-  it("still delivers media when the text is already published", async () => {
-    draftStream = createDraftStreamMock(null);
-    const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
-    const mediaReceipt = createMattermostReceipt("media-post-1", "media");
-    const deliverPayload = vi.fn(async () => ({
-      outcome: "media" as const,
+it("preserves the finalized preview receipt when its supplement fails after sending", async () => {
+  const mediaReceipt = createMattermostReceipt("media-post-1", "media");
+  const deliverPayload = vi.fn(async () => {
+    throw createChannelPartialDeliveryError(new Error("supplement bookkeeping failed"), {
       messageIds: ["media-post-1"],
       receipt: mediaReceipt,
       visibleReplySent: true,
       content: "",
-    }));
-
-    const result = await deliverDraftPreview({
-      payload: { text: "Already visible", mediaUrl: "https://example.com/image.png" } as never,
-      deliverPayload,
-      resolvePreviewFinalText: () => ({
-        alreadyDelivered: true,
-        confirmedDelivery,
-      }),
-    });
-
-    expect(deliverPayload).toHaveBeenCalledExactlyOnceWith({
-      text: "",
-      mediaUrl: "https://example.com/image.png",
-    });
-    expect(result).toMatchObject({
-      outcome: "media",
-      messageIds: ["sealed-post-1", "media-post-1"],
-      visibleReplySent: true,
-      content: "Already visible",
     });
   });
 
-  it("keeps a finalized preview after a later warning when participation failed", async () => {
-    const previewLifecycle = createPreviewLifecycle(draftStream);
-    const recordThreadParticipation = vi.fn(async () => {});
-    recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
-    const params = {
-      kind: "direct" as const,
-      client: createMattermostClientMock(),
-      resolvePreviewFinalText,
-      previewLifecycle,
-      logVerboseMessage: vi.fn(),
-      deliverPayload: deliverFinal,
-      recordThreadParticipation,
-    };
-
-    const firstDelivery = deliverMattermostReplyWithDraftPreview({
-      ...params,
-      payload: { text: "Successful assistant final" } as never,
-      info: { kind: "final" },
-    });
-    await expect(firstDelivery).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: {
-        messageIds: ["patched"],
-        visibleReplySent: true,
-        content: "Successful assistant final",
-      },
-    });
-    await deliverMattermostReplyWithDraftPreview({
-      ...params,
-      payload: { text: "Tool error warning", isError: true } as never,
-      info: { kind: "final" },
-    });
-
-    await previewLifecycle.cleanup();
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
-      text: "Tool error warning",
-      isError: true,
-    });
-    expect(draftStream.clear).not.toHaveBeenCalled();
-  });
-
-  it("preserves a completed normal send when preview cleanup fails", async () => {
-    draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
-
-    const result = await deliverDraftPreview({
-      payload: { text: "Already visible", replyToId: "reply-1" } as never,
-      effectiveReplyToId: undefined,
-    });
-
-    expect(result).toMatchObject({
-      messageIds: ["delivered-post-1"],
-      visibleReplySent: true,
-      content: "Already visible",
-    });
-    expect(deliverFinal).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
-    await deliverDraftPreview({
-      payload: ttsPayload(),
-    });
-
-    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
-      message: "Spoken answer",
-    });
-    expect(draftStream.discardPending).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(deliverFinal).toHaveBeenCalledWith(ttsPayload());
-  });
-
-  it("retries an explicitly unsent TTS supplement through normal delivery", async () => {
-    let deliveryAttempt = 0;
-    const deliverPayload = vi.fn(async (payload: { text?: string }) => {
-      deliveryAttempt += 1;
-      if (deliveryAttempt === 1) {
-        return {
-          outcome: "empty" as const,
-          visibleReplySent: false,
-          suppression: { reason: "no_visible_result" as const },
-        };
-      }
-      return {
-        outcome: "text" as const,
-        messageIds: ["supplement-post-1"],
-        receipt: createMattermostReceipt("supplement-post-1", "media"),
-        visibleReplySent: true,
-        content: payload.text ?? "",
-      };
-    });
-
-    const result = await deliverDraftPreview({
-      payload: ttsPayload(),
-      deliverPayload,
-    });
-
-    expect(deliverPayload).toHaveBeenCalledTimes(2);
-    expect(deliverPayload.mock.calls[1]?.[0]).not.toHaveProperty("text");
-    expect(result).toMatchObject({
-      messageIds: ["patched", "supplement-post-1"],
-      visibleReplySent: true,
-      content: "Spoken answer",
-    });
-  });
-
-  it("preserves the finalized preview receipt when its supplement fails after sending", async () => {
-    const mediaReceipt = createMattermostReceipt("media-post-1", "media");
-    const deliverPayload = vi.fn(async () => {
-      throw createChannelPartialDeliveryError(new Error("supplement bookkeeping failed"), {
-        messageIds: ["media-post-1"],
-        receipt: mediaReceipt,
-        visibleReplySent: true,
-        content: "",
-      });
-    });
-
-    let caught: unknown;
-    try {
-      await deliverDraftPreview({
-        payload: ttsPayload(),
-        deliverPayload,
-      });
-    } catch (error: unknown) {
-      caught = error;
-    }
-
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected a partial Mattermost preview delivery error");
-    }
-    expect(caught.deliveryResult).toMatchObject({
+  const delivery = deliverDraftPreview(ttsPayload(), { deliverPayload });
+  await expect(delivery).rejects.toSatisfy(isChannelPartialDeliveryError);
+  await expect(delivery).rejects.toMatchObject({
+    deliveryResult: {
       messageIds: ["patched", "media-post-1"],
       visibleReplySent: true,
       content: "Spoken answer",
-    });
+    },
+  });
+});
+
+it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+  updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
+  await deliverDraftPreview(ttsPayload(), {
+    resolvePreviewFinalText: (text) => ({
+      editText: text?.trim(),
+      deliveryText: "",
+      alreadyDelivered: false,
+    }),
   });
 
-  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
-    updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
-
-    await deliverDraftPreview({
-      payload: ttsPayload(),
-      resolvePreviewFinalText: (text) => ({
-        editText: text?.trim(),
-        deliveryText: "",
-        alreadyDelivered: false,
-      }),
-    });
-
-    expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
-    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
-    expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverFinal).toHaveBeenCalledWith({ ...ttsPayload(), text: "Spoken answer" });
-  });
+  expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
+  expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+  expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  expect(deliverFinal).toHaveBeenCalledWith({ ...ttsPayload(), text: "Spoken answer" });
 });
