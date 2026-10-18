@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
@@ -123,8 +123,6 @@ export function announcementFixture(
       const context = createContext();
       context.localEmbedded = true;
       context.getRuntimeConfig = getRuntimeConfig;
-      context.chatAbortControllers = new Map();
-      context.chatQueuedTurns = new Map();
       const registry = createGatewayMethodRegistry([
         {
           name: "agent",
@@ -139,6 +137,12 @@ export function announcementFixture(
       gatewayContextResolver = () => context;
     } else {
       fixture.wake.mockResolvedValue(false);
+      if (holdForRequester) {
+        // The session controller owns the spawning requester turn.
+        const { holdLiveRequesterTurns } =
+          await import("./subagent-requester-turn-liveness.test-support.js");
+        onTestFinished(holdLiveRequesterTurns("held-requester-turn").restore);
+      }
     }
     await registerSubagentRun({
       ...registrationDefaults,

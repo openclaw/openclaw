@@ -3,12 +3,12 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
-import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
+  runCopilotAttempt,
   type FakeSdk,
   type FakeSession,
 } from "./attempt.test-support.js";

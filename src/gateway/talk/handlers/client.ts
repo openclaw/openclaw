@@ -47,6 +47,7 @@ import {
   closeTalkClientGatewayControlSession,
   resolveTalkAgentConsultAuthority,
 } from "../client-gateway-control.js";
+import { createTalkRunCancel } from "../realtime-run-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
@@ -384,7 +385,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization?.talkSessionTarget ??
         (await prepareTalkSessionTarget(context.getRuntimeConfig(), params.sessionKey));
       const runTarget = resolveOwnedActiveTalkRunTarget({
-        context,
         clientConnId: client?.connId,
         sessionTarget: target,
         scope: { kind: "session" },
@@ -423,6 +423,12 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             }),
           text: params.text,
           mode: params.mode,
+          cancelRun: createTalkRunCancel({
+            context,
+            sessionTarget: target,
+            connId: client?.connId ?? "",
+            assertCurrent: sessionMutationAuthorization?.assertCurrent,
+          }),
         });
         respond(true, result, undefined);
       } finally {

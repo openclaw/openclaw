@@ -6,8 +6,12 @@ import type {
   SandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi, type Mock } from "vitest";
-import { runCopilotAttempt } from "./attempt.js";
-import { makeFakePool, makeFakeSdk, type FakeSdk } from "./attempt.test-support.js";
+import {
+  makeFakePool,
+  makeFakeSdk,
+  runCopilotAttempt,
+  type FakeSdk,
+} from "./attempt.test-support.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];

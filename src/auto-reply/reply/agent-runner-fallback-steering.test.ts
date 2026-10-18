@@ -9,20 +9,20 @@ import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import * as metadata from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import * as registryState from "../../sessions/session-controller.state.js";
 import { bindReplyFallbackSteeringRoute } from "./agent-runner-fallback-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import * as followupRunner from "./followup-runner.js";
 import { createPersonalToolScreenDispatcher } from "./personal-tool-turn.test-support.js";
 import { getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { clearFollowupQueue } from "./queue/state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
+import { enqueueFollowupRun } from "./queue/enqueue.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
-import * as registryState from "./reply-run-registry.state.js";
 import * as toolAuthority from "./reply-tool-authority.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -99,6 +99,7 @@ describe("ordinary steering into automatic model fallback", () => {
           agentId: queued.run.agentId,
           sessionId: queued.run.sessionId,
           sessionKey: key,
+          mailboxClaim: queued.controllerInput?.claim,
           kind: "queued_followup",
           resetTriggered: false,
         });
@@ -186,8 +187,10 @@ describe("ordinary steering into automatic model fallback", () => {
       } finally {
         resume.resolve();
         await incoming.catch(() => {});
-        clearFollowupQueue(key);
-        clearFollowupDrainCallback(key);
+        clearSessionQueues(
+          [key],
+          registryState.getSessionControllerEntryForOperation(operation).target,
+        );
         operation.complete();
       }
     },
@@ -195,6 +198,7 @@ describe("ordinary steering into automatic model fallback", () => {
 
   it.each([
     "automatic",
+    "queued-followup",
     "cross-profile",
     "cross-profile-pending",
     "policy-fallback",
@@ -211,6 +215,7 @@ describe("ordinary steering into automatic model fallback", () => {
     const run = createQueueTestRun({ prompt: "use the new requirements", messageId: scenario });
     run.run.agentId = "main";
     run.run.sessionKey = key;
+    run.run.sessionId = `fallback-${scenario}`;
     run.run.config = {
       agents: {
         defaults: {
@@ -319,6 +324,7 @@ describe("ordinary steering into automatic model fallback", () => {
           operation.attachBackend({
             kind: "embedded",
             terminalReplyExpectation: "result-required",
+            supportsTranscriptCommitWait: true,
             cancel: vi.fn(),
             messageInjectionV2: {
               version: 2,
@@ -364,7 +370,26 @@ describe("ordinary steering into automatic model fallback", () => {
       }
       const resultState: ReplyOperationRunState = {};
       const shouldSteer =
-        scenario === "automatic" || scenario === "policy-fallback" || crossProfile;
+        scenario === "automatic" ||
+        scenario === "queued-followup" ||
+        scenario === "policy-fallback" ||
+        crossProfile;
+      if (scenario === "queued-followup") {
+        const older = createQueueTestRun({ prompt: "run on the next turn", messageId: "older" });
+        older.run.agentId = run.run.agentId;
+        older.run.sessionId = run.run.sessionId;
+        older.run.config = run.run.config;
+        expect(
+          enqueueFollowupRun(
+            key,
+            older,
+            { mode: "followup", debounceMs: 0 },
+            "none",
+            undefined,
+            false,
+          ),
+        ).toBe(true);
+      }
       if (crossProfile) {
         run.operatorAuthority = operator("bob");
         Object.assign(run.run, {
@@ -427,8 +452,7 @@ describe("ordinary steering into automatic model fallback", () => {
         );
       }
     } finally {
-      clearFollowupQueue(key);
-      clearFollowupDrainCallback(key);
+      clearSessionQueues([key]);
       operation.complete();
     }
   });

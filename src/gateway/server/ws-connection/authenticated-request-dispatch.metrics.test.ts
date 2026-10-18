@@ -897,8 +897,6 @@ describe("Gateway observation response ordering", () => {
       extraHandlers: { "agent.wait": agentHandlers["agent.wait"]! },
       buildRequestContext: () => ({
         dedupe: new Map(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
         getRuntimeConfig: () => ({}),
       }),
     });

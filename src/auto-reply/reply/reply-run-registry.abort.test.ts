@@ -8,27 +8,24 @@ import {
 } from "../../agents/run-termination.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
-import type { ReplyBackendHandle } from "./reply-run-registry.contracts.js";
+import type { ReplyBackendHandle } from "../../sessions/session-controller.contracts.js";
 import {
   abortActiveReplyRuns,
-  beginReplyMessageInjectionTarget,
-  forceClearReplyOperation,
-  registerReplyOperationSuccessorBarrier,
-  ReplyRunSuccessorAdmissionBlockedError,
-  waitForReplyRunSuccessorAdmission,
   clearReplyRunForResetBySessionId,
-  isReplyRunAbortableForCompaction,
-  isReplyRunAbortableForSignal,
-  isReplyRunActiveForSessionId,
-  replyRunRegistry,
-  retainReplyOperationUntilComplete,
-} from "./reply-run-registry.js";
+  getSessionControllerOperation,
+  isSessionRunActive,
+  isSessionRunActiveForKey,
+} from "../../sessions/session-controller.js";
 import {
-  resolveActiveReplyRunOwnerForSignal,
-  waitForReplyOperationBackend,
-} from "./reply-run-registry.state.js";
+  beginSessionEffect,
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { isSessionRunCompactionBlocked } from "../../sessions/session-controller.queries.js";
+import { waitForReplyOperationBackend } from "../../sessions/session-controller.state.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
+import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 
 function createRunningOperation(
   upstreamAbortSignal?: AbortSignal,
@@ -43,7 +40,7 @@ function createRunningOperation(
 }
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   resetCommandQueueStateForTest();
   resetDiagnosticRunActivityForTest();
   vi.restoreAllMocks();
@@ -55,49 +52,60 @@ describe("reply run registry cancellation", () => {
       sessionId: "session-compact",
     });
 
-    expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+    expect(isSessionRunActive("session-compact")).toBe(true);
+    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
 
     operation.markWaitingForDeferredMaintenance();
 
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
 
     operation.markDeferredMaintenanceWaitEnded();
     operation.setPhase("running");
 
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
+    expect(isSessionRunCompactionBlocked("session-compact")).toBe(true);
   });
 
-  it("settles aborted global-lane reservations but waits for retained owners and delivery", async () => {
-    for (const retained of [false, true]) {
-      const operation = createTestReplyOperation({ sessionId: "session-waiting-abort" });
-      const delivery = createDeferred();
-      const settled = vi.fn();
-      void operation.ownerSettlement?.then(settled);
-      operation.setPhase("waiting_for_global_lane");
-      if (retained) {
-        retainReplyOperationUntilComplete(operation);
-      }
-      try {
-        operation.abortByUser();
-        expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-        expect(replyRunRegistry.isActive(operation.key)).toBe(retained);
-        expect(isReplyRunActiveForSessionId(operation.sessionId)).toBe(retained);
-        await Promise.resolve();
-        expect(settled).toHaveBeenCalledTimes(retained ? 0 : 1);
-        if (retained) {
-          operation.completeWithAfterClearBarrier(delivery.promise);
-          await Promise.resolve();
-          expect(replyRunRegistry.isActive(operation.key)).toBe(false);
-          expect(settled).not.toHaveBeenCalled();
-          delivery.resolve();
-          await operation.ownerSettlement;
-          expect(settled).toHaveBeenCalledOnce();
-        }
-      } finally {
-        delivery.resolve();
-        operation.complete();
-      }
+  it("retains deferred-maintenance custody until its aborted producer completes", () => {
+    const operation = createTestReplyOperation({
+      sessionId: "session-waiting-abort",
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+    operation.abortByUser();
+
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(isSessionRunActiveForKey("agent:main:main")).toBe(true);
+    expect(isSessionRunActive("session-waiting-abort")).toBe(true);
+    expect(() => createTestReplyOperation()).toThrow();
+    operation.complete();
+    expect(isSessionRunActiveForKey("agent:main:main")).toBe(false);
+    expect(isSessionRunActive("session-waiting-abort")).toBe(false);
+  });
+
+  it("retains an aborted global-lane reservation through producer and delivery settlement", async () => {
+    const operation = createTestReplyOperation({ sessionId: "session-global-lane-abort" });
+    const delivery = createDeferred();
+    const settled = vi.fn();
+    void operation.ownerSettlement.then(settled);
+    operation.markWaitingForGlobalLane();
+    try {
+      operation.abortByUser();
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(isSessionRunActiveForKey(operation.key)).toBe(true);
+      expect(isSessionRunActive(operation.sessionId)).toBe(true);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      operation.completeWithAfterClearBarrier(delivery.promise);
+      await Promise.resolve();
+      expect(isSessionRunActiveForKey(operation.key)).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
+      delivery.resolve();
+      await operation.ownerSettlement;
+      expect(settled).toHaveBeenCalledOnce();
+    } finally {
+      delivery.resolve();
+      operation.complete();
     }
   });
 
@@ -110,7 +118,7 @@ describe("reply run registry cancellation", () => {
     clearReplyRunForResetBySessionId("session-waiting-reset");
 
     expect(operation.result).toBeNull();
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
+    expect(isSessionRunActiveForKey("agent:main:main")).toBe(true);
   });
 
   it("keeps retained terminal failures immutable across late aborts", () => {
@@ -119,7 +127,6 @@ describe("reply run registry cancellation", () => {
       isStreaming: () => false,
       isAbortable: () => true,
     });
-    operation.retainFailureUntilComplete();
 
     operation.fail("run_failed", new Error("provider failed"));
     upstreamAbort.abort(new Error("late upstream abort"));
@@ -187,7 +194,7 @@ describe("reply run registry cancellation", () => {
     },
   );
 
-  it("clears queued ownership when the upstream signal is already aborted", () => {
+  it("retains already-aborted queued ownership until its producer completes", () => {
     const upstreamAbort = new AbortController();
     upstreamAbort.abort(new Error("caller already cancelled"));
 
@@ -200,28 +207,31 @@ describe("reply run registry cancellation", () => {
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(operation.phase).toBe("aborted");
     expect(operation.abortSignal.aborted).toBe(true);
-    expect(replyRunRegistry.isActive("agent:main:already-cancelled")).toBe(false);
+    expect(isSessionRunActiveForKey("agent:main:already-cancelled")).toBe(true);
+    expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow();
+    operation.complete();
+    expect(isSessionRunActiveForKey("agent:main:already-cancelled")).toBe(false);
   });
 
-  it("rejects aborts while the attached backend is finalizing", () => {
+  it("rejects aborts while the attached backend is finalizing", async () => {
     let abortable = false;
     const { operation, cancel } = createRunningOperation(undefined, {
       isStreaming: () => false,
       isAbortable: () => abortable,
     });
 
-    expect(replyRunRegistry.abort(operation.key)).toBe(false);
+    expect(await requestCurrentSessionStop(operation.key)).toBe(false);
     expect(abortActiveReplyRuns({ mode: "all" })).toBe(false);
     expect(operation.result).toBeNull();
     expect(cancel).not.toHaveBeenCalled();
 
     abortable = true;
-    expect(replyRunRegistry.abort(operation.key)).toBe(true);
+    expect(await requestCurrentSessionStop(operation.key)).toBe(true);
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
     expect(cancel).toHaveBeenCalledWith("user_abort");
   });
 
-  it("keeps abort frozen after the backend detaches for reply delivery", () => {
+  it("keeps abort frozen after the backend detaches for reply delivery", async () => {
     const upstreamAbort = new AbortController();
     const { operation, cancel, backend } = createRunningOperation(upstreamAbort.signal, {
       isStreaming: () => false,
@@ -231,9 +241,7 @@ describe("reply run registry cancellation", () => {
     operation.detachBackend(backend);
 
     expect(operation.phase).toBe("running");
-    expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
-    expect(isReplyRunAbortableForSignal(new AbortController().signal)).toBe(true);
-    expect(replyRunRegistry.abort(operation.key)).toBe(false);
+    expect(await requestCurrentSessionStop(operation.key)).toBe(false);
     expect(operation.result).toBeNull();
     expect(cancel).not.toHaveBeenCalled();
 
@@ -241,11 +249,10 @@ describe("reply run registry cancellation", () => {
     expect(operation.abortSignal.aborted).toBe(false);
 
     operation.complete();
-    expect(replyRunRegistry.isActive(operation.key)).toBe(false);
-    expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
+    expect(isSessionRunActiveForKey(operation.key)).toBe(false);
   });
 
-  it("aborts compacting runs through the registry compatibility helper", () => {
+  it("aborts only compacting runs selected by the controller", () => {
     const faultyOperation = createTestReplyOperation({
       sessionKey: "agent:main:faulty",
       sessionId: "session-faulty",
@@ -316,7 +323,7 @@ describe("reply operation backend readiness", () => {
     source.abort();
     await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
     expect(operation.abortSignal.aborted).toBe(false);
-    expect(replyRunRegistry.get(operation.key)).toBe(operation);
+    expect(getSessionControllerOperation(operation.key)).toBe(operation);
     operation.attachBackend({ kind: "embedded", cancel: vi.fn() });
     operation.setPhase("running");
     await expect(retained).resolves.toBe(true);
@@ -361,277 +368,47 @@ describe("reply operation backend readiness", () => {
     await expect(current).resolves.toBe(true);
     operation.complete();
   });
-});
 
-describe("reply run control ownership", () => {
-  const sessionKey = "agent:main:voice-control";
-  afterEach(() => replyRunRegistry.get(sessionKey)?.complete());
-  it.each([false, true])(
-    "settles producer handoff before delivery can admit a successor (forced clear=%s)",
-    async (forcedClear) => {
-      const controller = new AbortController();
-      const operation = createTestReplyOperation({
-        sessionKey,
-        upstreamAbortSignal: controller.signal,
-      });
-      operation.setPhase("running");
-      const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
-      const persistence = createDeferred();
-      const delivery = createDeferred();
-      const producerError = new Error("Producer rejected its partial reply");
-      const started = vi.fn();
-      let handoff: Promise<void> | undefined;
-      try {
-        expect(
-          owner?.handoff((producerCompleted) => {
-            handoff = producerCompleted.then(async (error) => {
-              expect(error).toBe(producerError);
-              started();
-              await persistence.promise;
-            });
-            return handoff;
-          }),
-        ).toBe(true);
-
-        controller.abort();
-        if (forcedClear) {
-          expect(forceClearReplyOperation(operation)).toBe(true);
-        }
-        operation.fail("run_failed", producerError);
-        operation.fail("run_failed", new Error("Later cleanup failure"));
-        await Promise.resolve();
-        expect(started).not.toHaveBeenCalled();
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow();
-
-        operation.completeWithAfterClearBarrier(delivery.promise);
-        await Promise.resolve();
-        expect(started).toHaveBeenCalledOnce();
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
-        const nextAdmission = waitForReplyRunSuccessorAdmission(operation.key, null);
-        persistence.resolve();
-        await handoff;
-        await expect(nextAdmission).resolves.toMatchObject({ settled: true });
-
-        // Delivery is allowed to depend on a new operation without a settlement cycle.
-        const successor = createTestReplyOperation({ sessionKey, sessionId: "successor" });
-        successor.complete();
-        delivery.resolve();
-        await operation.ownerSettlement;
-        expect(owner?.handoff(async () => {})).toBe(false);
-      } finally {
-        persistence.resolve();
-        delivery.resolve();
-        operation.complete();
-        await operation.ownerSettlement;
-      }
-    },
-  );
-
-  it("keeps a mismatched input out of a required reply owner", async () => {
-    const queueMessage = vi.fn(async () => {});
-    const operation = replyRunRegistry.begin({
-      sessionKey,
-      sessionId: "session-reply-expectation",
-      resetTriggered: false,
+  it("retains physical source settlement after its queued operation moves to another key", async () => {
+    const source = captureSessionTarget({
+      storeScope: "/stores/rekey-source.sqlite",
+      sessionKey: "agent:main:rekey-source",
+      incarnation: "source-incarnation",
     });
-    operation.attachBackend({
-      kind: "embedded",
-      terminalReplyExpectation: "required",
-      cancel: vi.fn(),
-      queueMessage,
+    const operation = createTestReplyOperation({
+      sessionKey: source.sessionKey,
+      sessionId: "source-incarnation",
+      target: source,
     });
-    operation.setPhase("running");
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
-    if (!target) {
-      throw new Error("Expected a live message injection target");
-    }
-    await expect(
-      (
-        await beginReplyMessageInjectionTarget(target, "different input", {
-          terminalReplyExpectation: "optional",
-        })
-      ).outcome,
-    ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
-    expect(queueMessage).not.toHaveBeenCalled();
-    await expect(
-      (
-        await beginReplyMessageInjectionTarget(target, "matching input", {
-          terminalReplyExpectation: "required",
-        })
-      ).outcome,
-    ).resolves.toEqual({ status: "accepted" });
-    expect(queueMessage).toHaveBeenCalledOnce();
-  });
-
-  it.each(["key", "sessionId"] as const)(
-    "fences retained controls after its %s changes",
-    (field) => {
-      const controller = new AbortController();
-      const operation = replyRunRegistry.begin({
-        sessionKey,
-        sessionId: "original-session",
-        resetTriggered: false,
-        upstreamAbortSignal: controller.signal,
-      });
-      try {
-        const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
-        if (field === "key") {
-          operation.updateSessionKey("agent:main:voice-control-rekeyed");
-        } else {
-          operation.updateSessionId("replacement-session");
-        }
-        expect(owner?.abort()).toBe(false);
-        expect(operation.abortSignal.aborted).toBe(false);
-      } finally {
-        operation.complete();
-      }
-    },
-  );
-
-  it("controls a queued reply only through its admitted upstream signal", () => {
-    const controller = new AbortController();
-    const operation = replyRunRegistry.begin({
-      sessionKey,
-      sessionId: "queued-session",
-      resetTriggered: false,
-      upstreamAbortSignal: controller.signal,
-    });
-    expect(resolveActiveReplyRunOwnerForSignal(new AbortController().signal)).toBeUndefined();
-    const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
-    expect(owner?.sessionId).toBe("queued-session");
-    expect(owner?.abort()).toBe(true);
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(resolveActiveReplyRunOwnerForSignal(controller.signal)).toBeUndefined();
-  });
-
-  it("fences retained controls after same-session replacement", () => {
-    const controller = new AbortController();
-    const operation = replyRunRegistry.begin({
-      sessionKey,
-      sessionId: "same-session",
-      resetTriggered: false,
-      upstreamAbortSignal: controller.signal,
-    });
-    const owner = resolveActiveReplyRunOwnerForSignal(controller.signal);
-    operation.complete();
-    const successor = replyRunRegistry.begin({
-      sessionKey,
-      sessionId: "same-session",
-      resetTriggered: false,
-      upstreamAbortSignal: new AbortController().signal,
-    });
-    expect(resolveActiveReplyRunOwnerForSignal(controller.signal)).toBeUndefined();
-    expect(owner?.abort()).toBe(false);
-    expect(successor.abortSignal.aborted).toBe(false);
-  });
-});
-
-async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
-  vi.useFakeTimers();
-  try {
-    return await run();
-  } finally {
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-  }
-}
-
-describe("reply run successor barriers", () => {
-  it("fences every durable alias until successor handoff settles", async () => {
-    await withFakeReplyTimers(async () => {
-      const requestKey = "agent:main:telegram:alias:request";
-      const canonicalKey = "agent:main:telegram:alias:canonical";
-      const adoptedKey = "agent:main:telegram:alias:adopted";
-      const operation = createTestReplyOperation({
-        sessionKey: requestKey,
-        sessionId: "alias-session",
-      });
-      const { promise: firstBarrier, resolve: releaseFirstBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [requestKey, canonicalKey],
-        start: () => firstBarrier,
-      });
-      const { promise: secondBarrier, resolve: releaseSecondBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [adoptedKey],
-        start: () => secondBarrier,
-      });
-
-      operation.updateSessionId("rotated-alias-session");
-      operation.complete();
-      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
-      }
-      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(timedWait).resolves.toEqual({ settled: false });
-
-      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
-      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      releaseFirstBarrier();
-      for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({ settled: true });
-      }
-      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
-      );
-      releaseSecondBarrier();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
-        settled: true,
-      });
-      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
-      successor.complete();
-    });
-  });
-
-  it("starts a late deferred release and keeps successors fenced after rejection", async () => {
-    const operation = createTestReplyOperation();
-    operation.complete();
-    const entered = createDeferred();
-    const release = createDeferred();
-    const start = vi.fn(() => {
-      entered.resolve();
-      return release.promise;
-    });
-    const controller = new AbortController();
-    let wait: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
+    const effect = await beginSessionEffect({ target: source });
+    const held = createDeferred();
+    const writing = effect.run(() => held.promise);
     try {
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: operation.sessionId,
-        sessionKeys: [operation.key],
-        deferUntilClear: true,
-        start,
-      });
-      expect(start).toHaveBeenCalledOnce();
-      await entered.promise;
-      release.reject(new Error("Synthetic late release failure"));
-      await Promise.allSettled([release.promise]);
-      expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
-      );
-      wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
-        signal: controller.signal,
-      });
-      controller.abort();
-      await expect(wait).resolves.toEqual({ settled: false });
-      expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
-      );
-      expect(start).toHaveBeenCalledOnce();
+      operation.updateSessionKey("agent:main:rekey-destination");
+      const settled = vi.fn();
+      const receipt = captureSessionControllerSettlement({ target: source });
+      expect(receipt).toBeDefined();
+      void receipt?.then(settled);
+      expect(() =>
+        createTestReplyOperation({
+          sessionKey: source.sessionKey,
+          sessionId: "next-incarnation",
+          target: source,
+        }),
+      ).toThrow();
+      effect.release();
+      operation.complete();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      held.resolve();
+      await writing;
+      await receipt;
+      expect(settled).toHaveBeenCalledOnce();
     } finally {
-      controller.abort();
-      release.resolve();
-      await Promise.allSettled([release.promise]);
-      await wait;
+      held.resolve();
+      await writing;
+      effect.release();
+      operation.complete();
     }
   });
 });

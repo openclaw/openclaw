@@ -1,9 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
   testing,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
@@ -12,11 +10,14 @@ import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { bindReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { updateRpcSourceSessionId } from "../../sessions/session-controller.rpc-sources.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { prepareTalkClientControlAuthority } from "./client-agent-consult.js";
 import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
@@ -56,15 +57,18 @@ it.each([true, false])(
       client.connect.caps = ["tool-events", "task-suggestions"];
       const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
       const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
-      const context = { chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
       const runId = "talk-authority-run";
       const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
         runId,
         sessionId: "queued-session",
         sessionKey: sessionTarget.canonicalKey,
         agentId: sessionTarget.agentId,
         ownerConnId: "talk-authority-client",
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: sessionTarget.canonicalKey,
+          agentId: sessionTarget.agentId,
+        }),
         timeoutMs: 60_000,
         kind: "chat-send",
       });
@@ -85,7 +89,7 @@ it.each([true, false])(
           if (!preparedRunAdmission || !operation || !provider || !modelId || !sessionFile) {
             throw new Error("Missing real reply admission");
           }
-          registration.entry.sessionId = params.sessionId;
+          updateRpcSourceSessionId(registration.entry, params.sessionId);
           const admittedRunContext = await preparedRunAdmission.admit("embedded", "talk-chat-test");
           return await withPreparedEmbeddedRunToolAuthority(
             { admittedRunContext, replyOperation: operation },
@@ -111,7 +115,6 @@ it.each([true, false])(
               } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
               const captureTarget = () =>
                 resolveOwnedActiveTalkRunTarget({
-                  context,
                   clientConnId: "talk-authority-client",
                   sessionTarget,
                   scope: { kind: "session" },
@@ -119,7 +122,15 @@ it.each([true, false])(
               const queuedTarget = beforePublication ? captureTarget() : undefined;
               operation.attachBackend(handle);
               operation.setPhase("running");
-              setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
+              expect(registration.entry.input.claim?.operation).toBe(operation);
+              setActiveEmbeddedRun(
+                params.sessionId,
+                handle,
+                params.sessionKey,
+                params.sessionFile,
+                params.agentId,
+                operation,
+              );
               const runTarget = beforePublication ? queuedTarget : captureTarget();
               const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
                 controlRealtimeVoiceAgentRun({
@@ -185,7 +196,15 @@ it.each([true, false])(
           CommandInterpretationSuppressed: true,
           InputProvenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
         }),
-        { toolsAllow: authority.toolsAllow, runId, abortSignal: registration.controller.signal },
+        {
+          toolsAllow: authority.toolsAllow,
+          runId,
+          abortSignal: registration.controller.signal,
+          turnAdoptionLifecycle: bindReplySourceInput(
+            { onAdopted: () => {} },
+            registration.entry.input,
+          ),
+        },
         config,
       ).finally(registration.cleanup);
       if (executionError) {

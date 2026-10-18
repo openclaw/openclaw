@@ -40,7 +40,6 @@ const fixtures = setupCronRegressionFixtures({ prefix: "cron-finalization-receip
 
 function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
-    observed: undefined,
     storePath,
     job,
     agentId: job.agentId ?? "main",

@@ -92,10 +92,10 @@ type ProofObservation = Partial<ReturnType<typeof rpcObservation>> & {
 
 // Fixed keys and primitive observations only: never serialize RPC payloads,
 // errors, identities, file paths, media bytes, or transcript content.
-export function observe(phase: ProofPhase, fields: ProofObservation): void {
+function observe(phase: ProofPhase, fields: ProofObservation): void {
   console.log(JSON.stringify({ proof: "agent-runtime-authority", version: 1, phase, ...fields }));
 }
-export function rpcObservation(response: Response) {
+function rpcObservation(response: Response) {
   const { payload, error } = response;
   const status =
     payload !== null && typeof payload === "object" && "status" in payload

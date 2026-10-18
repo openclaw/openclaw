@@ -187,6 +187,7 @@ describe("GitHub publication requester authority schema migration", () => {
         { kind: "subagent-operator-recovery-v25", path: databasePath },
         { kind: "session-state-head-layout-v26", path: databasePath },
         { kind: "state-write-indexes-v27", path: databasePath },
+        { kind: "github-publication-draft-v28", path: databasePath },
       ]);
       if (via === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options)).toEqual({

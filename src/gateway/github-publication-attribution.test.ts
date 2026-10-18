@@ -359,7 +359,7 @@ describe("Gateway GitHub publication attribution", () => {
       body: `Detailed proof\n\n### Verification notes\n\nKeep this paragraph.\n\n## Worked on by\n\n- @alice\n- @grace\n\n<!-- openclaw-publication:${result.requestId} -->\n\n---\n[View the OpenClaw team session](https://team.example/control/chat/main/subagent/delegated-publication)`,
       head: `openclaw:${BRANCH}`,
       base: "main",
-      draft: true,
+      draft: false,
     });
   });
 

@@ -16,7 +16,7 @@ export type ToolOutcomeSummaryProps = {
 export function ToolOutcomeSummary(props: ToolOutcomeSummaryProps) {
   const outcomes = createMemo(() => summarizeToolCardOutcomes(props.cards, props.activity));
   const outcome = () =>
-    outcomes().exitCode === undefined
+    outcomes().exitCode === undefined || outcomes().exitCode === 0
       ? t("chat.toolCards.failed")
       : t("chat.toolCards.exitCode", { code: String(outcomes().exitCode) });
   return (

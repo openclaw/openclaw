@@ -18,9 +18,9 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -349,7 +349,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
     let releaseAdmission = () => {};
     const admission =
       phase === "before-interrupt"
-        ? await beginSessionWorkAdmission({
+        ? await beginSessionEffect({
             scope: storePath,
             identities: [sessionId, sessionKey],
             assertAllowed: () => {},
@@ -892,7 +892,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
 
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
-  const heldMutation = runExclusiveSessionLifecycleMutation("recover", {
+  const heldMutation = runSessionMutation({
     scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {

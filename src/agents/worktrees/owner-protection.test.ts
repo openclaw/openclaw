@@ -26,9 +26,9 @@ import type { ManagedWorktreeRecord } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   placementService: vi.fn(),
-  isSessionWorkAdmissionActive: vi.fn(),
-  isSessionLifecycleMutationActive: vi.fn(),
-  runExclusiveSessionLifecycleMutation: vi.fn(),
+  isSessionControllerWorkActive: vi.fn(),
+  isSessionMutationActive: vi.fn(),
+  runSessionMutation: vi.fn(),
 }));
 
 const readOwnersInWorker = sessionReads.readResolvedSessionStoreTargetsInWorker;
@@ -72,12 +72,22 @@ vi.mock("../../gateway/session-worker-placement-context.js", () => ({
     workerSessionPlacementService: mocks.placementService(),
   }),
 }));
-vi.mock("../../sessions/session-lifecycle-admission.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../sessions/session-lifecycle-admission.js")>()),
-  isSessionWorkAdmissionActive: mocks.isSessionWorkAdmissionActive,
-  isSessionLifecycleMutationActive: mocks.isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation: mocks.runExclusiveSessionLifecycleMutation,
-}));
+// mock-isolation: Select GC activity and mutation facts; retain real maintenance protection.
+vi.mock("../../sessions/session-controller.lifecycle.js", async () => {
+  const {
+    collectSessionControllerTargets,
+    collectSessionMutationIdentities,
+    observeSessionControllerProtectionReleases,
+  } = await import("../../sessions/session-controller.lifecycle-projections.js");
+  return {
+    collectSessionControllerTargets,
+    collectSessionMutationIdentities,
+    observeSessionControllerProtectionReleases,
+    isSessionControllerWorkActive: mocks.isSessionControllerWorkActive,
+    isSessionMutationActive: mocks.isSessionMutationActive,
+    runSessionMutation: mocks.runSessionMutation,
+  };
+});
 
 function target(
   sessionKey = cleanupRecord.ownerId,
@@ -97,11 +107,9 @@ beforeEach(() => {
   vi.resetAllMocks();
   setRuntimeConfigSnapshot({});
   mocks.placementService.mockReturnValue(emptyPlacementService);
-  mocks.isSessionWorkAdmissionActive.mockReturnValue(false);
-  mocks.isSessionLifecycleMutationActive.mockReturnValue(false);
-  mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
-    (_operation, { run }: { run: () => Promise<unknown> }) => run(),
-  );
+  mocks.isSessionControllerWorkActive.mockReturnValue(false);
+  mocks.isSessionMutationActive.mockReturnValue(false);
+  mocks.runSessionMutation.mockImplementation(({ run }: { run: () => Promise<unknown> }) => run());
   readOwners.mockImplementation(({ sessionKeys }: { sessionKeys: readonly string[] }) =>
     Promise.resolve(new Map(sessionKeys.map((sessionKey) => [sessionKey, target(sessionKey)]))),
   );
@@ -239,17 +247,16 @@ it.each(["canonical-key", "shared-key", "session-id"])(
 
 it("cancels queued cleanup before the preceding session mutation finishes", async ({ signal }) => {
   const lifecycle = await vi.importActual<
-    typeof import("../../sessions/session-lifecycle-admission.js")
-  >("../../sessions/session-lifecycle-admission.js");
-  mocks.runExclusiveSessionLifecycleMutation.mockImplementation(
-    lifecycle.runExclusiveSessionLifecycleMutation,
-  );
+    typeof import("../../sessions/session-controller.lifecycle.js")
+  >("../../sessions/session-controller.lifecycle.js");
+  mocks.runSessionMutation.mockImplementation(lifecycle.runSessionMutation);
   const sessionId = "queued-cleanup-session";
   ownerEntry({ sessionId, updatedAt: 1, archivedAt: 1 });
   const cfg = { session: { store: "/worktree-cleanup-policy/sessions.json" } };
   const entered = createDeferred();
   const release = createDeferred();
-  const blocker = lifecycle.runExclusiveSessionLifecycleMutation("archive", {
+  const blocker = lifecycle.runSessionMutation({
+    policy: "wait",
     scope: resolveSessionStorePathCore(cfg.session.store, { agentId: "main" }),
     identities: [key, sessionId],
     run: async () => {
@@ -291,13 +298,13 @@ it("uses one worker owner read through cleanup and refuses committed changes bef
 });
 
 it("exempts its own cleanup fence while preserving new work admission", async () => {
-  mocks.isSessionLifecycleMutationActive.mockReturnValue(true);
+  mocks.isSessionMutationActive.mockReturnValue(true);
   await policy.withOwnerCleanup(cleanupRecord, async (withOwnerMutation) => {
     expectState("active");
     await withOwnerMutation(async () => {
       expectState("retired");
       expectState("active", `${key}:other`);
-      mocks.isSessionWorkAdmissionActive.mockReturnValue(true);
+      mocks.isSessionControllerWorkActive.mockReturnValue(true);
       expectState("active");
     });
   });

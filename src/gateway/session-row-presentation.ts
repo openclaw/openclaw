@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import {
-  SESSION_DASHBOARD_ROW_FIELDS,
-  SESSION_ROW_DETAIL_FIELDS,
-  SESSION_ROWS_DELTA_PREFIX,
-  SESSION_SIDEBAR_ROW_FIELDS,
-} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resolveProjectedAgentRunModel } from "../infra/agent-run-registry.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -42,6 +37,7 @@ import {
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
+  applyGatewaySessionRowMode,
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
 } from "./session-utils-display.js";
@@ -224,13 +220,16 @@ export function prepareProjectedSessionPresentation(
     }: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
   ) =>
     projectGatewaySessionRunState({ key, entry, parsedKey, now, rowContext: preparedRowContext });
-  const active = (key: string, entry: records.MaterializedRow["entry"], agentId: string) =>
+  const active = (
+    record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
+  ) =>
     projectRun?.({
-      requestedKey: key,
-      canonicalKey: key,
-      sessionId: entry.sessionId,
-      agentId,
-      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, key),
+      storePath: record.storeTarget.storePath,
+      requestedKey: record.key,
+      canonicalKey: record.key,
+      sessionId: record.entry.sessionId,
+      agentId: record.agentId,
+      defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, record.key),
     });
   const target = (query: records.Lookup) => {
     const record = projection.describe(query);
@@ -323,7 +322,7 @@ export function prepareProjectedSessionPresentation(
     record: records.MaterializedRow,
     options: PresentationOptions = {},
   ): GatewaySessionRow | null => {
-    const run = active(record.key, record.entry, record.agentId);
+    const run = active(record);
     const preparedFacts = record.facts?.present();
     const childOwnerSessionKeys = resolveSessionChildOwners({
       key: record.key,
@@ -498,21 +497,7 @@ export function prepareProjectedSessionPresentation(
         row.activitySummary = { ...row.activitySummary, canEnsure: canEnsure === true };
       }
     }
-    if (options.rowMode === "dashboard" || options.rowMode === "sidebar") {
-      const fields =
-        options.rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
-      for (const field of Object.keys(row)) {
-        if (!fields.has(field)) {
-          Reflect.deleteProperty(row, field);
-        }
-      }
-      row.rowMode = options.rowMode;
-    } else if (options.rowMode === "compact") {
-      for (const field of SESSION_ROW_DETAIL_FIELDS) {
-        delete row[field];
-      }
-      row.rowMode = "compact";
-    }
+    applyGatewaySessionRowMode(row, options.rowMode);
     if (options.omitSentinelChildren) {
       row.childSessions = undefined;
       row.hasActiveSubagentRun = undefined;

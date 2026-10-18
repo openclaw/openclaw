@@ -73,6 +73,14 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     await server.startupSettled;
     socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
     const connected = socket;
+    // Complete catalog acquisition before holding a call: retained acquisition
+    // drains before call quiescence and may legitimately change reader status.
+    const refreshed = await rpcReq<{ pendingProviders?: string[] }>(connected, "models.list", {
+      agentId: "main",
+      refresh: true,
+    });
+    expect(refreshed.ok, JSON.stringify(refreshed)).toBe(true);
+    expect(refreshed.payload?.pendingProviders ?? []).toEqual([]);
     const reads = async () =>
       await Promise.all(
         ["models.list", "chat.metadata"].map(async (method) => {

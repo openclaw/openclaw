@@ -273,7 +273,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       rejectRequesterWake: true,
     },
     {
-      name: "backs off when rejected-wake settlement persistence fails",
+      name: "retains rejected-wake settlement until sweep recovery",
       rejectRequesterWake: true,
       rejectPersistence: true,
     },
@@ -447,7 +447,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     if (rejectPersistence) {
       // Alpha was already delivered before yield. Join the rejected wake owner
-      // before measuring its backoff; delivered cleanup does not imply it settled.
+      // before observing recovery; delivered cleanup does not imply it settled.
       await settleWakeOwner?.(true);
       expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
         status: "pending",
@@ -461,6 +461,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
       });
       expect(getRequesterWakeCalls()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
+      await settleWakeOwner?.(true);
+      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 0,
+      });
+      await registry.testing.sweepOnceForTests();
       await settleWakeOwner?.(true);
       await waitForDeliveredCleanup(alpha.runId);
       expect(getRequesterWakeCalls()).toHaveLength(0);
@@ -566,7 +572,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
       expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
       expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
       expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);
-      await registry.testing.sweepOnceForTests();
+      if (change === "unchanged") {
+        await registry.testing.sweepOnceForTests();
+      }
       expect(getRequesterWakeCalls()).toHaveLength(0);
       const database = openOpenClawStateDatabase();
       let replayTrigger = false;
@@ -580,6 +588,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await flushOwnedWork();
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
+          expect(held.executions).not.toContain("reconcile");
         } else {
           await expect(held.publications.complete.promise).resolves.toEqual({
             applied: true,
@@ -591,8 +600,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
             "CREATE TRIGGER reject_quiet_retirement_replay BEFORE DELETE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'quiet retirement replayed'); END",
           );
           replayTrigger = true;
-          await registry.testing.sweepOnceForTests();
-          await vi.advanceTimersByTimeAsync(30_000);
+          await vi.advanceTimersByTimeAsync(60_000);
           await held.reconcile.entered.promise;
           held.reconcile.release.resolve();
           await expect(held.publications.reconcile.promise).resolves.toEqual({

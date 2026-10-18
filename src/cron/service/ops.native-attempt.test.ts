@@ -17,6 +17,10 @@ import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
 import { getTotalQueueSize } from "../../process/command-queue.js";
+import {
+  getSessionControllerEntryForOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.state.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { occupyWorkers, readJob, withCronGatewayState } from "./ops.gateway.test-support.js";
@@ -129,7 +133,15 @@ describe("native attempt queued automation admission", () => {
                       });
                       expect(ack.details).toMatchObject({ ok: true, enqueued: true });
                       if (outcome === "permission change") {
-                        const change = prepareEmbeddedRunPermissionChange("embedded-session");
+                        const operation = getSessionControllerOperation(
+                          "agent:main:native-cron-admission",
+                        );
+                        const target =
+                          operation && getSessionControllerEntryForOperation(operation).target;
+                        if (!target) {
+                          throw new Error("Native permission target missing");
+                        }
+                        const change = prepareEmbeddedRunPermissionChange(target);
                         expect(change.kind).toBe("active");
                         if (change.kind !== "active") {
                           throw new Error("Native permission owner missing");

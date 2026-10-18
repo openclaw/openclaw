@@ -1,12 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  StateDatabaseAccessError,
+  assertPersistedStateDatabaseAccessAllowed,
   StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
 import { releaseOpenClawStateLeaseBestEffort } from "./openclaw-state-lease-storage.js";
 
 const clock = vi.hoisted(() => ({ elapsed: 0 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: async (delay: number) => {
@@ -61,9 +66,34 @@ it("retains the maintenance error when release exhausts its existing two-second 
 });
 
 it.each([
-  new StateDatabaseAccessError("Synthetic ownership cannot be verified"),
+  new StateDatabaseMaintenanceScopeError(databasePath),
   new AggregateError([maintenance, new Error("Synthetic cleanup failure")]),
 ])("does not retry an unclassified release failure (%s)", async (failure) => {
+  await expect(
+    releaseOpenClawStateLeaseBestEffort(params, async () => {
+      throw failure;
+    }),
+  ).rejects.toBe(failure);
+  expect(clock.elapsed).toBe(0);
+});
+
+it("does not retry an ownership verification refusal from the persisted-owner guard", async () => {
+  const ownerPath = path.join(tempDirs.make("state-lease-refusal-"), "owner.json");
+  fs.writeFileSync(
+    ownerPath,
+    JSON.stringify({ pid: 0, createdAt: "fixture", configPath: "fixture" }),
+  );
+  let failure: unknown;
+  try {
+    assertPersistedStateDatabaseAccessAllowed({
+      databasePath,
+      ownerPath,
+      assertMaintenance: () => {},
+    });
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toMatchObject({ name: "StateDatabaseAccessError" });
   await expect(
     releaseOpenClawStateLeaseBestEffort(params, async () => {
       throw failure;

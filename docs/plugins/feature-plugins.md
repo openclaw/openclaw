@@ -415,6 +415,18 @@ deadline, which also covers retries and response-body consumption. The context
 returns parsed JSON plus HTTP status and a sanitized error message; backend route
 validation and mutation authority remain unchanged.
 
+The optional `login` capability connects a channel presentation to an existing
+application-owned login flow shared with setup. Its snapshot exposes the current
+message, QR image, connected state, and busy state; opaque login session keys stay
+with the host. `start(force)` and `wait()` retain the setup account selection.
+`captureLogout()` returns the selected account and a guarded logout callback;
+capture it before awaiting the host's `confirm` dialog. Account or linked-state
+changes, lost administrator access, replaced owners, and ended connection epochs
+invalidate that callback. Closing the detail does not reset the shared login flow.
+The host confirmation retains normal dialog admission and cancels when its view
+or transport lifetime ends. Optional phone and duration formatters preserve the
+host's locale conventions.
+
 The normal plugin builder preserves this declaration. The Control UI build
 loads it from the completed bundled distribution with the same package identity,
 asset revision, and immutable JavaScript/CSS generation. A Settings-only entry

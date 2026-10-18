@@ -19,7 +19,6 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
-  createTestUserTurnRecorder,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
@@ -28,6 +27,7 @@ import {
   requireRecord,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 

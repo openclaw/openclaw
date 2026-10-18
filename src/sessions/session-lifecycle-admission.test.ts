@@ -9,18 +9,18 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission as beginAdmission,
-  cancelSessionWorkAdmissionHandoff as cancelHandoff,
-  consumeSessionWorkAdmissionHandoff as consumeHandoff,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-  hasOnlySessionLifecycleMutationKindActive as onlyKindActive,
-  interruptSessionWorkAdmissions as interrupt,
-  isCompetingSessionWorkAdmissionActive as competingActive,
-  isSessionLifecycleMutationActive as mutationActive,
-  isSessionWorkAdmissionActive as workActive,
-  runExclusiveSessionLifecycleMutation as mutate,
-} from "./session-lifecycle-admission.js";
+  beginSessionEffect as beginAdmission,
+  cancelSessionEffectHandoff as cancelHandoff,
+  consumeSessionEffectHandoff as consumeHandoff,
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+  hasOnlySessionMutationKindActive as onlyKindActive,
+  interruptSessionControllerEffects as interrupt,
+  isCompetingSessionControllerWorkActive as competingActive,
+  isSessionMutationActive as mutationActive,
+  isSessionControllerWorkActive as workActive,
+  runSessionMutation as mutate,
+} from "./session-controller.lifecycle.js";
 
 type Target = { scope: string; identities: (string | undefined)[] };
 function target(scope: string, ...identities: (string | undefined)[]): Target {
@@ -31,7 +31,7 @@ function admit(params: Parameters<typeof beginAdmission>[0]) {
 }
 function holdMutation(
   owner: Target | { targets: Target[] },
-  options: { operation?: "patch" | "compact"; kind?: "compaction"; prepare?: boolean } = {},
+  options: { kind?: "compaction"; prepare?: boolean } = {},
 ) {
   const started = createDeferred();
   const release = createDeferred();
@@ -39,7 +39,7 @@ function holdMutation(
     started.resolve();
     await release.promise;
   };
-  const mutation = mutate(options.operation ?? "patch", {
+  const mutation = mutate({
     ...owner,
     kind: options.kind,
     run: options.prepare ? async () => {} : wait,
@@ -84,7 +84,7 @@ it("atomically hands admitted work across an interrupted RPC boundary", async ()
   const handoffId = admission.createHandoff();
   const mutationStarted = createDeferred();
   const run = vi.fn(async () => {});
-  const mutation = mutate("patch", {
+  const mutation = mutate({
     scope,
     identities,
     prepare: async () => {
@@ -127,6 +127,31 @@ it("keeps an admission handoff bound to its original identities", async () => {
   expect(workActive("store-bound-handoff", ["session-bound-handoff"])).toBe(false);
 });
 
+it("keeps a same-identity mutation queued until finalization completes", async () => {
+  const owner = { scope: "store-finalize-order", identities: ["session-finalize-order"] };
+  const finalizeStarted = createDeferred();
+  const releaseFinalize = createDeferred();
+  const secondRun = vi.fn(async () => {});
+  const first = mutate({
+    ...owner,
+    run: async () => {},
+    finalize: async () => {
+      finalizeStarted.resolve();
+      await releaseFinalize.promise;
+    },
+  });
+  await finalizeStarted.promise;
+  const second = mutate({ ...owner, run: secondRun });
+  try {
+    await waitForImmediate();
+    expect(secondRun).not.toHaveBeenCalled();
+  } finally {
+    releaseFinalize.resolve();
+    await Promise.all([first, second]);
+  }
+  expect(secondRun).toHaveBeenCalledOnce();
+});
+
 it.each(["run", "finalize"] as const)("releases lifecycle state when %s throws", async (phase) => {
   const owner = target(`store-${phase}-error`, "session-finalize-error");
   const error = new Error(`lifecycle ${phase} failed`);
@@ -135,7 +160,7 @@ it.each(["run", "finalize"] as const)("releases lifecycle state when %s throws",
   };
   const finalize = vi.fn(phase === "finalize" ? fail : async () => {});
   await expect(
-    mutate("patch", {
+    mutate({
       ...owner,
       run: phase === "run" ? fail : async () => {},
       finalize,
@@ -143,7 +168,7 @@ it.each(["run", "finalize"] as const)("releases lifecycle state when %s throws",
   ).rejects.toBe(error);
   expect(finalize).toHaveBeenCalledOnce();
   expect(mutationActive(owner.scope, owner.identities)).toBe(false);
-  await expect(mutate("patch", { ...owner, run: async () => "next" })).resolves.toBe("next");
+  await expect(mutate({ ...owner, run: async () => "next" })).resolves.toBe("next");
 });
 
 it("counts a cross-store lifecycle mutation once and fences every target", async () => {
@@ -157,7 +182,7 @@ it("counts a cross-store lifecycle mutation once and fences every target", async
   await held.started;
 
   try {
-    expect(getActiveSessionLifecycleMutationCount()).toBe(1);
+    expect(getSessionMutationCount()).toBe(1);
     expect(mutationActive("store-cross-count-a", ["agent:main:main"])).toBe(true);
     expect(mutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(true);
     expect(mutationActive("store-cross-count-b", ["agent:main:main"])).toBe(false);
@@ -166,7 +191,7 @@ it("counts a cross-store lifecycle mutation once and fences every target", async
     await held.mutation;
   }
 
-  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(getSessionMutationCount()).toBe(0);
   expect(mutationActive("store-cross-count-a", ["session-cross-count-a"])).toBe(false);
   expect(mutationActive("store-cross-count-b", ["session-cross-count-b"])).toBe(false);
 });
@@ -180,7 +205,7 @@ it("serializes opposite-direction cross-store lifecycle mutations", async () => 
 
   await Promise.all(
     Array.from({ length: 48 }, async (_, index) =>
-      mutate("patch", {
+      mutate({
         targets: index % 2 === 0 ? [main, work] : [work, main],
         run: async () => {
           activeMutations += 1;
@@ -201,7 +226,7 @@ it("serializes opposite-direction cross-store lifecycle mutations", async () => 
     maximumActiveMutations: 1,
     activeMutations: 0,
   });
-  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(getSessionMutationCount()).toBe(0);
 });
 
 it("interrupts admitted work in both stores before a cross-store mutation", async () => {
@@ -215,7 +240,7 @@ it("interrupts admitted work in both stores before a cross-store mutation", asyn
   const admissions = await Promise.all([admitInterruptible(main), admitInterruptible(work)]);
 
   try {
-    await mutate("drain", {
+    await mutate({
       targets: [work, main],
       prepare: async () => {
         const interrupted = await Promise.all([
@@ -250,7 +275,7 @@ it("cancels an opposite-direction cross-store mutation before activation", async
   const controller = new AbortController();
   const abortError = new Error("cancel queued cross-store lifecycle mutation");
   const run = vi.fn(async () => {});
-  const cancelled = mutate("patch", { targets: [work, main], signal: controller.signal, run });
+  const cancelled = mutate({ targets: [work, main], signal: controller.signal, run });
   controller.abort(abortError);
 
   try {
@@ -261,7 +286,7 @@ it("cancels an opposite-direction cross-store mutation before activation", async
   }
 
   expect(run).not.toHaveBeenCalled();
-  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(getSessionMutationCount()).toBe(0);
 });
 
 it("rejects an admission that resumes after suspension closes the async gap", async () => {
@@ -269,17 +294,17 @@ it("rejects an admission that resumes after suspension closes the async gap", as
   const owner = target("store-suspend-race", "session-suspend-race", "backing-suspend-race");
   const held = holdMutation(owner);
   await held.started;
-  expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
+  expect(getSessionMutationCount()).toBeGreaterThan(0);
 
   const admission = admit(owner);
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
   held.release();
   await held.mutation;
-  expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+  expect(getSessionMutationCount()).toBe(0);
 
   await expect(admission).rejects.toMatchObject({ name: "GatewayDrainingError" });
-  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+  expect(getSessionControllerWorkCount()).toBe(0);
   suspension?.release();
   resetGatewayWorkAdmission();
 });
@@ -425,7 +450,6 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
 
 it("tracks the active lifecycle mutation kind across identity aliases", async () => {
   const held = holdMutation(target("store-kind", "agent:main:child", "session-kind"), {
-    operation: "compact",
     kind: "compaction",
   });
   await held.started;
@@ -445,7 +469,7 @@ it("keeps identical session keys isolated by store", async () => {
     expect(workActive("store-a", ["global"])).toBe(true);
     expect(workActive("store-b", ["global"])).toBe(false);
     const run = vi.fn(async () => {});
-    await mutate("patch", { ...target("store-b", "global"), run });
+    await mutate({ ...target("store-b", "global"), run });
     expect(run).toHaveBeenCalledOnce();
   } finally {
     admissionLease.release();
@@ -476,7 +500,7 @@ it("preserves the initiating admission across a queued lifecycle mutation", asyn
   let initiatingAdmissionExcluded = false;
   const queued = admission.run(
     async () =>
-      await mutate("drain", {
+      await mutate({
         ...childTarget,
         prepare: async () => {
           initiatingAdmissionExcluded = await interrupt({ ...childTarget, timeoutMs: 1 });
@@ -511,17 +535,17 @@ it("bounds interruption waits for non-cooperative work", async () => {
 });
 
 it("shares lifecycle coordination across duplicate module instances", async () => {
-  const first = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
+  const first = await importFreshModule<typeof import("./session-controller.lifecycle.js")>(
     import.meta.url,
-    "./session-lifecycle-admission.js?scope=session-lifecycle-a",
+    "./session-controller.lifecycle.js?scope=session-lifecycle-a",
   );
-  const second = await importFreshModule<typeof import("./session-lifecycle-admission.js")>(
+  const second = await importFreshModule<typeof import("./session-controller.lifecycle.js")>(
     import.meta.url,
-    "./session-lifecycle-admission.js?scope=session-lifecycle-b",
+    "./session-controller.lifecycle.js?scope=session-lifecycle-b",
   );
   let releaseLease = () => {};
   const onInterrupt = vi.fn(() => releaseLease());
-  const lease = await first.beginSessionWorkAdmission({
+  const lease = await first.beginSessionEffect({
     scope: "store-duplicate",
     identities: ["agent:main:child", "session-duplicate"],
     assertAllowed: () => {},
@@ -530,18 +554,18 @@ it("shares lifecycle coordination across duplicate module instances", async () =
   releaseLease = lease.release;
 
   try {
-    expect(second.isSessionWorkAdmissionActive("store-duplicate", ["session-duplicate"])).toBe(
+    expect(second.isSessionControllerWorkActive("store-duplicate", ["session-duplicate"])).toBe(
       true,
     );
     await expect(
-      second.interruptSessionWorkAdmissions({
+      second.interruptSessionControllerEffects({
         scope: "store-duplicate",
         identities: ["agent:main:child"],
         timeoutMs: 50,
       }),
     ).resolves.toBe(true);
     expect(onInterrupt).toHaveBeenCalledOnce();
-    expect(first.isSessionWorkAdmissionActive("store-duplicate", ["session-duplicate"])).toBe(
+    expect(first.isSessionControllerWorkActive("store-duplicate", ["session-duplicate"])).toBe(
       false,
     );
   } finally {

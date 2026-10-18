@@ -12,6 +12,8 @@ import { isMissingPathError } from "../infra/errors.js";
 import { ATTACHMENT_OFFLOAD_THRESHOLD_BYTES } from "../media/attachment-processor.runtime.js";
 import { encodePngRgb } from "../media/png-encode.js";
 import * as mediaStore from "../media/store.js";
+import { isRpcSourceExecuting } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import {
   holdExecution,
@@ -103,7 +105,9 @@ describe("agent RPC metadata-read authority", () => {
           sessionKey: f.sessionKey,
           status: "accepted",
         });
-        expect(f.context.chatAbortControllers.has(f.runId)).toBe(false);
+        const acceptedSource = rpcSourceTesting.get(f.runId);
+        expect(acceptedSource).toBeDefined();
+        expect(isRpcSourceExecuting(acceptedSource)).toBe(false);
         expect(saved).toEqual([]);
         if (mode === "stopped") {
           expect(await f.stop()).toMatchObject({ ok: true, payload: { aborted: true } });
@@ -151,7 +155,8 @@ describe("agent RPC metadata-read authority", () => {
           expect.soft((await listSessionPendingInputs(f.scope)).total).toBe(0);
           expect.soft(execution.observer).not.toHaveBeenCalled();
           expect.soft(agentCommandMock).not.toHaveBeenCalled();
-          expect.soft(f.context.chatAbortControllers.has(f.runId)).toBe(false);
+          await f.drain();
+          expect.soft(rpcSourceTesting.has(f.runId)).toBe(false);
           expect.soft(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
           const response = {
             ok: true,

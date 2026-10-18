@@ -31,11 +31,11 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { SubagentCompletionSourceChangedError } from "./subagent-completion-admission.store.js";
 import {
-  SubagentCompletionSourceChangedError,
-  mutateRequesterCompletionBatch,
-} from "./subagent-completion-admission.store.js";
-import { admitCompletionFixtureDatabase } from "./subagent-completion-admission.test-helpers.js";
+  admitCompletionFixtureDatabase,
+  settleRequesterCompletionBatch,
+} from "./subagent-completion-admission.test-helpers.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -76,8 +76,8 @@ describe("committed requester outcome queue receipts", () => {
         completion: { required: true, resultText: "Synthetic child result", capturedAt: now - 10 },
         delivery: { status: "pending", generation: 1 },
         requesterSettleWake: {
-          status: "dispatching",
-          attemptCount: 1,
+          status: "pending",
+          attemptCount: 0,
           rearmGeneration: 1,
           batchRunIds: ["blocked-requester-outcome"],
         },
@@ -99,12 +99,9 @@ describe("committed requester outcome queue receipts", () => {
       });
       let committed: RequesterWakeCommittedWrite | undefined;
       const settle = (onPublished: () => void) =>
-        mutateRequesterCompletionBatch({
+        settleRequesterCompletionBatch({
           entries: [entry],
-          operation: {
-            kind: "settle",
-            outcome: { delivered: false, path: "none", error: "Requester unavailable" },
-          },
+          outcome: { delivered: false, path: "none", error: "Requester unavailable" },
           context,
           assertCurrent: () => {
             if (!isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)) {

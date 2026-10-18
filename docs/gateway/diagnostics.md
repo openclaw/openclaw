@@ -163,6 +163,13 @@ cap across counters, gauges, and histograms; a fully observed method uses up to
 five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
 coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
 
+Requester completion warnings include the underlying error name and message.
+`requester settle wake failed`, `failed to persist requester settle wake rejection`,
+and `failed to publish requester settle dispatch` report failures at the lifecycle
+owner on each failed attempt. These replace the former sustained requester-wake
+commit warning; retained settlement receipts retry through the existing sweep
+without redelivering a completed result.
+
 The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;

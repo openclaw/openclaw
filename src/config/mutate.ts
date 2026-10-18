@@ -11,7 +11,6 @@ import {
   applyConfigEnvVars,
   cloneEnvWithPlatformSemantics,
   createConfigRuntimeEnvBase,
-  getPublishedConfigRuntimeEnvState,
   withConfigReadEnvChanges,
 } from "./config-env-vars.js";
 import {
@@ -44,7 +43,10 @@ import {
 } from "./io.js";
 import { hasWebhookMigrationProgress } from "./io.meta.js";
 import { containsConfigIncludeDirective, hashConfigRaw } from "./io.read-helpers.js";
-import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
+import {
+  assertManagedRuntimeEnvPublicationCurrent,
+  resolveManagedRuntimeEnvBaseline,
+} from "./io.runtime-env.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
 import { recoverConfigWriteFailure } from "./io.write-errors.js";
 import {
@@ -173,14 +175,6 @@ type ConfigMutationOwnership = Pick<
   ConfigWriteOptions,
   "expectedConfigPath" | "ownedConfigPathForWrite" | "assertConfigPathForWrite"
 >;
-
-function assertManagedRuntimeEnvGeneration(generation: number): void {
-  if (getPublishedConfigRuntimeEnvState().generation !== generation) {
-    throw new ConfigMutationConflictError(
-      "active config environment changed while preparing write",
-    );
-  }
-}
 
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
   const currentHash = resolveConfigSnapshotHash(snapshot) ?? null;
@@ -571,7 +565,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               runtimeConfigToWrite,
               params.writeOptions?.runtimeRefresh,
             );
-            assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+            assertManagedRuntimeEnvPublicationCurrent(runtimeEnvBaseline.publication);
           } else {
             runtimePreflightResult = await preflightRuntimeSnapshotWrite({
               nextSourceConfig: runtimeConfigToWrite,
@@ -620,7 +614,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               assertScopedOwner();
               assertConfigPathForWrite();
               if (runtimeEnvBaseline) {
-                assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+                assertManagedRuntimeEnvPublicationCurrent(runtimeEnvBaseline.publication);
               }
             },
             assertOwnerForRollback: assertScopedOwner,
@@ -639,7 +633,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           try {
             assertPostCommitCurrent();
             if (runtimeEnvBaseline) {
-              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+              assertManagedRuntimeEnvPublicationCurrent(runtimeEnvBaseline.publication);
             }
             if (
               params.writeOptions?.skipRuntimeSnapshotRefresh &&
@@ -700,10 +694,10 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
                 afterWrite: params.afterWrite,
               });
             };
-            // A managed listener may accept this write and advance its own environment
-            // generation. Check the prepared generation before that owned transition.
+            // A managed listener may accept this write and publish its own environment.
+            // Check the prepared publication before that owned transition.
             if (runtimeEnvBaseline) {
-              assertManagedRuntimeEnvGeneration(runtimeEnvBaseline.generation);
+              assertManagedRuntimeEnvPublicationCurrent(runtimeEnvBaseline.publication);
             }
             await finalizeRuntimeSnapshotWrite({
               assertCurrent: assertPostCommitCurrent,

@@ -151,7 +151,7 @@ it("denies native spawn at final admission when another person steers the parent
             for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
               expectDenied(await invoke(name, `ambiguous-${name}`), ambiguity);
             }
-            turn.complete();
+            await turn.complete();
             expectDenied(await invoke("Agent", "ended-spawn"), /turn has ended/);
           } finally {
             resume.resolve();

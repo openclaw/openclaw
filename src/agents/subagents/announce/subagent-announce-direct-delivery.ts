@@ -9,6 +9,11 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import {
+  submitSessionControllerSteer,
+  type SessionControllerSteerResult,
+} from "../../../sessions/session-controller.steer.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
@@ -22,11 +27,7 @@ import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import type { EmbeddedAgentQueueMessageOptions } from "../../embedded-agent-runner/run-state.js";
-import {
-  formatEmbeddedAgentQueueFailureSummary,
-  resolveEmbeddedRunAbandonment,
-} from "../../embedded-agent-runner/runs.js";
+import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -39,11 +40,6 @@ import {
 import { resolveCommandReplyExpectation } from "../../reply-completion.js";
 import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
-  SOURCE_OWNER_CHANGED,
-  resolveActiveWakeWithRetries,
-  resolveRequesterSessionActivity,
-} from "./subagent-announce-active-wake.js";
-import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
   resolveRequesterRecoveryDelivery,
@@ -54,12 +50,12 @@ import {
   isIncompleteAnnounceAgentResultError,
   isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
-  runAnnounceDeliveryWithRetry,
   SourceOwnerChangedError,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentAnnounceRuntimeConfig,
+  getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
@@ -88,6 +84,7 @@ export type SubagentAnnounceDirectParams = {
   completionRequesterSessionId?: string;
   completionRequesterLifecycleRevision?: string;
   requireVisibleReply?: boolean;
+  requireDirectDelivery?: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
   completionDirectOrigin?: DeliveryContext;
@@ -106,8 +103,11 @@ export type SubagentAnnounceDirectParams = {
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onDeliveryError?: (error: unknown) => void;
   signal?: AbortSignal;
+  onAccepted?: (payload: unknown) => void;
   onExecutionStarted?: () => void;
+  onBeforeDispatch?: () => void | Promise<void>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
+  controllerInput?: SessionControllerInput;
 };
 
 /** Another owner (a yielded requester or an idle cron turn) settles this completion. */
@@ -144,6 +144,7 @@ async function sendSubagentAnnounceDirectlyBound(
   const turnMessage = runtimeContextFragments.length
     ? RUNTIME_EVENT_USER_PROMPT
     : params.triggerMessage;
+  let dispatchPrepared = params.onBeforeDispatch === undefined;
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -152,7 +153,7 @@ async function sendSubagentAnnounceDirectlyBound(
   try {
     // A partial completion origin must retain the target from the requester's
     // recorded delivery context or the generated reply becomes undeliverable.
-    const { directOrigin, requesterSessionOrigin, effectiveDirectOrigin } =
+    const { requesterSessionOrigin, effectiveDirectOrigin } =
       resolveCompletionDeliveryOrigins(params);
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
@@ -253,6 +254,7 @@ async function sendSubagentAnnounceDirectlyBound(
       ? resolveEmbeddedRunAbandonment({
           sessionKey: canonicalRequesterSessionKey,
           sessionId: requesterActivity.sessionId,
+          target: requesterActivity.target,
         })
       : undefined;
     if (requesterAbandonment === "timeout") {
@@ -263,15 +265,7 @@ async function sendSubagentAnnounceDirectlyBound(
         error: "requester session abandoned after timeout",
       };
     }
-    if (requesterAbandonment === "recovering_timeout") {
-      return {
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        error: "requester timeout recovery is still settling",
-        disposition: "retryable",
-      };
-    }
+    // Recovery retains the controller turn; its mailbox holds this once-only completion.
     const isCompletionDeliveryAllowed = () =>
       params.isSourceSessionEffectsAllowed?.() !== false &&
       !(params.expectsCompletionMessage && params.isCompletionOwnedByRequesterYield?.());
@@ -325,67 +319,83 @@ async function sendSubagentAnnounceDirectlyBound(
       channel:
         sessionDeliveryChannel(requesterEntry) ??
         requesterSessionOrigin?.channel ??
-        directOrigin?.channel,
+        params.directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
+    // A public completion steers once into the requester's running turn. A definite
+    // rejection, including compaction, leaves its input queued for the dispatch below.
     if (
       !recoveredResult &&
       !parentOnly &&
+      !params.requireDirectDelivery &&
       params.expectsCompletionMessage &&
-      requesterActivity.sessionId &&
-      requesterActivity.isActive
+      params.controllerInput
     ) {
-      const wakeOptions: EmbeddedAgentQueueMessageOptions = {
-        deliveryTimeoutMs: announceTimeoutMs,
-        steeringMode: "all",
-        ...(completionSourceReplyDeliveryMode
-          ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
-          : {}),
-        ...(requesterQueueSettings.debounceMs !== undefined
-          ? { debounceMs: requesterQueueSettings.debounceMs }
-          : {}),
-        waitForTranscriptCommit: true,
-        ...(runtimeContextFragments.length
-          ? {
-              currentInboundContext: {
-                text: projectRuntimeContextFragments(runtimeContextFragments),
-                fragments: runtimeContextFragments,
-              },
-            }
-          : {}),
-        ...(params.createUserTurnTranscriptRecorder
-          ? {
-              userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(
-                requesterActivity.sessionId,
-              ),
-            }
-          : {}),
-      };
-      // Ordinary subagent and harness handoffs must wait through compaction
-      // and transcript retries before treating an active wake as failed.
-      const wakeOutcome = await resolveActiveWakeWithRetries(
-        requesterActivity.sessionId,
-        turnMessage,
-        wakeOptions,
-        params.signal,
-        isCompletionDeliveryAllowed,
-        params.isSourceSessionAdmissionAllowed,
-      );
-      if (wakeOutcome === SOURCE_OWNER_CHANGED) {
+      let steer: SessionControllerSteerResult;
+      try {
+        steer = await submitSessionControllerSteer({
+          input: params.controllerInput,
+          text: turnMessage,
+          // A completion must never abort its requester over an unconfirmed commit.
+          abortOnUnconfirmedTranscript: false,
+          options: {
+            deliveryTimeoutMs: announceTimeoutMs,
+            steeringMode: "all",
+            ...(completionSourceReplyDeliveryMode
+              ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
+              : {}),
+            // Subagent inputs ignore the session queue mode except its debounce.
+            ...(requesterQueueSettings.debounceMs !== undefined
+              ? { debounceMs: requesterQueueSettings.debounceMs }
+              : {}),
+            waitForTranscriptCommit: true,
+            ...(runtimeContextFragments.length
+              ? {
+                  currentInboundContext: {
+                    text: projectRuntimeContextFragments(runtimeContextFragments),
+                    fragments: runtimeContextFragments,
+                  },
+                }
+              : {}),
+            ...(params.createUserTurnTranscriptRecorder && requesterActivity.sessionId
+              ? {
+                  userTurnTranscriptRecorder: params.createUserTurnTranscriptRecorder(
+                    requesterActivity.sessionId,
+                  ),
+                }
+              : {}),
+            assertCurrent: () => {
+              if (!isCompletionAdmissionAllowed()) {
+                throw new SourceOwnerChangedError();
+              }
+            },
+          },
+        });
+      } catch (error) {
+        if (error instanceof SourceOwnerChangedError) {
+          return sourceOwnerChangedResult();
+        }
+        throw error;
+      }
+      // Steering consumes admission; its result remains valid while the delivery owner is current.
+      if (!isCompletionDeliveryAllowed()) {
         return sourceOwnerChangedResult();
       }
-      if (wakeOutcome.queued) {
+      if (steer.status === "accepted") {
+        return { delivered: true, path: "steered" };
+      }
+      if (steer.status === "indeterminate") {
+        // The input was consumed without a confirmed commit; it is never replayed.
         return {
-          delivered: true,
-          deliveredAt: wakeOutcome.deliveredAtMs,
-          enqueuedAt: wakeOutcome.enqueuedAtMs,
+          delivered: false,
           path: "steered",
+          error: steer.errorMessage,
+          disposition: "ambiguous",
         };
       }
-      const wakeFailure = formatEmbeddedAgentQueueFailureSummary(wakeOutcome);
-      defaultRuntime.log(
-        `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: active requester session could not be woken${wakeFailure ? `: ${wakeFailure}` : ""}`,
-      );
+      if (!isCompletionAdmissionAllowed()) {
+        return sourceOwnerChangedResult();
+      }
     }
     if (
       params.expectsCompletionMessage &&
@@ -427,6 +437,7 @@ async function sendSubagentAnnounceDirectlyBound(
           }
         : {}),
       sessionKey: canonicalRequesterSessionKey,
+      ...(requesterAgentId ? { agentId: requesterAgentId } : {}),
       message: turnMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,
@@ -476,85 +487,88 @@ async function sendSubagentAnnounceDirectlyBound(
     try {
       directAnnounceResponse = recoveredResult
         ? { status: "ok", result: recoveredResult }
-        : await runAnnounceDeliveryWithRetry({
-            operation: params.expectsCompletionMessage
-              ? "completion direct announce agent call"
-              : "direct announce agent call",
-            signal: params.signal,
-            isAttemptAllowed: isCompletionAdmissionAllowed,
-            run: async () => {
-              if (!isCompletionAdmissionAllowed()) {
-                throw new SourceOwnerChangedError();
-              }
-              return await runAnnounceAgentCall({
-                agentParams: directAgentParams,
-                // Individual result delivery and an owed public synthesis remain
-                // required; optional settle intake may complete without repeating it.
-                replyExpectation:
-                  params.expectsCompletionMessage || params.requireVisibleReply
-                    ? "required"
-                    : "optional",
-                // A resumed parent has no inbound channel dispatcher to keep activity visible.
-                typing:
-                  sourceToolId === "subagent_settle" &&
-                  shouldDeliverAgentFinal &&
-                  deliveryTarget.channel &&
-                  deliveryTarget.to
-                    ? {
-                        agentId: requesterAgentId,
-                        runId: params.directIdempotencyKey,
-                        channel: deliveryTarget.channel,
-                        to: deliveryTarget.to,
-                        accountId: deliveryTarget.accountId,
-                        threadId: deliveryTarget.threadId,
-                      }
-                    : undefined,
-                settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
-                ...(parentOnly ? { privateCompletion: true as const } : {}),
-                delegatedToolPolicyHandoff:
-                  ((isSubagentCompletion && trustedCompletionEvent) ||
-                    (sourceToolId === "subagent_settle" &&
-                      params.settleWakeSourceSessionKeys?.length &&
-                      params.isSourceSessionEffectsAllowed)) &&
-                  params.sourceSessionKey &&
-                  requesterActivity.sessionId &&
-                  params.isSourceSessionEffectsAllowed?.() !== false
-                    ? {
-                        sourceSessionKey: params.sourceSessionKey,
-                        ...(trustedCompletionEvent?.childSessionId
-                          ? { sourceSessionId: trustedCompletionEvent.childSessionId }
-                          : {}),
-                        targetSessionKey: canonicalRequesterSessionKey,
-                        targetSessionId: requesterActivity.sessionId,
-                        idempotencyKey: params.directIdempotencyKey,
-                        ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
-                          ? {
-                              settleBatch: {
-                                sourceSessionKeys: params.settleWakeSourceSessionKeys,
-                                isCurrent: isCompletionDeliveryAllowed,
-                                receiptAdmission: params.sourceReceiptAdmission,
-                              },
-                            }
-                          : {}),
-                      }
-                    : undefined,
-                expectFinal: true,
-                signal: params.signal,
-                onExecutionStarted: params.onExecutionStarted,
-                // Individual private delivery uses the lifecycle window for admission;
-                // settle batches can observe and replay admission.
-                timeoutMs: parentOnly && isSubagentCompletion ? undefined : announceTimeoutMs,
-                isExecutionAllowed: isCompletionDeliveryAllowed,
-                isSourceSessionAdmissionAllowed:
-                  params.isSourceSessionAdmissionAllowed && isCompletionAdmissionAllowed,
-                resolveGatewayContext: params.resolveGatewayContext,
-              });
-            },
-          });
+        : await (async () => {
+            // One dispatch; its outcome is recorded once and never replayed.
+            if (!isCompletionAdmissionAllowed()) {
+              throw new SourceOwnerChangedError();
+            }
+            return await runAnnounceAgentCall({
+              agentParams: directAgentParams,
+              controllerInput: params.controllerInput,
+              // The input owner decides whether this handoff owes another reply.
+              replyExpectation:
+                params.expectsCompletionMessage || params.requireVisibleReply
+                  ? "required"
+                  : "optional",
+              // A resumed parent has no inbound channel dispatcher to keep activity visible.
+              typing:
+                sourceToolId === "subagent_settle" &&
+                shouldDeliverAgentFinal &&
+                deliveryTarget.channel &&
+                deliveryTarget.to
+                  ? {
+                      agentId: requesterAgentId,
+                      runId: params.directIdempotencyKey,
+                      channel: deliveryTarget.channel,
+                      to: deliveryTarget.to,
+                      accountId: deliveryTarget.accountId,
+                      threadId: deliveryTarget.threadId,
+                    }
+                  : undefined,
+              settleWakeSourceSessionKeys: params.settleWakeSourceSessionKeys,
+              ...(parentOnly ? { privateCompletion: true as const } : {}),
+              delegatedToolPolicyHandoff:
+                ((isSubagentCompletion && trustedCompletionEvent) ||
+                  (sourceToolId === "subagent_settle" &&
+                    params.settleWakeSourceSessionKeys?.length &&
+                    params.isSourceSessionEffectsAllowed)) &&
+                params.sourceSessionKey &&
+                requesterActivity.sessionId &&
+                params.isSourceSessionEffectsAllowed?.() !== false
+                  ? {
+                      sourceSessionKey: params.sourceSessionKey,
+                      ...(trustedCompletionEvent?.childSessionId
+                        ? { sourceSessionId: trustedCompletionEvent.childSessionId }
+                        : {}),
+                      targetSessionKey: canonicalRequesterSessionKey,
+                      targetSessionId: requesterActivity.sessionId,
+                      idempotencyKey: params.directIdempotencyKey,
+                      ...(sourceToolId === "subagent_settle" && params.settleWakeSourceSessionKeys
+                        ? {
+                            settleBatch: {
+                              sourceSessionKeys: params.settleWakeSourceSessionKeys,
+                              isCurrent: isCompletionDeliveryAllowed,
+                              receiptAdmission: params.sourceReceiptAdmission,
+                            },
+                          }
+                        : {}),
+                    }
+                  : undefined,
+              expectFinal: true,
+              signal: params.signal,
+              onAccepted: params.onAccepted,
+              onExecutionStarted: params.onExecutionStarted,
+              onBeforeDispatch: params.onBeforeDispatch
+                ? async () => {
+                    await params.onBeforeDispatch!();
+                    dispatchPrepared = true;
+                  }
+                : undefined,
+              // Private delivery waits in the requester mailbox without an admission deadline.
+              timeoutMs: parentOnly && isSubagentCompletion ? undefined : announceTimeoutMs,
+              isExecutionAllowed: isCompletionDeliveryAllowed,
+              isSourceSessionAdmissionAllowed:
+                params.isSourceSessionAdmissionAllowed && isCompletionAdmissionAllowed,
+              resolveGatewayContext: params.resolveGatewayContext,
+            });
+          })();
       if (!isCompletionDeliveryAllowed()) {
         return sourceOwnerChangedResult();
       }
     } catch (err) {
+      if (!dispatchPrepared) {
+        throw err;
+      }
       if (err instanceof SourceOwnerChangedError) {
         return sourceOwnerChangedResult();
       }
@@ -673,6 +687,10 @@ async function sendSubagentAnnounceDirectlyBound(
       ? settledRecovery.delivery
       : classifyResponse({ status: "ok", result: settledRecovery.result });
   } catch (err) {
+    // A failed dispatch receipt has not admitted any delivery; its owner retries preparation.
+    if (!dispatchPrepared) {
+      throw err;
+    }
     params.onDeliveryError?.(err);
     const disposition = hasAnnounceSendEvidence(err)
       ? "ambiguous"

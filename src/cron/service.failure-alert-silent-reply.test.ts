@@ -43,6 +43,7 @@ describe("CronService silent failure alerts", { concurrent: false }, () => {
       { layout: "state-only", prefix: "openclaw-cron-silent-failure-" },
       async (state) => {
         const cfg = {
+          session: { store: "/tmp/store.json" },
           agents: { defaults: { model: `${modelRef.provider}/${modelRef.model}` } },
         };
         setRuntimeConfigSnapshot(cfg);

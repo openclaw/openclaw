@@ -1,9 +1,12 @@
 import { resolveManifestModelCatalogProviderAliasMetadata } from "../../agents/embedded-agent-runner/model.manifest-alias.js";
 import type { ModelFallbackAttemptProvenance } from "../../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ReplyOperation,
+  ReplyToolAuthorityRoute,
+} from "../../sessions/session-controller.contracts.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { ReplyOperation, ReplyToolAuthorityRoute } from "./reply-run-registry.contracts.js";
 import { prepareFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 /** Keep selection changes separate from the concrete route and its effective tool authority. */

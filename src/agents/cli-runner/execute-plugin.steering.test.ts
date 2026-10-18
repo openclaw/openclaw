@@ -7,13 +7,9 @@ import { runActiveReplySteer } from "../../auto-reply/reply/agent-runner-steer-a
 import { handleSteerCommand } from "../../auto-reply/reply/commands-steer.js";
 import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { resolveQueueSettingsCore } from "../../auto-reply/reply/queue/settings.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
-import { beginReplyMessageInjectionTarget } from "../../auto-reply/reply/reply-run-registry.message-injection.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.operation.js";
-import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
@@ -30,6 +26,11 @@ import {
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.message-injection.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   createTestUserTurnTranscriptTarget,
@@ -190,7 +191,7 @@ it("steers configured, session and explicit inputs through current authority int
         }),
       ]);
       const target = expectDefined(
-        replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey),
+        captureCurrentReplyMessageInjectionTarget(sessionKey),
         "Claude registry input sink",
       );
       const guestFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync({
@@ -262,7 +263,6 @@ it("steers configured, session and explicit inputs through current authority int
             opts: { runId: route.text },
             providedReplyOperation: operation,
             queueKey: sessionKey,
-            releaseAdmissionTicket: vi.fn(),
             replyOperationRunState: resultState,
             resolvedQueue,
             restartRecoverySourceTurnId: undefined,
@@ -270,7 +270,6 @@ it("steers configured, session and explicit inputs through current authority int
             sessionCtx: {},
             sessionKey,
             touchActiveSessionEntry: async () => {},
-            typing,
             typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
           }),
         ).resolves.toBe("handled");
@@ -358,7 +357,6 @@ it("steers configured, session and explicit inputs through current authority int
       await settled;
       operation.complete();
       clearFollowupQueue(sessionKey);
-      clearFollowupDrainCallback(sessionKey);
       await prepared?.cleanup?.();
     }
   });

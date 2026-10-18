@@ -5,7 +5,15 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
-import { client, config, fixture, page, post } from "./test-support/monitor-fixture.js";
+import {
+  client,
+  config,
+  fixture,
+  page,
+  post,
+  type Payload,
+} from "./test-support/monitor-fixture.js";
+import { createQueue } from "./test-support/monitor.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
@@ -80,43 +88,74 @@ async function mediaFixture(failProcessing = false) {
     },
   });
   client.getXApi.mockResolvedValue(api);
-  return { root, file, bytes, requests };
+  return { root, file, bytes, requests, api };
 }
 
 describe("X native attachment delivery", () => {
-  it.each(["action", "outbound", "message", "payload"] as const)(
-    "attaches the uploaded image through the %s entrypoint",
-    async (route) => {
-      const test = await mediaFixture();
-      const ctx = {
-        cfg: config,
-        to: "x:501",
-        text: "Proof.",
-        mediaAccess: { localRoots: [test.root] },
-      };
-      if (route === "action") {
-        await xPlugin.actions!.handleAction!({
-          channel: "x",
-          action: "send",
-          ...ctx,
-          params: { to: ctx.to, message: ctx.text, media: test.file },
-        });
-      } else if (route === "payload") {
-        await xPlugin.outbound!.sendPayload!({
-          ...ctx,
-          payload: { text: ctx.text, mediaUrl: test.file },
-        });
-      } else if (route === "message") {
-        await xPlugin.message!.send!.media!({ ...ctx, mediaUrl: test.file });
-      } else {
-        const result = await xPlugin.outbound!.sendMedia!({ ...ctx, mediaUrl: test.file });
-        expect(result.receipt?.parts[0]?.kind).toBe("media");
+  it.each([
+    "action",
+    "outbound",
+    "message",
+    "payload",
+    "monitor-mediaUrl",
+    "monitor-mediaUrls",
+  ] as const)("attaches the uploaded image through the %s entrypoint", async (route) => {
+    const test = await mediaFixture();
+    const ctx = {
+      cfg: config,
+      to: "x:501",
+      text: "Proof.",
+      mediaAccess: { localRoots: [test.root] },
+    };
+    if (route === "action") {
+      await xPlugin.actions!.handleAction!({
+        channel: "x",
+        action: "send",
+        ...ctx,
+        params: { to: ctx.to, message: ctx.text, media: test.file },
+      });
+    } else if (route === "payload") {
+      await xPlugin.outbound!.sendPayload!({
+        ...ctx,
+        payload: { text: ctx.text, mediaUrl: test.file },
+      });
+    } else if (route === "message") {
+      await xPlugin.message!.send!.media!({ ...ctx, mediaUrl: test.file });
+    } else if (route === "monitor-mediaUrl" || route === "monitor-mediaUrls") {
+      const completed = Promise.withResolvers<void>();
+      const monitor = fixture({
+        posts: [post("501", "10")],
+        cfg: {
+          ...config,
+          agents: { entries: { maintainer: { workspace: test.root } } },
+        },
+        visibleSessionUrl: null,
+        finals: [
+          {
+            text: "[[x_success]] Proof.",
+            ...(route === "monitor-mediaUrl"
+              ? { mediaUrl: test.file }
+              : { mediaUrls: [test.file] }),
+          },
+        ],
+        queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
+      });
+      monitor.api.uploadMedia.mockImplementation((params) => test.api.uploadMedia(params));
+      monitor.api.reply.mockImplementation((params) => test.api.reply(params));
+      monitor.start();
+      try {
+        await completed.promise;
+      } finally {
+        await monitor.stop();
       }
-      expect(test.requests.filter((r) => r.path === "/2/tweets").map((r) => r.body)).toEqual([
-        { text: "Proof.", reply: { in_reply_to_tweet_id: "501" }, media: { media_ids: ["701"] } },
-      ]);
-    },
-  );
+    } else {
+      const result = await xPlugin.outbound!.sendMedia!({ ...ctx, mediaUrl: test.file });
+      expect(result.receipt?.parts[0]?.kind).toBe("media");
+    }
+    expect(test.requests.filter((r) => r.path === "/2/tweets").map((r) => r.body)).toEqual([
+      { text: "Proof.", reply: { in_reply_to_tweet_id: "501" }, media: { media_ids: ["701"] } },
+    ]);
+  });
   it("sends an attachment-only reply without an empty text field", async () => {
     const test = await mediaFixture();
     await xPlugin.actions!.handleAction!({

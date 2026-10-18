@@ -1,11 +1,11 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";

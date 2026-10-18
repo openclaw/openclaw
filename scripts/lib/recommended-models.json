@@ -5,6 +5,8 @@
   "gpt-6-astra",
   "claude-fable-5.1",
   "claude-sonnet-5.5",
+  "muse-wonder-1",
+  "muse-wonder",
   "claude-sonnet-5",
   "grok-4.7",
   "deepseek-v4.1-flash",
@@ -26,7 +28,5 @@
   "mistral-large-4",
   "minimax-m3",
   "nemotron-3-ultra-550b-a55b",
-  "nemotron-3-super-120b-a12b",
-  "muse-wonder-1",
-  "muse-wonder"
+  "nemotron-3-super-120b-a12b"
 ]

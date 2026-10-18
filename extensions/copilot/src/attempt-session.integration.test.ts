@@ -21,12 +21,12 @@ import {
   transcriptMessages,
 } from "./attempt-transcript-journal.test-helpers.js";
 import type { AttemptParamsLike, AttemptResultWithSdkSessionId } from "./attempt-types.js";
-import { runCopilotAttempt } from "./attempt.js";
 import {
   makeAssistantMessageEvent,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
+  runCopilotAttempt,
 } from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
@@ -158,10 +158,12 @@ describe("Copilot canonical session persistence", () => {
         config: { tools: { toolSearch: false } },
         disableTools: false,
         hostCapabilities: createCopilotTestHostCapabilities(() => [sourceTool]),
+        provider: "github-copilot",
+        modelId: "gpt-5",
         model: {
           api: "openai-responses",
-          id: "gpt-5.6-luna",
-          name: "Luna",
+          id: "gpt-5",
+          name: "GPT-5",
           provider: "github-copilot",
           baseUrl: "https://api.githubcopilot.com",
           reasoning: true,
@@ -292,10 +294,12 @@ describe("Copilot canonical session persistence", () => {
     const params = {
       ...attempt,
       agentDir: tempDir,
+      provider: "github-copilot",
+      modelId: "gpt-5",
       model: {
         api: "openai-responses",
-        id: "gpt-5.6-luna",
-        name: "Luna",
+        id: "gpt-5",
+        name: "GPT-5",
         provider: "github-copilot",
         baseUrl: "https://api.githubcopilot.com",
         reasoning: true,

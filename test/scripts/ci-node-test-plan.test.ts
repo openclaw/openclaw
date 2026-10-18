@@ -4095,6 +4095,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
       "src/agents/sandbox.context.github-identity.test.ts",
       "src/auto-reply/reply/session-reset-prompt.test.ts",

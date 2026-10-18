@@ -28,10 +28,6 @@ import type { InternalSessionEntry as SessionEntry } from "../config/sessions/ty
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createCliDispatchTranscriptRecorder } from "./embedded-agent-runner/cli-backend-dispatch-transcript.js";
 import {
-  persistForceClearedEmbeddedRunTerminalState,
-  tryLoadForceClearSessionSnapshot,
-} from "./embedded-agent-runner/force-clear-session-state.js";
-import {
   createInternalSessionEffectsCleanup,
   prepareInternalSessionEffectsSession,
   removeInternalSessionEffectsSession,
@@ -355,28 +351,3 @@ it.each([true, false])(
     }
   },
 );
-
-it.each([false, true])("force-clear preserves a later session update: %s", async (changed) => {
-  const { target, binding } = await create(`force-clear-${changed}`, {
-    lifecycleRunId: "running",
-    startedAt: 1,
-  });
-  const snapshot = await runWithSessionActorStorage(binding, () =>
-    tryLoadForceClearSessionSnapshot(target.sessionKey, "main", "running"),
-  );
-  expect(snapshot).toBeDefined();
-  if (!snapshot) {
-    throw new Error("Missing force-clear snapshot");
-  }
-  if (changed) {
-    await runWithSessionActorStorage(binding, () =>
-      patchSessionEntryCore(target, () => ({ label: "updated during recovery", updatedAt: 2 })),
-    );
-  }
-  await persistForceClearedEmbeddedRunTerminalState({ ...snapshot, ...target }, () => false);
-  const entry = actor.readSession(target.sessionKey, authority)?.entry;
-  expect(entry?.status).toBe(changed ? undefined : "killed");
-  if (changed) {
-    expect(entry?.label).toBe("updated during recovery");
-  }
-});

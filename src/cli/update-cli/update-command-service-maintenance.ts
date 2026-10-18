@@ -180,6 +180,7 @@ type ManagedServiceStopParams = {
   /** Doctor restores this same native instance after its offline repair. */
   retainNativeIdentity?: boolean;
   assertCurrent?: (phase?: "restore") => void;
+  waitForCurrent?: () => Promise<void>;
   timeoutMs?: number;
   warn?: (message: string) => void;
 } & (
@@ -240,8 +241,7 @@ async function stopManagedServiceBeforeMutableUpdate(
   assertNative?: () => void,
 ): Promise<PreManagedServiceStop> {
   // Retain the original live owner across daemon awaits; history is not authority.
-  const updateRun = params.updateRun;
-  const recordPhase = params.recordPhase;
+  const { updateRun, recordPhase } = params;
   const executorFence = updateRun?.executorFence;
   const assertExecutor = () => {
     if (params.updateRun !== updateRun || updateRun?.executorFence !== executorFence) {
@@ -610,6 +610,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       assertCurrent();
     }
     const stop = async () => {
+      await params.waitForCurrent?.();
       assertCurrent();
       if (process.platform === "linux") {
         const beforeStop = await readCurrentService(currentState.env);
@@ -658,6 +659,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     } else {
       await stop();
     }
+    await params.waitForCurrent?.();
     assertCurrent();
     if (windowsTaskAutoStartRecovery) {
       await abortWindowsTaskUpdateIfInterrupted(windowsTaskAutoStartRecovery);
@@ -700,12 +702,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     }
     throw err;
   }
-  return {
-    ...inspected,
-    stopped: true,
-    stoppedAtMs,
-    windowsTaskAutoStartRecovery,
-  };
+  return { ...inspected, stopped: true, stoppedAtMs, windowsTaskAutoStartRecovery };
 }
 
 export async function mutableUpdateGatewayServiceBlock(params: {
