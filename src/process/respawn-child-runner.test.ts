@@ -1,5 +1,5 @@
 import childProcess, { ChildProcess } from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
@@ -8,7 +8,6 @@ vi.mock("./kill-tree.js", async (importOriginal) => ({
   signalProcessTree: signalProcessTreeMock,
 }));
 import { runRespawnChildWithSignalBridge } from "./respawn-child-runner.js";
-
 const runs: Array<{ child: ChildProcess; completion: Promise<number> }> = [];
 const ttyStreams = [process.stdin, process.stdout].map((stream) => ({
   stream,
@@ -20,11 +19,17 @@ function start(
     pid?: number;
     detached?: boolean;
     onError?: (error: unknown) => void | Promise<void>;
+    spawnError?: Error;
   } = {},
 ) {
   const child = Object.assign(new ChildProcess(), { pid: options.pid });
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-  vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+  vi.spyOn(childProcess, "spawn").mockImplementation(() => {
+    if (options.spawnError) {
+      throw options.spawnError;
+    }
+    return child;
+  });
   const detach = vi.fn();
   let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
   const onError = vi.fn(options.onError ?? (() => {}));
@@ -32,6 +37,7 @@ function start(
     command: "/usr/bin/node",
     args: ["/repo/openclaw/dist/entry.js"],
     env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+    onError,
     detachForProcessTree: options.detached,
     runtime: {
       spawn: childProcess.spawn,
@@ -40,7 +46,6 @@ function start(
         return { detach };
       },
     },
-    onError,
   });
   runs.push({ child, completion });
   const settled = vi.fn();
@@ -55,7 +60,6 @@ function start(
     signal: (value: NodeJS.Signals) => onSignal?.(value),
   };
 }
-
 beforeEach(() => {
   for (const { stream } of ttyStreams) {
     Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
@@ -78,143 +82,113 @@ afterEach(async () => {
     }
   }
 });
-
-describe("runRespawnChildWithSignalBridge", () => {
-  it.each([
-    ["SIGINT", "SIGINT", "SIGTERM", 130, 130],
-    ["SIGTERM", "SIGTERM", "SIGINT", 143, 143],
-    ["SIGTERM", "SIGINT", undefined, 1, 143],
-  ] as const)(
-    "settles actual %s status only after close (first=%s, later=%s)",
-    async (signal, firstSignal, laterSignal, windowsCode, posixCode) => {
-      const run = start({ pid: 2345 });
-      run.signal(firstSignal);
-      if (laterSignal) {
-        run.signal(laterSignal);
-      }
-      run.child.emit("exit", null, signal);
-      await Promise.resolve();
-      expect(run.settled).not.toHaveBeenCalled();
-      expect(run.detach).not.toHaveBeenCalled();
-      expect(killProcess).not.toHaveBeenCalled();
-      run.child.emit("close", null, signal);
-      await expect(run.completion).resolves.toBe(
-        process.platform === "win32" ? windowsCode : posixCode,
-      );
-      expect(run.detach).toHaveBeenCalledOnce();
-      if (process.platform === "win32") {
-        expect(killProcess).not.toHaveBeenCalled();
-      } else {
-        expect(killProcess).toHaveBeenCalledExactlyOnceWith(process.pid, signal);
-        expect(run.detach).toHaveBeenCalledBefore(killProcess);
-      }
-    },
-  );
-
-  it.each([false, true])("escalates detached=%s after grace and joins close", async (detached) => {
-    vi.useFakeTimers();
-    const run = start({ pid: 2468, detached });
-    run.signal("SIGTERM");
-    if (!detached) {
-      run.child.emit("error", new Error("first signal delivery failed"));
-      run.child.emit("error", new Error("second signal delivery failed"));
+it.each([
+  ["SIGINT", "SIGINT", "SIGTERM", 130, 130],
+  ["SIGTERM", "SIGTERM", "SIGINT", 143, 143],
+  ["SIGTERM", "SIGINT", undefined, 1, 143],
+] as const)(
+  "settles actual %s status only after close (first=%s, later=%s)",
+  async (signal, firstSignal, laterSignal, windowsCode, posixCode) => {
+    const run = start({ pid: 2345 });
+    run.signal(firstSignal);
+    if (laterSignal) {
+      run.signal(laterSignal);
     }
-    const tree = detached && process.platform !== "win32";
-    vi.advanceTimersByTime(1_000);
-    expect(signalProcessTreeMock.mock.calls).toEqual(
-      tree ? [[2468, "SIGTERM", { detached: true }]] : [],
+    run.child.emit("exit", null, signal);
+    await Promise.resolve();
+    for (const mock of [run.settled, run.detach, killProcess]) {
+      expect(mock).not.toHaveBeenCalled();
+    }
+    run.child.emit("close", null, signal);
+    await expect(run.completion).resolves.toBe(
+      process.platform === "win32" ? windowsCode : posixCode,
     );
-    expect(run.kill.mock.calls).toEqual(tree ? [] : [["SIGTERM"]]);
-    vi.advanceTimersByTime(1_000);
-    if (tree) {
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(2468, "SIGKILL", { detached: true });
-    } else {
-      expect(run.kill.mock.calls).toEqual([
-        ["SIGTERM"],
-        [process.platform === "win32" ? "SIGTERM" : "SIGKILL"],
-      ]);
-    }
-    vi.advanceTimersByTime(1_000);
-    expect(killProcess).not.toHaveBeenCalled();
-    expect(run.onError).not.toHaveBeenCalled();
-    run.child.emit("exit", null, "SIGKILL");
-    expect(run.detach).not.toHaveBeenCalled();
-    run.child.emit("close", null, "SIGKILL");
-    await expect(run.completion).resolves.toBe(process.platform === "win32" ? 1 : 137);
-  });
-
-  it("reaps detached descendants when their root exits after a parent signal", async () => {
-    vi.useFakeTimers();
-    const run = start({ pid: 3579, detached: true });
-    run.signal("SIGTERM");
-    run.child.emit("exit", 0, null);
+    expect(run.detach).toHaveBeenCalledOnce();
     if (process.platform === "win32") {
-      expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      expect(killProcess).not.toHaveBeenCalled();
     } else {
-      expect(signalProcessTreeMock).toHaveBeenCalledExactlyOnceWith(3579, "SIGKILL", {
-        detached: true,
-      });
+      expect(killProcess).toHaveBeenCalledExactlyOnceWith(process.pid, signal);
+      expect(run.detach).toHaveBeenCalledBefore(killProcess);
     }
-    expect(run.kill).not.toHaveBeenCalled();
-    run.signal("SIGTERM");
-    vi.advanceTimersByTime(3_000);
-    expect(run.kill).not.toHaveBeenCalled();
-    run.child.emit("close", 0, null);
-    await expect(run.completion).resolves.toBe(0);
-  });
+  },
+);
 
-  it.each(["reject", "throw"] as const)(
-    "waits for close and diagnostic settlement (%s)",
-    async (settlement) => {
-      const reporting = createDeferredCore();
-      const run = start({
-        onError: () => {
-          if (settlement === "throw") {
-            throw new Error("formatter unavailable");
-          }
-          return reporting.promise;
-        },
-      });
-      const error = new Error("spawn failed");
-      try {
-        run.child.emit("error", error);
-        expect(run.onError).toHaveBeenCalledExactlyOnceWith(error);
-        expect(run.settled).not.toHaveBeenCalled();
-        run.child.emit("close", -2, null);
-        await Promise.resolve();
-        if (settlement !== "throw") {
-          expect(run.settled).not.toHaveBeenCalled();
-        }
-        if (settlement === "reject") {
-          reporting.reject(new Error("formatter unavailable"));
-        } else {
-          reporting.resolve();
-        }
-        await expect(run.completion).resolves.toBe(1);
-      } finally {
-        reporting.resolve();
-      }
-    },
+it.each([false, true])("escalates detached=%s after grace and joins close", async (detached) => {
+  vi.useFakeTimers();
+  const run = start({ pid: 2468, detached });
+  run.signal("SIGTERM");
+  if (!detached) {
+    run.child.emit("error", new Error("first signal delivery failed"));
+    run.child.emit("error", new Error("second signal delivery failed"));
+  }
+  const tree = detached && process.platform !== "win32";
+  vi.advanceTimersByTime(1_000);
+  expect(signalProcessTreeMock.mock.calls).toEqual(
+    tree ? [[2468, "SIGTERM", { detached: true }]] : [],
   );
+  expect(run.kill.mock.calls).toEqual(tree ? [] : [["SIGTERM"]]);
+  vi.advanceTimersByTime(1_000);
+  if (tree) {
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(2468, "SIGKILL", { detached: true });
+  } else {
+    expect(run.kill.mock.calls).toEqual([
+      ["SIGTERM"],
+      [process.platform === "win32" ? "SIGTERM" : "SIGKILL"],
+    ]);
+  }
+  vi.advanceTimersByTime(1_000);
+  expect([killProcess.mock.calls, run.onError.mock.calls]).toEqual([[], []]);
+  run.child.emit("exit", null, "SIGKILL");
+  expect(run.detach).not.toHaveBeenCalled();
+  run.child.emit("close", null, "SIGKILL");
+  await expect(run.completion).resolves.toBe(process.platform === "win32" ? 1 : 137);
+});
 
-  it("preserves synchronous spawn errors without diagnostics", () => {
-    const error = new Error("invalid spawn options");
-    const onError = vi.fn();
-    vi.spyOn(childProcess, "spawn").mockImplementation(() => {
-      throw error;
-    });
-    expect(() =>
-      runRespawnChildWithSignalBridge({
-        command: "node",
-        args: [],
-        env: {},
-        runtime: {
-          spawn: childProcess.spawn,
-          attachChildProcessBridge: vi.fn(),
-        },
-        onError,
-      }),
-    ).toThrow(error);
-    expect(onError).not.toHaveBeenCalled();
+it("reaps detached descendants when their root exits after a parent signal", async () => {
+  vi.useFakeTimers();
+  const run = start({ pid: 3579, detached: true });
+  run.signal("SIGTERM");
+  run.child.emit("exit", 0, null);
+  expect(signalProcessTreeMock.mock.calls).toEqual(
+    process.platform === "win32" ? [] : [[3579, "SIGKILL", { detached: true }]],
+  );
+  expect(run.kill).not.toHaveBeenCalled();
+  run.signal("SIGTERM");
+  vi.advanceTimersByTime(3_000);
+  expect(run.kill).not.toHaveBeenCalled();
+  run.child.emit("close", 0, null);
+  await expect(run.completion).resolves.toBe(0);
+});
+
+it.each(["reject", "throw"] as const)("joins close and diagnostics: %s", async (settlement) => {
+  const reporting = createDeferredCore();
+  const run = start({
+    onError: () => {
+      if (settlement === "throw") {
+        throw new Error("formatter unavailable");
+      }
+      return reporting.promise;
+    },
   });
+  const error = new Error("spawn failed");
+  try {
+    run.child.emit("error", error);
+    expect(run.onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(run.settled).not.toHaveBeenCalled();
+    run.child.emit("close", -2, null);
+    await Promise.resolve();
+    if (settlement === "reject") {
+      expect(run.settled).not.toHaveBeenCalled();
+      reporting.reject(new Error("formatter unavailable"));
+    }
+    await expect(run.completion).resolves.toBe(1);
+  } finally {
+    reporting.resolve();
+  }
+});
+it("preserves synchronous spawn errors without diagnostics", () => {
+  const error = new Error("invalid spawn options");
+  const onError = vi.fn();
+  expect(() => start({ spawnError: error, onError })).toThrow(error);
+  expect(onError).not.toHaveBeenCalled();
 });

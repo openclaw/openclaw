@@ -34,10 +34,6 @@ class ControlledSecretStream extends EventEmitter {
   }
 }
 
-function childWithSecretStream(stream: ControlledSecretStream): ChildProcess {
-  return { stdio: [null, null, null, stream] } as unknown as ChildProcess;
-}
-
 function writeSecret(stream: ControlledSecretStream, abortSignal?: AbortSignal): Promise<void> {
   const original = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
@@ -46,14 +42,20 @@ function writeSecret(stream: ControlledSecretStream, abortSignal?: AbortSignal):
       fd: 3,
       createData: () => Buffer.from("selected-secret"),
     });
-    return prepared!.deliverTo(childWithSecretStream(stream), { abortSignal });
+    const child = { stdio: [null, null, null, stream] } as unknown as ChildProcess;
+    return prepared!.deliverTo(child, { abortSignal });
   } finally {
     Object.defineProperty(process, "platform", original);
   }
 }
 
-function readOutput(child: ChildProcess) {
-  return new Promise<string>((resolve, reject) => {
+function spawnSecret(script: string, createData: () => Buffer) {
+  const stdin = process.platform === "win32" ? "pipe" : "ignore";
+  const stdio: SpawnStdioEntry[] = [stdin, "pipe", "pipe"];
+  using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData })!;
+  const original = process.platform === "win32" ? undefined : fstatSync(stdio[3] as number);
+  const child = spawn(process.execPath, ["-e", script], { stdio, windowsHide: true });
+  const output = new Promise<string>((resolve, reject) => {
     let text = "";
     child.stdout!.on("data", (chunk) => {
       text += chunk;
@@ -63,18 +65,6 @@ function readOutput(child: ChildProcess) {
       code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
     );
   });
-}
-
-function spawnSecret(script: string, createData: () => Buffer) {
-  const stdio: SpawnStdioEntry[] = [
-    process.platform === "win32" ? "pipe" : "ignore",
-    "pipe",
-    "pipe",
-  ];
-  using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData })!;
-  const original = process.platform === "win32" ? undefined : fstatSync(stdio[3] as number);
-  const child = spawn(process.execPath, ["-e", script], { stdio, windowsHide: true });
-  const output = readOutput(child);
   return {
     child,
     output,
@@ -90,7 +80,6 @@ describe("Windows secret input delivery", () => {
   it("completes on accepted bytes and consumes late errors until the pipe closes", async () => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
-
     expect(stream.written?.toString()).toBe("selected-secret");
     stream.finishWrite();
     await expect(write).resolves.toBeUndefined();
@@ -99,7 +88,6 @@ describe("Windows secret input delivery", () => {
     const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
     expect(() => stream.emit("error", reset)).not.toThrow();
     expect(stream.listenerCount("error")).toBe(1);
-
     stream.emit("close");
     expect(stream.listenerCount("error")).toBe(0);
   });
@@ -135,10 +123,7 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
     return;
   }
   // Other Vitest workers can reuse the number after close; identity owns the pipe.
-  expect({ dev: current.dev, ino: current.ino }).not.toEqual({
-    dev: original.dev,
-    ino: original.ino,
-  });
+  expect([current.dev, current.ino]).not.toEqual([original.dev, original.ino]);
 }
 
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {

@@ -10,16 +10,11 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  onDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
-  type DiagnosticEventPayload,
-} from "../infra/diagnostic-events.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import { emitChildProcessSpawnSample, withChildProcessOperation } from "./spawn-diagnostics.js";
+import { withChildProcessOperation } from "./spawn-diagnostics.js";
+import { useSpawnDiagnostics } from "./spawn-diagnostics.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   signalPtySessionTree: vi.fn(),
@@ -46,6 +41,12 @@ vi.mock("./terminal-pty-node.js", () => ({
 const { prepareTerminalPty, spawnTerminalPty } = await import("./terminal-pty.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const dimensions = { cols: 80, rows: 24 };
+const diagnosticParams = { file: "/bin/bash", args: ["-c", "synthetic"], ...dimensions };
+
+function expectSpawn(file: string, args: string[] | string, options: object) {
+  expect(mocks.spawn).toHaveBeenCalledWith(file, args, expect.objectContaining(options));
+}
 
 function replaceValue(target: object, key: string, value: unknown) {
   const original = Object.getOwnPropertyDescriptor(target, key);
@@ -64,6 +65,11 @@ function replaceValue(target: object, key: string, value: unknown) {
   };
 }
 
+beforeEach(() => {
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -73,7 +79,7 @@ async function spawnDirectTerminalPty(
   overrides: Pick<Parameters<typeof spawnTerminalPty>[0], "file"> &
     Partial<Parameters<typeof spawnTerminalPty>[0]>,
 ): ReturnType<typeof spawnTerminalPty> {
-  const params = { args: [], env: {}, cols: 80, rows: 24, ...overrides };
+  const params = { args: [], env: {}, ...dimensions, ...overrides };
   using runtime = replaceValue(process.versions, "bun", undefined);
   void runtime;
   return await spawnTerminalPty(params);
@@ -96,55 +102,25 @@ function createWindowsNpmShim(command: string) {
   return { entrypoint, shimPath };
 }
 
-function fakePty(pid = 4321) {
-  return {
-    pid,
-    write: vi.fn(),
-    resize: vi.fn(),
-    pause: vi.fn(),
-    resume: vi.fn(),
-    onData: vi.fn(),
-    onExit: vi.fn(),
-    kill: vi.fn(),
-  };
-}
-
-async function spawnFakePty(pid = 4321) {
-  const pty = fakePty(pid);
-  mocks.spawn.mockReturnValueOnce(pty);
-  const handle = await spawnDirectTerminalPty({ file: "/bin/sh" });
-  return { handle, pty };
-}
+const fakePty = (pid = 4321) => ({
+  pid,
+  write: vi.fn(),
+  resize: vi.fn(),
+  pause: vi.fn(),
+  resume: vi.fn(),
+  onData: vi.fn(),
+  onExit: vi.fn(),
+  kill: vi.fn(),
+});
 
 describe("terminal PTY spawn diagnostics", () => {
-  let now = 0;
-  let events: DiagnosticEventPayload[];
-  let stop: () => void;
-
-  beforeEach(() => {
-    mocks.spawn.mockReset();
-    mocks.spawnBunTerminalPty.mockReset();
-    mocks.spawnNodeTerminalPty.mockReset();
-    now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    resetDiagnosticEventsForTest();
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    setDiagnosticsEnabledForProcess(true);
-    events = [];
-    stop = onDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.child_process.spawn") {
-        events.push(event);
-      }
-    });
-  });
-
-  afterEach(() => {
-    stop();
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    resetDiagnosticEventsForTest();
-  });
+  const { events, sampleAt } = useSpawnDiagnostics();
+  const expectSample = (time: number, family?: string) => {
+    sampleAt(time);
+    expect(events).toEqual(
+      family ? [expect.objectContaining({ family, operation: "agent.exec", count: 1 })] : [],
+    );
+  };
 
   it.each(["node-pty", "bun-native", "node-helper"] as const)(
     "counts an admitted %s PTY once with the agent owner",
@@ -170,43 +146,32 @@ describe("terminal PTY spawn diagnostics", () => {
       );
       using global = !bunGlobalDescriptor ? replaceValue(globalThis, "Bun", bunRuntime) : undefined;
       void [runtime, terminal, global];
-      await withChildProcessOperation("agent.exec", () =>
-        spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
-      );
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual([
-        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-      ]);
+      await withChildProcessOperation("agent.exec", () => spawnTerminalPty(diagnosticParams));
+      expectSample(60_000, "bash");
     },
   );
 
   it("retains preparation ownership and excludes failed or denied native launches", async () => {
-    const params = { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 };
     using runtime = replaceValue(process.versions, "bun", undefined);
     void runtime;
-    const launch = await withChildProcessOperation("agent.exec", () => prepareTerminalPty(params));
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([]);
+    const launch = await withChildProcessOperation("agent.exec", () =>
+      prepareTerminalPty(diagnosticParams),
+    );
+    expectSample(60_000);
     mocks.spawn.mockReturnValueOnce(fakePty());
     launch();
     mocks.spawn.mockImplementationOnce(() => {
       throw new Error("native PTY unavailable");
     });
-    await expect(spawnTerminalPty(params)).rejects.toThrow("native PTY unavailable");
+    await expect(spawnTerminalPty(diagnosticParams)).rejects.toThrow("native PTY unavailable");
     await expect(
-      spawnTerminalPty(params, {
+      spawnTerminalPty(diagnosticParams, {
         assertCurrent: () => {
           throw new Error("PTY launch denied");
         },
       }),
     ).rejects.toThrow("PTY launch denied");
-    now = 120_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-    ]);
+    expectSample(120_000, "bash");
   });
 
   it.each(["data", "silent-exit", "failed-exit"] as const)(
@@ -216,23 +181,15 @@ describe("terminal PTY spawn diagnostics", () => {
       const pty = fakePty(0);
       const dataSubscription = { dispose: vi.fn() };
       const exitSubscription = { dispose: vi.fn() };
-      let onData: (data: string) => void = () => {};
-      let onExit: () => void = () => {};
-      pty.onData.mockImplementation((listener: typeof onData) => {
-        onData = listener;
-        return dataSubscription;
-      });
-      pty.onExit.mockImplementation((listener: typeof onExit) => {
-        onExit = listener;
-        return exitSubscription;
-      });
+      pty.onData.mockReturnValueOnce(dataSubscription);
+      pty.onExit.mockReturnValueOnce(exitSubscription);
       mocks.spawn.mockReturnValueOnce(pty);
       await withChildProcessOperation("agent.exec", () =>
-        spawnTerminalPty({ file: "powershell.exe", args: [], cols: 80, rows: 24 }),
+        spawnTerminalPty({ file: "powershell.exe", args: [], ...dimensions }),
       );
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual([]);
+      const onData: (data: string) => void = pty.onData.mock.calls[0][0];
+      const onExit: () => void = pty.onExit.mock.calls[0][0];
+      expectSample(60_000);
       if (outcome !== "failed-exit") {
         pty.pid = 4321;
       }
@@ -241,75 +198,40 @@ describe("terminal PTY spawn diagnostics", () => {
       }
       onExit();
       onData("late synthetic output");
-      now = 120_000;
-      emitChildProcessSpawnSample();
-      expect(events).toEqual(
-        outcome === "failed-exit"
-          ? []
-          : [expect.objectContaining({ family: "powershell", operation: "agent.exec", count: 1 })],
-      );
+      expectSample(120_000, outcome === "failed-exit" ? undefined : "powershell");
       expect(dataSubscription.dispose).toHaveBeenCalledOnce();
       expect(exitSubscription.dispose).toHaveBeenCalledOnce();
     },
   );
 });
 
-describe("terminal PTY teardown", () => {
-  beforeEach(() => {
-    mocks.signalPtySessionTree.mockReset();
-    mocks.signalProcessTree.mockReset();
-    mocks.spawn.mockReset();
-  });
-
-  it("uses the PTY handle for non-terminating signals", async () => {
-    const { handle, pty } = await spawnFakePty();
-    handle.kill("SIGHUP");
-    expect(mocks.signalPtySessionTree).not.toHaveBeenCalled();
-    if (process.platform === "win32") {
-      expect(pty.kill).toHaveBeenCalledWith();
-    } else {
-      expect(pty.kill).toHaveBeenCalledWith("SIGHUP");
-    }
-  });
+it("uses the PTY handle for non-terminating signals", async () => {
+  const pty = fakePty();
+  mocks.spawn.mockReturnValueOnce(pty);
+  const handle = await spawnDirectTerminalPty({ file: "/bin/sh" });
+  handle.kill("SIGHUP");
+  expect(mocks.signalPtySessionTree).not.toHaveBeenCalled();
+  expect(pty.kill.mock.calls).toEqual([process.platform === "win32" ? [] : ["SIGHUP"]]);
 });
 
 describe("terminal PTY invocation", () => {
   beforeEach(() => {
-    mocks.spawn.mockReset().mockReturnValueOnce(fakePty());
+    mocks.spawn.mockReturnValueOnce(fakePty());
   });
 
-  it("upgrades non-interactive TERM for a real PTY", async () => {
-    await spawnDirectTerminalPty({
-      file: "/usr/bin/codex",
-      args: ["resume", "thread"],
-      env: { TERM: "dumb" },
-    });
-
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "/usr/bin/codex",
-      ["resume", "thread"],
-      expect.objectContaining({
-        name: "xterm-256color",
-        env: expect.objectContaining({ TERM: "xterm-256color" }),
-      }),
-    );
-  });
-
-  it("canonicalizes a case-insensitive Windows TERM key", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    await spawnDirectTerminalPty({
-      file: "powershell.exe",
-      env: { Term: "screen-256color" },
-    });
-
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "powershell.exe",
-      [],
-      expect.objectContaining({
-        name: "screen-256color",
-        env: { TERM: "screen-256color" },
-      }),
-    );
+  it.each([
+    ["TERM", "dumb", "xterm-256color"],
+    ["Term", "screen-256color", "screen-256color"],
+  ])("normalizes %s=%s to %s for a real PTY", async (key, value, name) => {
+    const windows = key === "Term";
+    if (windows) {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    }
+    const file = windows ? "powershell.exe" : "/usr/bin/codex";
+    const args = windows ? [] : ["resume", "thread"];
+    await spawnDirectTerminalPty({ file, args, env: { [key]: value } });
+    const env = { TERM: name };
+    expectSpawn(file, args, { name, env: windows ? env : expect.objectContaining(env) });
   });
 
   it("wraps Windows .bat shims through ComSpec", async () => {
@@ -320,11 +242,10 @@ describe("terminal PTY invocation", () => {
       args: ["resume", "thread title"],
       env: { COMSPEC: comspec },
     });
-
-    expect(mocks.spawn).toHaveBeenCalledWith(
+    expectSpawn(
       comspec,
       '/d /s /c ""C:\\Program Files\\Codex\\codex.bat" "resume" "thread title""',
-      expect.objectContaining({ cols: 80, rows: 24 }),
+      dimensions,
     );
   });
 
@@ -379,7 +300,6 @@ describe("terminal PTY invocation", () => {
       const tempDir = tempDirs.make("openclaw-terminal-pty-custom-");
       const wrapperPath = path.join(tempDir, "custom.cmd");
       fs.writeFileSync(wrapperPath, "@ECHO off\r\necho custom\r\n", "utf8");
-
       await expect(
         spawnDirectTerminalPty({
           file: wrapperPath,
@@ -401,20 +321,14 @@ describe("terminal PTY invocation", () => {
         file: barePath,
         args: ["--version"],
       });
-
-      expect(mocks.spawn).toHaveBeenCalledWith(
-        barePath,
-        ["--version"],
-        expect.objectContaining({ cols: 80, rows: 24 }),
-      );
+      expectSpawn(barePath, ["--version"], dimensions);
     },
   );
 });
 
-describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
-  it("kills a background job in a distinct process group within the PTY session", async ({
-    signal,
-  }) => {
+it.runIf(process.platform !== "win32")(
+  "kills a background process group within the PTY session",
+  async ({ signal }) => {
     vi.resetModules();
     vi.doUnmock("@lydell/node-pty");
     vi.doUnmock("./kill-tree.js");
@@ -425,8 +339,7 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       file: "/bin/bash",
       args: ["-l"],
       env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir() },
-      cols: 80,
-      rows: 24,
+      ...dimensions,
     });
     let output = "";
     let shellPid: number | undefined;
@@ -443,7 +356,6 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
         ready.resolve();
       }
     });
-
     try {
       handle.write(
         'sleep 300 & child=$(jobs -p); printf \'__OPENCLAW_PIDS__ %s %s\\n\' "$$" "$child"\r',
@@ -455,16 +367,10 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       if (!shellPid || !childPid) {
         throw new Error("missing PTY process ids");
       }
-      const ps = spawnSync(
-        "ps",
-        [
-          "-o",
-          process.platform === "darwin" ? "pid=,pgid=,tty=" : "pid=,pgid=,sid=",
-          "-p",
-          `${shellPid},${childPid}`,
-        ],
-        { encoding: "utf8" },
-      );
+      const fields = process.platform === "darwin" ? "pid=,pgid=,tty=" : "pid=,pgid=,sid=";
+      const ps = spawnSync("ps", ["-o", fields, "-p", `${shellPid},${childPid}`], {
+        encoding: "utf8",
+      });
       const rows = ps.stdout
         .trim()
         .split("\n")
@@ -480,7 +386,6 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       if (process.platform !== "darwin") {
         expect(Number(shell?.session)).toBe(shellPid);
       }
-
       handle.kill();
       await withinTest(exited.promise, signal);
       expect(isPidAlive(shellPid)).toBe(false);
@@ -496,5 +401,5 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       killPidIfAlive(childPid);
       killPidIfAlive(shellPid);
     }
-  });
-});
+  },
+);

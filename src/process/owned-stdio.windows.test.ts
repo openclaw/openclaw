@@ -63,14 +63,7 @@ function stubLauncher(error?: Error & { code?: string }) {
             : { job: args[1], type: "spawned", pid: 5678 },
         );
       }
-      if (error) {
-        return true;
-      }
-      const callback = sendArgs.findLast((value) => typeof value === "function");
-      if (typeof callback === "function") {
-        callback(null);
-      }
-      return true;
+      return error ? true : stub.sendMock(message, ...sendArgs);
     });
     queueMicrotask(() => {
       stub.child.emit("spawn");
@@ -108,7 +101,10 @@ function observeJob(cause?: Error) {
   });
 }
 
-const fixture = { argv: [process.execPath, "fixture"], exactEnv: true };
+const fixture = {
+  argv: [process.execPath, "fixture"],
+  exactEnv: true,
+} satisfies Parameters<typeof createOwnedStdioProcess>[0];
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let createOwnedStdioProcess: typeof import("./owned-stdio.js").createOwnedStdioProcess;
 let closeOwnedStdioProcess: typeof import("./owned-stdio.js").closeOwnedStdioProcess;
@@ -144,8 +140,7 @@ it("joins the Job after root exit with descendants holding stdio", async () => {
   child.onStdout(() => {});
   child.onStderr(() => {});
   try {
-    expect(child.waitForExtinction).toBeTypeOf("function");
-    expect(child.pid).toBe(5678);
+    expect(child).toMatchObject({ pid: 5678, waitForExtinction: expect.any(Function) });
     const observed = createDeferred();
     native.inspect.mockImplementation(() => {
       observed.resolve();
@@ -173,15 +168,13 @@ it.each([false, true])(
     const cause = new Error("Job accounting unavailable");
     const child = await createOwnedStdioProcess(fixture);
     observeJob(fails ? cause : undefined);
-    let observed = false;
-    const extinction = child.waitForExtinction!().then((result) => {
-      observed = true;
-      return result;
-    });
+    const observed = vi.fn();
+    const extinction = child.waitForExtinction!();
+    void extinction.then(observed);
     finishRoot();
     try {
       await child.wait();
-      expect(observed).toBe(true);
+      expect(observed).toHaveBeenCalledOnce();
       await expect(extinction).resolves.toEqual(
         fails
           ? { status: "uncertain", reason: "job-observation-failed", cause }
@@ -196,40 +189,51 @@ it.each([false, true])(
   },
 );
 
-it.each(["binding", "launcher", "create", "admission"] as const)(
-  "launches once without containment when Job %s is unavailable",
-  async (phase) => {
-    const unavailable = phase === "binding" || phase === "launcher";
-    const cause = new Error(`Job ${phase} failed`);
-    failJob(phase, cause);
-    const child = await createOwnedStdioProcess(fixture);
-    expect(native.spawn.mock.calls.filter(([, args]) => args[0] === "fixture")).toHaveLength(1);
-    if (unavailable) {
-      expect(native.spawn).toHaveBeenCalledWith(process.execPath, ["fixture"], expect.any(Object));
-    } else if (phase !== "create") {
-      expect(native.close.mock.invocationCallOrder[0]).toBeLessThan(
-        native.spawn.mock.invocationCallOrder.at(-1)!,
-      );
-    }
-    finishRoot();
-    await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
-    const extinction = child.waitForExtinction!();
-    if (unavailable) {
-      await expect(extinction).resolves.toEqual({ status: "uncertain", reason: "job-unavailable" });
-    } else {
-      await expect(extinction).resolves.toMatchObject({
-        status: "uncertain",
-        reason: `job-${phase}-failed`,
-        cause: expect.objectContaining({ message: cause.message }),
-      });
-    }
-    await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
-    if (unavailable) {
-      expect(native.terminate).not.toHaveBeenCalled();
-      expect(native.close).not.toHaveBeenCalled();
-    }
-  },
-);
+it.each<[JobPhase, boolean]>([
+  ["binding", false],
+  ["launcher", false],
+  ["create", false],
+  ["admission", false],
+  ["create", true],
+  ["admission", true],
+])("handles Job %s failure with cancellation=%s", async (phase, cancelled) => {
+  const unavailable = phase === "binding" || phase === "launcher";
+  const cause = new Error(`Job ${phase} failed`);
+  const abort = new AbortController();
+  failJob(phase, cause, cancelled ? abort : undefined);
+  const starting = createOwnedStdioProcess(
+    cancelled ? { ...fixture, abortSignal: abort.signal } : fixture,
+  );
+  if (cancelled) {
+    await expect(starting).rejects.toThrow("child construction aborted");
+    expect(native.spawn).toHaveBeenCalledTimes(phase === "create" ? 0 : 1);
+    expect(stub.sendMock).not.toHaveBeenCalled();
+    return;
+  }
+  const child = await starting;
+  expect(native.spawn.mock.calls.filter(([, args]) => args[0] === "fixture")).toHaveLength(1);
+  if (unavailable) {
+    expect(native.spawn).toHaveBeenCalledWith(process.execPath, ["fixture"], expect.any(Object));
+  } else if (phase !== "create") {
+    expect(native.close.mock.invocationCallOrder[0]).toBeLessThan(
+      native.spawn.mock.invocationCallOrder.at(-1)!,
+    );
+  }
+  finishRoot();
+  await expect(child.wait()).resolves.toEqual({ code: 0, signal: null });
+  const extinction = expect(child.waitForExtinction!()).resolves;
+  const expected = {
+    status: "uncertain",
+    reason: unavailable ? "job-unavailable" : `job-${phase}-failed`,
+    ...(!unavailable && { cause: expect.objectContaining({ message: cause.message }) }),
+  };
+  await (unavailable ? extinction.toEqual(expected) : extinction.toMatchObject(expected));
+  await expect(closeOwnedStdioProcess(child)).resolves.toBeUndefined();
+  if (unavailable) {
+    expect(native.terminate).not.toHaveBeenCalled();
+    expect(native.close).not.toHaveBeenCalled();
+  }
+});
 
 it("does not retry a genuine command-launch error after Job admission", async () => {
   const cause = Object.assign(new Error("command not found"), { code: "ENOENT" });
@@ -239,19 +243,6 @@ it("does not retry a genuine command-launch error after Job admission", async ()
   ).rejects.toMatchObject(cause);
   expect(native.spawn).toHaveBeenCalledOnce();
 });
-
-it.each(["create", "admission"] as const)(
-  "does not fall back when cancelled during Job %s failure",
-  async (phase) => {
-    const abort = new AbortController();
-    failJob(phase, new Error(`Job ${phase} failed`), abort);
-    await expect(
-      createOwnedStdioProcess({ ...fixture, abortSignal: abort.signal }),
-    ).rejects.toThrow("child construction aborted");
-    expect(native.spawn).toHaveBeenCalledTimes(phase === "create" ? 0 : 1);
-    expect(stub.sendMock).not.toHaveBeenCalled();
-  },
-);
 
 it.each([
   ["required-all", false, true, "job-unavailable"],

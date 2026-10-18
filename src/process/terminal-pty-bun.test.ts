@@ -77,14 +77,12 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
       }
     };
     checkOutput();
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(ready.promise, exited.promise, `PTY exited before ${text}`),
-        signal,
-      );
-    } finally {
+    return withinTest(
+      awaitGateBeforeSettlement(ready.promise, exited.promise, `PTY exited before ${text}`),
+      signal,
+    ).finally(() => {
       checkOutput = undefined;
-    }
+    });
   };
   return { handle, observed, exited: exited.promise, waitForOutput };
 }
@@ -103,7 +101,7 @@ async function pausedShell(script: string, cwd: string) {
 
 // Stock Bun and the current CI pin lack the capability required by the native route.
 describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && hasFlowControl)(
-  "Bun native terminal PTY (requires Bun on POSIX with Terminal.pause/resume)",
+  "Bun native terminal PTY",
   () => {
     it("preserves cwd, env, terminal input, resize, Unicode, and final output", async () => {
       const cwd = fs.realpathSync(tempDirs.make("openclaw-bun-pty-"));
@@ -191,76 +189,70 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       expect(isPidAlive(childPid)).toBe(false);
     });
 
-    describe("flow control", () => {
-      it("stalls child progress while paused and delivers every byte after resume", async () => {
-        const cwd = tempDirs.make("openclaw-bun-pty-flow-");
-        const payload = "x".repeat(4 * 1024 * 1024);
-        fs.writeFileSync(path.join(cwd, "payload"), payload);
-        const { handle, observed } = await pausedShell(
-          "printf started > progress; cat payload; printf finished > progress",
-          cwd,
-        );
-        const progress = () => fs.readFileSync(path.join(cwd, "progress"), "utf8");
-        await vi.waitFor(() => expect(progress()).toBe("started"), deadline);
-        let samples = 0;
-        await vi.waitFor(
-          () => {
-            expect(progress()).toBe("started");
-            expect(observed.output).toBe("READY\r\n");
-            expect(++samples).toBeGreaterThanOrEqual(5);
-          },
-          { timeout: 1_000, interval: 20 },
-        );
-        expect(observed.exit).toBeUndefined();
-        handle.resume();
-        await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(0), deadline);
-        expect(progress()).toBe("finished");
-        expect(observed.output).toBe(`READY\r\n${payload}`);
-      });
+    it("stalls child progress while paused and delivers every byte after resume", async () => {
+      const cwd = tempDirs.make("openclaw-bun-pty-flow-");
+      const payload = "x".repeat(4 * 1024 * 1024);
+      fs.writeFileSync(path.join(cwd, "payload"), payload);
+      const { handle, observed } = await pausedShell(
+        "printf started > progress; cat payload; printf finished > progress",
+        cwd,
+      );
+      const progress = () => fs.readFileSync(path.join(cwd, "progress"), "utf8");
+      await vi.waitFor(() => expect(progress()).toBe("started"), deadline);
+      let samples = 0;
+      await vi.waitFor(
+        () => {
+          expect(progress()).toBe("started");
+          expect(observed.output).toBe("READY\r\n");
+          expect(++samples).toBeGreaterThanOrEqual(5);
+        },
+        { timeout: 1_000, interval: 20 },
+      );
+      expect(observed.exit).toBeUndefined();
+      handle.resume();
+      await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(0), deadline);
+      expect(progress()).toBe("finished");
+      expect(observed.output).toBe(`READY\r\n${payload}`);
+    });
 
-      it("preserves the tail when the child finishes while output is paused", async () => {
-        const cwd = tempDirs.make("openclaw-bun-pty-tail-");
-        const { handle, observed } = await pausedShell(
-          'printf "tail 🦞\\n"; : > written; exit 9',
-          cwd,
-        );
-        await vi.waitFor(
-          () => expect(fs.existsSync(path.join(cwd, "written"))).toBe(true),
-          deadline,
-        );
-        // macOS holds an exiting session leader until its PTY output drains.
-        expect(observed.output).toBe("READY\r\n");
-        expect(observed.exit).toBeUndefined();
-        handle.resume();
-        await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(9), deadline);
-        expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
-      });
+    it("preserves the tail when the child finishes while output is paused", async () => {
+      const cwd = tempDirs.make("openclaw-bun-pty-tail-");
+      const { handle, observed } = await pausedShell(
+        'printf "tail 🦞\\n"; : > written; exit 9',
+        cwd,
+      );
+      await vi.waitFor(() => expect(fs.existsSync(path.join(cwd, "written"))).toBe(true), deadline);
+      // macOS holds an exiting session leader until its PTY output drains.
+      expect(observed).toEqual({ output: "READY\r\n" });
+      handle.resume();
+      await vi.waitFor(() => expect(observed.exit?.exitCode).toBe(9), deadline);
+      expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
+    });
 
-      it("drains on kill despite consumer re-pauses", async ({ signal }) => {
-        const cwd = tempDirs.make("openclaw-bun-pty-kill-");
-        const payload = path.join(cwd, "payload");
-        fs.writeFileSync(payload, "x".repeat(4 * 1024 * 1024));
-        // A shell can exit with its killed child's status before the tree kill reaches it.
-        const { handle, observed, exited, waitForOutput } = await start([payload], {
-          file: "/bin/cat",
-          cwd,
-        });
-        // A viewer whose backlog stays full pauses again on every chunk it receives.
-        handle.onData(() => handle.pause());
-        await waitForOutput("x", signal);
-        expect(observed.exit).toBeUndefined();
-        const beforeKill = observed.output.length;
-        handle.kill();
-        expect(await withinTest(exited, signal)).toEqual({
-          exitCode: 0,
-          signal: constants.signals.SIGKILL,
-        });
-        // Teardown delivered the dying tree's output before exit; nothing trails it.
-        const atExit = observed.output.length;
-        expect(atExit).toBeGreaterThan(beforeKill);
-        handle.resume();
-        expect(observed.output.length).toBe(atExit);
+    it("drains on kill despite consumer re-pauses", async ({ signal }) => {
+      const cwd = tempDirs.make("openclaw-bun-pty-kill-");
+      const payload = path.join(cwd, "payload");
+      fs.writeFileSync(payload, "x".repeat(4 * 1024 * 1024));
+      // A shell can exit with its killed child's status before the tree kill reaches it.
+      const { handle, observed, exited, waitForOutput } = await start([payload], {
+        file: "/bin/cat",
+        cwd,
       });
+      // A viewer whose backlog stays full pauses again on every chunk it receives.
+      handle.onData(() => handle.pause());
+      await waitForOutput("x", signal);
+      expect(observed.exit).toBeUndefined();
+      const beforeKill = observed.output.length;
+      handle.kill();
+      expect(await withinTest(exited, signal)).toEqual({
+        exitCode: 0,
+        signal: constants.signals.SIGKILL,
+      });
+      // Teardown delivered the dying tree's output before exit; nothing trails it.
+      const atExit = observed.output.length;
+      expect(atExit).toBeGreaterThan(beforeKill);
+      handle.resume();
+      expect(observed.output.length).toBe(atExit);
     });
   },
 );

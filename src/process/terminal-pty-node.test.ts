@@ -21,12 +21,10 @@ import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.j
 const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir(), TERM: "dumb" };
 const handles: TerminalPtyHandle[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const defaults = { cwd: os.tmpdir(), env, cols: 80, rows: 24 };
+const defaults = { file: "/bin/sh", cwd: os.tmpdir(), env, cols: 80, rows: 24 };
 
-async function start(
-  params: Pick<TerminalPtySpawnParams, "file" | "args"> & Partial<TerminalPtySpawnParams>,
-) {
-  const handle = await spawnNodeTerminalPty({ ...defaults, ...params });
+async function start(args: string[], params: Partial<TerminalPtySpawnParams> = {}) {
+  const handle = await spawnNodeTerminalPty({ ...defaults, args, ...params });
   handles.push(handle);
   return handle;
 }
@@ -70,7 +68,6 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       const starting = spawnNodeTerminalPty(
         {
           ...defaults,
-          file: "/bin/sh",
           args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
           cwd: directory,
         },
@@ -116,13 +113,10 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const directory = tempDirs.make("openclaw-pty-node-shim-");
     fs.writeFileSync(path.join(directory, "node"), "#!/bin/sh\nexit 42\n", { mode: 0o755 });
     vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
-    const handle = await start({
-      file: "/bin/sh",
-      args: [
-        "-c",
-        'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
-      ],
-    });
+    const handle = await start([
+      "-c",
+      'stty -echo; printf "READY\\n"; IFS= read -r input; stty size; printf "%s\\n%s\\n" "$input" "$TERM"; exit 7',
+    ]);
     let inputSent = false;
     const { state, done } = observe(handle, (output) => {
       if (!inputSent && output.includes("READY\r\n")) {
@@ -141,7 +135,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const payload = "x".repeat(2 * 1024 * 1024);
     const file = path.join(directory, "output.txt");
     fs.writeFileSync(file, payload);
-    const handle = await start({ file: "/bin/cat", args: [file], cwd: directory });
+    const handle = await start([file], { file: "/bin/cat", cwd: directory });
     handle.pause();
     const { state, done } = observe(handle);
     await delay(50);

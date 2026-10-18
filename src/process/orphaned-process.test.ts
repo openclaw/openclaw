@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
-
 const mocks = vi.hoisted(() => ({
   ps: vi.fn(),
   identity: vi.fn(),
@@ -20,8 +19,8 @@ vi.mock("./supervisor/darwin-process-command.js", () => ({
 }));
 import { reapOrphanedProcesses } from "./orphaned-process.js";
 
-const command = "/state/llama-cpp/build/llama-server";
-const rootArgs = [command, "--models-preset", "/state/llama-cpp/models.ini", "--port", "19321"];
+const command = "/state/llama-server";
+const rootArgs = [command, "--port", "19321"];
 const defaults = { parentPid: 1, uid: 501, command, executable: command, cwd: "/state" };
 type KernelProcess = typeof defaults & { pid: number; argv: string[]; startedAt: number | null };
 const processes = new Map<number, KernelProcess>();
@@ -29,20 +28,13 @@ const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 let killSpy: MockInstance<typeof process.kill>;
 let onPs: ((pid?: number) => void) | undefined;
-let onSignal: ((...args: Parameters<typeof process.kill>) => void) | undefined;
+let onSignal: (...args: Parameters<typeof process.kill>) => void;
 
 function add(pid: number, overrides: Partial<KernelProcess> = {}) {
-  const entry: KernelProcess = {
-    ...defaults,
-    pid,
-    argv: [...rootArgs],
-    startedAt: pid,
-    ...overrides,
-  };
+  const entry = { ...defaults, pid, argv: [...rootArgs], startedAt: pid, ...overrides };
   processes.set(pid, entry);
   return entry;
 }
-
 function exit(pid: number) {
   processes.delete(pid);
   for (const entry of processes.values()) {
@@ -51,7 +43,6 @@ function exit(pid: number) {
     }
   }
 }
-
 function reap(
   options: { cwd?: string; signal?: AbortSignal; onReap?: (pid: number) => void } = {},
 ) {
@@ -62,10 +53,10 @@ function reap(
     ...options,
   });
 }
-
 async function expectUntouched(options: Parameters<typeof reap>[0] = {}) {
   expect(await reap(options)).toEqual([]);
   expect(killSpy).not.toHaveBeenCalled();
+  expect(processes.has(100)).toBe(true);
 }
 
 beforeEach(() => {
@@ -73,7 +64,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   processes.clear();
   onPs = undefined;
-  onSignal = undefined;
+  onSignal = exit;
   Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
   Object.defineProperty(process, "getuid", { configurable: true, value: () => 501 });
   mocks.realpath.mockImplementation((directory: string) => directory);
@@ -101,11 +92,7 @@ beforeEach(() => {
     return row && { executable: row.executable, argv: [...row.argv] };
   });
   killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-    if (onSignal) {
-      onSignal(pid, signal);
-    } else {
-      exit(pid);
-    }
+    onSignal(pid, signal);
     return true;
   });
 });
@@ -130,106 +117,60 @@ it("reaps only the captured managed macOS tree", async () => {
   add(103, { parentPid: 100, executable: "/other/llama-server" });
   add(104, { parentPid: 103 });
   expect(await reap()).toEqual([100]);
-  expect(killSpy.mock.calls).toEqual([
-    [100, "SIGTERM"],
-    [101, "SIGTERM"],
-    [102, "SIGTERM"],
-  ]);
+  expect(killSpy.mock.calls).toEqual([100, 101, 102].map((pid) => [pid, "SIGTERM"]));
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
-type UntouchedCase = {
-  name: string;
-  change?: Partial<KernelProcess>;
-  prepare?: () => void;
-  options?: Parameters<typeof reap>[0];
-  unread?: typeof mocks.ps;
-};
-it.each<UntouchedCase>([
-  { name: "live parent", change: { parentPid: 50 } },
-  { name: "foreign user", change: { uid: 502 } },
-  { name: "foreign executable with spoofed argv", change: { executable: "/other/llama-server" } },
-  { name: "different argv zero", change: { argv: ["llama-server", ...rootArgs.slice(1)] } },
-  { name: "different port", change: { argv: [...rootArgs.slice(0, -1), "19322"] } },
-  {
-    name: "host without birth identity",
-    prepare: () => {
-      mocks.identity.mockReturnValueOnce(null);
-    },
-    unread: mocks.ps,
-  },
-  {
-    name: "different working directory",
-    change: { cwd: "/other" },
-    prepare: () => {
-      mocks.realpath.mockReturnValue("/state");
-    },
-    options: { cwd: "/state-alias" },
-  },
-  {
-    name: "unreadable foreign installation",
-    change: { command: "/other/llama-server" },
-    prepare: () => {
-      mocks.command.mockImplementation(() => {
-        throw new Error("unreadable");
-      });
-    },
-    unread: mocks.command,
-  },
-  {
-    name: "Linux PID 1 child",
-    prepare: () => {
-      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    },
-    unread: mocks.ps,
-  },
-])("leaves $name untouched", async ({ change, prepare, options, unread }) => {
+it.each<[string, Partial<KernelProcess>]>([
+  ["live parent", { parentPid: 50 }],
+  ["foreign user", { uid: 502 }],
+  ["foreign executable with spoofed argv", { executable: "/other/llama-server" }],
+  ["different argv zero", { argv: ["llama-server", ...rootArgs.slice(1)] }],
+  ["different port", { argv: [...rootArgs.slice(0, -1), "19322"] }],
+  ["different working directory", { cwd: "/other" }],
+])("leaves %s untouched", async (_name, change) => {
   add(100, change);
-  prepare?.();
-  await expectUntouched(options);
-  expect(processes.has(100)).toBe(true);
-  if (unread) {
-    expect(unread).not.toHaveBeenCalled();
-  }
+  mocks.realpath.mockReturnValue("/state");
+  await expectUntouched({ cwd: "/state-alias" });
 });
-
-it("reports unavailable precise identity only for a matching process", async () => {
-  add(100, { startedAt: null });
-  await expect(reap()).rejects.toThrow("Cannot verify orphaned process 100");
-  expect(killSpy).not.toHaveBeenCalled();
-});
-
-it("refuses a root that acquires a live parent before signaling its tree", async () => {
-  const root = add(100);
-  add(101, { parentPid: 100 });
-  await expect(
-    reap({
-      onReap: () => {
-        root.parentPid = 50;
-      },
-    }),
-  ).rejects.toThrow("changed identity");
-  expect(killSpy).not.toHaveBeenCalled();
-});
-
-it("treats disappearance during the final process inspection as already stopped", async () => {
+it.each<[string, () => unknown]>([
+  ["unknown host birth", () => mocks.identity.mockReturnValueOnce(null)],
+  ["Linux PID 1", () => Object.defineProperty(process, "platform", { value: "linux" })],
+])("leaves %s untouched", async (_name, prepare) => {
   add(100);
-  onPs = (pid) => {
-    if (pid === 100) {
-      exit(pid);
-    }
-  };
+  prepare();
   await expectUntouched();
+  expect(mocks.ps).not.toHaveBeenCalled();
 });
-
-it("does not signal any captured process when the root PID is recycled before TERM", async () => {
+it("leaves an unreadable foreign installation untouched", async () => {
+  add(100, { command: "/other/llama-server" });
+  mocks.command.mockImplementation(() => {
+    throw new Error("unreadable");
+  });
+  await expectUntouched();
+  expect(mocks.command).not.toHaveBeenCalled();
+});
+it.each<[string, Partial<KernelProcess>, string?]>([
+  ["unverifiable birth", { startedAt: null }, "Cannot verify orphaned process 100"],
+  ["reparented root", { parentPid: 50 }, "changed identity"],
+  ["recycled root", { startedAt: 999 }],
+  ["vanished root", {}],
+])("never signals a %s tree", async (name, change, error) => {
   const root = add(100);
   add(101, { parentPid: 100 });
-  await expectUntouched({
-    onReap: () => {
-      root.startedAt = 999;
-    },
-  });
+  if (name === "unverifiable birth") {
+    Object.assign(root, change);
+  }
+  if (name === "vanished root") {
+    onPs = (pid) => pid === 100 && exit(pid);
+  }
+  const result = reap({ onReap: () => Object.assign(root, change) });
+  if (error) {
+    await expect(result).rejects.toThrow(error);
+  } else {
+    expect(await result).toEqual([]);
+  }
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("finishes captured children after root exit without signaling a reused PID or new descendant", async () => {
@@ -257,37 +198,28 @@ it("finishes captured children after root exit without signaling a reused PID or
   expect([...processes.keys()]).toEqual([101, 103]);
 });
 
-it.each(["before TERM", "after TERM"])(
-  "honors cancellation %s without abandoning captured cleanup",
-  async (when) => {
-    add(100);
-    add(101, { parentPid: 100 });
-    add(200);
-    const controller = new AbortController();
-    const cancelled = new Error("caller cancelled");
-    onSignal = (pid, signal) => {
-      if (signal === "SIGTERM") {
-        controller.abort(cancelled);
-      } else {
-        exit(pid);
-      }
-    };
-    const result = reap({
-      signal: controller.signal,
-      onReap: when === "before TERM" ? () => controller.abort(cancelled) : undefined,
-    });
-    const rejected = expect(result).rejects.toBe(cancelled);
-    await vi.advanceTimersByTimeAsync(5_000);
-    await rejected;
-    if (when === "after TERM") {
-      expect(killSpy).toHaveBeenCalledWith(100, "SIGKILL");
-      expect(killSpy).toHaveBeenCalledWith(101, "SIGKILL");
-    } else {
-      expect(killSpy).not.toHaveBeenCalled();
-    }
-    expect(processes.has(200)).toBe(true);
-  },
-);
+it.each(["before TERM", "after TERM"])("joins cleanup on cancellation %s", async (when) => {
+  add(100);
+  add(101, { parentPid: 100 });
+  add(200);
+  const controller = new AbortController();
+  const cancelled = new Error("caller cancelled");
+  onSignal = (pid, signal) => (signal === "SIGTERM" ? controller.abort(cancelled) : exit(pid));
+  const result = reap({
+    signal: controller.signal,
+    onReap: when === "before TERM" ? () => controller.abort(cancelled) : undefined,
+  });
+  const rejected = expect(result).rejects.toBe(cancelled);
+  await vi.advanceTimersByTimeAsync(5_000);
+  await rejected;
+  if (when === "after TERM") {
+    expect(killSpy).toHaveBeenCalledWith(100, "SIGKILL");
+    expect(killSpy).toHaveBeenCalledWith(101, "SIGKILL");
+  } else {
+    expect(killSpy).not.toHaveBeenCalled();
+  }
+  expect(processes.has(200)).toBe(true);
+});
 
 it.each<[string, Partial<KernelProcess>]>([
   ["arguments", { argv: [command, "--other"] }],
