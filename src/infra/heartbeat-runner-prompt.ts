@@ -35,12 +35,14 @@ import {
   resolveHeartbeatSessionSelection,
 } from "./heartbeat-runner-session.js";
 import {
+  isTargetedUnscheduledWake,
   resolveHeartbeatWakePayloadFlags,
   type HeartbeatWakePayloadFlags,
 } from "./heartbeat-wake-policy.js";
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatScheduledTask,
+  type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import { heartbeatExecRouteKey } from "./outbound/heartbeat-route-context.js";
@@ -97,27 +99,6 @@ function resolveConversationCompletionRoute(
     : undefined;
 }
 
-/**
- * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
- * before retryable busy guards; wakes carrying heartbeat tasks keep deferral.
- */
-export function shouldPreflightWakeBeforeBusy(
-  source: HeartbeatWakeSource | undefined,
-  scheduledEveryMs: number | undefined,
-  scheduledTaskCount: number,
-): boolean {
-  return (
-    scheduledTaskCount === 0 &&
-    (source === "interval" ||
-      (source === "exec-event" &&
-        !(
-          typeof scheduledEveryMs === "number" &&
-          Number.isSafeInteger(scheduledEveryMs) &&
-          scheduledEveryMs > 0
-        )))
-  );
-}
-
 export async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -125,6 +106,7 @@ export async function resolveHeartbeatPreflight(params: {
   sessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
@@ -175,15 +157,17 @@ export async function resolveHeartbeatPreflight(params: {
         false,
       )
     : heartbeatSession;
+  // Targeted system events keep their queue even when execution uses an isolated session.
+  session.inspectsRunQueue ||=
+    (params.source === "manual" || params.source === "notifications-event") &&
+    isTargetedUnscheduledWake(params);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // The selected queue follows isolated execution into reply admission; the base queue does not.
-  const shouldInspectWakePendingEvents = wakeFlags.isWakePayload && session.inspectsRunQueue;
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
-    shouldInspectWakePendingEvents ||
+    (wakeFlags.isWakePayload && session.inspectsRunQueue) ||
     hasTaggedCronEvents;
   const firstExec =
     !params.scheduledTasks?.length && shouldInspectPendingEvents
@@ -351,7 +335,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
+      : `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

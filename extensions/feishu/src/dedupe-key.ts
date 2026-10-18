@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -73,10 +73,7 @@ function resolveTextRetryDedupeKey(event: FeishuMessageDedupeInput): string | un
   ) {
     return undefined;
   }
-  const contentHash = createHash("sha256")
-    .update(event.message.content, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+  const contentHash = sha256Hex(event.message.content).slice(0, 32);
   return JSON.stringify(["text-retry", senderId, chatId, createTime, contentHash]);
 }
 

@@ -82,6 +82,7 @@ suite.define(() => {
         const picker = section.locator("openclaw-select-picker.model-picker__select");
         await picker.waitFor();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+        await picker.locator(".picker-select__trigger").click();
         if (initiallyUnavailable) {
           await section.getByText("Explicit model catalog unavailable", { exact: true }).waitFor();
         } else {
@@ -107,6 +108,7 @@ suite.define(() => {
         const initialOptions = (
           await picker.locator('[role="option"] .picker-select__label').allTextContents()
         ).map((text) => text.trim());
+        await page.keyboard.press("Escape");
         if (captureUiProof) {
           // The settings section exceeds the viewport; keep its current field scroll.
           await picker.scrollIntoViewIfNeeded();

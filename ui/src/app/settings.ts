@@ -138,13 +138,6 @@ type BooleanSettingKey = {
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
 
-function isViteDevPage(): boolean {
-  if (typeof document === "undefined") {
-    return false;
-  }
-  return Boolean(document.querySelector('script[src*="/@vite/client"]'));
-}
-
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const basePath = resolveControlUiPaths(location.pathname)[0];
@@ -153,7 +146,7 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   if (devGateway) {
     return { pageUrl, effectiveUrl: devGateway.gatewayUrl };
   }
-  if (isRemoteControlUiIngress() || !isViteDevPage()) {
+  if (isRemoteControlUiIngress() || globalThis.OPENCLAW_UI_DEV_SERVER !== true) {
     return { pageUrl, effectiveUrl: pageUrl };
   }
   // location.hostname already carries brackets for IPv6 literals; wrapping
@@ -600,22 +593,21 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
-    talkCameraAutoEnable:
-      typeof next.talkCameraAutoEnable === "boolean" ? next.talkCameraAutoEnable : undefined,
+    talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.
     chatWorkspaceDock: next.chatWorkspaceDock === "bottom" ? "bottom" : undefined,
     boardSessionViews:
       next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
-        ? normalizeBoardSessionViews(next.boardSessionViews)
+        ? next.boardSessionViews
         : undefined,
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
-        ? normalizeSidebarSessionLayouts(next.sidebarSessionLayouts)
+        ? next.sidebarSessionLayouts
         : undefined,
     sidebarSessionActivePanels:
       next.sidebarSessionActivePanels && Object.keys(next.sidebarSessionActivePanels).length > 0
-        ? normalizeSidebarSessionActivePanels(next.sidebarSessionActivePanels)
+        ? next.sidebarSessionActivePanels
         : undefined,
     navWidth: next.navWidth, // Persist size, not visibility: shared localStorage leaks across tabs.
     sidebarAgentsMode: next.sidebarAgentsMode === "roster" ? "roster" : "chip",

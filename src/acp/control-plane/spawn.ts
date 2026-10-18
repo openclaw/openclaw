@@ -10,7 +10,7 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 
 /** Roll back only the provisional session owned by this failed spawn. */
@@ -96,7 +96,8 @@ export async function cleanupFailedAcpSpawn(params: {
       cancellation.abort(error);
     }
     if (!deletionStarted && params.closeRuntimeOnFailure) {
-      await runExclusiveSessionLifecycleMutation("acp-spawn-cleanup", {
+      await runSessionMutation({
+        diagnosticLabel: "acp-spawn-cleanup",
         scope: storePath,
         identities: [params.sessionKey, sessionId],
         run: async () => {

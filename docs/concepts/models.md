@@ -39,6 +39,14 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 [Agent runtimes](/concepts/agent-runtimes) and
 [GitHub Copilot agent runtime](/plugins/copilot).
 
+Creating a session with a native runtime acquires that runtime's current model
+and account observation when needed, including when the runtime comes from model
+policy. You do not need to open the model picker first. Cached observations are
+reused only while their runtime owner and account remain current. Native reads
+share session creation's catalog deadline and stop waiting if the caller disconnects
+or loses authority; an unfinished catalog returns a retryable error without creating
+the session.
+
 ## Selection order
 
 <Steps>
@@ -58,7 +66,7 @@ Related model-config surfaces:
 - `agents.defaults.models` stores aliases and per-model settings. After legacy-policy migration, adding an entry does not restrict model overrides.
 - `agents.defaults.modelSelectionScope` chooses the scope of chat commands and Gateway session model updates without an explicit scope. The default is the current session. See [Model selection scope](/gateway/config-agents/models#agentsdefaultsmodelselectionscope).
 - `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`. Omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
-- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks. Those tasks include generated dashboard session titles, supported channel thread or topic titles, progress narration, and rolling [Activity recaps](/web/control-ui/settings#activity-tab). Per-agent `agents.entries.*.utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model. Set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility model fails. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile. An explicit utility model keeps its configured provider and auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider. Activity recaps use bounded transcript excerpts and the previous recap, preserve cached text on failure, and do not fall back to the primary model.
+- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks. It accepts a `provider/model` string, alias, or `{ primary, fallbacks }` object. Those tasks include generated dashboard session titles, supported channel thread or topic titles, progress narration, rolling [Activity recaps](/web/control-ui/settings#activity-tab), Side chat, and saved transcript summaries. Utility fallbacks use the same retry policy, alias resolution, and model-selection policy as configured model fallbacks, independently of `model.fallbacks`. Per-agent `agents.entries.*.utilityModel` inherits the default chain when unset. A fallback-only object inherits the primary; an explicit primary without `fallbacks`, or `fallbacks: []`, clears the inherited list. When unset, OpenClaw uses the primary provider's declared small-model default when one exists, otherwise the agent's primary model. Set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility chain is exhausted. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile. An explicit utility model keeps its configured provider and auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider. Activity recaps use bounded transcript excerpts and the previous recap, preserve cached text when the utility chain is exhausted, and do not fall back to the primary model.
 - `agents.defaults.decisionModel` selects a plugin's typed decision model as `provider/model` for choices, scores, and boolean probabilities. It is disabled when unset or empty. Per-agent `agents.entries.*.decisionModel` inherits when unset and disables decisions when empty. The Control UI has a separate **Decision** picker beside Utility; decision models never appear in chat, primary, fallback, or utility choices. Supporting plugins call the [decision runtime](/plugins/sdk-overview/capabilities#decision-models-contract-version-1); selection alone does not start background work or replace the chat model.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
@@ -147,8 +155,9 @@ to 30 minutes while it keeps failing. A selected native model can load its own
 metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons reuse the newest completed provider
-list. First use of an idle native agent can take a few seconds to start its harness
-and discover models. Pending providers show `checking models…`.
+list. Gateway model pickers return prepared rows immediately while an idle native
+agent starts its harness and discovers models in the background. Pending providers
+show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent. If optional native discovery fails, ordinary
 catalog requests keep the published rows and report `refreshFailed`; selecting a
@@ -484,9 +493,13 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 When a saved catalog has a malformed model `cost` block, OpenClaw skips that model
 and records a warning naming it. Other valid models in the same catalog remain
-available. The saved catalog is left unchanged; correct the model's pricing to
-make it available again. Other schema errors and invalid model API or token limits
-still reject the affected catalog, even on a model with malformed pricing.
+available. Normal loading leaves the saved catalog unchanged. For generated
+provider catalogs in agent SQLite, `openclaw doctor --fix` completes missing
+numeric cost rates with zero while preserving supplied rates and pricing metadata.
+Null or non-numeric costs still require correction at the provider source and a
+catalog refresh; correct authored `models.json` pricing directly. Other schema
+errors and invalid model API or token limits still reject the affected catalog,
+even on a model with malformed pricing.
 
 ### Hosted catalog updates
 

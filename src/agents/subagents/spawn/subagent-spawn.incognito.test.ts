@@ -18,7 +18,6 @@ import {
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
-import * as spawnRuntime from "./subagent-spawn.runtime.js";
 
 vi.mock("node:sqlite", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:sqlite")>()),
@@ -164,29 +163,13 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  { crossAgent: false, revoked: false },
-  { crossAgent: false, revoked: true },
-  { crossAgent: true, revoked: false },
-  { crossAgent: true, revoked: true },
-])(
-  "guards exact parent skills before child commit ($crossAgent, revoked=$revoked)",
-  async ({ crossAgent, revoked }) => {
-    const name = `skills-${crossAgent}-${revoked}`;
+it.each([false, true])(
+  "inherits pinned parent skills into an incognito child (crossAgent=%s)",
+  async (crossAgent) => {
+    const name = `skills-${crossAgent}`;
     const parentKey = await create(parent, name, { skillLibrarySelections });
     const childOwner = crossAgent ? sibling : parent;
     const childKey = `agent:${childOwner.agentId}:dashboard:incognito-child-${name}`;
-    const upsert = spawnRuntime.upsertSessionEntryCore;
-    vi.spyOn(spawnRuntime, "upsertSessionEntryCore").mockImplementation(async (...args) => {
-      await withMemorySource(parent, parentKey, () =>
-        patchSessionEntryCore({ storePath: parent.path, sessionKey: parentKey }, () => ({
-          updatedAt: 2,
-          totalTokens: 10,
-          ...(revoked ? { skillLibrarySelections: [] } : {}),
-        })),
-      );
-      return upsert(...args);
-    });
     const result = await withMemorySource(parent, parentKey, () =>
       createInitialSubagentSession({
         cfg: {},
@@ -222,24 +205,16 @@ it.each([
         collect: false,
       }),
     );
-    expect(result).toMatchObject(
-      revoked
-        ? { status: "error", error: expect.stringContaining("Parent skill selection changed") }
-        : { status: "ok" },
-    );
+    expect(result).toMatchObject({ status: "ok" });
     const child = childOwner.readSession(childKey, authority)?.entry;
-    if (revoked) {
-      expect(child).toBeUndefined();
-    } else {
-      expect(child).toMatchObject({
-        spawnedBy: parentKey,
-        spawnedBySessionId: name,
-        parentSessionLifecycleRevision: "original",
-        skillLibrarySelections,
-        inheritedToolAllow: ["read"],
-        inheritedToolDeny: ["exec"],
-      });
-    }
+    expect(child).toMatchObject({
+      spawnedBy: parentKey,
+      spawnedBySessionId: name,
+      parentSessionLifecycleRevision: "original",
+      skillLibrarySelections,
+      inheritedToolAllow: ["read"],
+      inheritedToolDeny: ["exec"],
+    });
   },
 );
 

@@ -73,6 +73,7 @@ export type PlainTextToolCallScan = PlainTextToolCallScanBranches &
         next: number;
         overCap: boolean;
         payloadStart: number;
+        settled: boolean;
       }
     | {
         completeEnd?: number;
@@ -355,6 +356,8 @@ export function scanPlainTextToolCall(
         next: complete.end,
         overCap: payloadOverCap,
         payloadStart: complete.payload.start,
+        settled:
+          complete.end > complete.payload.end || skipWhitespace(text, complete.end) < text.length,
       };
     }
     return {
@@ -518,18 +521,46 @@ export function stripPlainTextToolCallBlocks(
   ) {
     return text;
   }
-  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  return projectPlainTextToolCallBlocks(text, options).text;
+}
+
+/** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
+export function projectPlainTextToolCallBlocks(
+  text: string,
+  options: {
+    resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
+    settleBefore?: number;
+  } = {},
+): { text: string; retainStart: number; retainedOutputStart: number } {
+  let protectedRanges: ReturnType<PlainTextToolCallProtectedRangeResolver> | undefined;
+  const isProtected = (offset: number) =>
+    isOffsetInProtectedRanges(
+      offset,
+      (protectedRanges ??= options.resolveProtectedRanges?.(text) ?? []),
+    );
   let result = "";
   let cursor = 0;
   let index = 0;
+  let retainStart = 0;
+  let retainedOutputStart = 0;
+  let pending = false;
   while (index < text.length) {
     const lineStart = index === 0 || text[index - 1] === "\n" || text[index - 1] === "\r";
     if (!lineStart) {
       index += 1;
       continue;
     }
+    if (!pending && index <= (options.settleBefore ?? text.length)) {
+      retainStart = index;
+      retainedOutputStart = result.length + index - cursor;
+    }
     const blockStart = skipLineIndentation(text, index);
-    if (isOffsetInProtectedRanges(blockStart, protectedRanges)) {
+    if (
+      (text[blockStart] === "[" ||
+        text[blockStart] === "<" ||
+        HARMONY_CHANNELS.some((channel) => channel[0] === text[blockStart])) &&
+      isProtected(blockStart)
+    ) {
       index += 1;
       continue;
     }
@@ -540,17 +571,19 @@ export function stripPlainTextToolCallBlocks(
       index = Math.max(index + 1, scan.next);
       continue;
     }
+    pending ||= scan.kind === "prefix" || !scan.settled;
     let blockEnd = scan.kind === "complete" ? scan.end : scan.completeEnd;
     if (blockEnd === undefined) {
-      return result + text.slice(cursor);
+      return { text: result + text.slice(cursor), retainStart, retainedOutputStart };
     }
     result += text.slice(cursor, index);
     while (true) {
       const adjacentStart = skipLineIndentation(text, blockEnd);
-      if (isOffsetInProtectedRanges(adjacentStart, protectedRanges)) {
+      if (isProtected(adjacentStart)) {
         break;
       }
       const adjacent = scanPlainTextToolCall(text, adjacentStart);
+      pending ||= adjacent.kind === "prefix" || (adjacent.kind === "complete" && !adjacent.settled);
       const adjacentEnd =
         adjacent.kind === "complete"
           ? adjacent.end
@@ -570,5 +603,10 @@ export function stripPlainTextToolCallBlocks(
     index = cursor;
   }
   result += text.slice(cursor);
-  return result;
+  // Keep a terminal CR until a possible LF settles newline consumption.
+  if (!pending && text.endsWith("\n") && text.length <= (options.settleBefore ?? text.length)) {
+    retainStart = text.length;
+    retainedOutputStart = result.length;
+  }
+  return { text: result, retainStart, retainedOutputStart };
 }

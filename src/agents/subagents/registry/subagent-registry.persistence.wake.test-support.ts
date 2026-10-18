@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
@@ -9,6 +8,7 @@ import {
 import {
   createDeliveredWake,
   observeSubagentRequesterWake,
+  prepareSubagentRecoveryFixture,
 } from "./subagent-registry.persistence.test-support.js";
 
 type WakeParams = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
@@ -23,7 +23,7 @@ export function registerStaleRequesterWakeBatchTests({
     requesterSettleModule: typeof import("../announce/subagent-announce.requester-settle-wake.js");
     bindGatewayContextResolver: typeof import("../../../plugins/runtime/gateway-request-scope.js").bindGatewayContextResolver;
   };
-  withRegistryState: (run: () => Promise<void>) => Promise<void>;
+  withRegistryState: (run: (stateDir: string) => Promise<void>) => Promise<void>;
   settleOwnedWork: () => Promise<void> | undefined;
 }) {
   const readPersistedRun = (runId: string) => loadSubagentRegistryFromSqlite().get(runId);
@@ -35,16 +35,14 @@ export function registerStaleRequesterWakeBatchTests({
       let oldParams: WakeParams | undefined;
       let siblingGatewayOpen = true;
       const anchorGateway = {
-        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
         resolveGatewayContext: () => anchorGateway as never,
       };
       const nextGateway = {
-        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
         resolveGatewayContext: () => nextGateway as never,
       };
       vi.useFakeTimers();
       try {
-        await withRegistryState(async () => {
+        await withRegistryState(async (stateDir) => {
           try {
             const batch = ["run-batch-anchor", "run-batch-sibling"].map((runId, index) =>
               createDeliveredWake(runId, {
@@ -55,6 +53,9 @@ export function registerStaleRequesterWakeBatchTests({
                 ...(index === 1 ? { nextAttemptAt: Date.now() + 30_000 } : {}),
               }),
             );
+            for (const run of batch) {
+              await prepareSubagentRecoveryFixture(run, { stateDir });
+            }
             const { run: wakeRequester, waitForCalls } = observeSubagentRequesterWake((params) => {
               oldParams ??= params;
               return oldDone.promise;
@@ -125,7 +126,8 @@ export function registerStaleRequesterWakeBatchTests({
               );
               expect(readPersistedRun(anchor.runId)?.requesterSettleWake).toEqual(expected[0]);
 
-              await mod.testing.runSweeperTickForTests();
+              // Explicit resumption evaluates the surviving obligation before the next recovery sweep.
+              mod.resumeSubagentRun(anchor.runId);
               await settleOwnedWork();
               const freshParams = wakeRequester.mock.calls.findLast(
                 ([params]) => params.settledEntry === anchor,

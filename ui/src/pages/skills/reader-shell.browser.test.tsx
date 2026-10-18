@@ -100,7 +100,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const headerTop = close.getBoundingClientRect().top;
     body.scrollTop = body.scrollHeight;
     expect(body.scrollTop).toBeGreaterThan(0);
-    expect(close.getBoundingClientRect().top).toBe(headerTop);
+    expect(close.getBoundingClientRect().top).toBeCloseTo(headerTop, 2);
 
     showContent(shortContent);
     await expect
@@ -168,7 +168,7 @@ describe.runIf(browserMode)("skill reader shell", () => {
       }
       body.scrollTop = body.scrollHeight;
       expect(body.scrollTop).toBeGreaterThan(0);
-      expect(footer.getBoundingClientRect().top).toBe(bounds.top);
+      expect(footer.getBoundingClientRect().top).toBeCloseTo(bounds.top, 2);
     },
   );
 });

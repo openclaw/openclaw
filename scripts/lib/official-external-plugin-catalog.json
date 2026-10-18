@@ -62,6 +62,32 @@
       }
     },
     {
+      "name": "@openclaw/cloudflare",
+      "description": "Cloudflare R2 storage for named OpenClaw storage locations.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
+        "plugin": {
+          "id": "cloudflare",
+          "label": "Cloudflare"
+        },
+        "contracts": {
+          "storageProviders": [
+            "r2"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/cloudflare",
+          "npmSpec": "@openclaw/cloudflare",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.7"
+        }
+      }
+    },
+    {
       "name": "@openclaw/codex",
       "description": "OpenClaw Codex app-server harness and native session catalog",
       "source": "official",

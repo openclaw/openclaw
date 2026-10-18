@@ -10,6 +10,7 @@ import { SessionFollowupCompletion } from "../agents/subagents/completion/sessio
 import type { FollowupRequest } from "../agents/subagents/completion/session-followup-completion.types.js";
 import { startSessionsSendReplyFlow } from "../agents/tools/sessions-send-reply-flow.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { agentCommandMock as gatewayAgentCommandMock } from "./test-helpers.js";
@@ -24,6 +25,7 @@ type PrivateCompletionFixture = {
   transcript: () => unknown;
   recorder: (input: unknown) => UserTurnTranscriptRecorder;
   agentCommandMock: typeof gatewayAgentCommandMock;
+  verifyChatSuccessor: (signal: AbortSignal) => Promise<void>;
 };
 
 export function createPrivateCompletionRequest({
@@ -79,6 +81,7 @@ export function registerSessionsSendPrivateCompletionTests(
         transcript,
         recorder,
         agentCommandMock,
+        verifyChatSuccessor,
       } = getFixture();
       const childRunId = `sessions-send-child-${sequence}`;
       const childSessionKey = `agent:main:subagent:${childRunId}`;
@@ -116,7 +119,11 @@ export function registerSessionsSendPrivateCompletionTests(
       const completion = SessionFollowupCompletion.bind(followup);
       const close = vi.spyOn(completion, "close");
       completion.markAccepted(childRunId);
-      await completion.settle(childRunId, { status: "ok", replyText: childReply });
+      await completion.settle(childRunId, {
+        status: "ok",
+        terminalReply: { disposition: "visible", text: childReply },
+        replyText: childReply,
+      });
       completion.finishExecution(childRunId);
       agentCommandMock.mockImplementation(async (input) => {
         const command = input as AgentCommandOpts;
@@ -129,7 +136,7 @@ export function registerSessionsSendPrivateCompletionTests(
           throw new Error("synthetic retained parent failure");
         }
         await inputRecorder.persistApproved();
-        return { payloads: [], meta: { durationMs: 1 } };
+        return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
       });
       await startSessionsSendReplyFlow({
         runId: childRunId,
@@ -174,7 +181,7 @@ export function registerSessionsSendPrivateCompletionTests(
               ],
         );
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         expect(settled.completions).toMatchObject([
           { run_id: runId, succeeded: outcome === "processed" ? 1 : 0 },
         ]);
@@ -185,6 +192,7 @@ export function registerSessionsSendPrivateCompletionTests(
             status: "ok",
             inputProcessingCompleted: true,
           });
+          await verifyChatSuccessor(signal);
         } else {
           expect(settled.pending).toMatchObject([
             {

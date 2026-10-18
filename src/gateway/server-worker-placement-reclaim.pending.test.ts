@@ -7,9 +7,9 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
@@ -20,7 +20,7 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 afterEach(clearRuntimeConfigSnapshot);
 
 it.each(["active", "failed"] as const)(
-  "a %s reclaim whose canonical cancellation rejects still retires old pending work",
+  "a %s reclaim whose canonical cancellation rejects preserves its mutation-owned effect",
   async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = path.join(tempDirs.make(`cancel-failure-${state}-`), "sessions.sqlite");
@@ -67,9 +67,10 @@ it.each(["active", "failed"] as const)(
     const interrupted = vi.fn();
     const validated = vi.fn();
     const acquiredInterrupted = vi.fn();
-    const acquired = await beginSessionWorkAdmission({
+    const acquired = await beginSessionEffect({
       scope,
       identities: [sessionKey, sessionId],
+      agentId: "main",
       assertAllowed: () => {},
       onInterrupt: acquiredInterrupted,
     });
@@ -77,17 +78,20 @@ it.each(["active", "failed"] as const)(
     const reclaim = vi.fn();
     let pending!: Promise<{ admitted: boolean; error?: unknown }>;
     try {
-      await runExclusiveSessionLifecycleMutation("placement-reclaim", {
+      await runSessionMutation({
         scope,
         identities: [sessionKey, sessionId],
+        agentId: "main",
         run: async () => {
-          pending = beginSessionWorkAdmission({
+          pending = beginSessionEffect({
             scope,
             identities: [sessionKey, sessionId],
+            agentId: "main",
             assertAllowed: validated,
             onInterrupt: interrupted,
           }).then(
             (lease) => {
+              expect(lease.isActive()).toBe(true);
               lease.release();
               return { admitted: true };
             },
@@ -104,14 +108,17 @@ it.each(["active", "failed"] as const)(
       expect(cancel).toHaveBeenCalledOnce();
       expect(begin).not.toHaveBeenCalled();
       expect(reclaim).not.toHaveBeenCalled();
-      // Failed Stop never begins teardown; acquired runs retain canonical abort ordering.
+      // Failed Stop never begins teardown; work admitted by the surrounding mutation
+      // remains subordinate to that mutation instead of becoming a competing owner.
       expect(acquiredInterrupted).not.toHaveBeenCalled();
-      expect(await pending).toEqual({ admitted: false, error: expect.any(Error) });
-      expect(interrupted).toHaveBeenCalledOnce();
-      expect(validated).not.toHaveBeenCalled();
-      const fresh = await beginSessionWorkAdmission({
+      expect(acquired.isActive()).toBe(true);
+      expect(await pending).toEqual({ admitted: true });
+      expect(interrupted).not.toHaveBeenCalled();
+      expect(validated).toHaveBeenCalledOnce();
+      const fresh = await beginSessionEffect({
         scope,
         identities: [sessionKey, sessionId],
+        agentId: "main",
         assertAllowed: () => {},
       });
       fresh.release();

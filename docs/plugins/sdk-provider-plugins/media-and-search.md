@@ -18,6 +18,14 @@ the private `openclaw/plugin-sdk/concurrency-runtime` subpath. It returns
 `promise`, `resolve`, and `reject` without loading logging or provider auth;
 the adapter retains responsibility for cancellation and terminal settlement.
 
+Speech providers can use `createSpeechDirectiveParser` from the lightweight
+`openclaw/plugin-sdk/speech-provider` subpath. Map each override field to its
+policy key and accepted token aliases; optional field callbacks retain vendor
+validation and warning text. The shared parser handles alias dispatch and policy
+gating and returns an override patch. The host merges these patches into the
+provider's accumulated overrides; callbacks use `currentOverrides` only when
+merging a nested value such as voice settings.
+
 ## Media and search capabilities
 
 <Tabs>
@@ -114,6 +122,16 @@ the adapter retains responsibility for cancellation and terminal settlement.
 
   </Tab>
   <Tab title="Image and video generation">
+    OpenAI-compatible image adapters can use `createOpenAiCompatibleImageGenerationProvider`
+    from `openclaw/plugin-sdk/image-generation`. Adapters with custom request handling can
+    use `inlineOpenAiCompatibleImageUrls` before `parseOpenAiCompatibleImageResponse`.
+    The URL helper bounds downloads by `maxDownloads`, `maxBytes`, and the remaining
+    operation budget returned by `timeoutMs`. It trusts only `providerUrl`'s origin
+    automatically, checks every redirect, and never forwards provider HTTP credentials.
+    Pass only explicit operator permission as `allowPrivateNetwork`; an inferred local
+    endpoint allowance must not authorize other private hosts. TLS and hostname
+    overrides in `dispatcherPolicy` stay confined to the provider origin.
+
     Image and video capabilities use a **mode-aware** shape. Image
     providers declare required `generate` and `edit` capability blocks;
     video providers declare `generate`, `imageToVideo`, and

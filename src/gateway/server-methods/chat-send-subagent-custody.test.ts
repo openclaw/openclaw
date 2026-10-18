@@ -11,6 +11,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
+import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 
 const runtime = vi.hoisted(() => ({ run: vi.fn<typeof runEmbeddedAgentEntry>() }));
@@ -90,18 +91,7 @@ it("gives a human chat.send continuation native child custody before backend exe
       settleSessionOverride: async () => {},
     };
   });
-  const actualDispatch = await vi.importActual<typeof import("../../auto-reply/dispatch.js")>(
-    "../../auto-reply/dispatch.js",
-  );
-  const actualReply = await vi.importActual<typeof import("../../auto-reply/reply/get-reply.js")>(
-    "../../auto-reply/reply/get-reply.js",
-  );
-  dispatchInboundMessageMock.mockImplementation((params) =>
-    actualDispatch.dispatchInboundMessage({
-      ...params,
-      replyResolver: actualReply.getReplyFromConfig,
-    }),
-  );
+  dispatchInboundMessageMock.mockImplementation(await loadRealChatDispatch());
   try {
     const ack = await fixture.send();
     expect(ack).toHaveBeenCalledWith(

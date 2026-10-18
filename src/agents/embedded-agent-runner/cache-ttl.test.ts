@@ -77,6 +77,9 @@ describe("isCacheTtlEligibleProvider", () => {
     },
   );
 
+  // TTL bookkeeping is separate from retention policy. LiteLLM leaves
+  // cacheRetention unspecified, which does not mean that its transport disables
+  // caching.
   it("allows custom anthropic-messages providers", () => {
     expect(isCacheTtlEligibleProvider("litellm", "claude-sonnet-4-6", "anthropic-messages")).toBe(
       true,

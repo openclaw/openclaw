@@ -73,14 +73,15 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
     });
     const records = new Map(index.plugins.map((record) => [record.pluginId, record]));
     const installSelectors = new Map(
-      Object.entries(index.installRecords).map(([owner, record]) => [
-        owner,
-        record.spec ??
+      Object.entries(index.installRecords).map(([owner, record]) => {
+        const spec =
+          record.spec ??
           record.resolvedSpec ??
           (record.source === "clawhub"
             ? `clawhub:${record.clawhubPackage ?? owner}`
-            : (record.resolvedName ?? owner)),
-      ]),
+            : (record.resolvedName ?? owner));
+        return [owner, record.source === "npm" ? `npm:${spec}` : spec];
+      }),
     );
     const installTargets = new Map<string, string>();
     const preparedPlugins = registry.plugins.map((plugin) => {

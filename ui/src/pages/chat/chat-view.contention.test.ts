@@ -61,11 +61,43 @@ describe("chat view state contention", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("shows preparation rather than generic work before the first status arrives", () => {
+  it("waits for startup progress rather than claiming preparation before the first status", () => {
     const container = renderChatView({ runActive: true, stream: "" });
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+      "Waiting for turn to start…",
+    );
+  });
+
+  it.each(["submitting", "sending", "waiting-model"] as const)(
+    "does not claim preparation or offer Stop for a local %s send without run custody",
+    (sendState) => {
+      const container = renderChatView({
+        runActive: false,
+        canAbort: false,
+        stream: null,
+        queue: [
+          { id: "pending-send", sessionKey: "main", text: "Continue", createdAt: 1, sendState },
+        ],
+      });
+      expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
+        "Waiting for turn to start…",
+      );
+      expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+    },
+  );
+
+  it("retains preparation and Stop once the Gateway reports context preparation", () => {
+    const container = renderChatView({
+      runActive: true,
+      canAbort: true,
+      runId: "run-1",
+      stream: "",
+      startupStatus: { state: "status", runId: "run-1", phase: "preparing_context" },
+    });
     expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Preparing this turn…",
     );
+    expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
   });
 
   it.each(["answer", "finishing"] as const)(

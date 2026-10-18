@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -12,6 +12,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -104,7 +105,7 @@ it("hydrates only old scoped candidates while protecting out-of-scope history re
     });
   }, options);
   const hydratedKeys: unknown[] = [];
-  database.db.function("artifact_snapshot_value", (key, valueJson) => {
+  requireNativeSqliteDatabase(database.db).function("artifact_snapshot_value", (key, valueJson) => {
     hydratedKeys.push(key);
     return valueJson;
   });
@@ -164,7 +165,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     let following: Promise<void> | undefined;
     try {
@@ -174,7 +175,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
         "Artifact worker read was bypassed",
       );
       if (outcome === "admitted") {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, sessionId],
           assertAllowed: () => {},

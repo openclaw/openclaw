@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Boots the OpenClaw CLI entry point under Node.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { format } from "node:util";
+import { watchCliRespawnParent } from "../node-runtime-recovery.mjs";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import { resolveCliDatabaseProcessRole } from "./cli/database-process-role.js";
 import { tryOutputPrecomputedCommandHelp } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
@@ -26,6 +27,7 @@ import {
 } from "./entry.compile-cache.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
+import { installDatabaseProcessRole } from "./infra/database-engine/admission-scope.js";
 import { normalizeEnv } from "./infra/env.js";
 import { fsSafeEnvInput } from "./infra/fs-safe-env.js";
 import { isMainModule } from "./infra/is-main.js";
@@ -109,7 +111,6 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
 
 const gatewayEntryStartupTrace = createGatewayDispatchStartupTrace(process.argv, "entry");
 
-// Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
 // would call runCli a second time, starting a duplicate gateway that fails
@@ -130,6 +131,8 @@ if (isEntryMain) {
 }
 
 async function runEntryMain(): Promise<void> {
+  installDatabaseProcessRole(resolveCliDatabaseProcessRole(normalizeWindowsArgv(process.argv)));
+  watchCliRespawnParent();
   if (isUpdateAdmissionInvocation(resolveCliArgvInvocation(process.argv))) {
     await tryRunUpdateAdmissionBeforeStartup(resolveCliArgvInvocation(process.argv));
     return;
@@ -348,7 +351,7 @@ async function prepareCliFailureHandler(argv: string[], commandStarted: () => bo
 
 export async function runMainOrRootHelp(
   argv: string[],
-  deps: RunMainOrRootHelpDeps = {},
+  options: { finalize?: () => Promise<void> } = {},
 ): Promise<void> {
   // Command-phase errors reach this handler too: runCommandWithRuntime rethrows in JSON
   // mode so the envelope is written here. Only failures before runCli are startup failures.
@@ -357,7 +360,7 @@ export async function runMainOrRootHelp(
   const { runCliWithExitFinalization, requestExitAfterOneShotOutput } =
     await import("./cli/one-shot-exit.js");
   await runCliWithExitFinalization({
-    finalize: deps.finalize,
+    finalize: options.finalize,
     run: async () => {
       if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
         const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
@@ -378,7 +381,7 @@ export async function runMainOrRootHelp(
       }
       const { runCli } = await gatewayEntryStartupTrace.measure(
         "run-main-import",
-        deps.loadRunCli ?? (() => import("./cli/run-main.js")),
+        () => import("./cli/run-main.js"),
       );
       // Commands can replace their own installation. Retain diagnostics before old chunks vanish.
       failureHandler = await prepareCliFailureHandler(argv, () => commandStarted);
@@ -394,8 +397,3 @@ export async function runMainOrRootHelp(
       (failureHandler ?? (await prepareCliFailureHandler(argv, () => commandStarted)))(error),
   });
 }
-
-type RunMainOrRootHelpDeps = {
-  loadRunCli?: () => Promise<Pick<typeof import("./cli/run-main.js"), "runCli">>;
-  finalize?: () => Promise<void>;
-};

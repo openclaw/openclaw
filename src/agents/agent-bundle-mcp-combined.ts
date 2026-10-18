@@ -29,7 +29,7 @@ async function loadCurrentCatalog(part: SessionMcpRuntime): Promise<McpToolCatal
 }
 
 /** Safe names are precomputed from the full declared set, so no re-suffix is needed. */
-export function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
+function mergeMcpToolCatalogs(catalogs: readonly McpToolCatalog[]): McpToolCatalog {
   const servers: Record<string, McpServerCatalog> = {};
   const tools: McpCatalogTool[] = [];
   const policyTools: McpCatalogTool[] = [];
@@ -152,9 +152,7 @@ export function createCombinedSessionMcpRuntime(params: {
     try {
       return await inFlight;
     } finally {
-      if (catalogInFlight === inFlight) {
-        catalogInFlight = undefined;
-      }
+      catalogInFlight = undefined;
     }
   };
 

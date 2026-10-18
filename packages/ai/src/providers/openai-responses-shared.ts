@@ -170,18 +170,11 @@ export function applyCommonResponsesParams<TApi extends Api>(
     return;
   }
   params.reasoning = { effort: effort as NonNullable<typeof params.reasoning>["effort"] };
-  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary)) {
-    params.reasoning.summary = options?.reasoningSummary || "auto";
+  if (effort !== "none" && (options?.reasoningEffort || options?.reasoningSummary !== undefined)) {
+    // Explicit null disables summaries; only an omitted summary defaults to auto.
+    params.reasoning.summary =
+      options?.reasoningSummary === undefined ? "auto" : options.reasoningSummary;
     params.include = ["reasoning.encrypted_content"];
-  }
-}
-
-function cleanStreamingScratchBuffers(output: AssistantMessage): void {
-  for (const block of output.content) {
-    delete (block as { index?: number }).index;
-    if (block.type === "toolCall") {
-      delete block.partialJson;
-    }
   }
 }
 
@@ -324,7 +317,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       output,
       signal: options?.signal,
       error,
-      cleanup: () => cleanStreamingScratchBuffers(output),
     });
   } finally {
     firstEventAbort?.dispose();

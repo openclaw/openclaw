@@ -31,6 +31,27 @@ function fixture(files: Record<string, string>) {
 }
 
 describe("standalone worker discovery", () => {
+  it("embeds self-targeted workers in root modules and emitted chunks", () => {
+    const files = {
+      "node-compile-cache.mjs":
+        'import { Worker as CacheWorker } from "node:worker_threads"; new CacheWorker(new URL(import.meta.url));',
+      "dist/node-compile-cache-chunk.mjs":
+        'import * as threads from "node:worker_threads"; new threads.Worker(new URL(import.meta.url));',
+      "dist/ordinary.mjs": "const location = new URL(import.meta.url);",
+      "dist/shadowed.mjs":
+        'import { Worker } from "node:worker_threads"; function local(Worker) { return new Worker(new URL(import.meta.url)); }',
+    };
+    const { runtimeRoot } = fixture(files);
+    expect(
+      discoverStandaloneWorkers({
+        runtimeRoot,
+        moduleEntries: Object.keys(files),
+        runtimeEntrypoints: {},
+        parse,
+      }),
+    ).toEqual(["dist/node-compile-cache-chunk.mjs", "node-compile-cache.mjs"]);
+  });
+
   it("retains manifest launchers without worker suffixes and adds built plugin workers once", () => {
     const { runtimeRoot } = fixture({
       "dist/process/supervisor/service-child-relay.js": "",
@@ -57,6 +78,7 @@ describe("standalone worker discovery", () => {
           broker: { distWorkerPath: "process/spawn-broker/worker.js" },
           duplicate: { distWorkerPath: "process/supervisor/service-child-relay.js" },
         },
+        parse,
       }),
     ).toEqual([
       "dist/extensions/example/store.worker.mjs",
@@ -74,12 +96,54 @@ describe("standalone worker discovery", () => {
         runtimeRoot,
         moduleEntries: [],
         runtimeEntrypoints: { missing: { distWorkerPath: "agents/github-exec-launcher.js" } },
+        parse,
       }),
     ).toThrow("Missing standalone worker outputs: dist/agents/github-exec-launcher.js");
   });
 });
 
 describe("standalone inline worker graph", () => {
+  it.each([
+    "function unrelated() { let SOURCE; SOURCE = dynamicValue(); }",
+    "function unrelated(SOURCE) { SOURCE = dynamicValue(); }",
+    "function unrelated() { SOURCE = dynamicValue(); var SOURCE; }",
+  ])("keeps lazy module source separate from shadowed assignments: %s", (unrelated) => {
+    const source = `import { Worker } from "node:worker_threads";
+var SOURCE;
+const initialize = () => { SOURCE = "require('node:worker_threads').parentPort.postMessage(7)"; };
+${unrelated}
+function launch() { return new Worker(SOURCE, { eval: true }); }`;
+    const paths = fixture({ "dist/entry.mjs": source });
+    const prepared = prepareStandaloneWorkers({
+      ...paths,
+      runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
+      workerEntries: [],
+      moduleEntries: ["dist/entry.mjs"],
+      parse,
+    });
+    assert.ok(prepared.entrypoints[0]);
+    expect(fs.readFileSync(prepared.entrypoints[0].replace(/\.mjs$/, ".body.cjs"), "utf8")).toBe(
+      "require('node:worker_threads').parentPort.postMessage(7)\n",
+    );
+  });
+
+  it("refuses a dynamic worker source that shadows a fixed module binding", () => {
+    const paths = fixture({
+      "dist/entry.mjs": `import { Worker } from "node:worker_threads";
+const SOURCE = "wrong program";
+function launch(SOURCE) { return new Worker(SOURCE, { eval: true }); }`,
+    });
+    expect(() =>
+      prepareStandaloneWorkers({
+        ...paths,
+        runtimeBootstrap: path.join(paths.outputRoot, "bootstrap.mjs"),
+        workerEntries: [],
+        moduleEntries: ["dist/entry.mjs"],
+        parse,
+      }),
+    ).toThrow("Unsupported fixed worker source expression: Identifier SOURCE");
+  });
+
   it.each([
     ['import { Worker as Task } from "node:worker_threads";', "new Task"],
     ['import * as threads from "worker_threads";', "new threads.Worker"],

@@ -2,6 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
@@ -65,7 +66,11 @@ export function createSqliteTranscriptArchiveWorker(
   try {
     worker = createCpuTrackedWorker(workerUrl, {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
-      workerData: { ...workerData, databaseAdmissionPort: admission.port },
+      workerData: {
+        ...workerData,
+        databaseAdmissionPort: admission.port,
+        databaseEngineSelection: getDatabaseEngineSelection(),
+      },
       transferList: [admission.port],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
@@ -275,12 +280,7 @@ function runSqliteTranscriptArchiveWorker(
     runExclusiveSqliteTranscriptArchiveWorker,
   );
   if (scoped) {
-    return scoped.then((result) => {
-      if (result.type !== "done") {
-        throw new Error("SQLite archive Worker returned another operation's result");
-      }
-      return result.results;
-    });
+    return scoped.then((result) => result.results);
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
@@ -302,12 +302,7 @@ export function runSqliteTranscriptArchivePublishWorker(
     (run) => runExclusiveSqliteTranscriptArchiveWorker(run, signal),
   );
   if (scoped) {
-    return scoped.then((result) => {
-      if (result.type !== "published") {
-        throw new Error("SQLite archive Worker returned another operation's result");
-      }
-      return result.results;
-    });
+    return scoped.then((result) => result.results);
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     signal,
@@ -348,9 +343,6 @@ export async function runSqliteTranscriptArchiveReadWorker(
     throw new Error("SQLite archive reads require their captured database scope");
   }
   const result = await scoped;
-  if (result.type !== "final-read") {
-    throw new Error("SQLite archive Worker returned another operation's result");
-  }
   return result.results;
 }
 
@@ -366,9 +358,6 @@ export async function runSqliteTranscriptArchivePageWorker(
     throw new Error("SQLite archive reads require their captured database scope");
   }
   const result = await scoped;
-  if (result.type !== "page-read") {
-    throw new Error("SQLite archive Worker returned another operation's result");
-  }
   return result.results;
 }
 

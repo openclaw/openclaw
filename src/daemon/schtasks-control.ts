@@ -15,7 +15,10 @@ import {
   resolveTaskName,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
-import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
+import {
+  describeUnverifiedPortListeners,
+  waitForGatewayPortRelease,
+} from "./schtasks-port-diagnostics.js";
 import {
   findInstalledProcessPid,
   isNodeHostArgv,
@@ -29,7 +32,6 @@ import {
   terminateGatewayProcessTree,
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
-  waitForGatewayPortRelease,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,

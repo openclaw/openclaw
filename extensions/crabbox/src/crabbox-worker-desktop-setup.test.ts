@@ -21,8 +21,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirectories) => {
 });
 const sessionBus = "unix:path=/run/fixture/bus";
 const wallpaper = Buffer.from("fixture wallpaper");
+const setupScript = () =>
+  createCrabboxWorkerDesktopSetup("cbx_desktop_test", wallpaper.toString("base64"), "linux");
 const browserLauncherProof = String.raw`
-import ctypes, json, os, pathlib, shlex, shutil, signal, subprocess, sys
+import ctypes, os, pathlib, shlex, shutil, signal, subprocess, sys
 
 root = pathlib.Path(sys.argv[2])
 home = root / "home"
@@ -62,7 +64,6 @@ signal.signal(signal.SIGTERM, interrupted)
 signal.signal(signal.SIGINT, interrupted)
 first = subprocess.Popen(["/bin/bash", str(launcher)], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, pass_fds=(ready_writer,))
 os.close(ready_writer)
-result = {}
 try:
     with os.fdopen(readiness) as ready:
         identity = ready.readline()
@@ -73,22 +74,17 @@ try:
     assert len(locks) == 1
     def lock_available():
         return subprocess.run([flock, "-n", str(locks[0]), "true"], timeout=5).returncode == 0
-    result["parentHeldDuringReadiness"] = not lock_available()
-    assert result["parentHeldDuringReadiness"], "Launcher released its lock before readiness"
+    assert not lock_available(), "Launcher released its lock before readiness"
     (root / "ready").touch()
     _, errors = first.communicate()
     assert first.returncode == 0, errors.decode()
     os.kill(browser, 0)
-    result["browserAliveAfterReady"] = True
-    result["releasedAfterReady"] = lock_available()
-    assert result["releasedAfterReady"], "Browser child kept the launch lock after readiness"
+    assert lock_available(), "Browser child kept the launch lock after readiness"
     second = subprocess.run(["/bin/bash", str(launcher)], env=environment, capture_output=True, timeout=5)
     assert second.returncode == 0, second.stderr.decode()
     os.kill(browser, 0)
     assert int((root / "browser.pid").read_text()) == browser
-    result["launches"] = len((root / "launches").read_text().splitlines())
-    assert result["launches"] == 1
-    result["reusedLiveBrowser"] = True
+    assert len((root / "launches").read_text().splitlines()) == 1
 finally:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -98,8 +94,6 @@ finally:
     while True:
         try: os.waitpid(-1, 0)
         except ChildProcessError: break
-    result["childrenJoined"] = True
-    print(json.dumps(result))
 `;
 type RendererState =
   | "healthy"
@@ -120,8 +114,9 @@ function desktopFixture(
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
   const proc = path.join(root, "proc");
-  fs.mkdirSync(home);
-  fs.mkdirSync(bin);
+  for (const directory of [home, bin]) {
+    fs.mkdirSync(directory);
+  }
   if (installedWallpaper !== "missing") {
     const backgrounds = path.join(home, ".local/share/backgrounds");
     fs.mkdirSync(backgrounds, { recursive: true });
@@ -132,14 +127,15 @@ function desktopFixture(
   }
   fs.writeFileSync(path.join(root, "desktop.env"), "CRABBOX_DESKTOP_ENV=xfce\nDISPLAY=:99\n");
   fs.writeFileSync(path.join(root, "events"), "");
-  const processEnvironment = (pid: number, display: string, bus: string) => {
-    fs.mkdirSync(path.join(proc, String(pid)), { recursive: true });
+  const processEnvironment = (pid: number, display = ":99", bus = sessionBus) => {
+    const directory = path.join(proc, String(pid));
+    fs.mkdirSync(directory, { recursive: true });
     fs.writeFileSync(
-      path.join(proc, String(pid), "environ"),
+      path.join(directory, "environ"),
       `DISPLAY=${display}\0DBUS_SESSION_BUS_ADDRESS=${bus}\0XDG_RUNTIME_DIR=/run/fixture\0`,
     );
   };
-  processEnvironment(100, ":99", sessionBus);
+  processEnvironment(100);
   if (renderer !== "missing" && renderer !== "disappeared") {
     processEnvironment(
       101,
@@ -148,7 +144,7 @@ function desktopFixture(
     );
   }
   if (renderer === "multiple") {
-    processEnvironment(102, ":99", sessionBus);
+    processEnvironment(102);
   }
   const renderers = path.join(root, "renderers");
   fs.writeFileSync(
@@ -207,11 +203,7 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
       mode: 0o700,
     });
   }
-  const script = createCrabboxWorkerDesktopSetup(
-    "cbx_desktop_test",
-    wallpaper.toString("base64"),
-    "linux",
-  )
+  const script = setupScript()
     .replaceAll("/var/lib/crabbox/desktop.env", path.join(root, "desktop.env"))
     .replaceAll("/proc/$process_pid/environ", `${proc}/$process_pid/environ`)
     .replaceAll("/usr/local/bin/", `${bin}/`);
@@ -232,10 +224,23 @@ printf '%s\\n' "$pid" >"$FIXTURE_ROOT/renderers"`,
   expect(result.error).toBeUndefined();
   return {
     result,
-    home,
+    readWallpaper: () =>
+      fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
     renderers: fs.readFileSync(renderers, "utf8").trim(),
     events: fs.readFileSync(path.join(root, "events"), "utf8").trim().split("\n"),
   };
+}
+
+function expectRestart({ result, renderers, events }: ReturnType<typeof desktopFixture>) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(renderers).toBe("200");
+  expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
+  expect(events.filter((event) => event === "launch")).toHaveLength(1);
+}
+
+function expectRetainedRenderer(events: string[]) {
+  expect(events.filter((event) => /^(kill:|launch$|settle$)/u.test(event))).toEqual([]);
+  expect(events.at(-1)).toBe("reload");
 }
 
 describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", () => {
@@ -243,12 +248,7 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
     signal,
   }) => {
     const root = tempDirs.make("crabbox-browser-launch-");
-    const setup = createCrabboxWorkerDesktopSetup(
-      "cbx_browser_test",
-      wallpaper.toString("base64"),
-      "linux",
-    );
-    const launcher = setup.match(
+    const launcher = setupScript().match(
       /<<'WORKER_BROWSER_LAUNCHER_EOF'\n([\s\S]*?)\nWORKER_BROWSER_LAUNCHER_EOF/u,
     )?.[1];
     expect(launcher).toBeDefined();
@@ -256,15 +256,11 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
     fs.writeFileSync(launcherFile, `${launcher}\n`);
     const child = spawn("python3", ["-c", browserLauncherProof, launcherFile, root], {
       env: { PATH: process.env.PATH },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "pipe"],
     });
     const closed = once(child, "close");
     browserClosures.push(closed);
-    let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-      stdout += chunk;
-    });
     child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
       stderr += chunk;
     });
@@ -278,55 +274,32 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
       }
       await closed;
     }
-    expect(JSON.parse(stdout)).toEqual({
-      parentHeldDuringReadiness: true,
-      browserAliveAfterReady: true,
-      releasedAfterReady: true,
-      launches: 1,
-      reusedLiveBrowser: true,
-      childrenJoined: true,
-    });
   });
 
   it("retains the bound renderer without termination, launch, or settling on resumed setup", () => {
-    const { result, home, renderers, events } = desktopFixture("healthy");
+    const { result, readWallpaper, renderers, events } = desktopFixture("healthy");
     expect(result.status, result.stderr).toBe(0);
     expect(renderers).toBe("101");
-    expect(events.filter((event) => /^(kill:|launch$|settle$)/u.test(event))).toEqual([]);
-    expect(events.at(-1)).toBe("reload");
+    expectRetainedRenderer(events);
     expect(events.some((event) => event.endsWith("/last-image"))).toBe(true);
-    expect(
-      fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
-    ).toEqual(wallpaper);
+    expect(readWallpaper()).toEqual(wallpaper);
   });
 
   it.each(["changed", "missing"] as const)(
     "restarts a bound renderer when the installed wallpaper is %s",
     (installedWallpaper) => {
-      const { result, home, renderers, events } = desktopFixture(
-        "healthy",
-        "healthy",
-        true,
-        installedWallpaper,
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(renderers).toBe("200");
-      expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
-      expect(events.filter((event) => event === "launch")).toHaveLength(1);
-      expect(
-        fs.readFileSync(path.join(home, ".local/share/backgrounds/openclaw-worker.png")),
-      ).toEqual(wallpaper);
+      const fixture = desktopFixture("healthy", "healthy", true, installedWallpaper);
+      expectRestart(fixture);
+      expect(fixture.readWallpaper()).toEqual(wallpaper);
     },
   );
 
   it.each<RendererState>(["wrong-bus", "wrong-display", "missing", "multiple", "disappeared"])(
     "re-homes a %s renderer before updating the wallpaper",
     (renderer) => {
-      const { result, renderers, events } = desktopFixture(renderer);
-      expect(result.status, result.stderr).toBe(0);
-      expect(renderers).toBe("200");
-      expect(events.slice(0, 2)).toEqual(["kill:-TERM", "kill:-KILL"]);
-      expect(events.filter((event) => event === "launch")).toHaveLength(1);
+      const fixture = desktopFixture(renderer);
+      expectRestart(fixture);
+      const { events } = fixture;
       expect(events.indexOf("launch")).toBeLessThan(
         events.findIndex((event) => event.startsWith("setting:")),
       );
@@ -352,8 +325,7 @@ describe.skipIf(process.platform !== "linux")("Crabbox desktop renderer setup", 
           ? "renderer changed during reload"
           : "renderer lost its worker session during reload",
       );
-      expect(events.filter((event) => /^(kill:|launch$|settle$)/u.test(event))).toEqual([]);
-      expect(events.at(-1)).toBe("reload");
+      expectRetainedRenderer(events);
     },
   );
 });

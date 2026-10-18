@@ -2,8 +2,9 @@ import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit
 import {
   assertTransactionUsable,
   runSqliteWorkerTransactionSync,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
@@ -25,7 +26,7 @@ export function bindSqliteWorkerBackend(
   _input: unknown,
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
-  return {
+  return bindSqliteWorkerDatabase<InlineAuthFailureOperations>(context.database, {
     execute(command) {
       if (command.type === "authProfiles.enrollAuthorization") {
         return runSqliteWorkerTransactionSync(context, () =>
@@ -44,7 +45,7 @@ export function bindSqliteWorkerBackend(
         return true;
       }
       if (command.type === "authProfiles.inlineSnapshot") {
-        return runSqliteDeferredTransactionSync(context.database, () => ({
+        return runSqliteReadSnapshotSync(context.database, () => ({
           store: inspectAuthProfileJsonCell(context.database, "store", "agent"),
           state: inspectAuthProfileJsonCell(context.database, "state", "agent"),
           cacheable: false,
@@ -105,12 +106,5 @@ export function bindSqliteWorkerBackend(
       }
       return result;
     },
-    assertSettled() {
-      assertTransactionUsable(context.database);
-      if (!context.database.isOpen || context.database.isTransaction) {
-        throw new Error("Auth usage left an unsettled agent transaction");
-      }
-    },
-    close() {},
-  };
+  });
 }

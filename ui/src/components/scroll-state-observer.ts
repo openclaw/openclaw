@@ -52,7 +52,7 @@ function onScroll(event: Event): void {
   }
 }
 
-/** One observer and one frame batch serve directives and sidebar scroll state. */
+/** One observer and one frame batch serve component and sidebar scroll state. */
 export function observeScrollState(
   element: HTMLElement,
   publish: (state: ScrollState) => void,

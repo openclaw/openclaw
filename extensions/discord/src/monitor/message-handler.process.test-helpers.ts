@@ -1,4 +1,7 @@
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
+import { firstMockArg } from "../test-support/mock-calls.js";
+export { firstMockArg, firstMockCall } from "../test-support/mock-calls.js";
 import {
   createAutomaticSourceDeliveryContext,
   createDiscordDraftStream,
@@ -37,26 +40,7 @@ export function getReactionEmojis(): string[] {
   ).map((call) => call[2]);
 }
 
-export function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
-export function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`missing ${label} call`);
-  }
-  return call;
-}
-
-export function firstMockArg(mock: MockWithCalls, label: string) {
-  return firstMockCall(mock, label)[0];
-}
+export const requireRecord = createRequireRecord("object", "label-not-object");
 
 export function firstDispatchParams(): DispatchInboundParams {
   return firstMockArg(dispatchInboundMessage, "dispatchInboundMessage") as DispatchInboundParams;
@@ -71,79 +55,41 @@ export function expectRecordFields(
   }
 }
 
-function expectAckReactionRuntimeOptions(
-  options: unknown,
-  params?: {
-    accountId?: string;
-    ackReaction?: string;
-  },
-) {
-  const optionRecord = requireRecord(options, "reaction runtime options");
-  requireRecord(optionRecord.rest, "reaction REST client");
-  if (params?.accountId) {
-    expect(optionRecord.accountId).toBe(params.accountId);
-  }
-  const messages: Record<string, unknown> = {};
-  if (params?.ackReaction) {
-    messages.ackReaction = params.ackReaction;
-  }
-  if (Object.keys(messages).length > 0) {
-    const cfg = requireRecord(optionRecord.cfg, "reaction config");
-    expectRecordFields(requireRecord(cfg.messages, "reaction message config"), messages);
-  }
-}
-
-function requireReactionCall(
-  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
-  index: number,
-) {
-  const call = mock.mock.calls[index] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`missing reaction call ${index + 1}`);
-  }
-  return call;
-}
-
-function expectReactionCallAt(
-  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
-  index: number,
-  emoji: string,
-  params?: {
-    accountId?: string;
-    ackReaction?: string;
-    channelId?: string;
-    messageId?: string;
-  },
-) {
-  const call = requireReactionCall(mock, index);
-  expect(call[0]).toBe(params?.channelId ?? "c1");
-  expect(call[1]).toBe(params?.messageId ?? "1001");
-  expect(call[2]).toBe(emoji);
-  expectAckReactionRuntimeOptions(call[3], params);
-}
-
-export function expectReactionCallsContain(channelId: string, messageId: string, emoji: string) {
-  const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
-    [string, string, string]
-  >;
-  const hasCall = calls.some(
-    ([actualChannelId, actualMessageId, actualEmoji]) =>
-      actualChannelId === channelId && actualMessageId === messageId && actualEmoji === emoji,
-  );
-  expect(hasCall).toBe(true);
-}
-
 export function expectReactAckCallAt(
   index: number,
   emoji: string,
   params?: {
-    channelId?: string;
-    messageId?: string;
     accountId?: string;
     ackReaction?: string;
+    channelId?: string;
+    messageId?: string;
   },
 ) {
-  expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
+  const call = sendMocks.reactMessageDiscord.mock.calls[index];
+  expect(call?.slice(0, 3)).toEqual([
+    params?.channelId ?? "c1",
+    params?.messageId ?? "1001",
+    emoji,
+  ]);
+  const options = requireRecord(call?.[3], "reaction runtime options");
+  requireRecord(options.rest, "reaction REST client");
+  if (params?.accountId) {
+    expect(options.accountId).toBe(params.accountId);
+  }
+  if (params?.ackReaction) {
+    const cfg = requireRecord(options.cfg, "reaction config");
+    expect(requireRecord(cfg.messages, "reaction message config").ackReaction).toEqual(
+      params.ackReaction,
+    );
+  }
+}
+
+export function expectReactionCallsContain(channelId: string, messageId: string, emoji: string) {
+  expect(sendMocks.reactMessageDiscord.mock.calls.map((call) => call.slice(0, 3))).toContainEqual([
+    channelId,
+    messageId,
+    emoji,
+  ]);
 }
 
 export function createMockDraftStreamForTest() {
@@ -193,16 +139,10 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
     return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
   });
 
-  const ctx = await createAutomaticDraftContext({
-    discordConfig,
-  });
-
-  await runProcessDiscordMessage(ctx);
+  await runProcessDiscordMessage(await createAutomaticDraftContext({ discordConfig }));
 }
 
-export async function createBlockModeContext(
-  discordConfig: Record<string, unknown> = { streaming: { mode: "block" } },
-) {
+export async function createBlockModeContext() {
   return await createAutomaticDraftContext({
     cfg: {
       messages: { ackReaction: "👀" },
@@ -215,6 +155,6 @@ export async function createBlockModeContext(
         },
       },
     },
-    discordConfig,
+    discordConfig: { streaming: { mode: "block" } },
   });
 }

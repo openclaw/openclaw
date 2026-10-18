@@ -206,7 +206,7 @@ export function mutableCompensationFixtureSource(): string {
       const membershipUrl = ${url("serviceMembership")};
       mock.module(membershipUrl,{namedExports:{...(await import(membershipUrl)),inspectServiceProcessMembershipSync:()=> 'outside'}});
       const maintenanceUrl = ${url("systemdMaintenance")};
-      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>false}});
+      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>({kind:"unchanged"})}});
       const drainUrl = ${url("serviceDrain")};
       mock.module(drainUrl,{namedExports:{...(await import(drainUrl)),withGatewayMaintenanceDrain:async(_params,stop)=>await stop()}});
       return async ({run,currentOptions,ready}) => {

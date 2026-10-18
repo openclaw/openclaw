@@ -6,6 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { bindPluginRuntimeArtifactSelection } from "./plugin-runtime-artifact-binding.js";
+import { normalizeProviderToolSchemasWithPlugin } from "./provider-runtime.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
@@ -74,6 +75,43 @@ function createTools(expectScope: () => void) {
 }
 
 describe("registered plugin factory bindings", () => {
+  it("keeps provider-normalized tool data native and execution bound to its owner", async () => {
+    const { builder, api, instance, expectScope } = createOwner();
+    const { payloads, tools } = createTools(expectScope);
+    try {
+      api.registerProvider({
+        id: "factory-provider",
+        label: "Factory provider",
+        auth: [],
+        normalizeToolSchemas({ tools: input }) {
+          expectScope();
+          expect(this.id).toBe("factory-provider");
+          return input;
+        },
+      });
+      const plugin = builder.registry.providers[0]!.provider;
+      const normalize = () =>
+        normalizeProviderToolSchemasWithPlugin({
+          provider: plugin.id,
+          runtimeHandle: { provider: plugin.id, plugin },
+          allowRuntimePluginLoad: false,
+          context: { provider: plugin.id, tools },
+        });
+      const normalized = normalize();
+      assert(normalized);
+      for (const [index, tool] of normalized.entries()) {
+        expect(tool.parameters).toBe(tools[index]!.parameters);
+        const execute = tool.execute;
+        expect(await execute("normalized-call", {})).toBe(payloads[index]);
+      }
+      await instance.dispose();
+      expect(normalize).toThrow("reloaded or disabled");
+      expect(() => normalized[0]!.execute("retired-call", {})).toThrow("reloaded or disabled");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it.each(["sync", "callback"] as const)(
     "attributes a retained %s store's deprecation to the opening plugin",
     async (kind) => {
@@ -93,11 +131,23 @@ describe("registered plugin factory bindings", () => {
             assert(update);
             return () => update("counter", (current) => (current ?? 0) + 1);
           });
-          expect(emitWarning).not.toHaveBeenCalled();
+          if (kind === "sync") {
+            expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
+              expect.stringContaining(`Plugin ${pluginId}: api.runtime.state.openSyncKeyedStore`),
+              expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
+            );
+          } else {
+            expect(emitWarning).not.toHaveBeenCalled();
+          }
           await useLegacyStore();
           await useLegacyStore();
-          expect(emitWarning).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`Plugin ${pluginId}:`),
+          const warningCount = kind === "sync" ? 2 : 1;
+          const method =
+            kind === "sync" ? "PluginStateSyncKeyedStore.lookup" : "PluginStateKeyedStore.update";
+          expect(emitWarning).toHaveBeenCalledTimes(warningCount);
+          expect(emitWarning).toHaveBeenNthCalledWith(
+            warningCount,
+            expect.stringContaining(`Plugin ${pluginId}: ${method}`),
             expect.objectContaining({ type: "DeprecationWarning", code: "DEP_PLUGIN_SDK" }),
           );
         } finally {

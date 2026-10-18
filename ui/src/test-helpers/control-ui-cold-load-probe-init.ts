@@ -5,40 +5,27 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
-  requestUpdate(): void;
+  invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
 };
-export type SidebarLifecycle = "requestUpdate" | "prepareRender" | "commitRender";
+export type SidebarLifecycle = "invalidate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
-type ChatMethod =
-  | "requestUpdate"
-  | "performUpdate"
-  | "render"
-  | "prepareRender"
-  | "commitRender"
-  | "afterCommit";
 export type ChatProbeOwner = {
+  readonly element: HTMLElement;
   readonly isConnected: boolean;
-  requestUpdate: ProbeMethod;
-  performUpdate: ProbeMethod;
   render: ProbeMethod;
-  prepareRender?: ProbeMethod;
-  commitRender?: ProbeMethod;
-  afterCommit?: ProbeMethod;
 };
 export type ChatOwnerRecord = {
   host: HTMLElement;
   owner: ChatProbeOwner;
-  originals: Map<ChatMethod, ProbeMethod>;
+  originalRender?: ProbeMethod;
   pending: Map<string, number>;
   pendingRequests: Map<number, string>;
-  queuedRequests: Map<number, string>;
-  publicationRequests: Map<number, string>;
-  publicationPending: boolean;
 };
 
 export type ColdLoadProbeInput = {
+  ownerProbes?: boolean;
   latencyMs: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;
@@ -48,6 +35,10 @@ export type ColdLoadProbeInput = {
     event: string;
     payload: unknown;
     history?: { text?: string; message?: unknown };
+    sessionMutation?: {
+      upsert?: import("../api/types.ts").GatewaySessionRow[];
+      removeKeys?: string[];
+    };
   }>;
   liveHistory?: {
     sessionId: string;
@@ -84,7 +75,7 @@ export function createColdLoadFrameProbe(
   const liveDeliveries: Array<LiveDeliveryOrigin & { gapMs: number | null }> = [];
   const frameProbe = {
     original: window.requestAnimationFrame,
-    request(this: Window, callback: FrameRequestCallback): number {
+    request: (callback: FrameRequestCallback): number => {
       if (frameOrigins.size >= 5000) {
         throw new Error("Live frame scheduling origin limit exceeded");
       }
@@ -96,21 +87,23 @@ export function createColdLoadFrameProbe(
         delivery: activeLiveDelivery,
         parentId: activeFrameOrigin?.id ?? null,
       };
-      origin.frameId = frameProbe.original.call(this, function (this: unknown, timestamp: number) {
-        const previous = activeFrameOrigin;
-        const { startedAt, finishedAt } = readWindow();
-        activeFrameOrigin = startedAt && !finishedAt ? origin : null;
-        try {
-          callback.call(this, timestamp);
-        } finally {
-          activeFrameOrigin = previous;
-        }
-      });
+      origin.frameId = frameProbe.original.call(
+        window,
+        function (this: unknown, timestamp: number) {
+          const previous = activeFrameOrigin;
+          const { startedAt, finishedAt } = readWindow();
+          activeFrameOrigin = startedAt && !finishedAt ? origin : null;
+          try {
+            callback.call(this, timestamp);
+          } finally {
+            activeFrameOrigin = previous;
+          }
+        },
+      );
       frameOrigins.set(origin.id, origin);
       return origin.frameId;
     },
     install() {
-      // oxlint-disable-next-line typescript/unbound-method -- Installed as a window method; forwards that receiver to the native frame owner.
       window.requestAnimationFrame = frameProbe.request;
     },
     restore() {

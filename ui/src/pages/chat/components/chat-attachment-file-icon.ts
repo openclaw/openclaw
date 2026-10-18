@@ -1,5 +1,3 @@
-import { html } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 // The icon owns its CSS so composer and transcript call sites cannot render it unstyled.
@@ -282,19 +280,4 @@ export function prepareAttachmentFileIcon(options: AttachmentFileIconOptions) {
       "--chat-file-icon-accent": resolved.accent,
     },
   };
-}
-
-export function renderAttachmentFileIcon(options: AttachmentFileIconOptions) {
-  const view = prepareAttachmentFileIcon(options);
-  return html`<span
-    class="chat-attachment-file-icon ${
-      options.unavailable ? "chat-attachment-file-icon--unavailable" : ""
-    } ${options.loading ? "skeleton" : ""}"
-    data-family=${view.family}
-    data-mode=${options.mode}
-    aria-hidden="true"
-    style=${styleMap(view.style)}
-  >
-    ${view.large ? html`<span class="chat-attachment-file-icon__overlay"></span>` : null}
-  </span>`;
 }

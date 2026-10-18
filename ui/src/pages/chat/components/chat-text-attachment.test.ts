@@ -1,7 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, expect, it, vi } from "vitest";
-import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationContextRequest,
+} from "../../../app/context.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import "./chat-detail-panel.tsx";
@@ -26,12 +30,14 @@ async function mountAttachment(
     },
   } as unknown as ApplicationContext;
   panel.addEventListener("context-request", (event) => {
+    // SAFETY: This listener handles the native application context protocol.
+    const contextRequest = event as ApplicationContextRequest;
     if (
-      event.context === applicationContext &&
-      event.contextTarget.localName === "openclaw-chat-html-preview"
+      contextRequest.context === applicationContext &&
+      contextRequest.contextTarget.localName === "openclaw-chat-html-preview"
     ) {
       event.stopPropagation();
-      event.callback(previewContext);
+      contextRequest.callback(previewContext);
     }
   });
   panel.content = {
@@ -88,7 +94,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
   let ready = false;
   const panel = await mountAttachment({
     src: undefined,
-    resolveSource: (requestUpdate) =>
+    resolveSource: (onSourceChange) =>
       ready
         ? { status: "ready", src: "/recovered.txt" }
         : {
@@ -96,7 +102,7 @@ it("retries a source-resolution failure through the attachment owner", async () 
             reason: "Temporarily unavailable",
             onRetry: () => {
               ready = true;
-              requestUpdate();
+              onSourceChange();
             },
           },
   });
@@ -116,7 +122,6 @@ it.each([
     "Pasted notes 🦞\n  preserve indentation\n<script>not executable</script>\n",
   ],
   ["settings.json", "application/json", '{"ready":true}\n'],
-  ["config.xml", "application/xml", "<ready>true</ready>"],
   ["notes.txt", "application/octet-stream", "Text with generic metadata"],
   ["empty.txt", "", ""],
 ])("previews %s as literal text", async (title, mimeType, text) => {
@@ -200,12 +205,9 @@ const htmlFile = { title: "page.html", mimeType: "text/html" };
 
 it.each<RejectedAttachment>([
   { failure: "metadata", content: plainFile },
-  { failure: "metadata", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "metadata", content: { ...htmlFile, plainText: true } },
   { failure: "advertised", content: plainFile },
   { failure: "streamed", content: plainFile },
-  { failure: "advertised", content: htmlFile, limit: 2 * 1024 * 1024 },
-  { failure: "streamed", content: htmlFile, limit: 2 * 1024 * 1024 },
   { failure: "bytes", bytes: new Uint8Array([0xff]) },
   { failure: "bytes", bytes: new Uint8Array([0x61, 0x00, 0x62]) },
   { failure: "unavailable" },
@@ -331,7 +333,6 @@ it("aborts a closed preview and reloads it after remount", async () => {
 });
 
 it.each([
-  { title: "large.html", mimeType: "text/html", sizeBytes: 2 * 1024 * 1024, fill: "a", suffix: "" },
   {
     title: "large.HTM",
     mimeType: "application/octet-stream",

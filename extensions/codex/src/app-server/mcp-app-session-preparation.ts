@@ -4,13 +4,13 @@ import {
   buildCodexUserMcpServersThreadConfigPatchForRuntime,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { z } from "zod";
 import { resolveCodexAppServerAuthProfileId } from "./auth-profile.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { readCodexRequirementsToml } from "./config-requirements.js";
+import { jsonObjectSchema } from "./json-schema.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import {
   buildCodexPluginAppCacheKey,
@@ -132,7 +132,7 @@ export async function prepareCodexMcpAppSession(params: {
       });
       const client = await getLeasedSharedCodexAppServerClient({
         startOptions,
-        pluginConfig: params.pluginConfig,
+        pluginConfig,
         agentId: input.agentId,
         agentDir: input.agentDir,
         config: input.config,
@@ -203,7 +203,7 @@ export async function prepareCodexMcpAppSession(params: {
           modelSource?.release();
         }
         const bundleConfig = bundle.configPatch
-          ? z.record(z.string(), z.json()).parse(bundle.configPatch)
+          ? jsonObjectSchema.parse(bundle.configPatch)
           : undefined;
         const thread = await startOrResumeThread({
           client,

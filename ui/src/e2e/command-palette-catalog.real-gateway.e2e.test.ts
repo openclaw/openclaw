@@ -499,12 +499,21 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const frames: unknown[] = [];
-    const commands: unknown[] = [];
+    const frames: Array<{
+      direction: "sent" | "received";
+      frame: Record<string, unknown>;
+      transportFailure?: boolean;
+    }> = [];
+    const commands: Array<Record<string, unknown>> = [];
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     let rejectedCatalogReplies = 0;
+    const redact = (text: string) =>
+      text
+        .replaceAll(instance.gatewayToken, "[synthetic token]")
+        .replaceAll(instance.hookToken, "[synthetic token]")
+        .replaceAll(instance.homeDir, "[fixture-home]");
     const publish = async (page: Page, id: string) => {
       const applicationHandle = await getControlUiContextHandle(page);
       try {
@@ -526,8 +535,9 @@ suite.define(() => {
           "--replace",
         ];
         try {
+          const startedAt = Date.now();
           const result = await instance.cli(args);
-          commands.push({ args, ...result });
+          commands.push({ args, elapsedMs: Date.now() - startedAt, ...result });
           expect(result.code, result.stderr).toBe(0);
           // Runtime rows can arrive before this accepted-config event retires them.
           await expect
@@ -677,11 +687,38 @@ suite.define(() => {
           await status.waitFor({ state: "hidden" });
         },
       );
+    } catch (error) {
+      const gatewayLog = redact(instance.logs());
+      const catalogFrames = frames.filter(
+        ({ direction, frame }) => direction === "received" || frame.method === "models.list",
+      );
+      console.log(
+        "catalog-publication-failure",
+        redact(
+          JSON.stringify({
+            rejectCatalogReplies,
+            commands: commands.map(({ args, code, signal, elapsedMs }) => ({
+              args,
+              code,
+              signal,
+              elapsedMs,
+            })),
+            gatewayLogLength: gatewayLog.length,
+            gatewayLogTail: gatewayLog.slice(-48_000),
+            frameCount: catalogFrames.length,
+            frames: catalogFrames.slice(-100).map(({ direction, frame, transportFailure }) => ({
+              direction,
+              id: typeof frame.id === "string" ? frame.id.slice(0, 128) : undefined,
+              method: typeof frame.method === "string" ? frame.method.slice(0, 128) : undefined,
+              event: typeof frame.event === "string" ? frame.event.slice(0, 128) : undefined,
+              ok: typeof frame.ok === "boolean" ? frame.ok : undefined,
+              transportFailure,
+            })),
+          }),
+        ),
+      );
+      throw error;
     } finally {
-      const redact = (text: string) =>
-        text
-          .replaceAll(instance.gatewayToken, "[synthetic token]")
-          .replaceAll(instance.hookToken, "[synthetic token]");
       await fs.writeFile(
         path.join(suite.artifactDir, "publication.json"),
         redact(JSON.stringify({ frames, commands }, null, 2)),

@@ -1,10 +1,12 @@
-import { createMemo, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createUniqueId } from "solid-js";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "./solid/menu.tsx";
 import { resolveTransientContainer } from "./transient-container.ts";
 import "./native-link-menu.css";
@@ -24,8 +26,7 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
   (props, host) => {
     const id = createUniqueId();
     let menu: MenuHandle | undefined;
-    const shortcut = (event: KeyboardEvent) => activateMenuShortcut(host, event);
-    onCleanup(() => menu?.overlay.surface.removeEventListener("keydown", shortcut, true));
+    const shortcut = nativeListener("keydown", (event) => activateMenuShortcut(host, event), true);
     const actions = [
       ["inline", "s", "openInline", "panelRightOpen"],
       ["external", "b", "openExternal", "externalLink"],
@@ -79,7 +80,7 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
           if (props.trigger) {
             handle.overlay.setReturnTarget(props.trigger);
           }
-          handle.overlay.surface.addEventListener("keydown", shortcut, true);
+          shortcut(handle.overlay.surface);
           handle.open();
         }}
         onSelect={(item, event) => {
@@ -95,19 +96,10 @@ export const NativeLinkMenu = defineSolidBridge<Props>(
             props.onClose();
           }
         }}
-        triggerAttributes={{
-          tabindex: -1,
-          "aria-hidden": "true",
-          style: {
-            position: "fixed",
-            left: `${Math.max(8, Math.min(props.x, window.innerWidth - 264 - 8))}px`,
-            top: `${Math.max(8, Math.min(props.y, window.innerHeight - 136 - 8))}px`,
-            width: "1px",
-            height: "1px",
-            opacity: 0,
-            "pointer-events": "none",
-          },
-        }}
+        triggerAttributes={pointMenuTriggerAttributes({
+          x: Math.max(8, Math.min(props.x, window.innerWidth - 264 - 8)),
+          y: Math.max(8, Math.min(props.y, window.innerHeight - 136 - 8)),
+        })}
       />
     );
   },

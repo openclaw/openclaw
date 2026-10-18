@@ -15,52 +15,17 @@ import {
   resetRunnerTestState,
   runNodeHost,
   startNodeHostMcpManager,
+  withReadyNodeHost,
 } from "./runner.test-support.js";
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const nodeOptions = { gatewayHost: "127.0.0.1", gatewayPort: 18789 };
-type CapturedClient = (typeof mocks.capturedGatewayClients)[number];
 
 function receiveHello(options: GatewayClientOptions | undefined, capabilities: string[] = []) {
   options?.onHelloOk?.({
     protocol: 4,
     features: { methods: [], events: [], capabilities },
   } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
-}
-
-async function withRunningNodeHost(
-  runTest: (options: GatewayClientOptions, client: CapturedClient) => Promise<void>,
-): Promise<void> {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
-  const processOnSpy = vi.spyOn(process, "on");
-  const previousExitCode = process.exitCode;
-  const running = runNodeHost(nodeOptions);
-  try {
-    await vi.waitFor(() =>
-      expect(processOnSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function)),
-    );
-    await runTest(mocks.capturedGatewayClientOptions[0]!, mocks.capturedGatewayClients[0]!);
-  } finally {
-    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-    try {
-      onSigterm?.("SIGTERM");
-      await running;
-    } finally {
-      for (const [event, listener] of processOnSpy.mock.calls) {
-        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
-          process.off(event, listener);
-        }
-      }
-      process.exitCode = previousExitCode;
-      processOnSpy.mockRestore();
-    }
-  }
 }
 
 describe("runNodeHost", () => {
@@ -71,7 +36,7 @@ describe("runNodeHost", () => {
       caps: ["canvas"],
       commands: ["canvas.present"],
     };
-    await withRunningNodeHost(async (_options, client) => {
+    await withReadyNodeHost(async ({ client }) => {
       expect(client.updateNodeManifest).toHaveBeenCalledWith(
         expect.objectContaining({
           caps: expect.arrayContaining(["canvas"]),
@@ -123,7 +88,7 @@ describe("runNodeHost", () => {
   it("publishes each exact worker slot transition without reconnecting", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
-    await withRunningNodeHost(async (options, client) => {
+    await withReadyNodeHost(async ({ options, client }) => {
       expect(options.workerRuns).toBeUndefined();
       const workerHost = {
         enabled: true,
@@ -178,7 +143,7 @@ describe("runNodeHost", () => {
   it("republishes current worker facts after this node's surface approval without cancelling invokes", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
-    await withRunningNodeHost(async (options, client) => {
+    await withReadyNodeHost(async ({ options, client }) => {
       mocks.runnerCapacityChanged?.({ total: 2, available: 1 });
       receiveHello(options);
       await vi.waitFor(() =>

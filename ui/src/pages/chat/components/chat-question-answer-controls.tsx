@@ -1,13 +1,19 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, createUniqueId, For } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, For, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import {
+  adjustTextareaHeight,
+  disconnectTextareaOverflowObserver,
+  observeTextareaOverflow,
+} from "./chat-composer-dom.ts";
 
 type QuestionOptionsProps = {
   question: Question;
   selected: ReadonlySet<string>;
   disabled: boolean;
   onSelect: (label: string) => void;
+  optionRef?: (element: HTMLButtonElement) => () => void;
 };
 
 type QuestionFreeTextProps = {
@@ -16,6 +22,7 @@ type QuestionFreeTextProps = {
   selected: boolean;
   disabled: boolean;
   onInput: (value: string) => void;
+  inputRef?: (element: HTMLInputElement | HTMLTextAreaElement) => void;
 };
 
 function Shortcut(props: { value: number }) {
@@ -46,9 +53,14 @@ export function QuestionOptions(props: QuestionOptionsProps) {
             {(option, index) => {
               const value = () => option.value ?? option.label;
               const selected = () => props.selected.has(value());
+              let releaseOption: (() => void) | undefined;
+              onSettled(() => () => releaseOption?.());
               return (
                 <>
                   <button
+                    ref={(element) => {
+                      releaseOption = props.optionRef?.(element);
+                    }}
                     class={[
                       "chat-question-panel__option",
                       { "chat-question-panel__option--selected": selected() },
@@ -116,29 +128,55 @@ export function QuestionOptions(props: QuestionOptionsProps) {
   );
 }
 
-function FreeTextControl(
-  props: QuestionFreeTextProps & {
-    class: string;
-    placeholder: string;
-    label?: string;
-    id?: string;
-  },
-) {
-  const [revealed, setRevealed] = createSignal(false);
-  createEffect(
-    () => props.question.questionId,
-    () => {
-      setRevealed(false);
-    },
+type FreeTextControlProps = QuestionFreeTextProps & {
+  class: string;
+  placeholder: string;
+  label?: string;
+  id?: string;
+};
+
+function FreeTextTextarea(props: FreeTextControlProps) {
+  let textarea!: HTMLTextAreaElement;
+  const value = createMemo(() => props.value);
+  onSettled(() => {
+    observeTextareaOverflow(textarea);
+    adjustTextareaHeight(textarea);
+    return () => disconnectTextareaOverflowObserver(textarea);
+  });
+  // Keep the native textarea's measured height in sync with its committed answer.
+  createEffect(value, () => adjustTextareaHeight(textarea), { defer: true });
+  return (
+    <textarea
+      ref={(element) => {
+        textarea = element;
+        props.inputRef?.(element);
+      }}
+      id={props.id}
+      class={[props.class, "chat-question-panel__textarea"]}
+      rows={1}
+      placeholder={props.placeholder}
+      aria-label={props.label}
+      aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
+      value={value()}
+      disabled={props.disabled}
+      onInput={(event) => props.onInput(event.currentTarget.value)}
+    />
   );
-  const handleInput = (
-    event: InputEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement },
-  ) => props.onInput(event.currentTarget.value);
+}
+
+function FreeTextControl(props: FreeTextControlProps) {
+  const questionId = createMemo(() => props.question.questionId);
+  // Revealing applies only to this question; a new question starts masked.
+  const [revealed, setRevealed] = createSignal(() => {
+    questionId();
+    return false;
+  });
   return (
     <>
       {props.question.isSecret ? (
         <span class="chat-question-panel__secret">
           <input
+            ref={(element) => props.inputRef?.(element)}
             id={props.id}
             class={props.class}
             type={revealed() ? "text" : "password"}
@@ -148,7 +186,7 @@ function FreeTextControl(
             aria-label={props.label}
             value={props.value}
             disabled={props.disabled}
-            onInput={handleInput}
+            onInput={(event) => props.onInput(event.currentTarget.value)}
           />
           <button
             class="chat-question-panel__secret-toggle"
@@ -162,17 +200,7 @@ function FreeTextControl(
           </button>
         </span>
       ) : (
-        <textarea
-          id={props.id}
-          class={`${props.class} chat-question-panel__textarea`}
-          rows={1}
-          placeholder={props.placeholder}
-          aria-label={props.label}
-          aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
-          value={props.value}
-          disabled={props.disabled}
-          onInput={handleInput}
-        />
+        <FreeTextTextarea {...props} />
       )}
     </>
   );

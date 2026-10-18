@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Reads the configured tool catalog for an agent. */
 export const ToolsCatalogParamsSchema = closedObject({
@@ -11,12 +12,7 @@ export const ToolsCatalogParamsSchema = closedObject({
 
 /** Tool profile shown in catalog views. */
 export const ToolCatalogProfileSchema = closedObject({
-  id: Type.Union([
-    Type.Literal("minimal"),
-    Type.Literal("coding"),
-    Type.Literal("messaging"),
-    Type.Literal("full"),
-  ]),
+  id: stringLiteralUnion(["minimal", "coding", "messaging", "full"]),
   label: NonEmptyString,
 });
 
@@ -25,12 +21,10 @@ export const ToolCatalogEntrySchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   description: Type.String(),
-  source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+  source: stringLiteralUnion(["core", "plugin"]),
   pluginId: Type.Optional(NonEmptyString),
   optional: Type.Optional(Type.Boolean()),
-  risk: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
+  risk: Type.Optional(stringLiteralUnion(["low", "medium", "high"])),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   fullDescription: Type.Optional(Type.String()),
   parameters: Type.Optional(
@@ -50,7 +44,7 @@ export const ToolCatalogEntrySchema = closedObject({
 export const ToolCatalogGroupSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
-  source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+  source: stringLiteralUnion(["core", "plugin"]),
   pluginId: Type.Optional(NonEmptyString),
   tools: Type.Array(ToolCatalogEntrySchema),
 });
@@ -79,12 +73,7 @@ export const ToolsEffectiveEntrySchema = closedObject({
   ...Type.Pick(ToolCatalogEntrySchema, ["id", "label", "description", "pluginId", "risk", "tags"])
     .properties,
   rawDescription: Type.String(),
-  source: Type.Union([
-    Type.Literal("core"),
-    Type.Literal("plugin"),
-    Type.Literal("channel"),
-    Type.Literal("mcp"),
-  ]),
+  source: stringLiteralUnion(["core", "plugin", "channel", "mcp"]),
   channelId: Type.Optional(NonEmptyString),
   mcpServer: Type.Optional(NonEmptyString),
   mcpToolName: Type.Optional(NonEmptyString),
@@ -102,14 +91,14 @@ export const ToolsEffectiveGroupSchema = closedObject({
 /** Notice explaining runtime filtering such as quarantined tool schemas. */
 export const ToolsEffectiveNoticeSchema = closedObject({
   id: NonEmptyString,
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
+  severity: stringLiteralUnion(["info", "warning"]),
   message: Type.String(),
   servers: Type.Optional(Type.Array(NonEmptyString)),
 });
 
 /** Effective tool set for a session, including profile and filtering notices. */
 export const ToolAccessDiagnosticsSchema = closedObject({
-  checked: Type.Union([Type.Literal("local-config"), Type.Literal("live-session")]),
+  checked: stringLiteralUnion(["local-config", "live-session"]),
   profiles: Type.Array(
     closedObject({
       profile: NonEmptyString,
@@ -120,21 +109,10 @@ export const ToolAccessDiagnosticsSchema = closedObject({
   tools: Type.Array(
     closedObject({
       id: NonEmptyString,
-      status: Type.Union([
-        Type.Literal("allowed"),
-        Type.Literal("excluded"),
-        Type.Literal("available"),
-        Type.Literal("unavailable"),
-      ]),
+      status: stringLiteralUnion(["allowed", "excluded", "available", "unavailable"]),
       reasons: Type.Array(
         closedObject({
-          kind: Type.Union([
-            Type.Literal("profile"),
-            Type.Literal("deny"),
-            Type.Literal("allowlist"),
-            Type.Literal("session"),
-            Type.Literal("runtime"),
-          ]),
+          kind: stringLiteralUnion(["profile", "deny", "allowlist", "session", "runtime"]),
           label: NonEmptyString,
           source: Type.Optional(NonEmptyString),
           profile: Type.Optional(NonEmptyString),

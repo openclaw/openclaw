@@ -28,7 +28,7 @@ export function bindSqliteWorkerBackend(
     );
   }
   if (input.reportPath) {
-    db.prepare = (sql) => {
+    db.prepare = (sql: string) => {
       const statement = prepare(sql);
       const counter = sql.startsWith('delete from "memory_index_sources"')
         ? "sourceDeletes"

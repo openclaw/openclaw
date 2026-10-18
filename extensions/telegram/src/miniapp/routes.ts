@@ -90,7 +90,7 @@ async function handleAuth(
   if (contentType.split(";")[0]?.trim() !== "application/json") {
     return sendResponse(res, 415, "Unsupported media type");
   }
-  const currentConfig = () => (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+  const currentConfig = () => api.runtime.config.current() as OpenClawConfig;
   const requestConfig = currentConfig();
   const ip =
     resolveRequestClientIp(

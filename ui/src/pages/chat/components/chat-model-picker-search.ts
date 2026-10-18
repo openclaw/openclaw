@@ -40,19 +40,20 @@ function ensureModelPickerIds(menu: HTMLElement): void {
       )
       ?.setAttribute("aria-controls", listbox.id);
   });
-  menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
-    row.id = `${prefix}-option-${index}`;
-  });
   input.setAttribute("aria-controls", listboxes.map((listbox) => listbox.id).join(" "));
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
 function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-option]").forEach((candidate) => {
-    candidate.toggleAttribute("data-chat-model-highlighted", candidate === row);
-  });
+  const previous = menu.querySelector<HTMLElement>("[data-chat-model-highlighted]");
+  if (row && previous === row) {
+    return;
+  }
+  previous?.removeAttribute("data-chat-model-highlighted");
+  row?.setAttribute("data-chat-model-highlighted", "");
   const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  if (row?.id) {
+  if (row) {
+    row.id ||= `chat-model-option-${generateUUID()}`;
     input?.setAttribute("aria-activedescendant", row.id);
   } else {
     input?.removeAttribute("aria-activedescendant");
@@ -71,7 +72,7 @@ export function handleModelOptionMouseEnter(event: MouseEvent): void {
 // Search inputs and nested dropdowns own digits instead. The :focus-within rule
 // in styles/chat/composer.css hides these keycaps while the search input has focus.
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
-  menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
+  menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut-number]").forEach((shortcut) => {
     shortcut.hidden = true;
     shortcut.removeAttribute("data-shortcut");
     shortcut.removeAttribute("data-chat-model-shortcut-number");
@@ -140,12 +141,11 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
         isDisclosureCollapsed(section, "[data-chat-model-more-toggle]"));
     const score = query ? modelMatchRank(row, query) : collapsed ? null : 0;
     row.hidden = score === null;
-    row.style.removeProperty("--chat-model-rank");
-    delete row.dataset.chatModelRank;
     if (score !== null) {
       matches.push({ row, score, index });
     }
   });
+  // Hidden rows keep an unused rank; visible matches publish their current order below.
   const selectableRows: HTMLButtonElement[] = [];
   matches
     .toSorted((left, right) => left.score - right.score || left.index - right.index)

@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 import {
   AcpSessionManager,
   baseCfg,
@@ -13,6 +14,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockMutableSession,
   mockParentedAcpSessionEntries,
   readySessionMeta,
 } from "./manager.test-helpers.js";
@@ -20,11 +22,13 @@ import {
 function fixture({ sessionKey = "agent:codex:acp:accepted-ownership", parented = false } = {}) {
   const runtime = createRuntime();
   hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
-  hoisted.readAcpSessionEntryMock.mockReturnValue({ sessionKey, acp: readySessionMeta() });
+  const metadata = { currentMeta: readySessionMeta() };
+  mockMutableSession(sessionKey, metadata);
   if (parented) {
     mockParentedAcpSessionEntries({
       childSessionKey: sessionKey,
       parentSessionKey: "agent:main:main",
+      state: metadata,
     });
   }
   const manager = new AcpSessionManager();
@@ -79,7 +83,7 @@ describe("ACP accepted cancellation ownership", () => {
       );
       const cancelled = snapshot.map(({ turn }) => turn);
       const events = snapshot.map((accepted) => accepted.events);
-      const cancellation = state.manager.cancelSession(state.target);
+      const cancellation = stopAcpControllerTurns(state.target);
       const { turn: later } = state.startTurn("later", { text: "survivor" });
       try {
         await Promise.all([...cancelled, cancellation]);
@@ -121,17 +125,14 @@ describe("ACP accepted cancellation ownership", () => {
       const { turn: first } = state.startTurn("same-id", { text: "predecessor" });
       await entered.promise;
       const context = createTestAdmittedRunContext("same-id");
+      const cancellation = new AbortController();
       const { turn: queued, events } = state.startTurn("same-id", {
         text: "successor",
         admittedRunContext: context,
+        signal: cancellation.signal,
       });
       try {
-        await state.manager.cancelSession({
-          ...state.target,
-          expectedRunId: "same-id",
-          expectedInstanceId: context.operationalRunInstance.instanceId,
-          expectedOwnerKey: "agent:main:main",
-        });
+        cancellation.abort();
         await queued;
         expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
         expect(extractStatesFromUpserts().at(-1)).toBe("running");
@@ -193,7 +194,7 @@ describe("ACP accepted cancellation ownership", () => {
       requestId: "beta",
     });
     try {
-      await Promise.all([cancelled, state.manager.cancelSession(alpha), live]);
+      await Promise.all([cancelled, stopAcpControllerTurns(alpha), live]);
     } finally {
       release.resolve();
       await Promise.allSettled([actor, cancelled, live]);
@@ -229,17 +230,75 @@ describe("ACP accepted cancellation ownership", () => {
     const { turn, events } = state.startTurn("failed");
     const turnResult = Promise.allSettled([turn]);
     await entered.promise;
-    const cancel = state.manager.cancelSession(state.target);
+    const cancel = stopAcpControllerTurns(state.target);
     const cancelResult = Promise.allSettled([cancel]);
     release.resolve();
     expect(await turnResult).toMatchObject([
       { status: "rejected", reason: { message: "cancel transport failure" } },
     ]);
     expect(await cancelResult).toMatchObject([
-      { status: "rejected", reason: { message: "cancel transport failure" } },
+      {
+        status: "rejected",
+        reason: {
+          message: "Session source cleanup failed",
+          errors: [{ message: "cancel transport failure" }],
+        },
+      },
     ]);
     expect(events).toEqual([]);
     expect(state.runTurn).not.toHaveBeenCalled();
     expect(state.cancel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps failed backend cancellation attached to Stop until the producer settles", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
+      const state = fixture({ parented: true });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const cancelEntered = createDeferred();
+      state.runTurn.mockImplementationOnce(async function* () {
+        entered.resolve();
+        await release.promise;
+        yield { type: "done", status: "cancelled" };
+      });
+      state.cancel.mockImplementationOnce(async () => {
+        cancelEntered.resolve();
+        throw new Error("cancel transport failure");
+      });
+      const { turn } = state.startTurn("active-cancel-failed");
+      const turnResult = Promise.allSettled([turn]);
+      await entered.promise;
+      let stopSettled = false;
+      const stopResult = Promise.allSettled([stopAcpControllerTurns(state.target)]).then(
+        (result) => {
+          stopSettled = true;
+          return result;
+        },
+      );
+      try {
+        await cancelEntered.promise;
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopSettled).toBe(false);
+        release.resolve();
+        expect(await turnResult).toMatchObject([
+          { status: "rejected", reason: { message: "cancel transport failure" } },
+        ]);
+        expect(await stopResult).toMatchObject([
+          {
+            status: "rejected",
+            reason: {
+              message: "Session source cleanup failed",
+              errors: [{ message: "cancel transport failure" }],
+            },
+          },
+        ]);
+        expect(state.cancel).toHaveBeenCalledOnce();
+      } finally {
+        release.resolve();
+        await Promise.all([turnResult, stopResult]);
+      }
+    });
   });
 });

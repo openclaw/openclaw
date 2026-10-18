@@ -42,7 +42,7 @@ import { resolveSessionPublicShare } from "../config/sessions/session-public-sha
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as channelOutbound from "../plugin-sdk/channel-outbound.js";
 import * as ssrfRuntime from "../plugin-sdk/ssrf-runtime.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance, runPluginStreamConsumer } from "../plugins/plugin-instance-scope.js";
 import {
   getPluginRecordRegistry,
   isPluginRecordActive,
@@ -55,7 +55,7 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
@@ -100,7 +100,7 @@ let rejectIngress: ((error: unknown) => void) | undefined;
 const appToken = "synthetic-x-composition-app-token";
 const userToken = "synthetic-x-composition-user-token";
 const deniedWorkSessionReply =
-  "Work session creation was denied; no public work session was created.";
+  "[[x_failure]] Work session creation was denied; no public work session was created.";
 
 // Fail closed: never delegate to fetch, credentials, or the network.
 async function xResponse(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -340,6 +340,15 @@ describe("X publication production-owner composition", () => {
     setTestPluginRegistry(builder.registry);
     const instance = expectDefined(getPluginInstance(record), "registered X instance");
     instance.run(() => setXRuntime(api.runtime));
+    // Agent-core starts tools while consuming the provider's stream, inside that
+    // provider plugin's invocation. Host tools must not borrow its runtime slots.
+    const providerRecord = createPluginRecord({ id: "proof-provider", origin: "bundled" });
+    builder.createApi(providerRecord, { config: cfg(), registrationMode: "full" });
+    builder.registry.plugins.push(providerRecord);
+    const providerInstance = expectDefined(
+      getPluginInstance(providerRecord),
+      "registered provider instance",
+    );
     const allowlist = openXAllowlist(api.runtime);
     const allowlistEntry = (userId: string) => ({
       userId,
@@ -480,7 +489,7 @@ describe("X publication production-owner composition", () => {
           expect(await params.userTurnTranscriptRecorder.persistApproved()).toBeTruthy();
         }
         params.onExecutionPhase?.({ phase: "model_call_started" });
-        let text = "Synthetic X invocation settled.";
+        let text = "[[x_success]] Synthetic X invocation settled.";
         if (!child) {
           const publication = readChildSessionPublication(admitted.operationalRunInstance);
           publications.set(activeCase, publication !== undefined);
@@ -534,15 +543,18 @@ describe("X publication production-owner composition", () => {
                 tools.find((tool) => tool.name === "sessions_spawn"),
                 "real sessions_spawn tool",
               );
-              return spawn.execute("x-proof-" + activeCase, {
-                task: "Persist the synthetic publication composition answer.",
-                label: "X publication " + activeCase,
-                runtime: "subagent",
-                agentId: "coder",
-                visible: true,
-                context: "isolated",
-                expectsCompletionMessage: false,
-              });
+              const providerStream = providerInstance.run(() => Promise.resolve({}));
+              return runPluginStreamConsumer(providerStream, () =>
+                spawn.execute("x-proof-" + activeCase, {
+                  task: "Persist the synthetic publication composition answer.",
+                  label: "X publication " + activeCase,
+                  runtime: "subagent",
+                  agentId: "coder",
+                  visible: true,
+                  context: "isolated",
+                  expectsCompletionMessage: false,
+                }),
+              );
             });
             outcomes.set(activeCase, result.details);
             if (isRecord(result.details) && typeof result.details.error === "string") {
@@ -815,13 +827,16 @@ describe("X publication production-owner composition", () => {
           rows().filter(({ entry }) => entry.parentSessionKey === "agent:main:x:group:" + rootId),
           kind,
         ).toHaveLength(kind === "allowed" ? 1 : 0);
-        if (kind === "author-revoked") {
+        // Only a declared success reaches X; denied work-session replies are withheld.
+        const outcome = outcomes.get(kind);
+        const succeeded =
+          publications.has(kind) &&
+          !spawnErrors.has(kind) &&
+          !(isRecord(outcome) && typeof outcome.error === "string");
+        if (!succeeded) {
           expect(networkCase.replies, kind).toEqual([]);
-        } else if (kind === "owner-retired") {
-          // Retirement may reject delivery or let the admitted invocation finish
-          // its harmless failure reply. Neither outcome may expose a public link.
-          expect([[], [deniedWorkSessionReply]], kind).toContainEqual(networkCase.replies);
-        } else {
+        } else if (kind !== "owner-retired") {
+          // Retirement may still reject delivery of an admitted success.
           expect(networkCase.replies, kind).toHaveLength(1);
         }
         const publicReads = networkCase.reads.filter((request) => request.appOnly);
@@ -860,9 +875,10 @@ describe("X publication production-owner composition", () => {
             );
             expect(publication.sessionId).toBe(entry.sessionId);
             // The append checkpoint precedes the run's final session metadata writes.
-            const childReleased = getSessionWorkAdmissionRelease({
+            const childReleased = captureSessionControllerSettlement({
               scope: childStore,
               identities: [key, entry.sessionId],
+              agentId: "coder",
             });
             if (childReleased) {
               await waitFor("child admission release", childReleased);
@@ -933,9 +949,10 @@ describe("X publication production-owner composition", () => {
             "child admission cleanup",
             Promise.all(
               children.flatMap(({ sessionKey, entry }) => {
-                const drain = getSessionWorkAdmissionRelease({
+                const drain = captureSessionControllerSettlement({
                   scope: childStore,
                   identities: [sessionKey, entry.sessionId],
+                  agentId: "coder",
                 });
                 return drain ? [drain] : [];
               }),

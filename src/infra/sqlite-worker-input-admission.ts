@@ -9,7 +9,7 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 /** Retained inputs share the broker budget before they become queued jobs. */
 export class SqliteWorkerInputAdmission {
   private bytes = 0;
-  private opens = 0;
+  private readonly opens = new Set<Promise<void>>();
   private readonly inputPreparations = new Set<Promise<void>>();
   private readonly openQueue = new Map<string, StoreWriterQueue>();
 
@@ -39,9 +39,15 @@ export class SqliteWorkerInputAdmission {
     };
   }
 
-  open<T>(bytes: number, dispatch: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  open<T>(
+    bytes: number,
+    dispatch: () => Promise<T>,
+    signal?: AbortSignal,
+    reuse?: () => Promise<T | undefined>,
+    sharedState = false,
+  ): Promise<T> {
     if (
-      this.opens >= this.owner.maxPendingOpens ||
+      this.opens.size >= this.owner.maxPendingOpens ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
@@ -49,23 +55,37 @@ export class SqliteWorkerInputAdmission {
         new SqliteWorkerError("SQLite worker open input capacity reached", "overloaded"),
       );
     }
-    this.opens += 1;
+    const settled = createDeferredCore();
+    this.opens.add(settled.promise);
     const release = this.retain(bytes);
-    // Physical-file identity must be published before admitting another open alias.
-    return runQueuedStoreWrite({
-      queues: this.openQueue,
-      storePath: "sqlite-open",
-      label: "SQLite worker open",
-      fn: dispatch,
-      signal,
-    }).finally(() => {
-      this.opens -= 1;
+    // Serialize aliases within each owner class without holding shared state behind agent scans.
+    const enqueue = () =>
+      runQueuedStoreWrite({
+        queues: this.openQueue,
+        storePath: sharedState ? "sqlite-shared-state-open" : "sqlite-open",
+        label: "SQLite worker open",
+        fn: dispatch,
+        signal,
+      });
+    // Unknown actors enter the FIFO synchronously. A published actor can attach
+    // independently, but still retains its input budget and participates in drainage.
+    return (
+      reuse
+        ? Promise.resolve()
+            .then(reuse)
+            .then((store) => (store === undefined ? enqueue() : store))
+        : enqueue()
+    ).finally(() => {
+      this.opens.delete(settled.promise);
       release();
+      settled.resolve();
     });
   }
 
-  joinOpens(): Promise<void> {
-    return this.openQueue.get("sqlite-open")?.drainPromise ?? Promise.resolve();
+  async joinOpens(): Promise<void> {
+    while (this.opens.size > 0) {
+      await Promise.allSettled(this.opens);
+    }
   }
 
   async joinPreparations(): Promise<void> {
@@ -107,14 +127,9 @@ export class SqliteWorkerInputAdmission {
     return {
       assertCurrent,
       handoff: (dispatch) => {
-        try {
-          if (!this.inputPreparations.has(settled.promise)) {
-            throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
-          }
-          assertCurrent();
-        } catch (error) {
+        if (!this.inputPreparations.has(settled.promise) || this.owner.isClosing()) {
           release();
-          throw error;
+          throw new SqliteWorkerError("SQLite worker input preparation is closed", "closed");
         }
         // Enqueue takes custody in this same synchronous turn, including its oversized checks.
         handedOff = true;

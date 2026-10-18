@@ -1,10 +1,18 @@
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import {
+  projectPlainTextToolCallBlocks,
+  stripPlainTextToolCallBlocks,
+} from "../../../packages/tool-call-repair/src/index.js";
 import { escapeRegExp } from "../regexp.js";
-import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
+import {
+  findCodeRegions,
+  isInsideCode,
+  projectLinesOutsideCode,
+  stripLinesOutsideCode,
+} from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripReasoningTagsFromText } from "./reasoning-tags.js";
+import { createReasoningTagProbe, stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
   applyTextFilters,
   createConditionalTextProjector,
@@ -246,16 +254,17 @@ export function assistantVisibleTextFilters(
       : options?.preserveTrailingWhitespace
         ? "start"
         : "both";
+  const stripReasoning = (text: string) =>
+    stripReasoningTagsFromText(text, {
+      mode: preserve ? "preserve" : "strict",
+      scope: profile === "final-answer-delivery" ? "leading" : "all",
+      trim: preserveCodeIndentation ? "none" : trim,
+      // An unfinished stream cannot use terminal malformed-output recovery.
+      recoverUnclosed: !streaming,
+    });
   const reasoning: TextFilter = {
-    activationTokens: ["<"],
-    transform: (text) =>
-      stripReasoningTagsFromText(text, {
-        mode: preserve ? "preserve" : "strict",
-        scope: profile === "final-answer-delivery" ? "leading" : "all",
-        trim: preserveCodeIndentation ? "none" : trim,
-        // An unfinished stream cannot use terminal malformed-output recovery.
-        recoverUnclosed: !streaming,
-      }),
+    transform: stripReasoning,
+    create: () => createConditionalTextProjector(stripReasoning, createReasoningTagProbe()),
   };
   const filters: TextFilter[] = [
     ...(!preserve ? [minimaxToolCallTextFilter] : []),
@@ -286,7 +295,26 @@ export function assistantVisibleTextFilters(
     preserve ? leadingEmptyLinesTextFilter : trimTextFilter(trim, { preserveCodeIndentation }),
     {
       transform: stripInvisibleAssistantText,
-      create: () => createConditionalTextProjector(stripInvisibleAssistantText, () => true),
+      create: () => {
+        let visible = false;
+        let trailingHighSurrogate = "";
+        return createConditionalTextProjector(
+          () => "",
+          (input) => {
+            if (!visible) {
+              const appended = trailingHighSurrogate + (input.delta ?? input.text);
+              // A split supplementary character cannot permanently establish visibility yet.
+              trailingHighSurrogate = /[\uD800-\uDBFF]$/.test(appended) ? appended.slice(-1) : "";
+              visible = Boolean(
+                stripInvisibleAssistantText(
+                  trailingHighSurrogate ? appended.slice(0, -1) : appended,
+                ),
+              );
+            }
+            return !visible;
+          },
+        );
+      },
     },
   );
   profileFilters.set(key, filters);
@@ -314,54 +342,64 @@ function createAssistantTraceProjector() {
   let active = false;
   const resetLine = () => traceLineHeads.map((parts) => ({ parts, part: 0, offset: 0 }));
   let candidates = resetLine();
-  return createConditionalTextProjector(stripAssistantInternalTraceLines, (input) => {
-    if (active) {
-      return true;
-    }
-    const appended = input.delta ?? input.text;
-    for (let at = 0; at < appended.length; at++) {
-      const char = appended.charAt(at).toLowerCase();
-      if (char === "\n") {
-        candidates = resetLine();
-        continue;
-      }
-      const whitespace = /\s/.test(char);
-      candidates = candidates.filter((candidate) => {
-        if (candidate.offset === 0 && whitespace) {
-          return true;
-        }
-        if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
-          return false;
-        }
-        candidate.offset++;
-        if (candidate.offset === candidate.parts[candidate.part]?.length) {
-          candidate.part++;
-          candidate.offset = 0;
-          active ||= candidate.part === candidate.parts.length;
-        }
-        return true;
-      });
-      // The canonical transform owns code protection and corrections after activation.
+  return createConditionalTextProjector(
+    stripAssistantInternalTraceLines,
+    (input) => {
       if (active) {
         return true;
       }
-      if (candidates.length === 0) {
-        const newline = appended.indexOf("\n", at + 1);
-        if (newline === -1) {
-          break;
+      const appended = input.delta ?? input.text;
+      for (let at = 0; at < appended.length; at++) {
+        const char = appended.charAt(at).toLowerCase();
+        if (char === "\n") {
+          candidates = resetLine();
+          continue;
         }
-        at = newline - 1;
+        const whitespace = /\s/.test(char);
+        candidates = candidates.filter((candidate) => {
+          if (candidate.offset === 0 && whitespace) {
+            return true;
+          }
+          if (candidate.parts[candidate.part]?.charAt(candidate.offset) !== char) {
+            return false;
+          }
+          candidate.offset++;
+          if (candidate.offset === candidate.parts[candidate.part]?.length) {
+            candidate.part++;
+            candidate.offset = 0;
+            active ||= candidate.part === candidate.parts.length;
+          }
+          return true;
+        });
+        // The canonical transform owns code protection and corrections after activation.
+        if (active) {
+          return true;
+        }
+        if (candidates.length === 0) {
+          const newline = appended.indexOf("\n", at + 1);
+          if (newline === -1) {
+            break;
+          }
+          at = newline - 1;
+        }
       }
-    }
-    return false;
-  });
+      return false;
+    },
+    (text, retainStart) =>
+      projectLinesOutsideCode(
+        text,
+        (line) => INTERNAL_TRACE_LINE_RE.test(line.trim()),
+        retainStart,
+      ),
+  );
 }
 
 export const plainToolCallTextFilter: TextFilter = {
   transform: (text) =>
     stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions }),
+  checkpoint: (text, settleBefore) =>
+    projectPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions, settleBefore }),
   activationTokens: ["{", "<parameter=", "<function=", "to="],
-  ignoreBlockCode: true,
 };
 
 export function sanitizeAssistantVisibleTextWithProfile(
@@ -382,11 +420,6 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
-}
-
-/** Sanitizes text already marked as final-answer prose by the agent runtime. */
-export function sanitizeAssistantFinalAnswerText(text: string): string {
-  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

@@ -1,4 +1,6 @@
 import path from "node:path";
+import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { ContextPreparationTimeoutError } from "../../agents/failover/local-preparation-error.js";
 import {
   resolveWorkerPoolSize,
   SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
@@ -43,14 +45,24 @@ export async function readSessionTranscriptModelContextInWorker(
 ): Promise<ReturnType<typeof readSessionTranscriptModelContext>> {
   signal?.throwIfAborted();
   const value = unwrapSessionTranscriptWorkerReply(
-    await modelContextReads.run(
-      { kind: "model-context", target, admission, through, limits, expectedIdentity },
-      { timeoutMs: 60_000, signal },
-      {
-        storePaths: [target.storePath],
-        admissionPaths: [resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path],
-      },
-    ),
+    await modelContextReads
+      .run(
+        { kind: "model-context", target, admission, through, limits, expectedIdentity },
+        // Successful reads on slow hosts take 42–44s (#155627); allow startup headroom.
+        { timeoutMs: 180_000, signal },
+        {
+          storePaths: [target.storePath],
+          admissionPaths: [
+            resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
+          ],
+        },
+      )
+      .catch((error: unknown) => {
+        if (error instanceof WorkerTaskError && error.code === "timeout") {
+          throw new ContextPreparationTimeoutError(error);
+        }
+        throw error;
+      }),
   );
   if (!("events" in value)) {
     throw new Error("Session context worker returned a database target instead of context");

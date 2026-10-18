@@ -318,20 +318,18 @@ async function runGatewayUpdateCheckOwned(
     setSchedule(withoutUpdateTarget({ ...currentSchedule, autoEnabled: false }));
     return;
   }
-  // Only an admitted discovery attempt supersedes an explicit refresh.
-  const generation = ++lifecycle.publicationGeneration;
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
   const initialized = await lifecycle.initialize();
   params.signal.throwIfAborted();
-  // Discovery keeps its starting channel; campaign admission rechecks live policy.
+  // Discovery publishes only for its current installation and channel policy.
   // Opt-outs replace the background owner without superseding explicit discovery.
   const isCurrent = () =>
     lifecycle.isCurrent() &&
     lifecycle.announceDevGitUpdate === announceDevGitUpdate &&
+    normalizeUpdateChannel(params.getConfig().update?.channel) === configChannel &&
     lifecycle.installStatus?.status.installKind === initialized.status.installKind &&
     !params.signal.aborted &&
-    updateCampaign.getState()?.state !== "applying" &&
-    generation === lifecycle.publicationGeneration;
+    updateCampaign.getState()?.state !== "applying";
   if (!isCurrent()) {
     return;
   }
@@ -372,22 +370,22 @@ async function runGatewayUpdateCheckOwned(
   const initialSchedule: UpdateScheduleState = priorSchedule
     ? { ...priorSchedule, autoEnabled }
     : { channel: configuredChannel, autoEnabled };
-  setSchedule(autoDesired ? initialSchedule : withoutUpdateCampaign(initialSchedule));
+  const { root, status, installReceipt } = installStatus;
+  const isDevGit = configuredChannel === "dev" && status.installKind === "git";
+  // Cached checks still publish the installation facts discovery already established.
+  setSchedule(
+    withUpdateInstallStatus(
+      autoDesired ? initialSchedule : withoutUpdateCampaign(initialSchedule),
+      status,
+      isDevGit,
+      installReceipt,
+      root,
+    ),
+  );
   if (!autoDesired) {
     updateCampaign.clear();
   }
 
-  if (configuredChannel === "extended-stable" || configuredChannel === "dev") {
-    setSchedule(
-      withUpdateInstallStatus(
-        getUpdateSchedule() ?? initialSchedule,
-        installStatus.status,
-        configuredChannel === "dev",
-        installStatus.installReceipt,
-        installStatus.root,
-      ),
-    );
-  }
   if (configuredChannel === "extended-stable") {
     if (installStatus.status.installKind !== "package") {
       updateCampaign.clear();
@@ -397,7 +395,6 @@ async function runGatewayUpdateCheckOwned(
     }
   }
 
-  const isDevGit = configuredChannel === "dev" && installStatus?.status.installKind === "git";
   const shouldRunAutoUpdate =
     autoDesired && (configuredChannel === "stable" || configuredChannel === "beta" || isDevGit);
   if (!shouldRunAutoUpdate) {
@@ -441,17 +438,6 @@ async function runGatewayUpdateCheckOwned(
     return;
   }
 
-  const { root, status, installReceipt } = installStatus;
-  setSchedule(
-    withUpdateInstallStatus(
-      getUpdateSchedule() ?? initialSchedule,
-      status,
-      isDevGit,
-      installReceipt,
-      root,
-    ),
-  );
-
   const nextState: UpdateCheckState = {
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
@@ -469,7 +455,6 @@ async function runGatewayUpdateCheckOwned(
       return;
     }
     lifecycle.installStatus = installStatus;
-    lifecycle.publicationGeneration += 1;
     if (!update) {
       updateCampaign.clear();
       setAvailable(null);
@@ -516,7 +501,7 @@ async function runGatewayUpdateCheckOwned(
   const channel = configuredChannel;
   const resolved =
     shouldRunAutoUpdate || channel !== "stable"
-      ? await resolveNpmChannelTag({ channel })
+      ? await resolveNpmChannelTag({ channel, signal: params.signal })
       : {
           tag: "latest",
           version: telemetryUpdate?.version ?? null,

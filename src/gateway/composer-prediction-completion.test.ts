@@ -54,6 +54,7 @@ describe("composer prediction completion", () => {
     expect(completion.mock.calls[0]?.[0]).toMatchObject({
       provider: "example",
       model,
+      purpose: "composer-prediction",
       thinkLevel: "off",
       answerTokenBudget: 160,
       timeoutMs: 8_000,
@@ -77,6 +78,32 @@ describe("composer prediction completion", () => {
     route.mockResolvedValueOnce({ selection: { selectedHarnessId: "agentsapi" } });
     await expect(completeComposerPrediction(input("utility"))).rejects.toThrow("tool-free");
     expect(completion).not.toHaveBeenCalled();
+  });
+
+  it("checks the zero-tool contract again for utility fallback runtimes", async () => {
+    const params = input("utility");
+    params.cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "example/default", fallbacks: ["example/main-backup"] },
+          utilityModel: {
+            primary: "example/small",
+            fallbacks: ["example/service-tools", "example/backup"],
+          },
+        },
+      },
+    };
+    completion.mockRejectedValueOnce(new Error("503 service unavailable"));
+    route
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "openclaw" } })
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "agentsapi" } })
+      .mockResolvedValueOnce({ selection: { selectedHarnessId: "openclaw" } });
+
+    expect(await completeComposerPrediction(params)).toBe("What should I check next?");
+    expect(completion.mock.calls.map(([call]) => [call.model, call.purpose])).toEqual([
+      ["small", "composer-prediction"],
+      ["backup", "composer-prediction"],
+    ]);
   });
 
   it.each(["NO_SUGGESTION", "", "x".repeat(501)])(

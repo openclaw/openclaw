@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
@@ -12,19 +13,12 @@ import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { page } from "./route.ts";
 import type { UsageRouteData } from "./types.ts";
 
-const usageMethods = ["sessions.usage", "usage.status"];
 const totals = {
+  ...createEmptyCostUsageTotals(),
   input: 100,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
   totalTokens: 100,
   totalCost: 1,
   inputCost: 1,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
 };
 const payload = {
   updatedAt: 1,
@@ -128,23 +122,23 @@ describe("usage route", () => {
         query: { agentId: selection.state.scopeId },
         result: payload,
         error: null,
+        loadedAtMs: expect.any(Number),
       });
-      expect(active?.data?.loadedAtMs).toEqual(expect.any(Number));
     },
   );
 
   it.each(["navigation", "preload"] as const)(
-    "preserves query and %s cancellation ownership for all aggregate requests",
+    "preserves query and %s cancellation ownership for the session usage request",
     async (kind) => {
       const { router, context, request, usageCalls } = createUsageRouter();
       const started = createDeferred();
       const response = createDeferred<typeof payload>();
       let requests = 0;
       request.mockImplementation(async (method) => {
-        if (!usageMethods.includes(method)) {
+        if (method !== "sessions.usage") {
           return {};
         }
-        if (++requests === 2) {
+        if (++requests === 1) {
           started.resolve();
         }
         return response.promise;
@@ -163,14 +157,14 @@ describe("usage route", () => {
       response.resolve(payload);
       await loading;
 
-      expect(calls.map(([method]) => method).toSorted()).toEqual(usageMethods.toSorted());
+      // Provider plans load on the page, never in the route loader.
+      expect(calls.map(([method]) => method)).toEqual(["sessions.usage"]);
       for (const call of calls) {
         expect(call[2]?.signal).toBe(match.abortController.signal);
         expect(call[2]?.signal?.aborted).toBe(kind === "navigation");
       }
       await router.navigate("usage", context);
       const data = router.getState().matches[0]?.data;
-      expect(data?.result).toEqual(payload);
       expect(data?.query).toEqual({
         startDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
         endDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
@@ -185,7 +179,7 @@ describe("usage route", () => {
         updatedAt: 1,
         days: 30,
         totals,
-        daily: [{ date: "2026-08-07", ...totals }],
+        daily: payload.aggregates.costDaily,
         cacheStatus: payload.cacheStatus,
       });
       expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
@@ -197,33 +191,10 @@ describe("usage route", () => {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
       });
-      expect(data?.error).toBeNull();
     },
   );
 
-  it("records a provider usage request failure separately from an empty response", async () => {
-    const { router, context, request } = createUsageRouter();
-    request.mockImplementation(async (method) => {
-      switch (method) {
-        case "sessions.usage":
-          return payload;
-        case "usage.status":
-          throw new Error("gateway transport unavailable");
-        default:
-          return {};
-      }
-    });
-    await router.navigate("usage", context);
-    const result = router.getState().matches[0]?.data;
-
-    expect(result?.error).toBeNull();
-    expect(result?.providerUsage).toEqual({
-      state: "settled",
-      result: { ok: false, error: { kind: "request-failed" } },
-    });
-  });
-
-  it("redacts secrets in displayed loader failures", async () => {
+  it("reports a session usage failure without exposing secrets", async () => {
     const { router, context, request } = createUsageRouter();
     request.mockImplementation(async (method) => {
       if (method === "sessions.usage") {
@@ -233,7 +204,6 @@ describe("usage route", () => {
     });
     await router.navigate("usage", context);
     const result = router.getState().matches[0]?.data;
-
     expect(result?.error).toBe("OPENAI_API_KEY=sk-123...cdef");
   });
 });

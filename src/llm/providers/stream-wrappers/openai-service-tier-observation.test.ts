@@ -64,6 +64,7 @@ vi.mock("openai", () => {
 });
 beforeEach(() => {
   log.info.mockClear();
+  log.debug.mockClear();
   provider.tiers.length = 0;
   provider.rejectUltrafast = true;
   provider.elapsedMs = 0;
@@ -140,7 +141,8 @@ it("keeps requesting Ultrafast after a downgrade and clears it on the first hono
   }
   expect(payloads).toEqual(Array.from({ length: 3 }, () => ({ service_tier: "ultrafast" })));
   expect(previous).toHaveBeenCalledTimes(3);
-  expect(log.info).toHaveBeenCalledTimes(2);
+  expect(log.info).toHaveBeenCalledTimes(1);
+  expect(log.debug).toHaveBeenCalledTimes(1);
 });
 
 it("attributes a successful slower retry to the original rejected tier without altering overrides", async () => {

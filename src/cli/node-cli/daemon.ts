@@ -9,6 +9,7 @@ import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
   resolveNodeWindowsTaskName,
+  resolveNodeServiceIdentityEnvironment,
 } from "../../daemon/constants.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import {
@@ -19,7 +20,10 @@ import {
   resolvePinnedDaemonRuntimePath,
   resolveRecordedDaemonRuntime,
 } from "../../daemon/runtime-paths.js";
-import { readDaemonRuntimePinForInstall } from "../../daemon/runtime-pin-state.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePinForInstall,
+} from "../../daemon/runtime-pin-state.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import {
@@ -158,10 +162,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   };
   let pinSnapshot;
   try {
-    pinSnapshot = readDaemonRuntimePinForInstall(
-      { kind: "node", env: installEnv },
-      existingServiceCommand,
-      opts.runtime !== undefined || opts.runtimePath !== undefined,
+    pinSnapshot = await withDaemonRuntimePinMigration(
+      { ...installEnv, ...resolveNodeServiceIdentityEnvironment() },
+      () =>
+        readDaemonRuntimePinForInstall(
+          { kind: "node", env: installEnv },
+          existingServiceCommand,
+          opts.runtime !== undefined || opts.runtimePath !== undefined,
+        ),
     );
   } catch (error) {
     fail(`Runtime pin inspection failed: ${formatErrorMessage(error)}`);

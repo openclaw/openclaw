@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { WorkspaceConflictNotice } from "./chat-workspace-conflict.ts";
+import { WorkspaceConflictNotice } from "./chat-workspace-conflict.tsx";
 
 const conflict = {
   paths: ["src/local.ts"],

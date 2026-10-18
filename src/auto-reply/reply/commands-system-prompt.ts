@@ -7,10 +7,8 @@ import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/s
 import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
-import {
-  ensureSandboxWorkspaceForSession,
-  resolveSandboxRuntimeStatusAsync,
-} from "../../agents/sandbox.js";
+import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -148,10 +146,10 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     sessionKey: toolPolicySessionKey,
     allowGatewaySubagentBinding: true,
     messageProvider: params.command.channel,
-    groupId: targetSessionEntry?.groupId ?? undefined,
-    groupChannel: targetSessionEntry?.groupChannel ?? undefined,
-    groupSpace: targetSessionEntry?.space ?? undefined,
-    spawnedBy: targetSessionEntry?.spawnedBy ?? undefined,
+    groupId: targetSessionEntry?.groupId,
+    groupChannel: targetSessionEntry?.groupChannel,
+    groupSpace: targetSessionEntry?.space,
+    spawnedBy: targetSessionEntry?.spawnedBy,
     senderId: params.command.senderId,
     senderName: params.ctx.SenderName,
     senderUsername: params.ctx.SenderUsername,
@@ -169,9 +167,11 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     cwd: process.cwd(),
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    preparedSessionEntry: targetSessionEntry,
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,
+    requester: { agentTo: params.ctx.To, agentThreadId: params.ctx.MessageThreadId },
     chatType: normalizeChatType(params.ctx.ChatType ?? targetSessionEntry?.chatType),
   });
   const fullAccessState = resolveEmbeddedFullAccessState({

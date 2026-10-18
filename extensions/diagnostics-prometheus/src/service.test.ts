@@ -255,40 +255,6 @@ describe("diagnostics-prometheus service", () => {
     }
   });
 
-  it("preserves escaped histogram labels and fresh values across scrapes and restarts", () => {
-    const metrics = createMetricsHarness();
-    const event = {
-      type: "gateway.rpc" as const,
-      method: 'test."\\\n😀',
-      phase: "handler" as const,
-      outcome: "returned" as const,
-      durationMs: 5,
-      admissionMs: 0,
-    };
-    const name = "openclaw_gateway_rpc_handler_seconds";
-    const label = String.raw`method="test.\"\\\n😀"`;
-    metrics.record(event);
-    const first = metrics.render();
-    expect(first).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
-    expect(first).toContain(`${name}_bucket{le="+Inf",${label}} 1\n`);
-    expect(metrics.render()).toBe(first);
-
-    metrics.record({ ...event, durationMs: 10 });
-    const updated = metrics.render();
-    expect(updated).toContain(`${name}_bucket{le="0.005",${label}} 1\n`);
-    expect(updated).toContain(`${name}_bucket{le="0.01",${label}} 2\n`);
-    expect(updated).toContain(`${name}_bucket{le="+Inf",${label}} 2\n`);
-    expect(updated).toContain(`${name}_sum{${label}} 0.015\n`);
-    expect(updated).toContain(`${name}_count{${label}} 2\n`);
-
-    metrics.stop();
-    expect(metrics.render()).toBe("");
-    metrics.start();
-    metrics.record(event);
-    expect(metrics.render()).toBe(first);
-    metrics.stop();
-  });
-
   it("counts HTTP cancellations by source without accepting public events", () => {
     const metrics = createMetricsHarness();
     for (const source of ["client", "client", "shutdown"] as const) {
@@ -1045,6 +1011,31 @@ describe("metrics HTTP handler", () => {
       expect(head.status).toBe(200);
       expect(head.headers.get("content-length")).toBe(String(getBodyBytes));
       expect(headBody.byteLength).toBe(0);
+
+      metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 2 });
+      await fetch(base).then((res) => res.text());
+      metrics.record({ type: "queue.lane.dequeue", lane: "main", queueSize: 0, waitMs: 10 });
+      const updated = await fetch(base);
+      const updatedBody = await updated.text();
+      expect(updatedBody).toContain('openclaw_queue_lane_size{lane="main"} 0\n');
+      expect(updatedBody).toContain(
+        'openclaw_queue_lane_wait_seconds_bucket{lane="main",le="0.005"} 0\n',
+      );
+      expect(updated.headers.get("content-length")).toBe(String(Buffer.byteLength(updatedBody)));
+
+      metrics.stop();
+      metrics.start();
+      metrics.record({ type: "webhook.received", channel: "test", updateType: "message" });
+      const restarted = await fetch(base);
+      const restartedBody = await restarted.text();
+      expect(restartedBody).toBe(
+        "# HELP openclaw_webhook_received_total Webhook requests received by channel and update type.\n" +
+          "# TYPE openclaw_webhook_received_total counter\n" +
+          'openclaw_webhook_received_total{channel="test",webhook="message"} 1\n',
+      );
+      expect(restarted.headers.get("content-length")).toBe(
+        String(Buffer.byteLength(restartedBody)),
+      );
     });
   });
 });

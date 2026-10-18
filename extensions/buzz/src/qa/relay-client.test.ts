@@ -28,6 +28,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
       auth = relayMocks.auth;
       close = relayMocks.close;
       connect = relayMocks.connect;
+      connected = true;
       idleSince: number | undefined;
       ongoingOperations = 0;
       publish = relayMocks.publish;

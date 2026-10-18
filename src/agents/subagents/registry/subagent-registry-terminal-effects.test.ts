@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../../test/helpers/promise.js";
+import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -25,6 +26,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 vi.mock("./subagent-registry-helpers.js", { spy: true });
 // mock-isolation: Resource dispatch tests do not create process-wide MCP runtimes.
@@ -32,7 +34,8 @@ vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: vi.fn(async () => true),
 }));
 
-beforeEach(() => {
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
   resetGatewayWorkAdmission();
   vi.mocked(persistSubagentSessionTiming).mockResolvedValue(undefined);
   vi.mocked(retireSessionMcpRuntime).mockClear();
@@ -180,6 +183,75 @@ it.each(["keep", "delete"] as const)(
   },
 );
 
+it.each(["quiet", "suppressed"] as const)(
+  "publishes %s delivery cleanup with cleanup completion before waking the requester",
+  async (mode) => {
+    const suppressed = mode === "suppressed";
+    const entry = createRunEntry({
+      expectsCompletionMessage: suppressed,
+      suppressCompletionDelivery: suppressed || undefined,
+      wakeOnDescendantSettle: true,
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok" },
+      delivery: {
+        status: "pending",
+        disposition: suppressed ? "intentional_non_delivery" : undefined,
+        createdAt: 3_000,
+        attemptCount: 2,
+        nextAttemptAt: 5_000,
+      },
+    });
+    const writes: SubagentRunRecord[] = [];
+    const wake = vi.fn(async () => {
+      expect(readLifecycleRun(entry)).toMatchObject({
+        cleanupCompletedAt: expect.any(Number),
+        delivery: { status: "not_required" },
+        requesterSettleWake: { status: "pending" },
+      });
+      expect(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
+      return false;
+    });
+    const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
+    const controller = createLifecycleControllerFixture(
+      {
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled: wake,
+        beforeWrite: ({ postimages }) => {
+          const row = postimages.get(entry.runId);
+          if (row) {
+            writes.push(row);
+          }
+        },
+      },
+      { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
+    );
+    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
+    const settleRoots = observeRootWork();
+    try {
+      expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
+    } finally {
+      await settleRoots();
+    }
+
+    for (const row of writes) {
+      if (row.delivery?.attemptCount === undefined) {
+        expect(row.cleanupCompletedAt).toBeTypeOf("number");
+      }
+    }
+    const completed = readLifecycleRun(entry);
+    expect(completed.cleanupCompletedAt).toBeTypeOf("number");
+    expect(completed.suppressCompletionDelivery).toBeUndefined();
+    expect(completed.wakeOnDescendantSettle).toBeUndefined();
+    expect(completed.delivery).toEqual({
+      status: "not_required",
+      ...(suppressed ? { disposition: "intentional_non_delivery" } : {}),
+    });
+    expect(wake).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+    expect(controller.options.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  },
+);
+
 it.for(["queued", "pre-commit"] as const)(
   "retires a superseded session while its browser cleanup claim waits (%s)",
   async (barrier, { signal }) => {
@@ -243,7 +315,9 @@ it.for(["queued", "pre-commit"] as const)(
       await withinTest(loaderEntered.promise, signal);
       holdNextWrite = true;
       if (barrier === "queued") {
-        pendingWrite = mutateLifecycleRun(entry, () => {});
+        pendingWrite = mutateLifecycleRun(entry, (row) => {
+          row.label = "preceding durable write";
+        });
         await withinTest(writeEntered.promise, signal);
       }
       releaseLoader.resolve();

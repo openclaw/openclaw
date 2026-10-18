@@ -1,6 +1,6 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence-error.js";
 import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-entry-anchor.js";
 import { GatewayDrainingError } from "../../process/gateway-work-admission.js";
@@ -16,8 +16,15 @@ const log = vi.hoisted(() => ({ debug: vi.fn(), warn: vi.fn() }));
 vi.mock("../../logging/subsystem.js", () => ({ createSubsystemLogger: () => log }));
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   log.debug.mockReset();
   log.warn.mockReset();
+});
+
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const source = {
@@ -29,16 +36,10 @@ const source = {
 } as TranscriptEntryAnchor;
 
 function createHarness() {
-  const timers: Array<() => void> = [];
   const runReview = vi.fn(async (_candidate: ExperienceReviewCandidate) => {});
   const scheduler = createSkillExperienceReviewScheduler({
     isSystemActive: () => false,
     runReview,
-    setTimer: (callback) => {
-      timers.push(callback);
-      return { unref() {} } as unknown as ReturnType<typeof setTimeout>;
-    },
-    clearTimer: () => {},
   });
   const turn = (
     modelIterations: number,
@@ -69,15 +70,67 @@ function createHarness() {
       source,
       ...overrides,
     });
-  const fireTimers = () => {
-    for (const callback of timers.splice(0)) {
-      callback();
-    }
-  };
-  return { turn, fireTimers, runReview, timers };
+  const fireTimers = () => vi.runOnlyPendingTimers();
+  return { turn, fireTimers, runReview };
 }
 
 describe("skill experience review scheduler", () => {
+  it("backs off all sessions after a TPM rejection without replaying the failed review", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    runReview.mockRejectedValue(new Error("429 Rate limit reached: tokens per min (TPM)"));
+
+    turn(10);
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(1);
+    for (const minutes of [15, 30, 60]) {
+      turn(10, { sessionKey: `agent:main:session-${minutes}` });
+      now += minutes * 60_000 - 1;
+      fireTimers();
+      await setImmediate();
+      const before = runReview.mock.calls.length;
+      // The queue cannot bypass a cooldown through another session.
+      expect(before).toBe([15, 30, 60].indexOf(minutes) + 1);
+      now += 1;
+      fireTimers();
+      await setImmediate();
+      expect(runReview).toHaveBeenCalledTimes(before + 1);
+    }
+    now += 60 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledTimes(4);
+  });
+
+  it("defers queued reviews when a foreground turn hits the shared rate limit", async () => {
+    let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { turn, fireTimers, runReview } = createHarness();
+    turn(10);
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000 - 1;
+    turn(1, {
+      sessionKey: "agent:other:interactive",
+      event: { messages: [], success: false, error: "429 Rate limit reached (TPM)" },
+    });
+    now += 1;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).not.toHaveBeenCalled();
+    now += 15 * 60_000;
+    fireTimers();
+    await setImmediate();
+    expect(runReview).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["Gateway shutdown", new GatewayDrainingError(), "debug"],
     [
@@ -126,25 +179,25 @@ describe("skill experience review scheduler", () => {
   });
 
   it("accumulates model iterations across turns and reviews once the session reaches ten", async () => {
-    const { turn, fireTimers, runReview, timers } = createHarness();
+    const { turn, fireTimers, runReview } = createHarness();
 
     turn(4);
     turn(4);
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     // Compacted sessions keep counting; only the running total matters.
     turn(3, { compacted: true });
-    expect(timers).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
     fireTimers();
     await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));
     expect(runReview.mock.calls[0]?.[0]).toMatchObject({ source, ctx: { runId: "run-3" } });
 
     // The counter restarts after scheduling.
     turn(9);
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("counts the turn's assistant messages when the harness reports zero iterations", () => {
-    const { turn, timers } = createHarness();
+    const { turn } = createHarness();
     const assistantTurn = (assistantMessages: number) => ({
       event: {
         messages: [
@@ -159,27 +212,27 @@ describe("skill experience review scheduler", () => {
     // Only messages after the last user message belong to the turn: 6 + 3 stays below ten.
     turn(0, assistantTurn(6));
     turn(0, assistantTurn(3));
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     turn(0, assistantTurn(1));
-    expect(timers).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it("resets the counter when the foreground turn saved its own Workshop change", () => {
-    const { turn, timers } = createHarness();
+    const { turn } = createHarness();
 
     turn(8);
     turn(1, { workshopMutated: true });
     turn(9);
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     turn(1);
-    expect(timers).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it("drops an already queued review when a later foreground turn saves its own change", async () => {
-    const { turn, fireTimers, runReview, timers } = createHarness();
+    const { turn, fireTimers, runReview } = createHarness();
 
     turn(10);
-    expect(timers).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
     turn(1, { workshopMutated: true });
     fireTimers();
     await setImmediate();
@@ -187,7 +240,7 @@ describe("skill experience review scheduler", () => {
   });
 
   it("waits for ten accumulated iterations even when turns use a learned skill", async () => {
-    const { turn, fireTimers, runReview, timers } = createHarness();
+    const { turn, fireTimers, runReview } = createHarness();
     const workshopSkill = path.join(resolveWorkshopSkillsDir({}, "main"), "deploy", "SKILL.md");
 
     turn(1, {
@@ -195,16 +248,16 @@ describe("skill experience review scheduler", () => {
         { name: "notes", source: "workspace", activation: "read", skillFile: "/ws/notes/SKILL.md" },
       ],
     });
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     const usedSkills = [
       { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
     ] as const;
     turn(1, { usedSkills });
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     turn(7, { usedSkills });
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
     turn(1, { usedSkills });
-    expect(timers).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
     fireTimers();
     await vi.waitFor(() => expect(runReview).toHaveBeenCalledTimes(1));
     expect(runReview.mock.calls[0]?.[0].usedSkills).toEqual([
@@ -218,23 +271,23 @@ describe("skill experience review scheduler", () => {
         { name: "deploy", source: "workspace", activation: "read", skillFile: workshopSkill },
       ],
     });
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("ignores errored turns and sessions while Workshop is off", () => {
-    const { turn, timers } = createHarness();
+    const { turn } = createHarness();
 
     turn(8);
     turn(20, { event: { messages: [], success: false, error: "provider 500" } });
     turn(20, { config: { skills: { workshop: { autonomous: { mode: "off" } } } } });
     turn(8);
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("never reviews ACP child sessions", () => {
-    const { turn, timers } = createHarness();
+    const { turn } = createHarness();
 
     turn(20, { sessionKey: "agent:main:acp:child-1" });
-    expect(timers).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

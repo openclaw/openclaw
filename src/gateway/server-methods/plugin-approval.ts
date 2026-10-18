@@ -31,6 +31,10 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import {
+  captureApprovalWorkerOwner,
+  registerPendingApprovalRecord,
+} from "./approval-registration.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
@@ -39,7 +43,6 @@ import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
   listVisiblePendingApprovalRequests,
-  registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -83,6 +86,18 @@ export function createPluginApprovalHandlers(
       const reject = (message: string) =>
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       const p = params;
+      const hostApprovalOwnerId = normalizeOptionalString(
+        client?.internal?.pluginApprovalRequestOwnerId,
+      );
+      const claimedPluginId = normalizeOptionalString(p.pluginId);
+      if (hostApprovalOwnerId && claimedPluginId && claimedPluginId !== hostApprovalOwnerId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "plugin approval owner does not match host"),
+        );
+        return;
+      }
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
       const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
@@ -95,6 +110,7 @@ export function createPluginApprovalHandlers(
         return;
       }
 
+      const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
       if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
         reject("signed plugin approval owner is unavailable");
         return;
@@ -152,7 +168,10 @@ export function createPluginApprovalHandlers(
       };
       const turnSource = trustedAgentRuntime ?? p;
       const request: PluginApprovalRequestPayload = {
-        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
+        pluginId:
+          trustedAgentRuntime?.approvalOwnerPluginId ??
+          hostApprovalOwnerId ??
+          sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
         scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
@@ -206,7 +225,7 @@ export function createPluginApprovalHandlers(
         record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
       }
       bindApprovalRequesterMetadata({ record, client });
-      if (client?.internal?.approvalRuntime === true) {
+      if (client?.internal?.approvalRuntime === true || hostApprovalOwnerId) {
         bindApprovalReviewerDeviceIds({
           record,
           deviceIds: p.approvalReviewerDeviceIds,
@@ -219,6 +238,7 @@ export function createPluginApprovalHandlers(
         timeoutMs,
         respond,
         context,
+        workerOwner,
       });
       if (!registration) {
         return;

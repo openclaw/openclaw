@@ -2,19 +2,21 @@ import { createEffect, createMemo, createSignal, flush, onCleanup, Show, untrack
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { projectGateway, projectSidebarAttention } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.tsx";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -33,7 +35,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const attention = projectSidebarAttention(context.sidebarAttention);
-  const mentions = context.sidebarAttention.activate(SidebarAttentionStoreController);
+  context.sidebarAttention.activate(SidebarAttentionStoreOwner);
   const [panelOpen, setPanelOpen] = createSignal(false);
   const [panelPosition, setPanelPosition] = createSignal<SidebarAttentionPanelPosition>({
     left: 8,
@@ -46,6 +48,8 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const [panelRenderer, setPanelRenderer] = createSignal<PanelRenderer | null>(null);
   const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
   let panelTrigger: HTMLElement | null = null;
+  let list: HTMLDivElement | null = null;
+  let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
   const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
@@ -79,7 +83,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 
   const syncOverflowCue = () => {
-    const list = host.querySelector<HTMLElement>(".sidebar-issues-panel__list");
     setOverflowAbove(Boolean(list && list.scrollTop > 2));
     setOverflowBelow(Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2));
   };
@@ -93,7 +96,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (disposed || !host.isConnected || generation !== panelGeneration) {
       return;
     }
-    context.scopeUpgrade.activate(runtime.ScopeUpgradeController);
+    context.scopeUpgrade.activate(runtime.ScopeUpgradeOwner);
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
@@ -108,24 +111,21 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     setPanelOpen(true);
     queueMicrotask(() => {
       if (!disposed && generation === panelGeneration) {
-        host.querySelector<HTMLElement>(".sidebar-issues-panel__list")?.focus();
+        list?.focus();
       }
     });
   }
   function selectTab(tab: IssueTab) {
     setSelectedTab(tab);
-    queueMicrotask(() =>
-      untrack(() => {
-        if (disposed || !panelOpen() || selectedTab() !== tab) {
-          return;
-        }
-        const list = host.querySelector<HTMLElement>(".sidebar-issues-panel__list");
-        if (list) {
-          list.scrollTop = 0;
-        }
-        syncOverflowCue();
-      }),
-    );
+    queueMicrotask(() => {
+      if (disposed || !panelOpen() || selectedTab() !== tab) {
+        return;
+      }
+      if (list) {
+        list.scrollTop = 0;
+      }
+      syncOverflowCue();
+    });
   }
   async function open(item: SidebarAttentionItem) {
     closePanel(false);
@@ -135,7 +135,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
     custodianAlertStore.present(item.action.alert);
-    if (canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")) {
+    if (isCustodianPanelAvailable(context.gateway)) {
       window.dispatchEvent(
         new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
       );
@@ -178,20 +178,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (event.key !== "Tab" || !(event.currentTarget instanceof HTMLElement)) {
       return;
     }
-    const rows = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        "summary, button, a[href], [tabindex]:not([tabindex='-1'])",
-      ),
-    ).filter((element) => {
-      const closedDetails = element.closest("details:not([open])");
-      const insideSummary =
-        element.tagName === "SUMMARY" || Boolean(element.parentElement?.closest("summary"));
-      return (
-        !element.hasAttribute("disabled") &&
-        !element.closest("[hidden]") &&
-        (!closedDetails || insideSummary)
-      );
-    });
+    const rows = panelFocus?.controls() ?? [];
     const first = rows[0];
     const last = rows.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -207,28 +194,25 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (!(target instanceof HTMLElement)) {
       return;
     }
-    const focusOrder = Array.from(host.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    const focusOrder = panelFocus?.rows() ?? [];
     const row = target.closest<HTMLElement>("[data-approval-id]");
-    const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
-    const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
+    const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
     flush();
     if (disposed || generation !== panelGeneration || target.isConnected) {
       return;
     }
-    const remaining = Array.from(host.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    const remaining = panelFocus?.rows() ?? [];
     remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
   }
 
-  let previousRoute = untrack(() => props.activeRouteId);
   createEffect(
     () => props.activeRouteId,
-    (route) => {
+    (route, previousRoute) => {
       if (previousRoute !== undefined && previousRoute !== route) {
         closePanel(false);
       }
-      previousRoute = route;
     },
   );
   createEffect(
@@ -239,16 +223,13 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       }
     },
   );
-  document.addEventListener("pointerdown", handleOutsideInteraction, true);
-  document.addEventListener("keydown", handleOutsideInteraction, true);
-  window.addEventListener("blur", handleWindowBlur);
+  onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));
+  onCleanup(listen(document, "keydown", handleOutsideInteraction, true));
+  onCleanup(listen(window, "blur", handleWindowBlur));
   onCleanup(() => {
     disposed = true;
     panelGeneration += 1;
     panelDismissals.delete(host);
-    document.removeEventListener("pointerdown", handleOutsideInteraction, true);
-    document.removeEventListener("keydown", handleOutsideInteraction, true);
-    window.removeEventListener("blur", handleWindowBlur);
     panelLoad.dispose();
   });
 
@@ -287,8 +268,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       <Show when={panelOpen() && panelRenderer()} keyed>
         {(Panel) => (
           <Panel
-            context={context}
-            mentions={mentions}
             entries={attention.read()}
             onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
             onClose={() => closePanel(true)}
@@ -300,6 +279,8 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             }}
             onOpen={(item) => void open(item)}
             onScroll={syncOverflowCue}
+            listRef={(element) => (list = element)}
+            focusRef={(registry) => (panelFocus = registry)}
             onSelectTab={selectTab}
             overflowAbove={overflowAbove()}
             overflowBelow={overflowBelow()}

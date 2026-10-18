@@ -26,12 +26,12 @@ vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.write
 vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
 vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-const { registerBrowserElementCommands } = await import("./register.element.js");
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
 function createElementProgram(): Command {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
-  registerBrowserElementCommands(browser, parentOpts);
+  registerBrowserActionInputCommands(browser, parentOpts);
   return program;
 }
 

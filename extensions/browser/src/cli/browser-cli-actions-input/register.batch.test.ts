@@ -1,4 +1,5 @@
 // Browser tests cover register.batch plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { createNonExitingRuntime, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import {
   createBrowserProgram,
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
+  mockBrowserGateway,
 } from "../browser-cli.test-support.js";
 import * as batchSharedModule from "./shared.js";
 
@@ -81,6 +83,42 @@ describe("browser action input batch command", () => {
 
     expect(getLastActionBody()).toMatchObject({ kind: "batch", stopOnError: false });
   });
+
+  it.each([undefined, "work", " work ", "-work"])(
+    "keeps the selected profile %s when replaying a modal recovery hint",
+    async (profile) => {
+      const gateway = mockBrowserGateway();
+      mocks.callBrowserRequest.mockResolvedValueOnce({
+        ok: true,
+        blockedByDialog: true,
+        browserState: { dialogs: { pending: [{ id: "d1" }] } },
+      });
+      const args = ["browser"];
+      if (profile !== undefined) {
+        args.push("--browser-profile", profile);
+      }
+      await createActionInputProgram().parseAsync([...args, "click", "e1"], { from: "user" });
+
+      const hint = getBrowserCliRuntimeCapture().runtimeLogs.join("\n");
+      const command = expectDefined(
+        hint.match(/Use (openclaw browser .+) to continue\./)?.[1],
+        "modal recovery command",
+      );
+      const replay = command
+        .replace("--accept or --dismiss", "--accept")
+        .replace("--dialog-id <id>", "--dialog-id d1");
+      await createActionInputProgram().parseAsync(replay.split(/\s+/).slice(1), { from: "user" });
+
+      expect(mocks.callBrowserRequest).toHaveBeenCalledTimes(1);
+      expect(gateway).toHaveBeenCalledTimes(1);
+      expect(gateway.mock.calls[0]?.[2]).toMatchObject({
+        method: "POST",
+        path: "/hooks/dialog",
+        query: profile ? { profile: profile.trim() } : undefined,
+        body: { accept: true, dialogId: "d1" },
+      });
+    },
+  );
 
   it.each(["closed"])("reports actions skipped after %s", async (reason) => {
     const result = {

@@ -1,6 +1,5 @@
-// Discord tests cover sender-scoped media policy propagation for guild media actions.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordGuildActionRuntime from "../send.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
 
@@ -22,21 +21,20 @@ const senderRoots = ["/srv/openclaw/workspace-sender"] as const;
 const mediaReadFile = async () => Buffer.from("png");
 const mediaAccess = { localRoots: senderRoots, readFile: mediaReadFile };
 
-function guildActionConfig(actions: Record<string, boolean>): OpenClawConfig {
-  return { channels: { discord: { token: "tok", actions } } } as OpenClawConfig;
-}
-
-function senderScopedContext() {
-  return {
-    cfg: guildActionConfig({ emojiUploads: true, stickerUploads: true, events: true }),
-    requesterSenderId: "sender-1",
-    senderIsOwner: false,
-    toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:1" },
-    mediaAccess,
-    mediaLocalRoots: senderRoots,
-    mediaReadFile,
-  } as const;
-}
+const cfg: OpenClawConfig = {
+  channels: {
+    discord: { token: "tok", actions: { emojiUploads: true, stickerUploads: true, events: true } },
+  },
+};
+const senderContext = {
+  cfg,
+  requesterSenderId: "sender-1",
+  senderIsOwner: false,
+  toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:1" },
+  mediaAccess,
+  mediaLocalRoots: senderRoots,
+  mediaReadFile,
+};
 
 function expectSenderMediaPolicy(opts: unknown) {
   expect(opts).toMatchObject({
@@ -53,16 +51,9 @@ describe("Discord guild media actions forward the sender-scoped media policy", (
     }
   });
 
-  afterEach(() => {
-    for (const mock of Object.values(guildActionMocks)) {
-      mock.mockReset();
-    }
-  });
-
   it("passes the policy to the emoji upload loader options", async () => {
-    const ctx = senderScopedContext();
     await handleDiscordMessageAction({
-      ...ctx,
+      ...senderContext,
       action: "emoji-upload",
       params: { guildId: "guild-1", emojiName: "blob", media: "/srv/openclaw/workspace/other.png" },
     });
@@ -73,9 +64,8 @@ describe("Discord guild media actions forward the sender-scoped media policy", (
   });
 
   it("passes the policy to the sticker upload loader options", async () => {
-    const ctx = senderScopedContext();
     await handleDiscordMessageAction({
-      ...ctx,
+      ...senderContext,
       action: "sticker-upload",
       params: {
         guildId: "guild-1",
@@ -92,9 +82,8 @@ describe("Discord guild media actions forward the sender-scoped media policy", (
   });
 
   it("passes the whole policy to the event cover loader options", async () => {
-    const ctx = senderScopedContext();
     await handleDiscordMessageAction({
-      ...ctx,
+      ...senderContext,
       action: "event-create",
       params: {
         guildId: "guild-1",

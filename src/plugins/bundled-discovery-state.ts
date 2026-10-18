@@ -4,6 +4,7 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   getActiveOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
   isArtifactPreservingStateRead,
 } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -32,14 +33,18 @@ function readBundledDiscoveryFact<T>(read: () => T): T {
   try {
     return read();
   } catch (error) {
-    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery read admission changed during preparation; retry the operation.",
-        { cause: error },
-      );
-    }
-    throw error;
+    return throwBundledDiscoveryReadError(error);
   }
+}
+
+function throwBundledDiscoveryReadError(error: unknown): never {
+  if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
+    throw new PluginCacheFactInvalidatedError(
+      "Plugin discovery read admission changed during preparation; retry the operation.",
+      { cause: error },
+    );
+  }
+  throw error;
 }
 
 function resolveBundledDiscoveryOptions(
@@ -147,27 +152,19 @@ export async function prepareBundledDiscoveryMode(
   const key = resolveBundledDiscoveryMemoKey(env);
   const options = resolveBundledDiscoveryOptions({ env });
   const snapshot = isArtifactPreservingStateRead()
-    ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
+    ? await getActiveOpenClawStateDatabaseReadSnapshotAsync(options).catch(
+        throwBundledDiscoveryReadError,
+      )
     : undefined;
   if (snapshot) {
     const existing = discoveryState.snapshotModes.get(snapshot);
     // The read worker retains these snapshot bytes; derivation consumes its result locally.
     let value = existing?.value;
     if (!existing) {
-      try {
-        const row = readPreparedRow
-          ? await readPreparedRow(key)
-          : await readPluginMetadataStateRow("bundled-discovery", options);
-        value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
-      } catch (error) {
-        if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-          throw new PluginCacheFactInvalidatedError(
-            "Plugin discovery read admission changed during preparation; retry the operation.",
-            { cause: error },
-          );
-        }
-        throw error;
-      }
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow("bundled-discovery", options);
+      value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
     const activate = () => {
       discoveryState.snapshotModes.set(snapshot, { value });

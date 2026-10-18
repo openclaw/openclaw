@@ -1,4 +1,3 @@
-// Inventory of doctor compatibility migrations that outlive deprecated runtime/config paths.
 type DoctorDeprecationCompatStatus = "active" | "deprecated" | "removal-pending" | "removed";
 
 type DoctorDeprecationCompatOwner =
@@ -68,6 +67,31 @@ function compatRecord(
 // doctor fixes, and replacement notes should be revalidated against the current
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
+  // Restored after the August renewal; this is a new, unrenewed removal window.
+  {
+    code: "doctor-pre-july-retired-state",
+    status: "deprecated",
+    owner: "config",
+    introduced: "2026-10-16",
+    deprecated: "2026-10-16",
+    warningStarts: "2026-10-16",
+    removeAfter: "2026-11-29",
+    source:
+      "pre-July JSON runtime state, OAuth sidecars, cron jobs, queues, and sandbox registries",
+    migration: "src/commands/doctor-retired-state-repair.ts",
+    replacement: "canonical SQLite state and byte-preserving archives for obsolete sources",
+    docsPath: "/cli/doctor/state-migrations",
+    tests: [
+      "src/infra/state-migrations.retired-runtime.test.ts",
+      "src/infra/state-migrations.retired-archive.test.ts",
+      "src/commands/doctor-auth-retired-oauth.test.ts",
+      "src/commands/doctor/cron/legacy-json-migration.test.ts",
+      "src/commands/doctor-sandbox-retired-registry.test.ts",
+      "src/cli/update-cli/update-command-admit.test.ts",
+    ],
+    notes:
+      "Temporary fix for the #174343 upgrade dead end, restored by #174489; removal requested by Peter.",
+  },
   compatRecord("doctor-context-budget-one-knob", "deprecated", {
     previousRemoveAfter: "2026-11-16",
     owner: "config",

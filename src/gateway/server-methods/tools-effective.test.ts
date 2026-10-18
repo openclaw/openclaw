@@ -175,7 +175,11 @@ vi.mock("../session-utils-store-worker.js", () => ({
     >[0],
   ) => runtimeMocks.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
-vi.mock("../node-plugin-tool-snapshot.js", () => nodePluginToolSnapshotMocks);
+vi.mock("../node-plugin-tool-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-plugin-tool-snapshot.js")>()),
+  getConnectedNodePluginToolsVersion:
+    nodePluginToolSnapshotMocks.getConnectedNodePluginToolsVersion,
+}));
 
 const { applyFinalEffectiveToolPolicy } = await vi.importActual<
   typeof import("../../agents/embedded-agent-runner/effective-tool-policy.js")
@@ -504,6 +508,35 @@ describe("tools.effective handler", () => {
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
     expect(resolveEffectiveToolInventoryArg(1)?.workspaceDir).toBe("/tmp/workspace-sandbox");
+  });
+
+  it("updates returned web_search availability when only the saved override changes", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
+    const { resolveEffectiveToolInventory } = await vi.importActual<InventoryModule>(
+      "../../agents/tools-effective-inventory.js",
+    );
+    runtimeMocks.resolveEffectiveToolInventory.mockImplementation(resolveEffectiveToolInventory);
+    const cfg: OpenClawConfig = {
+      tools: { web: { search: { enabled: true, provider: "brave" } } },
+    };
+    const loaded = runtimeMocks.loadSessionEntry("main:abc");
+    const entry = expectDefined(loaded.entry, "session fixture");
+
+    // Keep all other cache inputs and time fixed across both override transitions.
+    for (const webSearch of [undefined, false, true, undefined]) {
+      runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+        ...loaded,
+        cfg,
+        entry: { ...entry, toolOverrides: { webSearch } },
+      });
+      const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" }, cfg);
+      await invoke();
+      expectResponsesOk(respond);
+      const payload = firstRespondCall(respond)?.[1] as ToolsEffectivePayload;
+      const toolIds = payload.groups?.flatMap((group) => group.tools?.map((tool) => tool.id) ?? []);
+      expect(toolIds?.includes("web_search")).toBe(webSearch !== false);
+    }
   });
 
   it("coalesces identical base inventory cache misses while inventory resolution is pending", async () => {

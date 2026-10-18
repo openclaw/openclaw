@@ -216,6 +216,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(bootstrap).toHaveBeenCalled();
+    expect(mockParams(bootstrap).runtimeSettings).toMatchObject({
+      limits: { promptTokenBudget: 2048 },
+    });
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
@@ -368,14 +371,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           },
         } as OpenClawConfig,
       },
-      createSession: () => {
-        const session = createDefaultEmbeddedSession();
-        const setActiveToolsByName = session.setActiveToolsByName;
-        session.setActiveToolsByName = (toolNames) => {
-          setActiveToolsByName(toolNames);
-          activeToolNames.push([...toolNames]);
-        };
-        return session;
+      sessionPrompt: async (session) => {
+        activeToolNames.push(session.getActiveToolNames());
       },
     });
 
@@ -465,7 +462,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
             forwardedAuthProfileId: undefined,
           },
           delivery: {
-            isSilentPayload: () => false,
             resolveFollowupRoute: () => undefined,
           },
           outcome: {

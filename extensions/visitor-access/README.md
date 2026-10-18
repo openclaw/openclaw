@@ -248,7 +248,8 @@ grant extends its lifetime; renewing after it ends requires fresh admission and
 does not revive canceled work.
 
 The plugin also removes expired targets from the named Cloudflare Access policy
-on Gateway startup and hourly. Provider cleanup is best effort and retries while
+in the background after loading grants on Gateway startup, and hourly. Provider
+cleanup does not delay Gateway readiness. It is best effort and retries while
 its durable record remains. A failed cleanup or a still-valid Access login does
 not restore Gateway access after the grant ends. This plugin does not separately
 revoke Cloudflare login sessions or change independent staff admission policies.

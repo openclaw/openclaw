@@ -1,6 +1,5 @@
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 
 /** Pass a pane locator when more than one chat is presented. */
 export async function openChatDetails(page: Page | Locator): Promise<Locator> {
@@ -9,14 +8,16 @@ export async function openChatDetails(page: Page | Locator): Promise<Locator> {
     .or(page.getByRole("complementary", { name: "Details", exact: true }));
   if (!(await details.isVisible())) {
     const trigger = page.getByRole("button", { name: "Details", exact: true });
-    await trigger
-      .or(page.getByRole("button", { name: "Panels", exact: true }))
-      .first()
-      .waitFor();
-    if (await trigger.isVisible()) {
-      await trigger.click();
-    } else {
-      await selectChatLayoutAction(page, "Details");
+    // Role lookup excludes aria-hidden cached panes; CSS visibility alone includes them.
+    const sessionMenu = page
+      .getByRole("button")
+      .and(page.locator(".chat-header-session-menu__trigger"));
+    // Startup can replace the offline button with the session menu during actionability checks.
+    await trigger.or(sessionMenu).filter({ visible: true }).first().click();
+    const menuItem = page.getByRole("menuitem", { name: "Session details", exact: true });
+    await details.or(menuItem).filter({ visible: true }).first().waitFor();
+    if (await menuItem.isVisible()) {
+      await menuItem.click();
     }
   }
   await details.waitFor();

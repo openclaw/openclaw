@@ -436,6 +436,9 @@ describe("CustodianSessionStore", () => {
 
     const liveStep = { id: "repair-step", type: "text", message: "Which channel?" };
     const reconnectRequest = vi.fn((method: string, params: { sessionId?: string }) => {
+      if (method === "health") {
+        return Promise.resolve({ channels: {} });
+      }
       if (method === "openclaw.chat.history") {
         return Promise.resolve({
           turns: [
@@ -675,6 +678,92 @@ describe("CustodianSessionStore", () => {
       if (destination === "channels") {
         expect(store.canRetry()).toBe(false);
       }
+    },
+  );
+
+  it("loads existing health faults on caretaker activation and reconnect without periodic events", async () => {
+    const request = vi.fn().mockResolvedValue({ sessionId: "health-session", action: "none" });
+    const healthRequest = vi.fn().mockResolvedValue({
+      configReload: { hotReloadStatus: "disabled" },
+      channels: {},
+    });
+    const { context, setGatewaySnapshot } = createContext(request, ["openclaw.chat"], {
+      healthRequest,
+    });
+    const client = context.gateway.snapshot.client;
+    const store = new CustodianSessionStore();
+    store.connect(context, "onboarding");
+    expect(healthRequest).not.toHaveBeenCalled();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.eventNudge?.kind).toBe("config-reload"));
+
+    store.connect(context, "caretaker");
+    setGatewaySnapshot({});
+    expect(healthRequest).toHaveBeenCalledOnce();
+    healthRequest.mockResolvedValue({ channels: {} });
+    setGatewaySnapshot({ phase: "reconnecting", client: null });
+    setGatewaySnapshot({ phase: "connected", client });
+    await waitForFast(() => expect(store.eventNudge).toBeNull());
+    expect(healthRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a failed initial health read on tick without polling after success", async () => {
+    const initialHealth = deferred<unknown>();
+    const request = vi.fn().mockResolvedValue({ sessionId: "health-session", action: "none" });
+    const healthRequest = vi
+      .fn()
+      .mockReturnValueOnce(initialHealth.promise)
+      .mockResolvedValue({ configReload: { hotReloadStatus: "disabled" }, channels: {} });
+    const { context, emitGatewayEvent } = createContext(request, ["openclaw.chat"], {
+      healthRequest,
+    });
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    emitGatewayEvent({ event: "tick", payload: {} });
+    expect(healthRequest).toHaveBeenCalledOnce();
+
+    initialHealth.reject(new Error("Temporary health failure"));
+    await initialHealth.promise.catch(() => undefined);
+    await Promise.resolve();
+    expect(healthRequest).toHaveBeenCalledOnce();
+    emitGatewayEvent({ event: "tick", payload: {} });
+    await waitForFast(() => expect(store.eventNudge?.kind).toBe("config-reload"));
+    emitGatewayEvent({ event: "tick", payload: {} });
+    expect(healthRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["event", "reconnect", "variant", "operator"] as const)(
+    "does not replace current health with a pending snapshot after %s changes",
+    async (change) => {
+      const pending = deferred<unknown>();
+      const request = vi.fn().mockResolvedValue({ sessionId: "health-session", action: "none" });
+      const healthRequest = vi
+        .fn()
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValue({ channels: {} });
+      const { context, emitGatewayEvent, setGatewaySnapshot, setGatewayToken } = createContext(
+        request,
+        ["openclaw.chat"],
+        { healthRequest },
+      );
+      const store = new CustodianSessionStore();
+      store.connect(context, "caretaker");
+      await waitForFast(() => expect(healthRequest).toHaveBeenCalledOnce());
+      if (change === "event") {
+        emitGatewayEvent({ event: "health", payload: { channels: {} } });
+      } else if (change === "reconnect") {
+        const client = context.gateway.snapshot.client;
+        setGatewaySnapshot({ phase: "reconnecting", client: null });
+        setGatewaySnapshot({ phase: "connected", client });
+      } else if (change === "variant") {
+        store.connect(context, "onboarding");
+      } else {
+        setGatewayToken("replacement-operator");
+        setGatewaySnapshot({});
+      }
+      pending.resolve({ configReload: { hotReloadStatus: "disabled" }, channels: {} });
+      await pending.promise;
+      expect(store.eventNudge).toBeNull();
     },
   );
 

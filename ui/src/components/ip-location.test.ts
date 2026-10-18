@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import "./ip-location.ts";
+import "./ip-location.tsx";
 
 function jsonResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response;

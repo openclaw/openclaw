@@ -37,7 +37,13 @@ cat task.md | openclaw agent exec --message-file - --json
 
 By default, the command creates a temporary state directory and removes it after confirmed cleanup, including accepted database work and the run's database resources. It runs against your ordinary OpenClaw config, so configured providers, credentials, and `agentRuntime` harness selection apply exactly as they do elsewhere. `--cwd` defaults to the process working directory and is passed as both the agent workspace and tool working directory.
 
-Config is layered in three parts, entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: workspace bootstrap files are skipped, the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and never bootstraps.
+Config is layered entirely in memory: exec composes the run config and publishes it as this process's runtime config rather than writing a copy to disk. Exec defaults apply only where your config leaves a setting unset: the agent sandbox is off, the `coding` tool profile is selected, filesystem tools are restricted to `--cwd`, and exec runs under the full execution policy a headless turn needs. Anything your config sets wins over those defaults, so a configured sandbox, shell env, or tool profile is never downgraded, and exec host routing stays with the sandbox when your config enables one. The invocation itself always wins last: the run is scoped to `--cwd` and sets `skipBootstrap: true` to prevent creating workspace bootstrap files.
+
+With the Codex runtime, `agent exec` uses OpenClaw's shell and filesystem tools
+instead of Codex-native execution, keeping tool cleanup under the one-shot run's
+owner. Ordinary Gateway-backed Codex turns keep their native tool surface.
+
+Existing workspace files such as `AGENTS.md` are still injected by default. For embedded-runtime runs that must omit this automatic context, set `agents.defaults.contextInjection: "never"` in the pinned config, unless overridden per agent. This controls injection, not file access through tools; see [Workspace and bootstrap](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.contextinjection).
 
 When your tool policy enables `browser`, local browser control works without a Gateway. Explicit Gateway or node routing and sandbox restrictions still apply; see [Node browser proxy](/tools/browser/remote#node-browser-proxy-zero-config-default).
 
@@ -47,7 +53,18 @@ When exec uses the ambient or a pinned config, installed plugins continue to res
 
 For reproducible runs, pin the config instead of inheriting it. `--config <path>` runs against exactly that config file, read through the normal loader so JSON5 syntax and `$include` resolve relative to it; a missing or invalid file fails the run rather than falling back to defaults, as does an ambient config that exists but cannot be parsed. `--isolated` ignores the ambient config entirely and uses only the exec defaults above. Both are the right choice for CI, where inheriting operator state would make runs machine-dependent.
 
-Stored credentials are used by default, so a folder-scoped run reaches the same logins as the rest of the CLI. Pass `--auth-env-only` to restrict the run to provider keys already present in the process environment. That mode loads no config at all, and pairing it with `--config` is rejected rather than silently ignored, because a config supplies provider credentials through several surfaces at once: [inline keys and secret headers](/reference/secretref-credential-surface), an `env` block, and login-shell import. It also skips OpenClaw auth profiles and external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands.
+Use `--config-override '<JSON object>'` to change selected settings for one run while inheriting everything else:
+
+```bash
+openclaw agent exec "Inspect this repository" \
+  --config-override '{"tools":{"deny":["exec"]}}'
+```
+
+Overrides apply after loading the ordinary, `--config`, or `--isolated` base. Nested objects merge; arrays and scalar values replace the previous value, including empty arrays. Repeat the flag to apply overrides in order. The resulting config is validated and never saved. Per-agent settings retain their normal precedence over agent defaults; target `agents.entries.<id>` to change one agent's settings. Explicit run flags such as `--model`, `--thinking`, and `--code-mode`, and the command's workspace/state binding, still win over config values. `--config` keeps its alternative-file meaning.
+
+Overrides use JSON syntax and normal runtime normalization, including `~` paths. File includes and login-shell imports belong to the selected base's loader. Overridden `env` variables apply for the run, preserve existing process-environment precedence, and are restored during cleanup.
+
+Stored credentials are used by default, so a folder-scoped run reaches the same logins as the rest of the CLI. Pass `--auth-env-only` to restrict the run to provider keys already present in the process environment. That mode loads no config at all, and pairing it with `--config` or `--config-override` is rejected rather than silently ignored, because a config supplies provider credentials through several surfaces at once: [inline keys and secret headers](/reference/secretref-credential-surface), an `env` block, and login-shell import. It also skips OpenClaw auth profiles and external Codex, Claude, or other CLI credential stores. Provider auth variables remain available to model authentication but are omitted from agent-launched host commands.
 
 On a clean installation without the Codex plugin, OpenAI API-key runs use the built-in OpenClaw runtime. The implicit Codex preference does not require installing a native harness before `--auth-env-only` can run. An explicitly configured Codex runtime or an existing Codex session pin still requires that harness.
 
@@ -76,7 +93,11 @@ openclaw agent exec "Inspect this repository" \
 
 The timeout defaults to 600 seconds per model attempt for `agent exec`, with a fresh budget for each configured fallback; this does not change the existing embedded `agent --local` default. A successful run exits `0`, any model or result error exits `1`, and a timeout exits `2`. Failure includes `meta.error`, aborted runs, exhausted model fallbacks, an error stop reason, and any error payload.
 
-If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`.
+`SIGINT` and `SIGTERM` cancel the run and wait for owned cleanup before exiting with
+status `130` and `143`, respectively. Confirmed cleanup removes temporary state;
+an explicit `--state-dir` remains intact and its lock is released.
+
+If cleanup fails after a run error or timeout, the original result and exit code are preserved and the cleanup failure is reported on stderr. A cleanup failure after a successful run exits `1`, but preserves the completed final text, payloads, and run metadata. The JSON envelope reports `error.kind: "cleanup"` so callers can distinguish completed work with failed cleanup from a failed task.
 
 Uncertain runtime cleanup preserves temporary state for inspection and keeps any
 acquired state lock until this process exits. Inspect the reported cleanup failure

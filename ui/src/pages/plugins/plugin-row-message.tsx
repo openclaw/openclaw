@@ -55,29 +55,25 @@ export function renderPluginRowMessage(
         {message.installPolicyWarning ? (
           <>
             <p>{t("pluginConsent.installPolicy.policyScope")}</p>
-            {
-              <For each={message.installPolicyWarning.details.findings}>
-                {(finding) => (
-                  <div class="plugins-policy-review__finding">
-                    <strong>{t(`pluginConsent.installPolicy.severity.${finding.severity}`)}</strong>
-                    <p>{formatUiExternalText(finding.message)}</p>
-                    <details>
-                      <summary>{t("pluginConsent.installPolicy.technicalDetails")}</summary>
-                      <code>{finding.ruleId}</code>
-                      {finding.file ? (
-                        <code>
-                          {finding.file}
-                          {finding.line ? `:${finding.line}` : ""}
-                        </code>
-                      ) : undefined}
-                      {finding.evidence ? (
-                        <p>{formatUiExternalText(finding.evidence)}</p>
-                      ) : undefined}
-                    </details>
-                  </div>
-                )}
-              </For>
-            }
+            <For each={message.installPolicyWarning.details.findings}>
+              {(finding) => (
+                <div class="plugins-policy-review__finding">
+                  <strong>{t(`pluginConsent.installPolicy.severity.${finding.severity}`)}</strong>
+                  <p>{formatUiExternalText(finding.message)}</p>
+                  <details>
+                    <summary>{t("pluginConsent.installPolicy.technicalDetails")}</summary>
+                    <code>{finding.ruleId}</code>
+                    {finding.file ? (
+                      <code>
+                        {finding.file}
+                        {finding.line ? `:${finding.line}` : ""}
+                      </code>
+                    ) : undefined}
+                    {finding.evidence ? <p>{formatUiExternalText(finding.evidence)}</p> : undefined}
+                  </details>
+                </div>
+              )}
+            </For>
             {options.onContinue ? (
               <button
                 class="btn btn--sm oc-action oc-action-secondary"

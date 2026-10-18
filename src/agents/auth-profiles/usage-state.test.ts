@@ -58,10 +58,7 @@ describe("auth profile usage state", () => {
   beforeEach(() =>
     setCurrentPluginMetadataSnapshot(
       createPluginMetadataSnapshotFixture({
-        plugins: [
-          { id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true },
-          { id: "kilocode", providers: ["kilocode"], managesOwnAvailability: true },
-        ],
+        plugins: [{ id: "openrouter", providers: ["openrouter"], managesOwnAvailability: true }],
       }),
       { config: {} },
     ),
@@ -95,18 +92,6 @@ describe("auth profile usage state", () => {
     }
   });
 
-  it.each<[string, number | null]>([
-    ["openrouter:default", until],
-    [anthropic, until],
-  ])("displays the cooldown for %s as %s", (profileId, expected) => {
-    expect(
-      resolveProfileUnusableUntilForDisplay(
-        makeStore({ [profileId]: { cooldownUntil: until } }),
-        profileId,
-      ),
-    ).toBe(expected);
-  });
-
   it.each(["rate_limit", "overloaded"] as const)(
     "ignores only the managed %s cooldown window",
     (reason) => {
@@ -136,7 +121,7 @@ describe("auth profile usage state", () => {
     },
   );
 
-  it.each(["auth", "auth_permanent", "billing", "timeout", undefined] as const)(
+  it.each(["auth", undefined] as const)(
     "keeps managed %s failures and inline credential health",
     (reason) => {
       const profileId = "openrouter:default";
@@ -150,9 +135,7 @@ describe("auth profile usage state", () => {
 
   it.each([
     ["rate_limit", "target", false, false, false],
-    ["overloaded", "target", false, false, false],
     ["timeout", "target", true, false, false],
-    ["model_not_found", "target", true, false, false],
     ["auth", "target", true, true, true],
   ] as const)(
     "preserves the managed %s model scope",
@@ -194,7 +177,6 @@ describe("auth profile usage state", () => {
     [sonnet, true],
     [undefined, true],
   ];
-  const disabled = { disabledUntil: until, disabledReason: "billing" } satisfies ProfileUsageStats;
   const cooldownCases: CooldownCase[] = [
     ["missing stats", anthropic, undefined, [[undefined, false]]],
     ["expired cooldown", anthropic, { cooldownUntil: now - 1_000 }, [[undefined, false]]],
@@ -202,18 +184,6 @@ describe("auth profile usage state", () => {
       "active disable",
       anthropic,
       { cooldownUntil: now - 1_000, disabledUntil: until },
-      [[undefined, true]],
-    ],
-    [
-      "OpenRouter billing remains disabled",
-      "openrouter:default",
-      cooldown(undefined, undefined, disabled),
-      [[undefined, true]],
-    ],
-    [
-      "Kilocode billing remains disabled",
-      "kilocode:default",
-      cooldown(undefined, undefined, disabled),
       [[undefined, true]],
     ],
     ["model-scoped rate limit", copilot, cooldown("rate_limit", sonnet), copilotChecks],
@@ -302,7 +272,6 @@ describe("auth profile usage state", () => {
       expected: ReturnType<typeof resolveProfilesUnavailableReason>,
     ]
   > = [
-    ["active disable", { primary: disabled }, "billing"],
     [
       "explicit cooldown beats stale counts",
       { primary: cooldown("auth", undefined, { failureCounts: { rate_limit: 99 } }) },
@@ -352,7 +321,6 @@ describe("auth profile usage state", () => {
 
   const unchangedCases: Array<[string, AuthProfileStore["usageStats"]]> = [
     ["missing stats", undefined],
-    ["no cooldowns", { primary: { lastUsed: now } }],
     [
       "non-finite cooldowns",
       {

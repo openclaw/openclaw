@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { PerformanceObserver } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BroadcastChannel, getEnvironmentData, setEnvironmentData } from "node:worker_threads";
@@ -91,6 +90,46 @@ async function runNodeProbe(body: string): Promise<unknown> {
 }
 
 describe("Node Code Mode executor", () => {
+  it.each([
+    { source: "await yield_control()", phase: "host", code: "internal_error", calls: 1 },
+    {
+      source: 'throw new Error("invalid code mode continuation timeout")',
+      phase: "guest",
+      code: "internal_error",
+      calls: 0,
+    },
+    {
+      source: "await new Promise(() => {})",
+      phase: "input",
+      code: "invalid_input",
+      calls: 0,
+    },
+  ])(
+    "preserves $phase failure provenance without replay",
+    async ({ source, phase, code, calls }) => {
+      const onFailure = vi.fn();
+      const onBoundary = vi.fn(async () => ({
+        kind: "continue" as const,
+        timeoutMs: Number.NaN,
+        pendingRequests: [],
+        settledRequests: [],
+      }));
+      const result = await host.run(() =>
+        nodeCodeModeExecutor.execute(
+          { kind: "exec", source, config, catalog: [], namespaces: [] },
+          { timeoutMs: 7_000, inlineHost: { onBoundary, onFailure } },
+        ),
+      );
+      expect(result).toMatchObject({ status: "failed", code, failurePhase: phase });
+      expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        phase,
+        expect.stringMatching(/^code-mode-node:/),
+      );
+      expect(onBoundary).toHaveBeenCalledTimes(calls);
+    },
+  );
+
   it("reuses healthy workers after rejected cells without retaining guest state", async () => {
     const starts = () =>
       sampleTrackedWorkerMemory().workerLifecycle.find(
@@ -190,8 +229,8 @@ describe("Node Code Mode executor", () => {
       result: { error: expect.stringContaining("Inspect any completed actions before retrying") },
     });
   });
-  // Bun lacks perf_hooks GC entries and V8's --expose_gc; native OOM is covered above.
-  it.skipIf(!PerformanceObserver.supportedEntryTypes.includes("gc"))(
+  // Bun lacks V8's GCProfiler and --expose_gc; native OOM is covered above.
+  it.skipIf(Boolean(process.versions.bun))(
     "stops sustained near-limit major collections even with zero reported duration and recovers",
     async () => {
       // Keep retained allocations live and measure occupancy after native collections.
@@ -503,11 +542,13 @@ describe("Node Code Mode executor", () => {
       };
       const reply = (id: string) => ({ id, ok: true, json: "null" });
       const delivered: unknown[] = [];
+      const onFailure = vi.fn();
       let result = await nodeCodeModeExecutor.execute(input, {
         timeoutMs: 7_000,
         ...(mode === "inline"
           ? {
               inlineHost: {
+                onFailure,
                 onBoundary: async (boundary, context) => {
                   delivered.push(boundary.output);
                   return {
@@ -545,11 +586,19 @@ describe("Node Code Mode executor", () => {
       expect(result).toMatchObject({
         status: "failed",
         code: "timeout",
+        failurePhase: "guest",
         output: {
           count: 0,
           source: { kind: "complete", json: "[]" },
         },
       });
+      if (mode === "inline") {
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ code: "timeout" }),
+          "guest",
+          expect.stringMatching(/^code-mode-node:/),
+        );
+      }
     },
   );
 

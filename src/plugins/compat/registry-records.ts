@@ -13,6 +13,7 @@ import { MEMORY_SESSION_COMPAT_RECORDS } from "./memory-session-records.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
 import { NATIVE_EXEC_APPROVAL_COMPAT_RECORD } from "./native-exec-approval-record.js";
+import { PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD } from "./plugin-sdk-private-runtime-export-record.js";
 import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
@@ -31,7 +32,14 @@ import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD } from "./web-search-provider-list-record.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
-export const PLUGIN_COMPAT_RECORDS = [
+// Preserve the finite code union without publishing literal migration metadata through its type.
+function defineCompatRecords<const Code extends string>(
+  records: readonly PluginCompatRecord<Code>[],
+): readonly PluginCompatRecord<Code>[] {
+  return records;
+}
+
+export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
   AUTH_ASYNC_COMPAT_RECORD,
@@ -54,6 +62,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   RUNTIME_CONFIG_COMPAT_RECORD,
   ASSISTANT_TEXT_PHASE_TERMINAL_HINT_COMPAT_RECORD,
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
+  PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD,
   {
     code: "plugin-sdk-session-header-link",
     status: "deprecated",
@@ -100,7 +109,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "TypeScript @deprecated annotations and migration documentation; placement reads, retirement, and restart clearing warn once per plugin and capability family on legacy use, while GitHub orphan deferral shares the github-publication family warning",
     ],
     tests: [
-      "src/plugin-sdk/gateway-placement-compat.test.ts",
+      "test/type-contracts/gateway-placement-compat.ts",
       "src/gateway/worker-environments/placement-store.test.ts",
       "src/gateway/worker-environments/placement-turn-claims.worker.test.ts",
       "src/gateway/operator-approval-placement-grants.test.ts",
@@ -659,4 +668,4 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["setup registry runtime diagnostic"],
     tests: ["src/plugins/setup-registry.test.ts", "src/plugins/setup-registry.runtime.test.ts"],
   },
-] as const satisfies readonly PluginCompatRecord[];
+]);

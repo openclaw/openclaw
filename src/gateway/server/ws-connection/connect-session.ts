@@ -20,12 +20,15 @@ import {
   isBrowserCopilotClient,
   isEphemeralGatewayClient,
 } from "../../../utils/message-channel.js";
-import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
+import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
-import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
+import {
+  createAuthenticatedGitHubIdentitySync,
+  resolveTrustedEnterpriseGitHubAccountId,
+} from "../../github-user-identity.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
 import {
   attachGatewayLocalUserIngress,
@@ -43,7 +46,7 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { formatForLog, logWs } from "../../ws-log.js";
+import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
@@ -65,7 +68,6 @@ import {
   resolveGatewayConnectProfileAdmission,
   scheduleGatewayConnectProfileSync,
 } from "./connect-user-profile.js";
-import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -97,15 +99,12 @@ export async function attachAuthenticatedGatewayConnect(
     setCloseCause,
     logGateway,
     logWsControl,
-    requestHost,
-    requestOrigin,
   } = context.handler;
   const {
     connectParams,
     isLocalClient,
     reportedClientIp,
     runDetachedConnectWork,
-    isWebchatConnect,
     clientLabel,
     clientMeta,
     markHandshakeFailure,
@@ -128,6 +127,7 @@ export async function attachAuthenticatedGatewayConnect(
     sessionSharedGatewaySessionGeneration,
     remoteIngressPrincipal,
   } = state;
+  const nodeStartedAt = performance.now();
   if (!(await prepareGatewayNodeConnect(context, state))) {
     return;
   }
@@ -169,6 +169,8 @@ export async function attachAuthenticatedGatewayConnect(
     };
   }
 
+  context.recordAttachTiming?.("nodePreparationMs", nodeStartedAt);
+
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
   // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
@@ -182,6 +184,11 @@ export async function attachAuthenticatedGatewayConnect(
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
+  });
   const tailscaleLogin = authResult.tailscaleIdentity
     ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
     : undefined;
@@ -190,6 +197,7 @@ export async function attachAuthenticatedGatewayConnect(
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
+    config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
   });
@@ -204,6 +212,7 @@ export async function attachAuthenticatedGatewayConnect(
   const ownerProfileExpected =
     shouldTrackPresence &&
     shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
+  const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
     ? { ok: true as const, prepared: undefined }
     : await resolveGatewayConnectProfileAdmission({
@@ -214,14 +223,17 @@ export async function attachAuthenticatedGatewayConnect(
         resolveAuthenticatedGitHubIdentity,
         assertCurrent: profileLifecycle.assertCurrent,
       });
+  context.recordAttachTiming?.("identityMs", identityStartedAt);
   if (!profileAdmission.ok) {
     return;
   }
+  context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
   const authenticatedUserProfile =
     remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
+  const scopesStartedAt = performance.now();
   const effectiveScopes = remoteIngressPrincipal
     ? { scopes: deviceScopes, addedIdentityScopes: [] }
     : resolveEffectiveConnectionScopes({
@@ -255,6 +267,9 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
+  context.recordAttachTiming?.("scopeGrantMs", scopesStartedAt);
+
+  let registrationStartedAt = performance.now();
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
@@ -328,37 +343,6 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
   }
-  const controlUiBuildMismatch = resolveControlUiBuildMismatch({
-    clientId: connectParams.client.id,
-    clientBuildId: connectParams.client.buildId,
-    gatewayBuildId: resolveRuntimeServiceBuildId(),
-    configuredControlUiRoot: context.configSnapshot.gateway?.controlUi?.root,
-    requestHost,
-    requestOrigin,
-  });
-  if (controlUiBuildMismatch) {
-    // Build identity predates this rejection. Frozen clients recognize the shipped
-    // protocol-mismatch signal and surface its literal reload guidance.
-    const message = "protocol mismatch: Control UI updated; reload this page to continue";
-    markHandshakeFailure("control-ui-build-mismatch", {
-      clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
-      gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-    });
-    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
-      retryable: false,
-      details: {
-        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
-        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
-        reloadRequired: true,
-      },
-    });
-    logWsControl.warn(
-      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
-    );
-    await releasePendingNodePairingCleanup();
-    close(1008, truncateCloseReason(message));
-    return;
-  }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.
   const authenticatedOperator =
@@ -383,11 +367,14 @@ export async function attachAuthenticatedGatewayConnect(
         : {}),
   };
   if (authenticatedOperator) {
+    const sourceStartedAt = performance.now();
     const source = await prepareGatewayConnectOperatorDeviceSource(context, state, deviceScopes);
+    context.recordAttachTiming?.("operatorDeviceMs", sourceStartedAt);
     if (source === undefined) {
       return;
     }
     internal.operatorDeviceTokenIdentity = source;
+    registrationStartedAt += performance.now() - sourceStartedAt;
   }
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
@@ -426,6 +413,7 @@ export async function attachAuthenticatedGatewayConnect(
     authPolicy: state.authPolicy,
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedFactoryGitHubAccountId ? { authenticatedFactoryGitHubAccountId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
@@ -562,6 +550,7 @@ export async function attachAuthenticatedGatewayConnect(
   handoffReceiver.value();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
+  context.recordAttachTiming?.("sessionRegistrationMs", registrationStartedAt);
   // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
   if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
     runDetachedConnectWork(
@@ -576,29 +565,18 @@ export async function attachAuthenticatedGatewayConnect(
         logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
     );
   }
-  logWs("in", "connect", {
-    connId,
-    client: connectParams.client.id,
-    clientDisplayName: connectParams.client.displayName,
-    version: connectParams.client.version,
-    mode: connectParams.client.mode,
-    clientId,
-    platform: connectParams.client.platform,
-    auth: authMethod,
-  });
-
-  if (authenticatedUserId) {
-    logWsControl.info(
-      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
-    );
-  }
-
-  if (isWebchatConnect(connectParams)) {
-    const clientBuildId = connectParams.client.buildId?.trim();
-    logWsControl.info(
-      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} build=${formatForLog(clientBuildId ?? "legacy")}`,
-    );
-  }
+  logWsControl.info(
+    [
+      `client connected conn=${connId}`,
+      `client=${clientId} name=${formatForLog(clientLabel)}`,
+      `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
+      `version=${formatForLog(connectParams.client.version)} platform=${formatForLog(connectParams.client.platform)}`,
+      `build=${formatForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
 
   const currentAuthenticatedPresenceUser = () =>
     nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile

@@ -4,7 +4,7 @@ import type {
   DecisionProviderV1,
 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { RuntimeConfig } from "./config.js";
+import { hasCredentials, type RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
@@ -16,7 +16,7 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
     contractVersion: 1,
     isReady: () => {
       const config = getConfig();
-      return Boolean(config.baseUrl || config.apiKey);
+      return hasCredentials(config);
     },
     async evaluate(batch: DecisionBatch, context) {
       context.signal.throwIfAborted();
@@ -25,7 +25,7 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
       const { evaluate: evaluateTypeSafe } = await loadClient();
       context.signal.throwIfAborted();
       const config = getConfig();
-      if (!config.baseUrl && !config.apiKey) {
+      if (!hasCredentials(config)) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
       const remaining = context.deadlineMonotonicMs - performance.now();
@@ -44,7 +44,19 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
           { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
           context.signal,
           context.deadlineMonotonicMs,
-          context.isAdmissible,
+          () => {
+            if (context.isAdmissible && !context.isAdmissible()) {
+              return false;
+            }
+            // DNS and capture admission may await; only the current owner may authorize egress.
+            const current = getConfig();
+            return (
+              current.baseUrl === config.baseUrl &&
+              current.providerConfig === config.providerConfig &&
+              current.apiKey === config.apiKey &&
+              !current.credentialsUnavailable
+            );
+          },
         );
         context.signal.throwIfAborted();
         const answers: Record<string, DecisionBatchResult["answers"][string]> = {};

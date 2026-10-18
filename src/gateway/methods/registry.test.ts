@@ -131,6 +131,20 @@ describe("gateway method registry", () => {
     ]);
   });
 
+  it("classifies Claw Add as a control-plane write without lifecycle methods", () => {
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "claws.add.apply": handler,
+    });
+    const registry = createGatewayMethodRegistry(descriptors);
+
+    expect(registry.isControlPlaneWrite("claws.add.apply")).toBe(true);
+    for (const method of ["claws.status", "claws.update.apply", "claws.remove.apply"]) {
+      expect(() => createCoreGatewayMethodDescriptors({ [method]: handler })).toThrow(
+        `gateway method handler is missing a descriptor: ${method}`,
+      );
+    }
+  });
+
   it("coerces reserved plugin namespaces to admin scope", () => {
     const descriptor = createPluginGatewayMethodDescriptor({
       pluginId: "demo",

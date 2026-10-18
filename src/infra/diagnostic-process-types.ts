@@ -14,10 +14,17 @@ export type DiagnosticRuntimeMeasurementFields =
       delayMaxMs: number;
     }
   | {
+      type: "gateway.main_thread.stall";
+      stalls: { task: string; durationMs: number }[];
+      dropped: number;
+    }
+  | {
       type: "diagnostic.gc";
       durationMs: number;
-      /** Optional for existing SDK event producers; native observers always supply both. */
+      /** Optional for existing SDK event producers; native observers always supply attribution. */
       kind?: GcSample["kind"];
+      /** Bounded Node GC callback flags; absent or unrecognized values become other. */
+      reason?: GcSample["reason"];
       /** main or an allowlisted worker script basename (other for unknown scripts). */
       thread?: string;
       /** Reusable Code Mode isolate slot (1–64), owned until native worker exit. */
@@ -62,8 +69,38 @@ export type DiagnosticAsyncQueueDroppedFields = {
   drainBatchSize: number;
 };
 
+export const DIAGNOSTIC_WORKER_RETAINED_STRUCTURES = [
+  "catalog-config",
+  "catalog-source",
+  "catalog-entries",
+  "catalog-index",
+  "catalog-pricing",
+  "catalog-request",
+  "catalog-metadata",
+  "catalog-static",
+  "catalog-remote",
+  "catalog-auth",
+] as const;
+
+/** Owner-reported size estimates only; never data keys, identities, or retained contents. */
+export type DiagnosticWorkerRetainedData = {
+  structure: (typeof DIAGNOSTIC_WORKER_RETAINED_STRUCTURES)[number];
+  entries: number;
+  approximateBytes: number;
+  stringBytes?: number;
+  objects?: number;
+  generations?: number;
+  providers?: number;
+  accounts?: number;
+  truncated?: boolean;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
+  /** Linux RssAnon: resident anonymous pages, including managed heaps and buffers. */
+  anonymousRssBytes?: number;
+  /** Linux VmSwap: swapped anonymous private pages, excluding shared-memory swap. */
+  anonymousSwapBytes?: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
   externalBytes: number;
@@ -89,6 +126,10 @@ export type DiagnosticMemoryUsage = {
     script: string;
     heapUsed: number;
     heapTotal: number;
+    /** Node's finite native space set; absent for native-only fallback samples and Bun. */
+    heapSpaces?: Pick<HeapSpaceInfo, "space_name" | "space_used_size">[];
+    /** Approximate owner-held data, not V8 retained-size attribution or a heap snapshot. */
+    retainedData?: readonly DiagnosticWorkerRetainedData[];
     /** Actual V8 isolate limit; unavailable on runtimes without V8. */
     heapSizeLimitBytes?: number;
     threadId?: number;

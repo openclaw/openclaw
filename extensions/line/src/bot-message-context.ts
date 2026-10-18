@@ -34,7 +34,7 @@ import {
   resolveInboundLastRouteSessionKey,
   type ResolvedAgentRoute,
 } from "openclaw/plugin-sdk/routing";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -198,11 +198,6 @@ async function resolveLineInboundRoute(params: {
       undefined,
       runtimeRoute.bindingRecord.conversation,
     );
-    logVerbose(
-      runtimeRoute.boundSessionKey
-        ? `line: routed via bound conversation ${peerId} -> ${runtimeRoute.boundSessionKey}`
-        : `line: plugin-bound conversation ${peerId}`,
-    );
   }
 
   if (configuredBinding) {
@@ -216,9 +211,6 @@ async function resolveLineInboundRoute(params: {
       );
       throw new Error(`Configured ACP binding unavailable: ${ensured.error}`);
     }
-    logVerbose(
-      `line: using configured ACP binding for ${peerId} -> ${configuredBindingSessionKey}`,
-    );
   }
 
   return prepared;
@@ -305,7 +297,6 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
   channelIngress?: ResolvedChannelMessageIngress;
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
-  verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
@@ -423,14 +414,6 @@ async function finalizeLineInboundContext<Event extends MessageEvent | PostbackE
     route: params.route,
     sessionKey: params.route.sessionKey,
   });
-  if (shouldLogVerbose()) {
-    const mediaInfo =
-      params.verboseLog.kind === "inbound" && (params.verboseLog.mediaCount ?? 0) > 1
-        ? ` mediaCount=${params.verboseLog.mediaCount}`
-        : "";
-    const label = params.verboseLog.kind === "inbound" ? "line inbound" : "line postback";
-    logVerbose(`${label}: from=${ctxPayload.From} len=${body.length}${mediaInfo}`);
-  }
 
   return {
     ctxPayload,
@@ -502,10 +485,12 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const nativeMediaKind = extractNativeMediaKind(message);
   const mediaFacts: ChannelInboundMediaInput[] =
     allMedia.length > 0
-      ? allMedia.map((media) => ({
-          ...media,
+      ? allMedia.map(({ path, contentType, fileName }) => ({
+          path,
+          contentType,
+          fileName,
           kind:
-            nativeMediaKind === "document" && media.contentType?.startsWith("image/")
+            nativeMediaKind === "document" && contentType?.startsWith("image/")
               ? "image"
               : nativeMediaKind,
         }))
@@ -574,7 +559,6 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
-    verboseLog: { kind: "inbound", mediaCount: allMedia.length },
     inboundHistory,
   });
 }
@@ -639,7 +623,6 @@ export async function buildLinePostbackContext(params: {
     }),
     buildContext: params.buildContext,
     media: [],
-    verboseLog: { kind: "postback" },
   });
 }
 

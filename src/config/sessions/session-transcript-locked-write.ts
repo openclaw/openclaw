@@ -184,7 +184,6 @@ export async function withWorkerTranscriptWriteLock<T>(
           assertCurrent();
         },
         beforeWrite: assertCurrent,
-        async release() {},
       }),
       onTransactionFacts(facts) {
         if (!isRecord(facts)) {

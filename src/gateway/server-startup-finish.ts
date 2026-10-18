@@ -18,6 +18,7 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
+import { GATEWAY_EVENTS } from "./events.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -26,7 +27,6 @@ import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from ".
 import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-startup.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
-import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
 import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
@@ -125,7 +125,6 @@ export async function finishGatewayStartup(params: {
     getPluginMetadataSnapshot,
     getPluginNodeCapabilities,
   } = runtime;
-  const startupPluginRuntimeClaim = kernel.pluginRuntimeGeneration.currentClaim();
   const databaseStartupAdmission = getAgentDatabaseStartupAdmission();
   const databasePreparationReady = createDeferredCore();
   const getReadiness = runtime.createHttpTransportOptions().getReadiness;
@@ -192,13 +191,8 @@ export async function finishGatewayStartup(params: {
           ),
         );
   // Join independent preparation before channels start or failure cleanup retires its owners.
-  const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(async () => {
+  const requestRuntimeReady = runtime.ensureRequestRuntimeReady().then(() => {
     kernel.setDispatchReady(true);
-    if (!minimalTestGateway && !opts.updateCanary) {
-      const { startOpenClawDatabaseIntegrityVerifier } =
-        await import("../state/openclaw-database-verify.js");
-      registerGatewayLifetimeSidecars(startOpenClawDatabaseIntegrityVerifier({ env: process.env }));
-    }
     if (databaseStartupAdmission && !opts.updateCanary && !lifecycle.closePreludeStarted) {
       activateGatewayAgentDatabaseStartup({
         admission: databaseStartupAdmission,
@@ -280,11 +274,10 @@ export async function finishGatewayStartup(params: {
           activationSourceConfig: startupActivationSourceConfig,
           pluginManifestRecords,
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-          pluginRuntimeClaim: startupPluginRuntimeClaim,
           getCurrentPluginRegistry: () => pluginRuntime.registry,
-          getCurrentPluginServices: () => kernel.pluginRuntimeGeneration.currentServices(),
-          getCurrentPluginMetadataSnapshot: getPluginMetadataSnapshot,
-          getCurrentActivationSourceConfig: getRuntimeConfigSourceSnapshot,
+          shouldStartPluginServices: () =>
+            kernel.pluginRuntimeGeneration.currentServices() === null &&
+            kernel.pluginRuntimeGeneration.getReloadStatus() === undefined,
           ambientEnvTriggers,
           pluginRegistry: pluginRuntime.registry,
           defaultWorkspaceDir,
@@ -312,8 +305,6 @@ export async function finishGatewayStartup(params: {
               startupTrace,
               ambientEnvTriggers,
               resolveGatewayContext: resolvePluginGatewayContext,
-              pluginRuntimeClaim: startupPluginRuntimeClaim,
-              getCurrentPluginRegistry: () => pluginRuntime.registry,
             });
           },
           onStartupPluginsLoading: () => {
@@ -325,12 +316,10 @@ export async function finishGatewayStartup(params: {
               activationCleanup.push(completion),
             );
             try {
-              if (
-                lifecycle.closePreludeStarted ||
-                !startupPluginRuntimeClaim.publish(prepared.publish)
-              ) {
+              if (lifecycle.closePreludeStarted) {
                 return false;
               }
+              prepared.publish();
               startupState.pendingReason = "startup-sidecars";
               prepared.afterCommit();
               // Nodes can finish their handshake before deferred plugins attach.
@@ -340,10 +329,7 @@ export async function finishGatewayStartup(params: {
               for (const client of clients) {
                 reconcileClientPluginNodeCapabilities(client, nodeCapabilitySurfaces);
               }
-              await runtime.refreshAttachedGatewayDiscovery(
-                loaded.pluginRegistry,
-                startupPluginRuntimeClaim,
-              );
+              await runtime.refreshAttachedGatewayDiscovery(loaded.pluginRegistry);
               return true;
             } finally {
               await Promise.allSettled(activationCleanup);
@@ -352,10 +338,7 @@ export async function finishGatewayStartup(params: {
           getCronService: kernel.getCronService,
           onChannelsStarted: releaseStartupAccountStarts,
           onPluginServices: (pluginServices) =>
-            kernel.pluginRuntimeGeneration.publishServices(
-              startupPluginRuntimeClaim,
-              pluginServices,
-            ),
+            kernel.pluginRuntimeGeneration.setServices(pluginServices),
           onPostReadySidecars: registerPostReadySidecars,
           onGatewayLifetimeSidecars: registerGatewayLifetimeSidecars,
           trackStartupWork,
@@ -466,7 +449,6 @@ export async function finishGatewayStartup(params: {
     subscribeToWrites: (listener) =>
       registerConfigWriteListener(listener, {
         ownsRuntimeActivationFor: configSnapshot.path,
-        prepareSnapshot: opts.prepareConfigSnapshot,
         preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
           const candidate = await prepareReloadCandidate({
             runtimeConfig: sourceConfig,

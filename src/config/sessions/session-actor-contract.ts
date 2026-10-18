@@ -1,3 +1,4 @@
+import type { SessionActivitySummary } from "./activity-summary.js";
 import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
@@ -167,6 +168,7 @@ export type SessionActorPhaseInputs = {
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
     restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
+    activitySummary?: SessionActivitySummary;
   };
   deliveryPending:
     | {

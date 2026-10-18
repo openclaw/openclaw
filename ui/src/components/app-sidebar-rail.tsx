@@ -44,6 +44,7 @@ import {
   renderSessionUnreadBadge,
   renderSessionOwnerAvatar,
 } from "./solid/session-presentation.tsx";
+import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 type SidebarZone = ReturnType<AppSidebarRenderHost["reconciledSidebarZone"]>;
 type RailPinTouchPress = {
@@ -54,12 +55,9 @@ type RailPinTouchPress = {
   opened: boolean;
 };
 
-export function renderSidebarRail(
-  host: AppSidebarRenderHost,
-  TeamNewSession?: () => JSX.Element,
-): JSX.Element {
+export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
-  const zone = () => host.reconciledSidebarZone();
+  const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
     (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
       (entry) => parseSidebarEntry(entry)!,
@@ -80,29 +78,24 @@ export function renderSidebarRail(
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__create">
-        <Show
-          when={host.sidebarAgentsMode === "roster"}
-          fallback={renderNewSessionLink({
-            get basePath() {
-              return host.basePath;
-            },
-            get agentId() {
-              return host.expandedAgentId();
-            },
-            className: "sidebar-rail__button sidebar-new-session",
-            get label() {
-              return t("agentChip.newConversation");
-            },
-            showShortcut: true,
-            get disabledReason() {
-              const access = newSessionAccess();
-              return access.allowed ? undefined : access.reason;
-            },
-            onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-          })}
-        >
-          {TeamNewSession ? <TeamNewSession /> : undefined}
-        </Show>
+        {renderNewSessionLink({
+          get basePath() {
+            return host.basePath;
+          },
+          get agentId() {
+            return host.expandedAgentId();
+          },
+          class: "sidebar-rail__button sidebar-new-session",
+          get label() {
+            return t("agentChip.newConversation");
+          },
+          showShortcut: true,
+          get disabledReason() {
+            const access = newSessionAccess();
+            return access.allowed ? undefined : access.reason;
+          },
+          onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
+        })}
       </div>
       <div class="sidebar-rail__views">
         <For each={views}>
@@ -131,7 +124,7 @@ export function renderSidebarRail(
                 ) {
                   host.onToggleSidebar?.();
                 }
-                host.requestUpdate();
+                host.invalidate();
               }}
             >
               <Icon
@@ -186,7 +179,17 @@ export function renderSidebarRail(
           {(entry) => renderRailPin(host, untrack(entry), zone)}
         </For>
       </div>
-      <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
+      <div class="sidebar-rail__bottom">
+        <Show
+          when={
+            host.sessionDataContext?.theme.branding.communityLinks &&
+            host.sessionDataContext.config.current.communityInvite
+          }
+        >
+          <SidebarCommunityInvite />
+        </Show>
+        {renderAppSidebarFooterBar(host)}
+      </div>
     </nav>
   );
 }
@@ -259,7 +262,7 @@ function renderRailPin(
         </Show>
       </a>
     ) : entry.type === "route" ? (
-      host.sidebarMenus.renderRoute(entry.route)
+      host.sidebarMenus.renderRoute(entry.route, host)
     ) : (
       <Show
         when={session()}
@@ -450,7 +453,7 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
 
 /** Pages is the accessible destination catalog, not another favorites list. */
 export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
-  const zone = () => host.reconciledSidebarZone();
+  const zone = createMemo(() => host.reconciledSidebarZone());
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot

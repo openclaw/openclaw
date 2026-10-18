@@ -78,7 +78,11 @@ function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
   return `shared-auth-store:${sha256Hex(`${path.resolve(sourcePath)}\0${sourceTable}`)}`;
 }
 
-async function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string }): Promise<{
+async function readSourceSnapshot(params: {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+  integrityCheck?: "quick" | "full";
+}): Promise<{
   rows: AuthRows;
   size: number | null;
 }> {
@@ -94,7 +98,10 @@ async function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: 
         path: params.sourcePath,
         env: params.env,
       },
-      { operationLabel: "state-migration.shared-auth-source-read" },
+      {
+        operationLabel: "state-migration.shared-auth-source-read",
+        repairAdmission: { integrityCheck: params.integrityCheck ?? "quick", integrityTables: [] },
+      },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
     await closeOpenClawAgentDatabaseByPathAsync(params.sourcePath);
@@ -418,6 +425,7 @@ function advanceMigration(
 async function cleanupSourceRows(params: {
   env: NodeJS.ProcessEnv;
   sourcePath: string;
+  integrityCheck?: "quick" | "full";
 }): Promise<boolean> {
   if (inspectSharedAuthLegacySourceFile(params.sourcePath).status === "missing") {
     return false;
@@ -446,7 +454,13 @@ async function cleanupSourceRows(params: {
         path: params.sourcePath,
         env: params.env,
       },
-      { operationLabel: "state-migration.shared-auth-cleanup" },
+      {
+        operationLabel: "state-migration.shared-auth-cleanup",
+        repairAdmission: {
+          integrityCheck: params.integrityCheck ?? "quick",
+          integrityTables: ["auth_profile_store", "auth_profile_state"],
+        },
+      },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
     await closeOpenClawAgentDatabaseByPathAsync(params.sourcePath);
@@ -495,6 +509,7 @@ export async function migrateSharedAuthStore(params: {
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  integrityCheck?: "quick" | "full";
 }): Promise<MigrationMessages> {
   if (!params.detected.hasLegacy) {
     return { changes: [], warnings: [] };
@@ -528,7 +543,11 @@ export async function migrateSharedAuthStore(params: {
     },
     run: async (env) => {
       const now = params.now?.() ?? Date.now();
-      const source = await readSourceSnapshot({ env, sourcePath: params.detected.sourcePath });
+      const source = await readSourceSnapshot({
+        env,
+        sourcePath: params.detected.sourcePath,
+        integrityCheck: params.integrityCheck,
+      });
       const snapshot = {
         env,
         sourcePath: params.detected.sourcePath,
@@ -541,6 +560,7 @@ export async function migrateSharedAuthStore(params: {
       const sourceCleaned = await cleanupSourceRows({
         env,
         sourcePath: params.detected.sourcePath,
+        integrityCheck: params.integrityCheck,
       });
       const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
       advanceMigration({ ...snapshot, rows, stage: "completed" });

@@ -94,7 +94,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
       <tbody>
         <For each={rows}>
           {(group) => (
-            <tr class={group.key === props.selectedKey ? "selected" : ""}>
+            <tr class={{ selected: group.key === props.selectedKey }}>
               <th scope="row">
                 <button
                   type="button"
@@ -119,11 +119,11 @@ export function UsageCreators(props: UsageCreatorsProps) {
                   </span>
                 </button>
               </th>
-              <td class={props.mode === "tokens" ? "usage-creator-primary" : ""}>
-                {formatUsageTokens(group.totals.totalTokens)}
+              <td class={{ "usage-creator-primary": props.mode === "tokens" }}>
+                {formatUsageTokens(group.totals.totalTokens, group.totals.usageReport)}
               </td>
-              <td class={props.mode === "cost" ? "usage-creator-primary" : ""}>
-                {formatUsageCost(group.totals.totalCost)}
+              <td class={{ "usage-creator-primary": props.mode === "cost" }}>
+                {formatUsageCost(group.totals.totalCost, 2, group.totals.usageReport)}
               </td>
               <td>{group.sessionCount}</td>
             </tr>

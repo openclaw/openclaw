@@ -162,6 +162,10 @@ export function createGitHubPublicationCoordinator(params: {
       idempotencyKey: request.idempotencyKey,
       title: request.title,
       body: request.body,
+      draft:
+        existing && existing.draft == null && request.draft === undefined
+          ? undefined
+          : (request.draft ?? false),
     });
     const now = Date.now();
     const requestId = randomUUID();
@@ -172,6 +176,7 @@ export function createGitHubPublicationCoordinator(params: {
         idempotencyKey: request.idempotencyKey,
         title: request.title,
         body: request.body,
+        draft: request.draft ?? false,
       },
       requestId,
       requestDigest,
@@ -580,11 +585,14 @@ export function createGitHubPublicationCoordinator(params: {
     async processClaim(claim: WorkerSessionTurnClaim) {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
-    async resumeSessionRequests() {
+    async resumeSessionRequests(isStopping?: () => boolean) {
       const failures: unknown[] = [];
       for (const coordinator of [methods, repository]) {
+        if (isStopping?.()) {
+          break;
+        }
         try {
-          await coordinator.resumeSessionRequests();
+          await coordinator.resumeSessionRequests(isStopping);
         } catch (error) {
           failures.push(error);
         }

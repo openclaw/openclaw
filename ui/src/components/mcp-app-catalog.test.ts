@@ -1,18 +1,27 @@
+import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { AppsPage } from "../pages/apps/apps-page.tsx";
+import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "../pages/apps/apps-page.tsx";
-import "./mcp-app-catalog.tsx";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import "./mcp-app-catalog.tsx";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 const result: McpAppDiscoverResult = {
@@ -57,7 +66,11 @@ function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator
         },
       },
       agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-      sessions: { describe: async () => ({ session: { key: "agent:main:one" } }) },
+      sessions: {
+        describe: async () => ({
+          session: { key: "agent:main:one", kind: "direct" as const, updatedAt: 1 },
+        }),
+      },
     },
   };
 }
@@ -80,6 +93,156 @@ function appendElement(element: HTMLElement) {
 }
 
 describe("app launch catalog", () => {
+  it("prepares a global catalog again when its session was deleted offline", async () => {
+    let sessionExists = true;
+    const request = createGatewayRequestMock(() =>
+      sessionExists
+        ? Promise.resolve(result)
+        : Promise.reject(new Error("The requested session is unavailable")),
+    );
+    const describeSession = vi.fn(() =>
+      Promise.resolve({ session: sessionExists ? { key: "agent:main:one" } : null }),
+    );
+    const createResult = vi.fn(() => {
+      sessionExists = true;
+      return Promise.resolve({ key: "agent:main:one" });
+    });
+    const { gateway, publish } = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["mcp.app.discover"]);
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+    });
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, {
+      ...discoveryContext(request).context,
+      gateway,
+      sessions: { describe: describeSession, createResult, state: { error: null } },
+    });
+    appendElement(catalog);
+    await waitForSolid(() => expect(catalog.textContent).toContain("Library"));
+    expect(describeSession).toHaveBeenCalledOnce();
+    expect(createResult).not.toHaveBeenCalled();
+
+    publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+    flush();
+    sessionExists = false;
+    expect(catalog.textContent).toContain("Library");
+    publish({ ...gateway.snapshot, phase: "connected", hello });
+    await waitForSolid(() => {
+      expect(describeSession).toHaveBeenCalledTimes(2);
+      expect(createResult).toHaveBeenCalledOnce();
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(catalog.textContent).toContain("Library");
+      expect(catalog.querySelector('[role="alert"]')).toBeNull();
+    });
+  });
+
+  it("retains expanded discoveries offline, refreshes on reconnect, and clears a changed Gateway", async () => {
+    const refreshed = createDeferred<McpAppDiscoverResult>();
+    const request = vi.fn().mockResolvedValueOnce(result).mockReturnValue(refreshed.promise);
+    const { gateway, publish } = createApplicationGateway();
+    const hello = gatewayHelloForMethods(["mcp.app.discover"]);
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello,
+    });
+    const context = { ...discoveryContext(request).context, gateway };
+    const catalog = document.createElement("openclaw-mcp-app-catalog");
+    catalog.surface = "thread";
+    catalog.sessionKey = "agent:main:one";
+    provide(catalog, context);
+    appendElement(catalog);
+    await waitForSolid(() => expect(catalog.querySelector("button")).not.toBeNull());
+    catalog.querySelector<HTMLButtonElement>("button")!.click();
+    await waitForSolid(() => expect(catalog.textContent).toContain("Parts tray"));
+    const entry = catalog.querySelector<HTMLButtonElement>(".mcp-app-catalog__entry button")!;
+    publish({ ...gateway.snapshot, phase: "reconnecting", hello: null });
+    flush();
+    expect(catalog.querySelector(".mcp-app-catalog__entry button")).toBe(entry);
+    expect(entry.disabled).toBe(true);
+    publish({ ...gateway.snapshot, phase: "connected", hello });
+    flush();
+    expect(catalog.querySelector(".mcp-app-catalog__entry button")).toBe(entry);
+    expect(entry.disabled).toBe(false);
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    refreshed.resolve(result);
+    await refreshed.promise;
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(vi.fn(() => new Promise(() => {}))),
+    });
+    flush();
+    expect(catalog.textContent).not.toContain("Parts tray");
+  });
+
+  it("waits for the new session's discovery before retaining an Apps page launch", async () => {
+    // Observe the page-to-conversation contract without loading the conversation runtime.
+    const lookup = customElements.get.bind(customElements);
+    vi.spyOn(customElements, "get").mockImplementation((name) =>
+      name === "openclaw-chat-pane" ? HTMLElement : lookup(name),
+    );
+    const first = createDeferred<McpAppDiscoverResult>();
+    const second = createDeferred<McpAppDiscoverResult>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const { gateway, publish } = createApplicationGateway();
+    publish({
+      ...gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      sessionKey: "agent:main:one",
+      hello: gatewayHelloForMethods(["mcp.app.discover"]),
+    });
+    // SAFETY: This mounted page fixture supplies the discovery and launch capabilities it uses.
+    const context: Pick<ApplicationContext, "gateway"> & {
+      agentSelection: {
+        state: Pick<ApplicationContext["agentSelection"]["state"], "selectedId">;
+        subscribe: ApplicationContext["agentSelection"]["subscribe"];
+      };
+      sessions: Pick<ApplicationContext["sessions"], "describe">;
+    } = { ...discoveryContext(request).context, gateway };
+    const { container, unmount } = mountSolid(
+      () => createComponent(AppsPage, { appSearch: "?server=parts&tool=library" }),
+      { wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper },
+    );
+    try {
+      await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+      first.resolve(result);
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+          sessionKey: "agent:main:one",
+          entrypoint: { resourceUri: "ui://parts/library" },
+        }),
+      );
+      publish({ ...gateway.snapshot, sessionKey: "agent:main:two" });
+      flush();
+      expect(container.querySelector("openclaw-chat-pane")).toBeNull();
+      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+      second.resolve({
+        servers: result.servers.map((server) => ({
+          ...server,
+          entrypoints: server.entrypoints.map((entry) => ({
+            ...entry,
+            resourceUri: `${entry.resourceUri}-second`,
+          })),
+        })),
+      });
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-chat-pane")?.mcpAppLaunch).toMatchObject({
+          sessionKey: "agent:main:two",
+          entrypoint: { resourceUri: "ui://parts/library-second" },
+        }),
+      );
+    } finally {
+      unmount();
+    }
+  });
+
   it.each([
     { scope: "operator.read", discover: false },
     { scope: "operator.sessions.read", discover: false },
@@ -313,11 +476,8 @@ describe("app launch catalog", () => {
       const describeSession = vi.fn(async () => ({
         session: exists ? { key: "agent:main:main" } : null,
       }));
-      // SAFETY: the registered Apps page exposes its render-completion promise.
-      const element = document.createElement("openclaw-apps-page") as HTMLElement & {
-        readonly updateComplete: Promise<boolean>;
-      };
-      const provider = createApplicationContextProvider({
+      // SAFETY: The fixture supplies the capabilities exercised by Apps and discovery.
+      const context = {
         gateway: {
           snapshot: {
             sessionKey: "agent:main:main",
@@ -339,10 +499,14 @@ describe("app launch catalog", () => {
           describe: describeSession,
         },
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
-      } as unknown as ApplicationContext);
-      provider.append(element);
+      } as unknown as ApplicationContext;
+      const provider = createApplicationContextProvider(context);
       document.body.append(provider);
-      await element.updateComplete;
+      const { container: element } = mountSolid(() => createComponent(AppsPage, {}), {
+        container: provider,
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      });
+      flush();
       const catalog = element.querySelector<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]>(
         "openclaw-mcp-app-catalog",
       )!;
@@ -361,14 +525,14 @@ describe("app launch catalog", () => {
         sessionKey: "agent:main:main",
         agentId: "main",
       });
-      await element.updateComplete;
+      flush();
       await waitForSolid(() => expect(element.textContent).toContain("Library"));
       expect(element.querySelector('[role="alert"]')).toBeNull();
       for (const listener of configChanged) {
         listener({ event: "config.changed" });
       }
       await catalog.updateComplete;
-      await element.updateComplete;
+      flush();
       expect(describeSession).toHaveBeenCalledExactlyOnceWith({
         key: "agent:main:main",
         agentId: "main",

@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Dynamic } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -63,7 +63,7 @@ export function resolveSidebarOnline(host: AppSidebarRenderHost) {
     statusFilter: host.people.statusFilter,
     offlineUsers:
       saved?.offlineUsers ??
-      (host.people.directory?.result?.profiles ?? [])
+      (host.peopleView?.directory()?.result?.profiles ?? [])
         .filter((profile) => !profile.mergedInto)
         .map(profilePresenceViewer),
     presenceFilter: host.people.presenceFilter,
@@ -103,7 +103,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
           ]}
           onChange={(value) => {
             if (value === "online" || value === "all") {
-              host.people.setPresenceFilter(value);
+              host.people.set("presenceFilter", value);
             }
           }}
         />
@@ -127,14 +127,14 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
         </button>
         <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
       </div>
-      {host.people.directory?.loading && (
+      {host.peopleView?.directory()?.loading && (
         <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
       )}
-      {Boolean(host.people.directory?.error) && (
+      {Boolean(host.peopleView?.directory()?.error) && (
         <button
           type="button"
           class="sidebar-online__retry"
-          onClick={() => void host.people.directory?.load(true)}
+          onClick={() => void host.peopleView?.directory()?.load(true)}
         >
           {t("presence.directoryFailed")}
         </button>
@@ -208,30 +208,28 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (
                     <span class="sidebar-online__counts" aria-hidden="true">
                       <For each={["running", "open"] as const}>
-                        {(kind) =>
-                          workload()![kind] > 0 ? (
-                            <>
+                        {(kind) => (
+                          <Show when={workload()![kind] > 0}>
+                            <span
+                              class={`sidebar-online__${kind}`}
+                              data-session-count={kind}
+                              title={t(`presence.sessions.${kind}Count`, {
+                                count: String(workload()![kind]),
+                              })}
+                            >
                               <span
-                                class={`sidebar-online__${kind}`}
-                                data-session-count={kind}
-                                title={t(`presence.sessions.${kind}Count`, {
-                                  count: String(workload()![kind]),
-                                })}
+                                class={
+                                  kind === "running"
+                                    ? "session-run-spinner"
+                                    : "sidebar-online__open-icon"
+                                }
                               >
-                                <span
-                                  class={
-                                    kind === "running"
-                                      ? "session-run-spinner"
-                                      : "sidebar-online__open-icon"
-                                  }
-                                >
-                                  {kind === "running" ? undefined : <Icon name="messageCircle" />}
-                                </span>
-                                <span class="sidebar-online__count">{workload()![kind]}</span>
+                                {kind === "running" ? undefined : <Icon name="messageCircle" />}
                               </span>
-                            </>
-                          ) : undefined
-                        }
+                              <span class="sidebar-online__count">{workload()![kind]}</span>
+                            </span>
+                          </Show>
+                        )}
                       </For>
                     </span>
                   ) : undefined}

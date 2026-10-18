@@ -165,23 +165,44 @@ describe("context cache lifecycle", () => {
     ).toBe(1_000_000);
   });
 
-  it("keeps configured limits when an earlier prewarm finishes after refresh", async () => {
-    const previous = config("synthetic", model("current-model", 222_000, 111_000));
-    state.publishedOwner.mockReturnValueOnce({ config: previous, modelCatalog: state.catalog });
-    const warmup = context.prewarmContextWindowCacheAfterReady({ config: previous });
-    state.config = config("synthetic", model("current-model", 64_000, 32_000));
+  it.each(["success", "failure"])(
+    "keeps refreshed discovery when an older load finishes with %s",
+    async (outcome) => {
+      const started = Promise.withResolvers<void>();
+      const older = Promise.withResolvers<{ modelCatalog: ContextWindowCatalog }>();
+      state.loadOwner.mockImplementationOnce(() => {
+        started.resolve();
+        return older.promise;
+      });
+      const pending = context.ensureContextWindowCacheLoaded();
+      await started.promise;
 
-    await context.refreshContextWindowCache(state.config);
-    await warmup;
+      state.catalog.entries = [{ provider: "synthetic", id: "new-model", contextWindow: 222_000 }];
+      await context.refreshContextWindowCache({});
+      const options = { provider: "synthetic", allowAsyncLoad: false };
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
 
-    expect(
-      context.resolveContextTokensForModel({
-        provider: "synthetic",
-        model: "current-model",
-        allowAsyncLoad: false,
-      }),
-    ).toBe(32_000);
-  });
+      if (outcome === "failure") {
+        older.reject(new Error("old catalog unavailable"));
+      } else {
+        older.resolve({
+          modelCatalog: {
+            entries: [{ provider: "synthetic", id: "old-model", contextWindow: 111_000 }],
+          },
+        });
+      }
+      await pending;
+
+      expect(context.resolveContextTokensForModel({ model: "new-model", ...options })).toBe(
+        222_000,
+      );
+      expect(
+        context.resolveContextTokensForModel({ model: "old-model", ...options }),
+      ).toBeUndefined();
+    },
+  );
 
   it("warms configured, discovered, and static windows from the published owner", async () => {
     const requested = config("synthetic", model("stale-model", 111_000));

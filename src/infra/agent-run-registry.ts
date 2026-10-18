@@ -20,6 +20,8 @@ import {
   getAgentRunRegistryState,
   bumpAgentRunIndexVersion,
   getAgentRunContextOwnerStatus,
+  getAgentRunLifecycleGeneration,
+  readAgentRunIndexVersion,
 } from "./agent-run-registry-state.js";
 import type {
   AgentRunContext,
@@ -34,6 +36,7 @@ import { clearAgentRunUsage, resetAgentRunUsageForTest } from "./agent-run-usage
 export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
 export { getAgentRunContextOwnerStatus } from "./agent-run-registry-state.js";
 export { listAgentRunsForSession } from "./agent-run-registry-state.js";
+export { getAgentRunLifecycleGeneration, readAgentRunIndexVersion };
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
 const delegatedAuthorityFailures = new WeakMap<AgentRunDelegatedAuthority, { cause: unknown }>();
@@ -43,15 +46,6 @@ export function readAgentRunDelegatedAuthorityFailure(
   authority: AgentRunDelegatedAuthority,
 ): { cause: unknown } | undefined {
   return delegatedAuthorityFailures.get(authority);
-}
-
-/** Reads the process-local version of the active-run projection inputs. */
-export function readAgentRunIndexVersion(): number {
-  return getAgentRunRegistryState().version;
-}
-
-export function getAgentRunLifecycleGeneration(): string {
-  return getAgentRunRegistryState().lifecycleGeneration;
 }
 
 export function rotateAgentRunRegistryLifecycleGeneration(): string {
@@ -108,6 +102,7 @@ function storeRunContext(runId: string, context: AgentRunContext, predecessor?: 
   // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
   context.executionActivity = undefined;
+  context.localModelWait = undefined;
   context.eventState = { seq: 0 };
   context.modelCallSequence = { value: 0 };
   context.registeredAt ??= Date.now();
@@ -148,7 +143,7 @@ export function registerAgentRunContext(
     return;
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
-  const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
+  const { sessionKey, sessionId, agentId } = existing;
   for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
     if (context[key] && existing[key] !== context[key]) {
       existing[key] = context[key];
@@ -188,7 +183,7 @@ export function registerAgentRunContext(
   }
   recordAgentEventRouting(runId, existing);
   if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
-    bumpAgentRunIndexVersion(existing, previous);
+    bumpAgentRunIndexVersion(existing, { sessionKey, sessionId, agentId });
   }
 }
 
@@ -328,15 +323,15 @@ export function getAgentRunContextOwnership(runId: string): AgentRunContextOwner
   return getAgentRunRegistryState().owners.get(runId);
 }
 
-/** Records the latest next-check proposal on the matching paced cron run. */
+/** Records the latest next-check proposal on the matching live cron run. */
 export function recordCronNextCheckProposal(runId: string, jobId: string, delayMs: number): void {
   const context = getAgentRunContext(runId);
   const cronRun = context?.cronRunsByJobId?.get(jobId);
-  if (!cronRun) {
+  if (!cronRun || !hasAgentRunContextExecutionOwner(runId)) {
     throw new Error("cron next_check is only available to the currently running job");
   }
-  if (!cronRun.pacingEnabled) {
-    throw new Error("cron next_check requires pacing on the current job");
+  if (!cronRun.nextCheckEnabled) {
+    throw new Error("cron next_check requires pacing or a one-shot session continuation");
   }
   cronRun.nextCheckMs = delayMs;
 }

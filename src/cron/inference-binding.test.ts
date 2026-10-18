@@ -358,7 +358,7 @@ describe("durable cron inference authorization", () => {
         ).rejects.toThrow(
           change === "replacement"
             ? /inference account was replaced/i
-            : /authorization.*(?:unavailable|disconnected|replaced)/i,
+            : /inference account openai:platform was removed or signed out/i,
         );
       });
     },

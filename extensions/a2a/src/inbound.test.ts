@@ -179,39 +179,15 @@ describe("A2A channel inbound dispatch", () => {
     }
   });
 
-  it("settles a dispatched turn that ends without a final reply", async () => {
+  it("propagates dispatch failures to the HTTP task owner", async () => {
     const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => ({
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: turn.ctxPayload,
-      routeSessionKey: turn.route.sessionKey,
-      dispatchResult: createA2aDispatchResult(false),
-    }));
+    const failure = new Error("provider unavailable");
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(failure);
     try {
-      await dispatchA2aInbound(fixture.params);
-      expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
-      expect(fixture.task.artifacts).toEqual([]);
+      await expect(dispatchA2aInbound(fixture.params)).rejects.toBe(failure);
     } finally {
       fixture.store.stop();
     }
-  });
-
-  it("records dispatch failures on their task", async () => {
-    const fixture = createA2aInboundFixture();
-    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(
-      new Error("provider unavailable"),
-    );
-
-    await dispatchA2aInbound(fixture.params);
-
-    expect(fixture.store.get(fixture.task.id)?.status).toEqual(
-      expect.objectContaining({
-        state: "TASK_STATE_FAILED",
-        message: expect.objectContaining({ parts: [{ text: "provider unavailable" }] }),
-      }),
-    );
-    fixture.store.stop();
   });
 
   it("isolates route sessions and replies when distinct peers reuse one context ID", async () => {
@@ -319,6 +295,8 @@ describe("A2A channel inbound dispatch", () => {
         "agent:a2a_restricted:a2a:default:direct:hermes:ctx-inbound",
         "agent:a2a_context:a2a:default:direct:hermes:ctx-exact",
       ]);
+      expect(fixture.task.status.state).toBe("TASK_STATE_COMPLETED");
+      expect(fixture.task.artifacts).toEqual([]);
     } finally {
       fixture.store.stop();
     }

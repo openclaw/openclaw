@@ -1,4 +1,3 @@
-// Shared legacy runtime policy projection for selected canonical model refs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
 import {

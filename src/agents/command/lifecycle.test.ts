@@ -1,11 +1,17 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import { createCliTimeoutError } from "../cli-runner/no-output-timeout-policy.js";
 import { FailoverError } from "../failover-error.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./attempt-callbacks.js";
 import { createAgentCommandLifecycle } from "./lifecycle.js";
 
 const { emitAgentEvent, lifecycleLog } = vi.hoisted(() => ({
@@ -32,6 +38,86 @@ function createLifecycle(runId: string) {
 }
 
 describe("createAgentCommandLifecycle", () => {
+  it.each(["recovered", "later-failure", "preparation-failure"] as const)(
+    "selects command terminal facts after %s without an observed native start",
+    async (outcome) => {
+      emitAgentEvent.mockClear();
+      const state: AgentAttemptLifecycleState = {
+        currentTurnUserMessagePersisted: true,
+        lifecycleFinishing: false,
+        lifecycleEnded: false,
+      };
+      const callbacks = createAgentAttemptLifecycleCallbacks(state);
+      const lifecycle = createAgentCommandLifecycle({
+        runId: "recovered-command",
+        lifecycleGeneration: () => "generation",
+        startedAt: 100,
+        state,
+      });
+      await callbacks.onAgentEvent({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "old capacity error",
+          errorObservation: { httpStatus: 503 },
+        },
+      });
+      if (outcome === "preparation-failure") {
+        callbacks.onAttemptStart();
+      } else {
+        callbacks.onAttemptTerminalReplaced();
+      }
+      const error = outcome === "recovered" ? undefined : "new attempt failure";
+      const result = {
+        meta: {
+          durationMs: 1,
+          ...(error ? { error: { kind: "incomplete_turn" as const, message: error } } : {}),
+        },
+      };
+      const receipt = {
+        runId: "recovered-command",
+        sessionId: "session",
+        turnId: "recovery",
+        requested: { provider: "openai", model: "model" },
+        effective: { provider: "openai", model: "model", responseModel: "model" },
+        successfulToolNames: ["write"],
+        assistantTranscriptIdempotencyKey: "selected",
+        rerouted: false,
+        terminalDisposition: "visible" as const,
+      };
+      const terminal = {
+        metadata: { terminalReceipt: receipt },
+        outcome: buildAgentRunTerminalOutcome({
+          status: error ? "error" : "ok",
+          stopReason: error ? "error" : "stop",
+          error,
+        }),
+      };
+      // Exercise the same error selector and publisher used by command post-run settlement.
+      expect(lifecycle.resolveResultError(result, false)).toBe(error);
+      if (lifecycle.resolveResultError(result, false)) {
+        lifecycle.emitResultError(result, false, terminal);
+      } else {
+        lifecycle.emitEnd(terminal);
+      }
+      callbacks.onAttemptTerminalReplaced();
+      lifecycle.emitEnd(terminal);
+      expect(state.currentTurnUserMessagePersisted).toBe(true);
+      expect(state.lifecycleEnded).toBe(true);
+      expect(emitAgentEvent).toHaveBeenCalledOnce();
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      assert.isDefined(event);
+      const data = event.data;
+      expect(data).toMatchObject({
+        phase: error ? "error" : "end",
+        terminalReceipt: receipt,
+        executionSettled: true,
+      });
+      expect(data.error).toBe(error);
+      expect(data).not.toHaveProperty("errorObservation");
+    },
+  );
+
   it("publishes an outer timeout that arrives after a yielded result", () => {
     emitAgentEvent.mockClear();
     const controller = new AbortController();
@@ -135,12 +221,12 @@ describe("createAgentCommandLifecycle", () => {
         yielded: true,
         replayInvalid: true,
         error: { message: `Authorization: Bearer ${secret}`, nested: { secret } },
-        terminalDelivery: {
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "sent",
           resultCount: 2,
           errorMessage: secret,
           target: "private-target",
-        },
+        }),
         unsafeMetadata: { credential: secret },
       };
       const lifecycle = createLifecycle("terminal-owner");
@@ -234,6 +320,108 @@ describe("createAgentCommandLifecycle", () => {
         data: expect.objectContaining({
           phase: "error",
           error: expected,
+          executionSettled: true,
+        }),
+      }),
+    );
+  });
+
+  it("replaces a provisional overflow with the final compaction failure", async () => {
+    emitAgentEvent.mockClear();
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error:
+          "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+        errorObservation: { failoverReason: "context_overflow" },
+      },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "compaction-recovery-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state,
+    });
+    const text =
+      "Auto-compaction failed before the next model request: the model exhausted its summary output budget without producing summary text. Try again or run /compact.";
+    const result = {
+      payloads: [{ text, isError: true }],
+      meta: {
+        durationMs: 0,
+        finalAssistantVisibleText: text,
+        error: { kind: "compaction_failure" as const, message: "Summary output budget exhausted" },
+      },
+    };
+    const terminal = {
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
+    expect(lifecycle.resolveResultError(result, false)).toBe(text);
+    expect(lifecycle.resolveTerminalError(result, false, terminal)).toBe(text);
+    lifecycle.emitResultError(result, false, terminal);
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ phase: "error", error: text, executionSettled: true }),
+      }),
+    );
+    expect(emitAgentEvent.mock.calls[0]?.[0].data).not.toHaveProperty("errorObservation");
+  });
+
+  it("preserves overflow observations for overflow-shaped compaction failures", async () => {
+    emitAgentEvent.mockClear();
+    const observation = {
+      failoverReason: "context_overflow" as const,
+      provider: "test-provider",
+      model: "test-model",
+    };
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    };
+    await createAgentAttemptLifecycleCallbacks(state).onAgentEvent({
+      stream: "lifecycle",
+      data: {
+        phase: "finishing",
+        error: "Context overflow: prompt too large for the model.",
+        errorObservation: observation,
+      },
+    });
+    const lifecycle = createAgentCommandLifecycle({
+      runId: "overflow-shaped-compaction-owner",
+      lifecycleGeneration: () => "test-generation",
+      startedAt: 100,
+      state,
+    });
+    const text =
+      "request_too_large: summarization failed - Request size exceeds model context window";
+    const result = {
+      payloads: [{ text, isError: true }],
+      meta: {
+        durationMs: 0,
+        finalAssistantVisibleText: text,
+        error: { kind: "compaction_failure" as const, message: text },
+      },
+    };
+    const terminal = {
+      metadata: {},
+      outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+    };
+
+    lifecycle.emitResultError(result, false, terminal);
+
+    expect(emitAgentEvent).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          phase: "error",
+          error: text,
+          errorObservation: observation,
           executionSettled: true,
         }),
       }),
@@ -412,12 +600,21 @@ describe("createAgentCommandLifecycle", () => {
     const lifecycle = createLifecycle("post-turn-delivery-owner");
     lifecycle.emitPostTurnError(new Error("delivery failed"), {
       metadata: {
-        terminalDelivery: {
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot({
           status: "failed",
           resultCount: 0,
           errorMessage: secret,
+        }),
+        terminalReceipt: {
+          runId: "unrelated-receipt",
+          sessionId: "session",
+          turnId: "turn",
+          requested: { provider: "provider", model: "model" },
+          effective: { provider: "provider", model: "model", responseModel: "model" },
+          successfulToolNames: [],
+          rerouted: false,
+          terminalDisposition: "visible",
         },
-        terminalReceipt: { runId: "unrelated-receipt", secret },
         terminalReply: { disposition: "visible", text: secret },
         unsafeMetadata: { secret },
       },
@@ -465,8 +662,8 @@ describe("createAgentCommandLifecycle", () => {
         providerStarted: malicious,
         livenessState: malicious,
         replayInvalid: malicious,
-        terminalReceipt: malicious,
-        terminalDelivery: malicious,
+        terminalReceipt: normalizeAgentRunTerminalReceipt(malicious),
+        terminalDelivery: normalizeAgentRunTerminalDeliverySnapshot(malicious),
         error: malicious,
         unknownMetadata: malicious,
       },

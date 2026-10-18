@@ -268,6 +268,81 @@ describe("shared worktree receipt observation", () => {
     }
   });
 
+  it("borrows prepared session custody for receipt reads and rejects its release", async () => {
+    const { prepareGitHubPublicationSession } =
+      await import("./github-publication-availability.js");
+    await persistPublicationTestSession();
+    using selected = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
+    const entry = selected.readCurrent().entry!;
+    const identity = { ...session, lifecycleRevision: entry.lifecycleRevision ?? null };
+    const coordinator = sharedPublicationCoordinator();
+    expect(
+      await coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
+    ).toBeNull();
+    selected.release();
+    await expect(
+      coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent()),
+    ).rejects.toThrow("session lifecycle changed");
+  });
+
+  it("shares a reconnect burst's pending observation and invalidates it on publication", async () => {
+    const { prepareGitHubPublicationSession } =
+      await import("./github-publication-availability.js");
+    await persistPublicationTestSession();
+    using selected = await prepareGitHubPublicationSession(SESSION_KEY, { agentId: "main" });
+    const identity = {
+      ...session,
+      lifecycleRevision: selected.readCurrent().entry!.lifecycleRevision ?? null,
+    };
+    const coordinator = sharedPublicationCoordinator();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const freshEntered = createDeferredCore();
+    const execute = stateReads.executeExistingOpenClawStateRead;
+    const held = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockImplementation(async (...args) => {
+        const result = await execute(...args);
+        if (args[1].type === "githubPublication.sharedObservation") {
+          entered.resolve();
+          if (held.mock.calls.length === 2) {
+            freshEntered.resolve();
+          }
+          await release.promise;
+        }
+        return result;
+      });
+    const observe = () =>
+      coordinator.latestShared(identity, undefined, undefined, () => selected.readCurrent());
+    const burst = Promise.allSettled(Array.from({ length: 150 }, observe));
+    let fresh: ReturnType<typeof observe> | undefined;
+    let retired: ReturnType<typeof observe> | undefined;
+    try {
+      await entered.promise;
+      expect(held).toHaveBeenCalledTimes(1);
+      insertSharedWorktreeReceipt("new-publication", { session: identity });
+      fresh = observe();
+      await freshEntered.promise;
+      expect(held).toHaveBeenCalledTimes(2);
+      await deleteRegistryWorktree(process.env, "worktree-1");
+      retired = observe();
+      expect(held).toHaveBeenCalledTimes(3);
+      release.resolve();
+      expect(await burst).toEqual(
+        Array.from({ length: 150 }, () => ({ status: "fulfilled", value: null })),
+      );
+      expect((await fresh)?.result.requestId).toBe("new-publication");
+      expect(await retired).toBeNull();
+      await observe();
+      expect(held).toHaveBeenCalledTimes(4);
+    } finally {
+      release.resolve();
+      await burst;
+      await fresh?.catch(() => {});
+      await retired?.catch(() => {});
+    }
+  });
+
   it("rehydrates a real publication from immutable receipts without Git, credentials, replay, or events", async () => {
     const coordinator = sharedPublicationCoordinator();
     const published = await coordinator.requestForSessionV2({

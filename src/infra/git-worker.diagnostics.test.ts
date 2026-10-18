@@ -29,7 +29,7 @@ afterEach(async () => {
   logs.info.mockClear();
 });
 
-it("reuses concurrent Git readers across recurring sub-minute polls and releases them when idle", async () => {
+it("reuses concurrent Git readers across polling intervals and releases them when idle", async () => {
   const lifecycle = () =>
     getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
       (worker) => worker.script === "git-operation.worker.js",
@@ -49,12 +49,12 @@ it("reuses concurrent Git readers across recurring sub-minute polls and releases
   try {
     await expect(poll()).resolves.toEqual([[], []]);
     expect(starts() - before).toBe(2);
-    for (let round = 0; round < 3; round++) {
-      await vi.advanceTimersByTimeAsync(45_000);
+    for (const pollMs of [45_000, 60_001, 90_000]) {
+      await vi.advanceTimersByTimeAsync(pollMs);
       await expect(poll()).resolves.toEqual([[], []]);
       expect(starts() - before).toBe(2);
     }
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     await vi.waitFor(() => expect(idleExits() - exitsBefore).toBe(2));
     await expect(poll()).resolves.toEqual([[], []]);
     expect(starts() - before).toBe(4);

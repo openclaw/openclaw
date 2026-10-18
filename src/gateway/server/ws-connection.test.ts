@@ -1,13 +1,23 @@
 // Gateway WebSocket connection tests cover handshake auth, shared sessions, and message-handler attachment.
 import { once } from "node:events";
+import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
 import * as Ws from "../../../packages/gateway-client/src/websocket.test-support.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import {
+  onInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
@@ -57,7 +67,6 @@ vi.mock("../talk/session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalkConnectionMock,
 }));
 
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { markPublicWorkerIngress } from "./public-worker-ingress-context.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
@@ -123,9 +132,118 @@ describe("attachGatewayWsConnectionHandler", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it("counts accepted event bytes per socket with bounded names and live operator connections", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const observations: DiagnosticEventPayload[] = [];
+    const operatorCounts = () =>
+      observations
+        .filter((event) => event.type === "gateway.ws.connections")
+        .map((event) => event.operators);
+    setDiagnosticsEnabledForProcess(true);
+    const subscribe = () =>
+      onInternalDiagnosticEvent((event) => observations.push(event), {
+        include: ["gateway.ws.event", "gateway.ws.connections"],
+      });
+    let unsubscribe = subscribe();
+    let stopUntrusted = () => {};
+    const first = attachGatewayWsForTest({ attach: attachGatewayWsConnectionHandler });
+    await waitForLazyMessageHandler();
+    expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(1);
+    const second = createGatewayWsTestSocket();
+    first.listeners.get("connection")!(second, first.upgradeReq);
+    await waitForLazyMessageHandler();
+    expect(attachGatewayWsMessageHandlerMock).toHaveBeenCalledTimes(2);
+    const handlers = attachGatewayWsMessageHandlerMock.mock.calls.map(
+      ([handler]) =>
+        handler as import("./ws-connection/message-handler-types.js").GatewayWsMessageHandlerParams,
+    );
+    try {
+      for (const [index, socket] of [first.socket, second].entries()) {
+        const handler = handlers[index]!;
+        expect(
+          handler.setClient({
+            socket,
+            connId: handler.connId,
+            connect: {
+              role: "operator",
+              scopes: ["operator.read"],
+              client: { id: "openclaw-control-ui", mode: "webchat" },
+            } as GatewayWsClient["connect"],
+            usesSharedGatewayAuth: false,
+          }),
+        ).toBe(true);
+      }
+      await yieldImmediate();
+      await waitForDiagnosticEventsDrained();
+      expect(operatorCounts()).toEqual([0, 1, 2]);
+      const challenges = observations.filter((event) => event.type === "gateway.ws.event");
+      expect(challenges.every((event) => event.event === "connect.challenge")).toBe(true);
+      expect(challenges.reduce((sum, event) => sum + event.count, 0)).toBe(2);
+      observations.length = 0;
+      unsubscribe();
+      vi.advanceTimersByTime(30_000);
+      stopUntrusted = onInternalDiagnosticEvent(() => {}, {
+        include: ["gateway.ws.connections"],
+        includeTrusted: [],
+      });
+      unsubscribe = subscribe();
+      vi.advanceTimersByTime(30_000);
+      const { broadcast } = createGatewayBroadcaster({ clients: first.clients });
+      broadcast("tick", { text: "é🦞" });
+      handlers[0]!.send({
+        type: "event",
+        event: "private-dynamic-name",
+        payload: "private-content",
+      });
+      handlers[0]!.send({ type: "res", id: "not-an-event", ok: true });
+      second.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+      broadcast("tick", { text: "only-first" }, { dropIfSlow: true });
+      await yieldImmediate();
+      await waitForDiagnosticEventsDrained();
+      const events = observations.filter((event) => event.type === "gateway.ws.event");
+      expect(events.map(({ event, count }) => ({ event, count }))).toEqual([
+        { event: "tick", count: 3 },
+        { event: "other", count: 1 },
+      ]);
+      const firstFrame = first.socket.send.mock.calls.find(([frame]) =>
+        String(frame).includes('"event":"tick"'),
+      )![0];
+      const lastFrame = first.socket.send.mock.lastCall![0];
+      expect(events[0]!.bytes).toBe(
+        2 * Buffer.byteLength(firstFrame) + Buffer.byteLength(lastFrame),
+      );
+      expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
+      expect(operatorCounts()).toEqual([2]);
+      observations.length = 0;
+      setDiagnosticsEnabledForProcess(false);
+      vi.advanceTimersByTime(30_000);
+      await waitForDiagnosticEventsDrained();
+      expect(observations).toEqual([]);
+      setDiagnosticsEnabledForProcess(true);
+      vi.advanceTimersByTime(30_000);
+      await waitForDiagnosticEventsDrained();
+      expect(operatorCounts()).toEqual([2]);
+      observations.length = 0;
+      handlers[0]!.close();
+      handlers[0]!.close();
+      handlers[1]!.close();
+      await yieldImmediate();
+      await waitForDiagnosticEventsDrained();
+      expect(operatorCounts()).toEqual([1, 0]);
+    } finally {
+      handlers.forEach((handler) => handler.close());
+      first.listeners.get("close")?.();
+      unsubscribe();
+      stopUntrusted();
+      setDiagnosticsEnabledForProcess(false);
+    }
+  });
+
   it("keeps public worker sockets off the legacy challenge and plugin surface", async () => {
     const socket = createGatewayWsTestSocket();
     const previous = {
+      connId: "worker-previous",
+      connect: { client: { id: "openclaw-worker", mode: "worker" }, role: "worker" },
       socket: { terminate: vi.fn() },
       worker: { environmentId: "worker-1" },
     };
@@ -163,6 +281,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       publicAdmission: { clientIp: "203.0.113.10", rateLimiter },
     });
     const client = {
+      connId: "worker-current",
       socket,
       connect: { client: { id: "openclaw-worker", mode: "worker" } },
       worker: { environmentId: "worker-1" },
@@ -414,42 +533,6 @@ describe("attachGatewayWsConnectionHandler", () => {
     );
   });
 
-  it("cancels direct-response forced termination after the socket closes", async () => {
-    vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket();
-    const { passed } = await connectTestWs({ socket });
-    const handlerParams = passed as { send: (frame: unknown) => { kind: string } };
-    socket.send.mockClear();
-    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-
-    expect(handlerParams.send({ type: "res", id: "req-slow", ok: true })).toEqual({
-      kind: "unavailable",
-    });
-    socket.emit("close", 1008, Buffer.from("slow consumer"));
-    vi.advanceTimersByTime(WEBSOCKET_CLOSE_GRACE_MS);
-
-    expect(socket.terminate).not.toHaveBeenCalled();
-  });
-
-  it("terminates direct responses immediately when close cannot be queued", async () => {
-    vi.useFakeTimers();
-    const socket = createGatewayWsTestSocket();
-    socket.close.mockImplementationOnce(() => {
-      throw new Error("close unavailable");
-    });
-    const { passed } = await connectTestWs({ socket });
-    const handlerParams = passed as { send: (frame: unknown) => { kind: string } };
-    socket.send.mockClear();
-    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-
-    expect(handlerParams.send({ type: "res", id: "req-slow", ok: true })).toEqual({
-      kind: "unavailable",
-    });
-
-    expect(socket.terminate).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("shares one broadcast slow-consumer close with Gateway shutdown", async () => {
     vi.useFakeTimers();
     const socket = createGatewayWsTestSocket();
@@ -485,6 +568,82 @@ describe("attachGatewayWsConnectionHandler", () => {
 
     expect(socket.terminate).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("batches a broadcast burst into one socket write while preserving response order", async () => {
+    const server = new Ws.WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const accepted = once(server, "connection");
+    const peer = new Ws.WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    await once(peer, "open");
+    const [socket, request] = (await accepted) as [Ws.WebSocket, IncomingMessage];
+    const writes = vi.spyOn(request.socket, "write");
+    try {
+      const { clients } = attachGatewayWsForTest({
+        attach: attachGatewayWsConnectionHandler,
+        socket: socket as unknown as GatewayWsTestSocket,
+        requestSocket: request.socket,
+      });
+      await waitForLazyMessageHandler();
+      const handler = firstAttachedHandlerParams() as {
+        connId: string;
+        setClient: (client: GatewayWsClient) => boolean;
+        send: (frame: unknown) => unknown;
+      };
+      expect(
+        handler.setClient({
+          socket,
+          connId: handler.connId,
+          connect: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "openclaw-control-ui",
+              version: "test",
+              platform: "test",
+              mode: "webchat",
+            },
+            role: "operator",
+            scopes: ["operator.read"],
+          },
+          usesSharedGatewayAuth: false,
+        }),
+      ).toBe(true);
+      writes.mockClear();
+      const received: unknown[] = [];
+      const complete = createDeferred();
+      peer.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data));
+        if (frame.event === "connect.challenge") {
+          return;
+        }
+        received.push(frame);
+        if (received.length === 4) {
+          complete.resolve();
+        }
+      });
+      const { broadcast } = createGatewayBroadcaster({ clients });
+      broadcast("tick", { value: 1 });
+      broadcast("tick", { value: 2 });
+      handler.send({ type: "res", id: "between", ok: true });
+      broadcast("tick", { value: 3 });
+      expect([...clients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
+      await complete.promise;
+      expect(received).toEqual([
+        { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
+        { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
+        { type: "res", id: "between", ok: true },
+        { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
+      ]);
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
+    } finally {
+      peer.terminate();
+      socket.terminate();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it.each(["closing", "failed-send"] as const)(

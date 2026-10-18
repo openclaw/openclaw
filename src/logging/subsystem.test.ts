@@ -56,12 +56,63 @@ afterAll(async () => {
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
-  it("records raw Code Mode causes and correlation ids without a debug flag", async () => {
+  it.each([
+    ["guest", undefined, "WARN"],
+    ["input", undefined, "WARN"],
+    ["bridge", "invalid_input", "WARN"],
+    ["bridge", "input_contract", "WARN"],
+    ["bridge", "tool_error", "ERROR"],
+    ["bridge", "output_contract", "ERROR"],
+    ["host", "runtime_unavailable", "ERROR"],
+  ] as const)("logs %s/%s failures at %s", async (failurePhase, failureCode, level) => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+    logCodeModeFailure(new Error("synthetic failure"), { failurePhase, failureCode });
+    await testApi.flushFileLogQueueForTests();
+    const records = fs
+      .readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    expect(records[0]._meta.logLevelName).toBe(level);
+  });
+
+  it("records content-free Code Mode failure categories and correlation ids without a debug flag", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "error", consoleLevel: "silent", file });
     vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", "0");
-    const cause = new TypeError("synthetic failure token=example-fixture-value");
-    logCodeModeFailure(cause, {
+    const marker = "synthetic-private-code-mode-content";
+    const privateFields = {
+      name: `${marker}-name`,
+      code: `${marker}-code`,
+      stack: `${marker}-stack`,
+    };
+    const failures = [
+      {
+        error: Object.assign(new TypeError(`${marker} timed out`), privateFields),
+        expected: { errorCategory: "TypeError", failureKind: "timeout" },
+      },
+      {
+        error: new Error(marker, {
+          cause: Object.assign(new RangeError(`${marker} connection reset`), privateFields),
+        }),
+        expected: { errorCategory: "RangeError", failureKind: "connection_reset" },
+      },
+      {
+        error: { ...privateFields, message: `${marker} aborted` },
+        expected: { errorCategory: "object", failureKind: "aborted" },
+      },
+      {
+        error: new Error(marker, {
+          cause: Object.assign(new Error(marker), privateFields, {
+            code: "ERR_WORKER_OUT_OF_MEMORY",
+          }),
+        }),
+        expected: { errorCategory: "Error", errorCode: "ERR_WORKER_OUT_OF_MEMORY" },
+      },
+    ];
+    const context = {
       failurePhase: "bridge",
       sessionId: "session-fixture",
       sessionKey: "agent:fixture:main",
@@ -71,22 +122,20 @@ describe("createSubsystemLogger().isEnabled", () => {
       workerId: "worker-fixture",
       bridgeRequestId: "bridge:callValue:1",
       bridgeDispatchStarted: true,
-    });
+    };
+    for (const { error } of failures) {
+      logCodeModeFailure(error, context);
+    }
     await testApi.flushFileLogQueueForTests();
     const raw = fs.readFileSync(file, "utf8");
-    expect(raw).toContain(cause.message);
-    expect(raw).toContain("TypeError");
-    expect(raw).toContain("subsystem.test.ts");
-    for (const id of [
-      "session-fixture",
-      "agent-run-fixture",
-      "cell-fixture",
-      "call-fixture",
-      "worker-fixture",
-      "bridge:callValue:1",
-    ]) {
-      expect(raw).toContain(id);
-    }
+    expect(raw).not.toContain(marker);
+    const records = raw
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => record["1"])).toEqual(
+      failures.map(({ expected }) => Object.assign({}, context, expected)),
+    );
   });
   it.each([
     {

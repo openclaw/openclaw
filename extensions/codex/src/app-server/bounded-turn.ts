@@ -13,7 +13,7 @@ import {
 import type { CodexAppServerAuthRequirement, CodexAppServerPreparedAuth } from "./auth-types.js";
 import { assertCodexPrivateHookIsolation } from "./bounded-hook-policy.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexAppServerRuntimeOptions, type CodexPluginConfig } from "./config.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
 import type { CodexUsageProjection } from "./event-projector-usage.js";
@@ -67,7 +67,7 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 };
 
 export type CodexBoundedTurnOptions = {
-  pluginConfig?: unknown;
+  pluginConfig?: CodexPluginConfig;
   clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 

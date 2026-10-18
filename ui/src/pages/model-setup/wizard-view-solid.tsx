@@ -2,16 +2,17 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/modal-dialog.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
-import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 registerModelSetupEnglish();
 
 export type WizardViewProps = {
+  onDialogRef?: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => void;
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
@@ -27,13 +28,25 @@ export type WizardViewProps = {
 };
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
-  let content: HTMLDivElement | undefined;
+  let focusTargets = new Set<HTMLElement>();
+  const autofocusRef = (element: HTMLElement) => {
+    focusTargets.add(element);
+  };
+  // Focus the committed wizard step after its identity or completion actions change.
   createEffect(
     () =>
       props.state.phase === "step"
         ? props.state.step.id
         : `${props.state.phase}:${Boolean(props.doneAction)}`,
-    () => content?.querySelector<HTMLElement>("[autofocus]")?.focus({ preventScroll: true }),
+    () => {
+      focusTargets = new Set([...focusTargets].filter((element) => element.isConnected));
+      const target = [...focusTargets]
+        .filter((element) => element.autofocus)
+        .toSorted((left, right) =>
+          left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+        )[0];
+      target?.focus({ preventScroll: true });
+    },
   );
   const copy = createMemo(() => WIZARD_COPY[props.mode]);
   const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
@@ -44,6 +57,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
   return (
     <Show when={props.state.phase !== "idle"}>
       <openclaw-modal-dialog
+        ref={(element) => props.onDialogRef?.(element)}
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
@@ -55,9 +69,6 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               "model-setup-wizard--done": props.state.phase === "done",
             },
           ]}
-          ref={(element) => {
-            content = element;
-          }}
         >
           <Show when={props.state.phase !== "done"}>
             <div class="model-setup-wizard__header">
@@ -141,6 +152,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       </div>
                     </Show>
                     <WizardStepControls
+                      presentation="model-setup"
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
                       value={props.value}
@@ -161,6 +173,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       }
                       onValueChange={(value) => props.onValueChange(value)}
                       onAnswer={(value) => props.onAnswer(value)}
+                      onAutofocusRef={autofocusRef}
                     />
                     <Show
                       when={
@@ -185,6 +198,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               <Show when={props.state.phase === "done" && props.doneAction}>
                 {(action) => (
                   <button
+                    ref={autofocusRef}
                     type="button"
                     class="btn primary"
                     data-login-start-chat
@@ -201,6 +215,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 )}
               </Show>
               <button
+                ref={autofocusRef}
                 type="button"
                 class="btn"
                 autofocus={props.state.phase !== "done" || !props.doneAction}

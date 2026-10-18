@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type {
   SkillsLibraryListResult,
@@ -69,7 +69,18 @@ async function openSkills(page: Page) {
     await root.click();
   }
   await menu.getByText("Selected for this session", { exact: true }).waitFor();
+  await waitForMenuFocusHandoff(page, menu, "skills");
   return menu;
+}
+
+async function waitForMenuFocusHandoff(page: Page, menu: Locator, view: string) {
+  await expect.poll(() => menu.getAttribute("data-view")).toBe(view);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
 }
 
 suite.define(() => {
@@ -174,19 +185,21 @@ suite.define(() => {
         name: "Read selected revision",
         exact: true,
       });
+      await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
       const back = menu.getByRole("menuitem", { name: "Back", exact: true });
       await page.keyboard.press("Home");
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       await page.keyboard.press("Enter");
       await menu.getByText("Selected for this session", { exact: true }).waitFor();
-      // The new view renders before its frame-bound focus handoff finishes.
+      await waitForMenuFocusHandoff(page, menu, "skills");
       await expect.poll(() => back.evaluate((node) => node.matches(":focus"))).toBe(true);
       expect(await gateway.getRequests("skills.library.activate")).toHaveLength(0);
       await page.keyboard.press("Home");
       await page.keyboard.press("ArrowDown");
       await expect.poll(() => aliceItem.evaluate((node) => node.matches(":focus"))).toBe(true);
       await page.keyboard.press("Enter");
+      await waitForMenuFocusHandoff(page, menu, `library:${alice.entry.skillId}`);
       await readAction.waitFor({ state: "visible" });
       expect(await menu.getByText("release-notes · Alice", { exact: true }).count()).toBe(1);
       await waitForControlUiProofSurface(menuPanel, [

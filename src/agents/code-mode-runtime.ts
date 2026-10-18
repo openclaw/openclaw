@@ -1,3 +1,4 @@
+import { asPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -101,10 +102,6 @@ function readExecutor(value: unknown): CodeModeConfig["executor"] {
   throw new ToolInputError('Code Mode executor must be "node" or "quickjs".');
 }
 
-export function readPositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,
@@ -112,7 +109,7 @@ export function resolveCodeModeConfig(
 ): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId, model);
   const limit = (key: string, fallback: number, min: number, max: number) =>
-    clampNumber(readPositiveInteger(raw[key], fallback), min, max);
+    clampNumber(asPositiveInteger(raw[key]) ?? fallback, min, max);
   const maxSearchLimit = limit("maxSearchLimit", 50, 1, 50);
   return {
     enabled: readEnabled(raw.enabled),

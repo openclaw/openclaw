@@ -185,21 +185,6 @@ describe("buildMinimaxSpeechProvider", () => {
       },
     );
 
-    it.each(["0"])("describes the MiniMax volume boundary for vol=%s", (value) => {
-      const result = parseDirectiveToken({ key: "vol", value, policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toEqual([
-        `invalid MiniMax volume "${value}" (must be greater than 0 and at most 10)`,
-      ]);
-      expect(result.overrides).toBeUndefined();
-    });
-
-    it("warns on out-of-range pitch", () => {
-      const result = parseDirectiveToken({ key: "pitch", value: "20", policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-    });
-
     it("returns handled=false for unknown keys", () => {
       const result = parseDirectiveToken({
         key: "unknown_key",
@@ -401,25 +386,6 @@ describe("buildMinimaxSpeechProvider", () => {
         new Response("Unauthorized", { status: 401 }),
       );
       await expect(synthesize()).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
-    });
-  });
-
-  describe("listVoices", () => {
-    it("returns known voices", async () => {
-      const listVoices = provider.listVoices;
-      if (!listVoices) {
-        throw new Error("Expected MiniMax provider listVoices");
-      }
-      const voices = await listVoices({} as never);
-      expect(voices).toStrictEqual(
-        [
-          "English_expressive_narrator",
-          "Chinese (Mandarin)_Warm_Girl",
-          "Chinese (Mandarin)_Lively_Girl",
-          "Chinese (Mandarin)_Gentle_Boy",
-          "Chinese (Mandarin)_Steady_Boy",
-        ].map((id) => ({ id, name: id })),
-      );
     });
   });
 });

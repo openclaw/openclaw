@@ -115,12 +115,12 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
     });
     mergeProfiles(source, target);
     const context = captureOpenClawStateWorkerContext();
-    const readIdentity = () =>
+    const readWriterObservation = () =>
       executeOpenClawStateWorker(context, {
-        type: "deviceIdentity.read",
-        input: { identityKey: "preference-reader-test" },
+        type: "deviceAuth.read",
+        input: { deviceId: "preference-reader-test", role: "operator", readOnly: false },
       });
-    await readIdentity();
+    await readWriterObservation();
     const replyReady = createDeferredCore();
     let publish: (() => void) | undefined;
     let selected: { worker: Worker; id: number } | undefined;
@@ -137,9 +137,9 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
         const command: unknown = deserialize(request.input);
         if (
           isRecord(command) &&
-          command.type === "deviceIdentity.read" &&
+          command.type === "deviceAuth.read" &&
           isRecord(command.input) &&
-          command.input.identityKey === "preference-reader-test"
+          command.input.deviceId === "preference-reader-test"
         ) {
           selected = { worker: this, id: request.id };
         }
@@ -158,7 +158,7 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
       }
       return originalEmit.call(this, event, reply);
     });
-    const pendingWriter = readIdentity();
+    const pendingWriter = readWriterObservation();
     try {
       await withinTest(replyReady.promise, signal);
       expect(

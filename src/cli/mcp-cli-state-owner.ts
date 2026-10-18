@@ -17,7 +17,10 @@ export function offlineMcpAction<Args extends unknown[], T>(
       params: {},
       target: "MCP credentials and configuration",
       onForeignOwner: "refuse",
-      runLocal: async (owner) => action(owner, ...args),
+      runLocal: async (owner) => {
+        owner.assertCurrent();
+        return action(owner, ...args);
+      },
     });
 }
 

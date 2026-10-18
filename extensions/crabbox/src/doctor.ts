@@ -12,6 +12,7 @@ import * as managedBinary from "./crabbox-managed-binary.js";
 import { CRABBOX_WORKER_PROVIDER_ID, parseCrabboxSetupSecrets } from "./crabbox-worker-profile.js";
 import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
 import {
+  admitCrabboxWarmImageProfile,
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   projectCrabboxWarmImage,
@@ -293,7 +294,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
           ...(ctx.env ? { env: ctx.env } : {}),
         });
         for (const { key, value } of entries) {
-          const image = projectCrabboxWarmImage(key, value);
+          const image = projectCrabboxWarmImage(key, admitCrabboxWarmImageProfile(value)!);
           const facts = [
             image.profileId,
             image.backend,

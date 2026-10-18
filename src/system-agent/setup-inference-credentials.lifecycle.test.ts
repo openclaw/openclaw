@@ -19,6 +19,7 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -45,6 +46,7 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
+import * as providerRuntime from "../plugins/providers.runtime.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -62,7 +64,7 @@ import {
   type SetupCredentialActivationReceipt,
 } from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 const installRuntime = vi.hoisted(() =>
   vi.fn<typeof OnboardingPluginInstall.ensureOnboardingPluginInstalled>(),
@@ -466,16 +468,12 @@ it.each([
       ],
     };
     setup.deps.resolveManifestProviderAuthChoice = () => choice;
-    setup.deps.resolvePluginProviders = () => [provider];
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: [
-        pluginRecord("meta"),
-        pluginRecord("muse"),
-        pluginRecord("codex"),
-        pluginRecord("openai"),
-      ],
+    vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
+    const phases: string[] = [];
+    const verifySetup = vi.fn(async () => {
+      phases.push("verify");
     });
-    const verifySetup = vi.fn(async () => {});
     setup.pluginRegistry.agentHarnesses.push({
       pluginId: "muse",
       source: "test",
@@ -499,6 +497,7 @@ it.each([
     installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
       expect(entry.pluginId).toBe("muse");
       await beforePersistentEffect?.();
+      phases.push("install");
       return {
         installed: true,
         status: "installed",
@@ -526,6 +525,7 @@ it.each([
           surface: "gateway",
           runtime: createNonExitingRuntime(),
           prompter: setup.prompter,
+          onActivationStarted: () => phases.push("activate"),
           deps: setup.deps,
           assertCurrent: () => {
             if (!authorized) {
@@ -625,7 +625,10 @@ it.each([
           tracker.wizardSessions.get(params.sessionId),
           "login session",
         );
-        const consent = await session.next();
+        let consent = await session.next();
+        while (consent.step?.type === "progress") {
+          consent = await session.next();
+        }
         expect(consent.step).toMatchObject({
           type: "select",
           message: expect.stringContaining("Use Muse Code’s native permissions?"),
@@ -646,6 +649,12 @@ it.each([
     } else {
       const result = await activateCandidate();
       expect(result).toMatchObject({ ok: true, modelRef: selectedModel, modelName });
+    }
+    if (selectModel !== false) {
+      expect(phases.indexOf("activate")).toBeLessThan(phases.indexOf("install"));
+      const verification = phases.indexOf("verify");
+      expect(verification).toBeGreaterThan(phases.indexOf("install"));
+      expect(phases.indexOf("activate", verification + 1)).toBeGreaterThan(verification);
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
     expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
@@ -673,6 +682,7 @@ it.each([
     expect(verifySetup).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
     );
+    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(setup.run).not.toHaveBeenCalled();
   },
 );

@@ -62,7 +62,6 @@ const SubagentsToolSchema = Type.Object({
 });
 type SubagentsToolOptions = {
   agentSessionKey?: string;
-  callerPolicySessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 };
@@ -221,7 +220,10 @@ function waitForSelectedRuns(params: {
 }
 
 export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTool {
-  const readScope = (readController: ReturnType<typeof createSubagentControllerRead>["read"]) => {
+  const readScope = (
+    readController: ReturnType<typeof createSubagentControllerRead>["read"],
+    selectedRunId?: string,
+  ) => {
     const cfg = opts.config ?? getRuntimeConfig();
     const controller = readController();
     if (!controller.controllerAgentId) {
@@ -244,6 +246,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         current.controllerSessionKey,
         current.controllerAgentId,
         cfg,
+        selectedRunId,
       );
       for (const entry of entries) {
         readable.set(entry.runId, entry);
@@ -282,7 +285,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry: SubagentRunRecord;
             generation: SubagentRunRecord["generation"];
             createdAt: number;
-            ownership: ReturnType<typeof subagentRuns.captureRegistrationOwnership>;
           }
         | undefined;
       const assertSelection = () => {
@@ -298,15 +300,9 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
             entry,
             generation: entry.generation,
             createdAt: entry.createdAt,
-            ownership: subagentRuns.captureRegistrationOwnership(
-              entry.childSessionKey,
-              entry,
-              entry.childAgentId,
-            ),
           };
         }
         if (selection) {
-          selection.ownership.assertCurrent();
           if (
             !entry ||
             !isSameSubagentRunOwner(entry, selection.entry) ||
@@ -323,7 +319,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         agentId: opts.agentId,
         assertCurrent: assertSelection,
       });
-      const readCurrentScope = () => readScope(controllerRead.read);
+      const readCurrentScope = () => readScope(controllerRead.read, requestedRunId);
       const prepareRead = () => {
         assertSelection();
         if (!getSubagentSessionListReadSnapshotIdentity()) {
@@ -430,7 +426,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         throw new ToolInputError("Unsupported subagents action");
       } finally {
         controllerRead.release();
-        selection?.ownership.release();
       }
     },
   };

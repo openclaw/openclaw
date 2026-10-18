@@ -11,7 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { RealtimeTalkInputController } from "./input.ts";
+import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
   RealtimeTalkSessionResult,
@@ -99,7 +99,7 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
     let ownerTransferred = false;
-    let input: RealtimeTalkInputController | undefined;
+    let input: RealtimeTalkInputOwner | undefined;
     try {
       // Each start owns a new call. Provider allocation can retire an earlier
       // transport, so a failed start cannot restore that transport locally.
@@ -148,7 +148,7 @@ export class RealtimeTalkSession {
       if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
         return;
       }
-      input = new RealtimeTalkInputController(
+      input = new RealtimeTalkInputOwner(
         () => undefined,
         (detail) => this.callbacks.onStatus?.("connecting", detail),
       );

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
@@ -12,7 +12,9 @@ import "../lib/toast-host.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   type LoginFailureFeedback,
@@ -22,7 +24,7 @@ import {
 } from "./login-gate-feedback.ts";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
-import "./theme-brand-icon.ts";
+import "./theme-brand-icon.tsx";
 import "./tooltip.ts";
 
 registerEnglishCatalog(registerLoginEnglish);
@@ -367,14 +369,22 @@ function FormBody(props: ViewProps & { feedback: LoginFailureFeedback | null }) 
   );
 }
 
-function LoginGateContent(props: {
-  model: LoginGateProps;
-  host: LoginGateElement;
-}): SolidJSX.Element {
-  const host = untrack(() => props.host);
+function LoginGateContent(
+  props: {
+    model: LoginGateProps;
+  },
+  host: LoginGateElement,
+): SolidJSX.Element {
   host.style.display = "contents";
   const [refreshState, setRefreshState] = createSignal<RefreshState>("idle");
   const [now, setNow] = createSignal(Date.now());
+  useVisiblePoll(1_000, () => setNow(Date.now()), {
+    enabled: () =>
+      Boolean(props.model.reconnectPending) &&
+      props.model.lastErrorCode === "GATEWAY_BUSY" &&
+      (props.model.reconnectAt ?? 0) > now(),
+    immediate: true,
+  });
   let refreshAttempt: { props: LoginGateProps } | undefined;
   const cancelRefresh = () => {
     refreshAttempt = undefined;
@@ -409,41 +419,8 @@ function LoginGateContent(props: {
       }
     },
   );
-  createEffect(
-    () =>
-      props.model.reconnectPending &&
-      props.model.lastErrorCode === "GATEWAY_BUSY" &&
-      (props.model.reconnectAt ?? 0) > now(),
-    (running) => {
-      if (!running) {
-        return undefined;
-      }
-      let timer: ReturnType<typeof setInterval> | undefined;
-      const update = () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        timer = undefined;
-        if (document.visibilityState !== "hidden") {
-          setNow(Date.now());
-          timer = setInterval(() => setNow(Date.now()), 1000);
-        }
-      };
-      update();
-      document.addEventListener("visibilitychange", update);
-      return () => {
-        if (timer !== undefined) {
-          clearInterval(timer);
-        }
-        document.removeEventListener("visibilitychange", update);
-      };
-    },
-  );
-  host.addEventListener("login-gate-disconnect", cancelRefresh);
-  onCleanup(() => {
-    cancelRefresh();
-    host.removeEventListener("login-gate-disconnect", cancelRefresh);
-  });
+  onCleanup(cancelRefresh);
+  onCleanup(listen(host, "login-gate-disconnect", cancelRefresh));
   const refreshPage = async () => {
     const current = host.props;
     if (
@@ -552,7 +529,18 @@ function LoginGateContent(props: {
 export const LoginGate = defineSolidBridge<BridgeProps>(
   "openclaw-login-gate",
   (props, host) => (
-    <Show when={props.props}>{(model) => <LoginGateContent model={model()} host={host} />}</Show>
+    <Show when={props.props}>
+      {(model) =>
+        LoginGateContent(
+          {
+            get model() {
+              return model();
+            },
+          },
+          host,
+        )
+      }
+    </Show>
   ),
   {
     properties: { props: { default: undefined, attribute: false } },

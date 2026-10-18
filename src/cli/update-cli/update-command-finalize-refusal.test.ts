@@ -28,7 +28,10 @@ import * as shared from "./shared.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
-import { validConfigSnapshot } from "./update-command-lifecycle.test-support.js";
+import {
+  prepareFinalizationPackage,
+  validConfigSnapshot,
+} from "./update-command-lifecycle.test-support.js";
 import * as plugins from "./update-command-plugins.js";
 import * as sourceRuntime from "./update-command-runtime.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -191,10 +194,7 @@ beforeEach(async () => {
   native.root = path.join(base, "package");
   native.absent = false;
   await fs.mkdir(native.root);
-  await fs.writeFile(
-    path.join(native.root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.9.5" }),
-  );
+  await prepareFinalizationPackage(native.root);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(base, "state", "openclaw.json"));
   for (const key of [
@@ -214,7 +214,6 @@ beforeEach(async () => {
   vi.spyOn(performance, "now").mockImplementation(() => native.elapsedMs);
   await recordDeferredPluginMigrations({ pending: [pending] });
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(native.root);
-  vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
   vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess").mockResolvedValue(undefined);
   vi.spyOn(plugins, "updatePluginsAfterCoreUpdate");
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});

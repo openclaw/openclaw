@@ -15,6 +15,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import {
   adoptPreparedLocation,
   removeTempDirectory,
@@ -27,6 +28,7 @@ import type {
   PreparedSqliteReadOnlyLocation,
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
 import {
   resolveSqliteInspectionSignal,
@@ -35,6 +37,7 @@ import {
   isSqliteInspectionDeadlineOwnedByCaller,
   runSqliteReadOnlyWorker,
   runSqliteReadOnlyWorkerSync,
+  runSqliteReadOnlyWorkerOnce,
 } from "./sqlite-readonly-worker.js";
 import {
   prepareSingleFlightSqliteSnapshot,
@@ -168,7 +171,13 @@ export function startSqliteReadOnlyLocationAsync(
                 "SQLite snapshot producer returned an allocation without its prepared location",
               );
             }
-            return adoptPreparedLocation(reply.location, reply.directory, requireCleanup);
+            const prepared = adoptPreparedLocation(reply.location, reply.directory, requireCleanup);
+            // This producer lends only read-only images. Capture before flight publication:
+            // another reader's last close can remove the WAL before a later borrower arrives.
+            prepared.privateFamily = preserveSourceArtifacts
+              ? captureSqlitePrivateSnapshotFamily(reply.location, reply.directory)
+              : undefined;
+            return prepared;
           }),
           startClose: () => task.startClose(),
         };
@@ -178,21 +187,25 @@ export function startSqliteReadOnlyLocationAsync(
   );
 }
 
-/** Promise-only reads retain the token in one child, without another worker or broker. */
+/** Metadata selects live backup in a one-shot child; strict snapshots retain their raw-copy child. */
 export async function prepareSqliteReadOnlyLocationAwaited(
   inputPathname: string,
-  options: { signal: AbortSignal; expectedSourceIdentity: DatabaseFileIdentity },
+  options: {
+    signal: AbortSignal;
+    expectedSourceIdentity: DatabaseFileIdentity;
+    allowLiveOwner?: boolean;
+  },
 ): Promise<AsyncPreparedSqliteReadOnlyLocation> {
   const signal = resolveSqliteInspectionSignal(options.signal);
   const pathname = path.resolve(inputPathname);
   const expectedSourceIdentity = readDatabaseFileIdentity(options.expectedSourceIdentity);
   return prepareSingleFlightSqliteSnapshot(
     pathname,
-    `worker-sync:strict:awaited-token:${JSON.stringify(expectedSourceIdentity)}`,
+    `worker-${options.allowLiveOwner ? "metadata" : "sync"}:strict:awaited-token:${JSON.stringify(expectedSourceIdentity)}`,
     (flightSignal, recordCleanupFailure) =>
       prepareAwaitedWorkerSnapshot(
         pathname,
-        { signal: flightSignal, expectedSourceIdentity },
+        { signal: flightSignal, expectedSourceIdentity, allowLiveOwner: options.allowLiveOwner },
         recordCleanupFailure,
       ),
     signal,
@@ -201,38 +214,34 @@ export async function prepareSqliteReadOnlyLocationAwaited(
 
 async function prepareAwaitedWorkerSnapshot(
   pathname: string,
-  options: { signal: AbortSignal; expectedSourceIdentity: DatabaseFileIdentity },
+  options: {
+    signal: AbortSignal;
+    expectedSourceIdentity: DatabaseFileIdentity;
+    allowLiveOwner?: boolean;
+  },
   recordCleanupFailure: (error: unknown) => void,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   return useAwaitedSnapshotWorker(
     options.signal,
     recordCleanupFailure,
     async (worker, directory) => {
-      const location = await worker.run(pathname, {
-        mode: "sync",
+      const request = {
+        mode: options.allowLiveOwner ? ("metadata" as const) : ("sync" as const),
         stagingRoot: directory,
-        expectedSourceIdentity: readDatabaseFileIdentity(options.expectedSourceIdentity),
+        expectedSourceIdentity: options.expectedSourceIdentity,
         signal: options.signal,
-      });
+      };
+      // Native backup completion must not share the staging owner's persistent IPC session.
+      const location = options.allowLiveOwner
+        ? await runSqliteReadOnlyWorkerOnce(pathname, request)
+        : await worker.run(pathname, request);
       if (typeof location !== "string") {
         throw new Error("SQLite snapshot preparation returned an invalid location");
       }
       options.signal.throwIfAborted();
       return adoptPreparedLocation(location, directory, true);
     },
-    true,
   );
-}
-
-/** Keep raw source-file access and token retirement in one isolated native session. */
-export function withSqliteSnapshotWorker<T>(
-  signal: AbortSignal,
-  inspect: (
-    worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>,
-    directory: string,
-  ) => Promise<T>,
-): Promise<T> {
-  return useAwaitedSnapshotWorker(signal, undefined, inspect, false);
 }
 
 async function useAwaitedSnapshotWorker<T>(
@@ -242,7 +251,6 @@ async function useAwaitedSnapshotWorker<T>(
     worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>,
     directory: string,
   ) => Promise<T>,
-  retainPrepared: boolean,
 ): Promise<T> {
   signal.throwIfAborted();
   const launch = captureSqliteReadOnlyWorkerLaunch();
@@ -291,9 +299,6 @@ async function useAwaitedSnapshotWorker<T>(
     signal.throwIfAborted();
     const value = await inspect(worker, directory);
     signal.throwIfAborted();
-    if (!retainPrepared && !(await removeTempDirectoryAsync(directory))) {
-      throw new SqliteSnapshotCleanupError(`SQLite snapshot cleanup failed: ${directory}`);
-    }
     return value;
   } catch (error) {
     try {
@@ -315,6 +320,29 @@ async function useAwaitedSnapshotWorker<T>(
     }
     throw error;
   }
+}
+
+/** The retained read owner supplies the family before any native consumer can change its WAL. */
+export async function forkSqlitePrivateSnapshot(
+  pathname: string,
+  family: SqlitePrivateSnapshotFamily,
+  signal: AbortSignal,
+  assertCurrent: () => void,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  return useAwaitedSnapshotWorker(signal, undefined, async (worker, directory) => {
+    const location = await worker.run(pathname, {
+      mode: "private-fork",
+      family,
+      stagingRoot: directory,
+      signal,
+    });
+    if (typeof location !== "string") {
+      throw new Error("SQLite private fork returned an invalid location");
+    }
+    signal.throwIfAborted();
+    assertCurrent();
+    return adoptPreparedLocation(location, directory);
+  });
 }
 
 function prepareWorkerSnapshot(

@@ -48,11 +48,15 @@ export function registerGracefulGatewayShutdownTests({
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
+  abortEmbeddedAgentRun,
+  abortActiveCronTaskRuns,
 }: UpdateRespawnFixtures): void {
   registerTimedOutGatewayStopTests({
     createSignaledLoopHarness,
     waitForGatewayActiveWork,
     gatewayLog,
+    abortEmbeddedAgentRun,
+    abortActiveCronTaskRuns,
   });
 
   it("exits 0 on SIGTERM after graceful close", async () => {

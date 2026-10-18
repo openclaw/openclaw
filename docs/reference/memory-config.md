@@ -106,17 +106,23 @@ does not open the memory index, download a local model, or re-index your files.
 Ollama and LM Studio use their running servers and already-downloaded embedding
 models; see [interactive memory setup](/cli/configure#memory-section).
 
-| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
-| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
-| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                         |
+| ---------- | --------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                                     |
+| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `omlx`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                                |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                          |
 
 When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
 explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
 Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
+
+For [oMLX](/providers/omlx), set `provider: "omlx"` and an explicit embedding
+model ID from the server's `/v1/models` endpoint. Chat and memory share
+`models.providers.omlx.baseUrl` and optional credentials saved by setup. For
+an authenticated memory-only connection, set `memory.search.remote.apiKey`
+explicitly, for example to `"${OMLX_API_KEY}"`.
 
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
@@ -147,6 +153,12 @@ provider/auth configuration, switch to a reachable provider, or set
 `provider: "none"` if you want deliberate FTS-only recall.
 
 ### Custom provider ids
+
+For Azure OpenAI deployments, set the custom provider's `baseUrl` to the
+deployment URL and configure `api-version` in its `headers`. Embedding requests
+to Azure OpenAI and Azure AI Foundry hosts move that header into the URL query;
+an existing non-empty `api-version` query value takes precedence. Other
+OpenAI-compatible hosts keep the configured header unchanged.
 
 `memory.search.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
@@ -183,6 +195,7 @@ Remote embedding authentication depends on the provider. Bedrock uses the AWS SD
 | GitHub Copilot | `COPILOT_GITHUB_TOKEN`                              | Auth profile via device login       |
 | Mistral        | `MISTRAL_API_KEY`                                   | `models.providers.mistral.apiKey`   |
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
+| oMLX           | `OMLX_API_KEY` (via setup or `remote.apiKey`)       | `models.providers.omlx.apiKey`      |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
 | Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
 

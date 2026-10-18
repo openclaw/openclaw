@@ -511,51 +511,6 @@ describe("Claude CLI run diagnostics", () => {
     }
   });
 
-  it("attaches published turn content to run and harness completed events", async () => {
-    setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
-    const runId = "run-claude-content-capture";
-    const diagnostics = captureLifecycle(runId);
-    try {
-      await runClaudeCliAgentTurnWithDiagnostics(
-        {
-          runId,
-          sessionId: "session-content",
-          modelProvider: "anthropic",
-          model: "claude-opus-4-7",
-          trigger: "user",
-          messageChannel: "webchat",
-        },
-        async (lifecycle) => {
-          lifecycle.publishCapturedContent({
-            userPrompt: "prepare the release",
-            finalResponse: "release prepared",
-          });
-          return {
-            payloads: [{ text: "release prepared" }],
-            meta: { durationMs: 0 },
-          };
-        },
-      );
-      await flushDiagnosticEvents();
-
-      const runCompleted = diagnostics.events.find(({ event }) => event.type === "run.completed");
-      expect(runCompleted?.privateData.messageContent).toMatchObject({
-        userPrompt: "prepare the release",
-        finalResponse: "release prepared",
-      });
-
-      const harnessCompleted = diagnostics.events.find(
-        ({ event }) => event.type === "harness.run.completed",
-      );
-      expect(harnessCompleted?.privateData.harnessContent).toMatchObject({
-        userPrompt: "prepare the release",
-        finalResponse: "release prepared",
-      });
-    } finally {
-      clearRuntimeConfigSnapshot();
-    }
-  });
-
   it("merges separately published prompt and response into the completed events", async () => {
     // The real caller publishes { userPrompt } after preparation and
     // { finalResponse } after settlement; the second publication must not

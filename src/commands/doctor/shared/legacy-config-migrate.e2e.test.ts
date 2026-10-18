@@ -7,23 +7,36 @@ import { validateConfigObjectRaw } from "../../../config/validation.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
+const migrate = (raw: unknown) => migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+const apply = (raw: unknown) =>
+  applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
+const mediaConfig = (media: Record<string, unknown>) => ({ tools: { media } });
+function expectIdempotent(raw: unknown) {
+  expect(migrate(raw)).toEqual({ config: null, changes: [] });
+}
+function expectValid(raw: unknown) {
+  const validation = validateConfigObjectRaw(raw);
+  expect(validation.ok, JSON.stringify(validation)).toBe(true);
+  if (!validation.ok) {
+    throw new Error("Expected a valid migrated config");
+  }
+  return validation.config;
+}
+
 describe("legacy config migration end to end", () => {
   it.each([
     { prefsPath: "/tmp/synthetic-tts.json" },
     { personas: { narrator: { prompt: { style: "Synthetic instruction" } } } },
   ])("converges legacy TTS ownership and retirement in one pass: %j", (tts) => {
     const raw = { messages: { tts: { ...tts, summaryModel: "anthropic/claude-sonnet-4-5" } } };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = migrate(raw);
     expect(result.partiallyValid).toBeUndefined();
-    const validation = validateConfigObjectRaw(result.config);
-    expect(validation.ok, JSON.stringify(validation)).toBe(true);
+    expectValid(result.config);
     expect(result.config).not.toHaveProperty("messages.tts");
     expect(result.config).not.toHaveProperty("tts.prefsPath");
     expect(result.config).not.toHaveProperty("tts.personas.narrator.prompt");
     expect(result.config?.tts?.summaryModel).toBe("anthropic/claude-sonnet-4-6");
-    expect(
-      migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
-    ).toEqual({ config: null, changes: [] });
+    expectIdempotent(result.config);
   });
 
   it.each([
@@ -38,52 +51,36 @@ describe("legacy config migration end to end", () => {
     },
     {
       name: "malformed media model rows",
-      raw: {
-        tools: {
-          media: {
-            models: [null, "invalid", 42, false, [], { provider: "openai", model: "whisper-1" }],
-            audio: {
-              models: [null, "invalid", 42, false, [], { provider: "deepgram", model: "nova-2" }],
-            },
-          },
+      raw: mediaConfig({
+        models: [null, "invalid", 42, false, [], { provider: "openai", model: "whisper-1" }],
+        audio: {
+          models: [null, "invalid", 42, false, [], { provider: "deepgram", model: "nova-2" }],
         },
-      },
-      expected: {
-        tools: {
-          media: {
-            models: [
-              { provider: "deepgram", model: "nova-2", capabilities: ["audio"] },
-              { provider: "openai", model: "whisper-1" },
-            ],
-          },
-        },
-      },
+      }),
+      expected: mediaConfig({
+        models: [
+          { provider: "deepgram", model: "nova-2", capabilities: ["audio"] },
+          { provider: "openai", model: "whisper-1" },
+        ],
+      }),
     },
     {
       name: "Deepgram options before media consolidation",
-      raw: {
-        tools: {
-          media: {
-            audio: {
-              models: [{ provider: "deepgram", model: "nova-2", deepgram: { punctuate: true } }],
-            },
-          },
+      raw: mediaConfig({
+        audio: {
+          models: [{ provider: "deepgram", model: "nova-2", deepgram: { punctuate: true } }],
         },
-      },
-      expected: {
-        tools: {
-          media: {
-            models: [
-              {
-                provider: "deepgram",
-                model: "nova-2",
-                providerOptions: { deepgram: { punctuate: true } },
-                capabilities: ["audio"],
-              },
-            ],
+      }),
+      expected: mediaConfig({
+        models: [
+          {
+            provider: "deepgram",
+            model: "nova-2",
+            providerOptions: { deepgram: { punctuate: true } },
+            capabilities: ["audio"],
           },
-        },
-      },
+        ],
+      }),
     },
     {
       name: "memory owner before QMD collections",
@@ -123,14 +120,12 @@ describe("legacy config migration end to end", () => {
       },
     },
   ])("converges $name in one pass", ({ raw, expected }) => {
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = migrate(raw);
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config).toMatchObject(expected);
-    expect(validateConfigObjectRaw(result.config).ok).toBe(true);
+    expectValid(result.config);
     expect(findLegacyConfigIssues(result.sourceConfig)).toEqual([]);
-    expect(
-      migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
-    ).toEqual({ config: null, changes: [] });
+    expectIdempotent(result.config);
   });
 
   it("reshapes duplicate agent ids deterministically and keeps canonical entries", () => {
@@ -142,9 +137,7 @@ describe("legacy config migration end to end", () => {
         ],
       },
     };
-    const duplicate = applyLegacyDoctorMigrations(duplicateRaw, {
-      sourceConfigBeforeMigrations: duplicateRaw,
-    });
+    const duplicate = apply(duplicateRaw);
     expect(duplicate.next).toEqual({
       agents: {
         ownership: "explicit",
@@ -158,24 +151,18 @@ describe("legacy config migration end to end", () => {
         },
       },
     });
-    expect(
-      applyLegacyDoctorMigrations(duplicate.next, { sourceConfigBeforeMigrations: duplicate.next }),
-    ).toEqual({ next: null, changes: [] });
+    expect(apply(duplicate.next)).toEqual({ next: null, changes: [] });
 
     const canonicalRaw = {
       agents: { entries: { main: { name: "canonical" } }, list: [{ id: "main", name: "old" }] },
     };
-    const canonicalWins = applyLegacyDoctorMigrations(canonicalRaw, {
-      sourceConfigBeforeMigrations: canonicalRaw,
-    });
+    const canonicalWins = apply(canonicalRaw);
     expect(canonicalWins.next).toEqual({ agents: { entries: { main: { name: "canonical" } } } });
 
     const prototypeRaw = {
       agents: { list: [{ id: "__proto__", name: "prototype-safe" }] },
     };
-    const prototypeId = applyLegacyDoctorMigrations(prototypeRaw, {
-      sourceConfigBeforeMigrations: prototypeRaw,
-    });
+    const prototypeId = apply(prototypeRaw);
     const prototypeEntries = (prototypeId.next?.agents as { entries?: Record<string, unknown> })
       ?.entries;
     expect(Object.hasOwn(prototypeEntries ?? {}, "__proto__")).toBe(true);
@@ -183,9 +170,7 @@ describe("legacy config migration end to end", () => {
     const normalizedRaw = {
       agents: { list: [{ id: "Team Ops", name: "normalized" }] },
     };
-    const normalizedId = applyLegacyDoctorMigrations(normalizedRaw, {
-      sourceConfigBeforeMigrations: normalizedRaw,
-    });
+    const normalizedId = apply(normalizedRaw);
     expect(normalizedId.next).toEqual({
       agents: { entries: { "team-ops": { name: "normalized" } } },
     });
@@ -242,18 +227,12 @@ describe("legacy config migration end to end", () => {
           },
         },
       };
-      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+      const result = migrate(raw);
 
       expect(result.partiallyValid).toBeUndefined();
       expect(result.config).not.toHaveProperty("agents.defaults.memory");
-      const validation = validateConfigObjectRaw(result.config);
-      expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(
-        true,
-      );
-      if (!validation.ok) {
-        return;
-      }
-      const resolved = resolveMemorySearchConfig(validation.config, "main");
+      const config = expectValid(result.config);
+      const resolved = resolveMemorySearchConfig(config, "main");
       expect(resolved).toMatchObject({
         provider: "none",
         rememberAcrossConversations: false,
@@ -261,10 +240,8 @@ describe("legacy config migration end to end", () => {
         searchSources: expectedSources,
         extraPaths: expectedPaths,
       });
-      expect(validation.config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
-      expect(
-        migrateLegacyConfig(validation.config, { sourceConfigBeforeMigrations: validation.config }),
-      ).toEqual({ config: null, changes: [] });
+      expect(config.memory?.search?.experimental?.sessionMemory).toBe(!canonical);
+      expectIdempotent(config);
     },
   );
 
@@ -345,7 +322,7 @@ describe("legacy config migration end to end", () => {
         },
       },
     };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = migrate(raw);
 
     expect(result.partiallyValid).toBeUndefined();
     expect(result.config).toMatchObject({
@@ -385,11 +362,8 @@ describe("legacy config migration end to end", () => {
     expect(result.changes).toContain(
       "Moved agents.defaults.promptOverlays.gpt5.personality → plugins.entries.openai.config.personality.",
     );
-    const validation = validateConfigObjectRaw(result.config);
-    expect(validation.ok, validation.ok ? undefined : JSON.stringify(validation.issues)).toBe(true);
-    expect(
-      applyLegacyDoctorMigrations(result.config, { sourceConfigBeforeMigrations: result.config }),
-    ).toEqual({ next: null, changes: [] });
+    expectValid(result.config);
+    expect(apply(result.config)).toEqual({ next: null, changes: [] });
     const serialized = JSON.stringify(result.config);
     for (const key of [
       "pdfMaxBytesMb",
@@ -412,7 +386,7 @@ describe("legacy config migration end to end", () => {
         },
       },
     };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = migrate(raw);
 
     expect(result.sourceConfig?.messages).toEqual({ ackReaction: "👀" });
     expect(result.config?.channels?.whatsapp?.ackReaction).toBeUndefined();
@@ -426,7 +400,7 @@ describe("legacy config migration end to end", () => {
       agents: { defaults: { promptOverlays: { gpt5: { personality: "off" } } } },
       plugins: { entries: { openai: { config: { personality: "friendly" } } } },
     };
-    const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+    const result = migrate(raw);
 
     expect(result.config?.plugins?.entries?.openai?.config?.personality).toBe("friendly");
     expect(result.config?.agents?.defaults).not.toHaveProperty("promptOverlays");
@@ -473,7 +447,7 @@ describe("legacy config migration end to end", () => {
         })),
       };
       expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "bindings" })]);
-      const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
+      const result = migrate(raw);
       expect(result.config?.bindings?.map((binding) => binding.match.peer?.kind)).toEqual(expected);
       expect(result.changes).toContain(
         `Moved deprecated bindings[].match.peer.kind "dm" → "direct" for ${migrated} binding${migrated === 1 ? "" : "s"}.`,
@@ -482,12 +456,7 @@ describe("legacy config migration end to end", () => {
       const validation = validateConfigObjectRaw(result.config);
       expect(validation.ok, JSON.stringify(validation)).toBe(valid);
       if (valid) {
-        expect(
-          migrateLegacyConfig(result.config, { sourceConfigBeforeMigrations: result.config }),
-        ).toEqual({
-          config: null,
-          changes: [],
-        });
+        expectIdempotent(result.config);
       }
     },
   );

@@ -56,6 +56,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     getOAuthProviders: vi.fn(() => []),
   },
   modelRegistry: {
+    getProviderMetadataOwners: () => undefined,
     fork: vi.fn((authStorage: AuthStorage) => ({ authStorage })),
     getAll: vi.fn<() => ModelCatalogSnapshot["entries"]>(() => []),
     find: vi.fn(() => null),

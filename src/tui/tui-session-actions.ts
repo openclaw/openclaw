@@ -36,6 +36,7 @@ import {
   type SessionInfoDefaults,
   type SessionInfoEntry,
 } from "./tui-session-info.js";
+import { isListedTuiSession } from "./tui-session-list-policy.js";
 import {
   getTuiSessionProjection,
   readTuiSessionProjectionScope,
@@ -43,7 +44,12 @@ import {
 } from "./tui-session-projection.js";
 import * as submit from "./tui-submit-state.js";
 import { renderTuiHistoryToolResult } from "./tui-tool-activity.js";
-import type { TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
+import type {
+  TuiHistoryLoadResult,
+  TuiOptions,
+  TuiSessionRow,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type SessionActionContext = {
   client: TuiBackend;
@@ -349,6 +355,19 @@ export function createSessionActions(context: SessionActionContext) {
   const refreshSessionInfoRunner = createTuiRefreshCoalescer(runRefreshSessionInfo);
   const refreshSessionInfo = () => refreshSessionInfoRunner.run();
 
+  /**
+   * Applies the row a selected-session event carries. Rows the picker hides
+   * fall back to the description path, which reports them as missing.
+   */
+  const applySessionEventRow = (row: TuiSessionRow) => {
+    if (!isListedTuiSession(row)) {
+      return false;
+    }
+    adoptSessionKey(row.key);
+    applySessionInfo({ entry: row });
+    return true;
+  };
+
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
   ) => {
@@ -619,6 +638,7 @@ export function createSessionActions(context: SessionActionContext) {
     }
     const { selection, isCurrent: isCurrentAbort } = captureTuiSessionIncarnation(state);
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
+    const pendingSubmissionId = state.pendingSubmit?.runId;
     const activeRunId = state.activeChatRunId;
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
@@ -680,7 +700,22 @@ export function createSessionActions(context: SessionActionContext) {
         invalidateRunOwnership?.();
         state.activeChatRunId = null;
       }
-      if (result.aborted || (!state.activeChatRunId && !submit.hasPendingSubmit(state))) {
+      const hasNewerRun = state.activeChatRunId && state.activeChatRunId !== activeRunId;
+      const hasNewerSubmission =
+        state.pendingSubmit && state.pendingSubmit.runId !== pendingSubmissionId;
+      const hasTerminalProjection = [activeRunId, pendingRunId, ...(result.runIds ?? [])].some(
+        (runId) => {
+          const run = runId ? state.sessionProjection?.runs[runId] : undefined;
+          return run && run.status !== "streaming";
+        },
+      );
+      // The event owns terminal presentation; the RPC acknowledgment only fills a missing one.
+      if (
+        !hasNewerRun &&
+        !hasNewerSubmission &&
+        !hasTerminalProjection &&
+        (result.aborted || (!state.activeChatRunId && !submit.hasPendingSubmit(state)))
+      ) {
         setActivityStatus(result.aborted ? "aborted" : "idle");
       }
     } catch (err) {
@@ -696,6 +731,7 @@ export function createSessionActions(context: SessionActionContext) {
   return {
     refreshAgents,
     refreshSessionInfo,
+    applySessionEventRow,
     applySessionInfoFromPatch,
     applySessionMutationResult,
     loadHistory,

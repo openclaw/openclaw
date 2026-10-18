@@ -17,10 +17,8 @@ import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import {
-  assertAgentDatabaseMaintenanceAuthority,
-  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
-} from "./openclaw-agent-db-lease.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentSchemaContains,
@@ -28,6 +26,7 @@ import {
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { ensureOpenClawAgentDatabaseSchemaSteps } from "./openclaw-agent-db-schema.js";
+import { OPENCLAW_AGENT_FTS_SCHEMAS } from "./openclaw-agent-fts-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
@@ -132,6 +131,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     }
     const repairIndexes = () => {
       const changes = repairDoctorSqliteIndexCorruption(database, pathname, {
+        ftsSchemas: OPENCLAW_AGENT_FTS_SCHEMAS,
         label: `agent ${agentId}`,
         assertCurrent: () => {
           assertOwned();

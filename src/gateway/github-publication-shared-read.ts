@@ -1,12 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
+import { worktreeRegistryPublication } from "../agents/worktrees/registry-publication.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SharedGitHubPublicationReadInput } from "../state/github-publication-read.types.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { repositoryWorkspacePublication } from "../state/session-repository-workspaces.receipts.js";
 import {
   prepareGitHubPublicationSession,
   type PublicationSessionIdentity,
@@ -14,6 +18,19 @@ import {
 import { GitHubPublicationSessionChangedError } from "./github-publication-failure.js";
 
 type SharedGitHubPublicationSelector = SharedGitHubPublicationReadInput["selector"];
+type SharedObservation = {
+  type: "githubPublication.sharedObservation";
+  input: SharedGitHubPublicationReadInput;
+};
+const pendingObservations = new Map<
+  string,
+  ReturnType<typeof executeExistingOpenClawStateRead<SharedObservation>>
+>();
+// Publication writes and database replacement must not join an earlier observation.
+githubPublicationReceipts.subscribeFacts(() => pendingObservations.clear());
+worktreeRegistryPublication.subscribeFacts(() => pendingObservations.clear());
+repositoryWorkspacePublication.subscribeFacts(() => pendingObservations.clear());
+registerOpenClawStateDatabaseLifecycleListener(() => pendingObservations.clear());
 
 function workspaceSelection(
   entry: Pick<
@@ -41,22 +58,39 @@ function workspaceSelection(
 export async function readSharedGitHubPublication(
   session: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
+  preparedRead?: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>["readCurrent"],
 ) {
   const capturedSelector = { ...selector };
   let workspaceIndependent = false;
   const memory = captureSessionEntryMetadataRead(session, () => {});
-  const context = memory ? captureOpenClawStateReadWorkerContext() : undefined;
+  const context = captureOpenClawStateReadWorkerContext();
   const observe = async (entry: SessionEntry) => {
-    const result = await withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(
-        context ? { path: context.admission.databasePath, env: context.environment } : {},
-        {
-          type: "githubPublication.sharedObservation",
-          input: { session, selector: capturedSelector, entry: workspaceSelection(entry) },
-        },
-        { current: true, preferIndependentWarmRead: true, ...(context && { context }) },
-      ),
-    );
+    const input = { session, selector: capturedSelector, entry: workspaceSelection(entry) };
+    // Private actors and maintenance snapshots retain their own read context.
+    const key =
+      memory || context.maintenanceScope
+        ? undefined
+        : JSON.stringify([context.admission.identity.key, input]);
+    let pending = key ? pendingObservations.get(key) : undefined;
+    if (!pending) {
+      pending = withArtifactPreservingStateReads(() =>
+        executeExistingOpenClawStateRead(
+          { path: context.admission.databasePath, env: context.environment },
+          { type: "githubPublication.sharedObservation", input },
+          { current: true, preferIndependentWarmRead: true, context },
+        ),
+      );
+      if (key) {
+        pending = pending.finally(() => {
+          if (pendingObservations.get(key) === pending) {
+            pendingObservations.delete(key);
+          }
+        });
+        pendingObservations.set(key, pending);
+      }
+    }
+    const result = await pending;
+    context.admission.assertCurrent();
     if (result && (!result.ok || result.type !== "githubPublication.sharedObservation")) {
       throw new Error("Shared GitHub publication observation is unavailable.");
     }
@@ -82,7 +116,6 @@ export async function readSharedGitHubPublication(
     };
     const entry = readCurrent();
     const row = await observe(entry);
-    context!.admission.assertCurrent();
     const current = readCurrent();
     if (
       !workspaceIndependent &&
@@ -92,16 +125,27 @@ export async function readSharedGitHubPublication(
     }
     return row;
   }
-  using selected = await prepareGitHubPublicationSession(session.sessionKey, {
-    agentId: session.agentId,
-    // Terminal receipts retain session authority independently of the current workspace.
-    fields: ["sessionId", "lifecycleRevision", "owner", "createdActor", "visibility", "incognito"],
-  });
-  const entry = selected.loaded.entry;
+  using selected = preparedRead
+    ? undefined
+    : await prepareGitHubPublicationSession(session.sessionKey, {
+        agentId: session.agentId,
+        // Terminal receipts retain session authority independently of the current workspace.
+        fields: [
+          "sessionId",
+          "lifecycleRevision",
+          "owner",
+          "createdActor",
+          "visibility",
+          "incognito",
+        ],
+      });
+  const readCurrent = preparedRead ?? (() => selected!.readCurrent());
+  const loaded = readCurrent();
+  const entry = loaded.entry;
   if (
     !entry ||
-    selected.loaded.agentId !== session.agentId ||
-    selected.loaded.canonicalKey !== session.sessionKey ||
+    loaded.agentId !== session.agentId ||
+    loaded.canonicalKey !== session.sessionKey ||
     entry.sessionId !== session.sessionId ||
     (session.lifecycleRevision !== undefined &&
       (entry.lifecycleRevision ?? null) !== session.lifecycleRevision)
@@ -109,7 +153,7 @@ export async function readSharedGitHubPublication(
     throw new GitHubPublicationSessionChangedError();
   }
   const row = await observe(entry);
-  const current = selected.readCurrent().entry;
+  const current = readCurrent().entry;
   if (
     !current ||
     current.sessionId !== entry.sessionId ||

@@ -1,4 +1,3 @@
-// Shared workspace filesystem access for gateway file browsers and editors.
 // Local access uses fs-safe roots; remote access stays with the registered
 // workspace provider and its path/byte/lifecycle checks.
 import { randomUUID } from "node:crypto";

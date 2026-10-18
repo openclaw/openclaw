@@ -1,4 +1,4 @@
-import { createMemo, For, Match, Show, Switch, untrack } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
@@ -9,7 +9,7 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 import { t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-setup.css";
-import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
+import type { ModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -22,7 +22,7 @@ import {
 } from "./configured-model.tsx";
 import { renderModelSetupLoading } from "./loading-view.tsx";
 import { renderProviderIcon } from "./model-setup-icon-loader.tsx";
-import type { NativeModelSetup } from "./native-model-setup.tsx";
+import { NativeModelSetupView, type NativeModelSetup } from "./native-model-setup.tsx";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx";
 import type { ModelSetupPageState, ModelSetupVerifyState, ModelSetupWizardState } from "./state.ts";
@@ -35,9 +35,14 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 export type ModelSetupViewProps = CandidateRowsProps & {
-  connection?: ModelProviderLoginController["pageActions"];
+  connection?: ModelProviderLogin["pageActions"];
   login?: JSX.Element;
   revision?: () => unknown;
+  onManualInput?: (element: HTMLInputElement) => void;
+  onFeedback?: (element: HTMLDivElement) => void;
+  onWizardDialog?: (
+    element: import("../../components/modal-dialog.ts").OpenClawModalDialog,
+  ) => void;
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
@@ -232,6 +237,7 @@ function Prepare(props: ModelSetupViewProps & { result: SystemAgentSetupDetectRe
 }
 
 function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectResult }) {
+  let input: HTMLInputElement | undefined;
   const manualProviders = createMemo(() =>
     props.embedded
       ? props.detected.manualProviders.filter(
@@ -259,6 +265,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
               {...props}
               result={{ manualProviders: manualProviders() }}
               provider={provider()}
+              nextTabTarget={() => input}
             />
           </div>
           <label class="field">
@@ -271,6 +278,10 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             </span>
             <input
               class="input"
+              ref={(element) => {
+                input = element;
+                props.onManualInput?.(element);
+              }}
               type="password"
               autocomplete="off"
               required
@@ -309,13 +320,6 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
       </section>
     </Show>
   );
-}
-
-export function revealModelSetupFeedback(root: ParentNode): void {
-  // Reveal only this attempt synchronously; never move focus or leave work past route exit.
-  root
-    .querySelector(".model-setup > .model-setup__testing, .model-setup > .model-setup__failure")
-    ?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
 }
 
 function NativeSessionDiscovery(
@@ -357,10 +361,6 @@ function renderSetupAccessWarning(canAdmin: boolean) {
   );
 }
 
-function NativeModels(props: { owner: NativeModelSetup; revision?: () => unknown }) {
-  return untrack(() => props.owner.render(props.revision));
-}
-
 function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
   const verify = createMemo(() =>
     props.verify.phase === "ok" && props.verify.modelTarget === "utility"
@@ -397,9 +397,7 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
       >
         <NativeSessionDiscovery {...props} />
         <EmptyState {...props} />
-        <Show when={props.nativeModels}>
-          {(owner) => <NativeModels owner={owner()} revision={props.revision} />}
-        </Show>
+        <Show when={props.nativeModels}>{(owner) => <NativeModelSetupView owner={owner()} />}</Show>
         <CandidateRows {...props} />
         <Prepare {...props} />
         <SignIn {...props} />
@@ -509,7 +507,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
         </Show>
       </div>
       {props.canAdmin && !props.gatewayTooOld
-        ? renderActivationFeedback(props.activation)
+        ? renderActivationFeedback(props.activation, props.onFeedback)
         : undefined}
       {props.refreshWarning ? (
         <div class="callout warning" role="alert">
@@ -561,6 +559,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
       {props.login}
       <div onModal-cancel={(event: Event) => event.preventDefault()}>
         <ModelSetupWizard
+          onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
           refreshWarning={props.refreshWarning}
@@ -624,6 +623,7 @@ function EmbeddedModelSetup(props: {
     <>
       {" "}
       <openclaw-modal-dialog
+        ref={(element) => props.view.onWizardDialog?.(element)}
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
         onOverlay-after-show={(event: Event) =>

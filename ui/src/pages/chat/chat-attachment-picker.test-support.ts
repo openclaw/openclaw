@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { render, type LitElement } from "lit";
 import { expect, onTestFinished, vi } from "vitest";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as attachmentPayloadStore from "./attachment-payload-store.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import * as attachmentTextReader from "./components/chat-attachment-text-reader.ts";
@@ -14,7 +14,7 @@ export function createAttachmentSidebarHarness() {
     if (content.kind !== "attachment") {
       throw new Error("Expected an attachment side panel");
     }
-    render(content.renderActions?.(), container);
+    mountSolid(() => content.renderActions?.(), { container });
   });
   return { container, open };
 }
@@ -36,23 +36,23 @@ export async function renderSettledPastedTextAttachment(
   const read = vi.spyOn(attachmentTextReader, "readAttachmentText");
   try {
     const container = renderChatView(overrides);
-    const chip = await waitForSolid(() =>
+    await waitForSolid(() =>
       expectDefined(
-        container.querySelector<LitElement>("openclaw-chat-pasted-text"),
+        container.querySelector<HTMLElement>("openclaw-chat-pasted-text"),
         "pasted text attachment",
       ),
     );
-    await chip.updateComplete;
+    flush();
     expect(read).toHaveBeenCalledOnce();
     const result = expectDefined(read.mock.results[0], "pasted text read");
     if (result.type !== "return") {
       throw result.value;
     }
-    // The excerpt owns a real body read followed by a lazy parser import and a Lit update.
+    // The excerpt owns a real body read followed by a lazy parser import and a Solid update.
     // Await those operations instead of racing cold transforms against a polling budget.
     await result.value;
     await vi.dynamicImportSettled();
-    await chip.updateComplete;
+    flush();
     return container;
   } finally {
     read.mockRestore();

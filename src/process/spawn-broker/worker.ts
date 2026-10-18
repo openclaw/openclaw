@@ -660,13 +660,21 @@ async function initialize(bootstrap: BrokerBootstrap): Promise<void> {
   }
   if (bootstrap.nativeResource) {
     const authority = bootstrap.nativeResource;
-    resources = await createBrokerNativeResourceServer({
-      endpoint: authority.endpoint,
-      secret: authority.secret,
-      generation: authority.generation,
-      reportParent: report,
-      canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
-    });
+    try {
+      resources = await createBrokerNativeResourceServer({
+        endpoint: authority.endpoint,
+        secret: authority.secret,
+        generation: authority.generation,
+        reportParent: report,
+        canAdmit: () => !stopping && owned.size + starting.size + (resources?.size ?? 0) < 256,
+      });
+    } catch (error) {
+      await report({
+        type: "startup-failed",
+        error: serializeBrokerError(toErrorObject(error, "Native resource server startup failed")),
+      }).catch(() => {});
+      throw error;
+    }
     if (stopping) {
       resources.disconnect();
       return;

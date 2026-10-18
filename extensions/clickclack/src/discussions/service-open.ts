@@ -259,24 +259,16 @@ export async function openClickClackDiscussionBinding(
   const config = runtime.config.current() as CoreConfig;
   const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
   const fallback = fallbackDiscussionLabel(sessionKey, agentId);
-  const describeChannel = (
-    session: Parameters<typeof resolveDiscussionLabel>[0] & { category?: string },
-  ) => {
-    const label = resolveDiscussionLabel(session, sessionKey, agentId);
-    return {
-      label,
-      displayTitle: label === fallback ? "" : truncateDiscussionDisplayTitle(label),
-      section: session.category?.trim() || account.discussions.section,
-      externalUrl: controlSessionUrl(
-        account.discussions.controlUrlBase,
-        sessionKey,
-        account.agentId ?? agentId,
-        config.session?.mainKey,
-        label,
-      ),
-    };
-  };
-  const { label, displayTitle, section, externalUrl } = describeChannel(entry);
+  const label = resolveDiscussionLabel(entry, sessionKey, agentId);
+  const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
+  const section = entry.category?.trim() || account.discussions.section;
+  const externalUrl = controlSessionUrl(
+    account.discussions.controlUrlBase,
+    sessionKey,
+    account.agentId ?? agentId,
+    config.session?.mainKey,
+    label,
+  );
   const assertCurrentAuthority = () => {
     // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
     const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);
@@ -444,43 +436,7 @@ export async function openClickClackDiscussionBinding(
       params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
       throw new Error("OpenClaw session became inactive while opening its ClickClack discussion");
     }
-    const {
-      label: currentLabel,
-      displayTitle: currentDisplayTitle,
-      section: currentSection,
-      externalUrl: updatedExternalUrl,
-    } = describeChannel(currentEntry);
-    const currentExternalUrl = updatedExternalUrl ?? "";
-    let currentChannel = channel;
-    if (
-      currentEntry.sessionId !== entry.sessionId ||
-      currentLabel !== label ||
-      currentDisplayTitle !== displayTitle ||
-      currentSection !== section ||
-      currentExternalUrl !== (externalUrl ?? "")
-    ) {
-      try {
-        currentChannel = await renameDiscussionChannel({
-          client,
-          workspaceId: workspace.id,
-          channelId: channel.id,
-          label: currentLabel,
-          sessionKey,
-          agentId,
-          patch: {
-            ...managedFields,
-            external_url: currentExternalUrl,
-            sidebar_section: currentSection,
-            display_title: currentDisplayTitle,
-          },
-          assertCurrentAuthority,
-        });
-      } catch (error) {
-        await clearPendingDiscussionOpen(generationScope);
-        params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
-        throw error;
-      }
-    }
+    // Presentation changes during creation are reconciled through the normal session owner.
     const nextBinding: ClickClackDiscussionBinding = {
       accountId: account.accountId,
       agentId,
@@ -488,18 +444,16 @@ export async function openClickClackDiscussionBinding(
       serverBaseUrl,
       credentialFingerprint,
       externalRef,
-      externalUrl: currentExternalUrl,
+      externalUrl: externalUrl ?? "",
       workspaceRef: account.discussions.workspace,
       workspaceId: workspace.id,
       channelId: channel.id,
       channelRouteId: channel.route_id,
       workspaceRouteId: workspace.route_id,
-      section: currentSection,
+      section,
       archived: false,
-      label: currentLabel,
-      ...(currentChannel.display_title !== undefined
-        ? { displayTitle: currentChannel.display_title }
-        : {}),
+      label,
+      ...(channel.display_title !== undefined ? { displayTitle: channel.display_title } : {}),
     };
     try {
       nextBinding.sessionId = assertCurrentAuthority().sessionId;

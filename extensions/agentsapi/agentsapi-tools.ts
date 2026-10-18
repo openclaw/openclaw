@@ -246,9 +246,9 @@ export async function buildAgentsApiToolSurface(
   const executionBoundaries = createAgentHarnessToolExecutionBoundaryRegistry();
   const contextTokens = params.contextTokenBudget ?? params.model.contextWindow;
   const maxChars =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens })
-      : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+    contextTokens === undefined
+      ? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS
+      : resolveLiveToolResultMaxChars({ contextWindowTokens: contextTokens });
 
   return {
     declarations,
@@ -263,7 +263,7 @@ export async function buildAgentsApiToolSurface(
       signal.throwIfAborted();
       const entry = toolMap.get(call.name);
       let startedAt: number;
-      let executedArgs = isRecord(call.arguments) ? call.arguments : {};
+      let executedArgs: Record<string, unknown> = {};
       let executionBoundary: ReturnType<
         ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]
       >;
@@ -513,9 +513,7 @@ export async function buildAgentsApiToolSurface(
           executionBoundary = boundary;
           executedArgs = executedArguments;
           startedAt = invocationStartedAt;
-          const message = sanitizeToolResult(
-            formatToolExecutionErrorMessage(error, "OpenClaw tool failed"),
-          );
+          const message = formatToolExecutionErrorMessage(error, "OpenClaw tool failed");
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
@@ -625,9 +623,7 @@ function serializeToolText(
       break;
     }
     const next =
-      block.type === "text"
-        ? sanitizeToolResult(block.text)
-        : "[Image result omitted from Agents API function output]";
+      block.type === "text" ? block.text : "[Image result omitted from Agents API function output]";
     text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
   }
   return sliceToolResultTextToBudget(text || "Tool completed with no text output.", maxChars);

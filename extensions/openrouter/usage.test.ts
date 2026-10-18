@@ -6,6 +6,18 @@ function requestUrl(input: string | URL | Request): string {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
 
+function fetchKeyBudget(data: Record<string, unknown>) {
+  return fetchOpenRouterUsage({
+    token: "router-key",
+    timeoutMs: 5000,
+    fetchFn: vi.fn(async (input: string | URL | Request) =>
+      requestUrl(input).endsWith("/credits")
+        ? new Response(null, { status: 403 })
+        : Response.json({ data }),
+    ) as unknown as typeof fetch,
+  });
+}
+
 describe("OpenRouter usage", () => {
   it("combines account credits with key quota and period spend", async () => {
     const fetchFn = vi.fn(async (input: string | URL | Request) => {
@@ -284,21 +296,11 @@ describe("OpenRouter usage", () => {
   });
 
   it("derives recurring budget usage from remaining credits when the period counter is absent", async () => {
-    const snapshot = await fetchOpenRouterUsage({
-      token: "router-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async (input: string | URL | Request) =>
-        requestUrl(input).endsWith("/credits")
-          ? new Response(null, { status: 403 })
-          : Response.json({
-              data: {
-                limit: 50,
-                limit_remaining: 42,
-                limit_reset: "weekly",
-                usage: 200,
-              },
-            }),
-      ) as unknown as typeof fetch,
+    const snapshot = await fetchKeyBudget({
+      limit: 50,
+      limit_remaining: 42,
+      limit_reset: "weekly",
+      usage: 200,
     });
 
     expect(snapshot.windows).toEqual([{ label: "Weekly key budget", usedPercent: 16 }]);
@@ -315,21 +317,11 @@ describe("OpenRouter usage", () => {
   });
 
   it("preserves an exhausted zero-dollar key limit", async () => {
-    const snapshot = await fetchOpenRouterUsage({
-      token: "router-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async (input: string | URL | Request) =>
-        requestUrl(input).endsWith("/credits")
-          ? new Response(null, { status: 403 })
-          : Response.json({
-              data: {
-                limit: 0,
-                limit_remaining: 0,
-                limit_reset: "monthly",
-                usage_monthly: 0,
-              },
-            }),
-      ) as unknown as typeof fetch,
+    const snapshot = await fetchKeyBudget({
+      limit: 0,
+      limit_remaining: 0,
+      limit_reset: "monthly",
+      usage_monthly: 0,
     });
 
     expect(snapshot.windows).toEqual([{ label: "Monthly key budget", usedPercent: 100 }]);
@@ -346,23 +338,13 @@ describe("OpenRouter usage", () => {
   });
 
   it("uses remaining credits when BYOK spend counts toward a recurring limit", async () => {
-    const snapshot = await fetchOpenRouterUsage({
-      token: "router-key",
-      timeoutMs: 5000,
-      fetchFn: vi.fn(async (input: string | URL | Request) =>
-        requestUrl(input).endsWith("/credits")
-          ? new Response(null, { status: 403 })
-          : Response.json({
-              data: {
-                limit: 20,
-                limit_remaining: 14,
-                limit_reset: "monthly",
-                usage_monthly: 5,
-                byok_usage_monthly: 1,
-                include_byok_in_limit: true,
-              },
-            }),
-      ) as unknown as typeof fetch,
+    const snapshot = await fetchKeyBudget({
+      limit: 20,
+      limit_remaining: 14,
+      limit_reset: "monthly",
+      usage_monthly: 5,
+      byok_usage_monthly: 1,
+      include_byok_in_limit: true,
     });
 
     expect(snapshot.windows).toEqual([{ label: "Monthly key budget", usedPercent: 30 }]);
@@ -381,22 +363,12 @@ describe("OpenRouter usage", () => {
   it.each([{ period: undefined, usageKey: "usage", byokKey: "byok_usage" }])(
     "includes $period BYOK spend in key budgets when remaining credits are unavailable",
     async ({ period, usageKey, byokKey }) => {
-      const snapshot = await fetchOpenRouterUsage({
-        token: "router-key",
-        timeoutMs: 5000,
-        fetchFn: vi.fn(async (input: string | URL | Request) =>
-          requestUrl(input).endsWith("/credits")
-            ? new Response(null, { status: 403 })
-            : Response.json({
-                data: {
-                  limit: 20,
-                  ...(period ? { limit_reset: period } : {}),
-                  [usageKey]: 5,
-                  [byokKey]: 4,
-                  include_byok_in_limit: true,
-                },
-              }),
-        ) as unknown as typeof fetch,
+      const snapshot = await fetchKeyBudget({
+        limit: 20,
+        ...(period ? { limit_reset: period } : {}),
+        [usageKey]: 5,
+        [byokKey]: 4,
+        include_byok_in_limit: true,
       });
 
       expect(snapshot.windows[0]?.usedPercent).toBe(45);

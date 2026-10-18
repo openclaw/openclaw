@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type {
@@ -32,7 +32,13 @@ export type AdmissionState = {
   readonly publicationStateDir: string;
   readonly artifactPreservingReadOnly: boolean;
   preparedIndexes: WeakSet<InstalledPluginIndex>;
-  owners: Map<string, InstalledPluginIndexRecord>;
+  owners: Map<
+    string,
+    Pick<
+      InstalledPluginIndexRecord,
+      "pluginId" | "rootDir" | "installRecordHash" | "source" | "setupSource"
+    >
+  >;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
   files: Map<string, PluginNativeArtifactFact>;
@@ -47,6 +53,33 @@ export type AdmissionState = {
 const admissions = new WeakMap<PluginCache, Map<string, AdmissionState>>();
 const admissionScopes = new WeakMap<PluginCache, Set<AdmissionState>>();
 export const snapshotOwners = new WeakMap<NativeSnapshot, Set<object>>();
+
+export type PluginNativeAdmissionTransfer = {
+  receipts: Map<string, PluginSourceAdmissionReceipt>;
+  roots: NativeSnapshot[];
+};
+
+/** Adopt worker facts into the original admission view with independent root custody. */
+export function adoptPluginNativeAdmissions(
+  state: AdmissionState,
+  transfer: PluginNativeAdmissionTransfer,
+): void {
+  for (const root of transfer.roots) {
+    snapshotOwners.set(root, new Set([state]));
+    state.roots.add(root);
+  }
+  for (const [key, receipt] of transfer.receipts) {
+    state.receipts.set(key, receipt);
+    for (const [source, fact] of Object.entries(receipt.nativeArtifacts)) {
+      state.files.set(source, fact);
+      retainNativePath(state, fact.capturedPath);
+    }
+    for (const [directory, namespace] of Object.entries(receipt.nativeNamespaces)) {
+      state.namespaces.set(directory, namespace);
+      retainNativePath(state, path.join(directory, "content"));
+    }
+  }
+}
 
 function resolveAdmissionViewKey(
   readOnly = isArtifactPreservingStateRead(),
@@ -207,7 +240,7 @@ export function overlayPluginNativeAdmissions(
             ...record,
             sourceAdmissions: {
               ...record.sourceAdmissions,
-              ...structuredClone(Object.fromEntries(receipts)),
+              ...Object.fromEntries(receipts),
             },
           }
         : record;
@@ -229,7 +262,14 @@ export function preparePluginNativeAdmissions(
     if (state.owners.has(root)) {
       continue;
     }
-    state.owners.set(root, record);
+    // Admission needs source and publication identity, not the inventory's catalogs or receipts.
+    state.owners.set(root, {
+      pluginId: record.pluginId,
+      rootDir: record.rootDir,
+      installRecordHash: record.installRecordHash,
+      source: record.source,
+      setupSource: record.setupSource,
+    });
     const installOwner = resolveInstalledPluginIndexInstallOwner(record);
     const install = installOwner ? index.installRecords[installOwner] : undefined;
     const installRoot = install?.installPath
@@ -257,7 +297,7 @@ export function preparePluginNativeAdmissions(
       }
     }
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
-      state.receipts.set(key, structuredClone(receipt));
+      state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
         state.namespaces.set(id, structuredClone(namespace));
       }

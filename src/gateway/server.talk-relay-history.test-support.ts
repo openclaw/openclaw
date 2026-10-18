@@ -11,7 +11,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
 import * as transcriptTurns from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
 import * as sleep from "../utils/sleep.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -123,9 +123,10 @@ export async function runTalkRelayCloseHistory({
     });
     await Promise.race([
       modelStarted.promise,
-      getSessionWorkAdmissionRelease({
+      captureSessionControllerSettlement({
         scope: storePath,
         identities: [canonicalKey, sessionId],
+        agentId,
       }),
     ]);
     const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "relay model invocation");

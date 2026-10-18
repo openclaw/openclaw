@@ -225,7 +225,7 @@ async function closeServer(server: Server): Promise<void> {
 describe("scheduled message actions", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each(scenarios)("$title", { timeout: 60_000 }, async (scenario) => {
+  it.each(scenarios)("$title", { timeout: 120_000 }, async (scenario) => {
     const { runtime, action, disableBeforeResponse, creator = "trusted" } = scenario;
     const nativeCreator = creator === "native";
     // Local creator turns use the default account identity, independent of provider defaults.

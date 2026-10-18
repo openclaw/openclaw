@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
+import type { AgentsAvatarGenerateParams } from "./schema/agents-models-skills.js";
 import type { BackupRecordOutcomeParams, BackupStatusParams } from "./schema/backup.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
@@ -31,6 +32,7 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "agents.avatar.generate": AgentsAvatarGenerateParams;
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;
   "backup.status": BackupStatusParams;
@@ -73,6 +75,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
+  "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;

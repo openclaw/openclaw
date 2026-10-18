@@ -119,6 +119,8 @@ type OpenClawPluginSessionStateApi = {
 export type PluginActiveRunSteerParams = {
   sessionKey: string;
   text: string;
+  /** Operator-facing note without model-only delivery instructions; defaults to text. */
+  displayText?: string;
   idempotencyKey?: string;
 };
 
@@ -131,7 +133,7 @@ type OpenClawPluginSessionWorkflowApi = {
   enqueueNextTurnInjection: (
     injection: PluginNextTurnInjection,
   ) => Promise<PluginNextTurnInjectionEnqueueResult>;
-  /** Deliver hidden plugin-authored guidance to a session's current run, without starting a turn. */
+  /** Steer a current run without starting a turn; shown only as a Control UI notice, never a channel reply. */
   steerActiveRun: (params: PluginActiveRunSteerParams) => Promise<PluginActiveRunSteerResult>;
   /**
    * Register cleanup metadata for a plugin-owned session scheduler job.
@@ -373,8 +375,12 @@ export type OpenClawPluginApi = {
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   /** Register a context engine implementation (exclusive slot - only one active at a time). */
   registerContextEngine: (id: string, factory: ContextEngineFactory) => void;
-  /** Register one version 1 typed decision provider declared in the manifest. */
-  registerDecisionProvider: (provider: import("../decisions/types.js").DecisionProviderV1) => void;
+  /** Register a versioned typed decision executor declared in the manifest. */
+  registerDecisionProvider: (
+    provider:
+      | import("../decisions/types.js").DecisionProviderV1
+      | import("../decisions/types-v2.js").DecisionProviderV2,
+  ) => void;
   /** Register a compaction provider (pluggable summarization backend). */
   registerCompactionProvider: (
     provider: import("./compaction-provider.js").CompactionProvider,

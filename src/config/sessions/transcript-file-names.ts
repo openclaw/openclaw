@@ -1,7 +1,7 @@
 export const SESSION_ARCHIVE_ZSTD_SUFFIX = ".zst";
 
 /** Strips the optional zstd suffix so archive name parsers see one shape. */
-export function stripSessionArchiveCompressionSuffix(fileName: string): string {
+function stripSessionArchiveCompressionSuffix(fileName: string): string {
   return fileName.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
     ? fileName.slice(0, -SESSION_ARCHIVE_ZSTD_SUFFIX.length)
     : fileName;

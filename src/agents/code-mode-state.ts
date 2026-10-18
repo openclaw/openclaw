@@ -248,6 +248,9 @@ export function createCodeModeRunOwner(
       return execution;
     },
     approvalWait,
+    releaseCall() {
+      releaseCall();
+    },
     bindCall(callSignal?: AbortSignal): AbortSignal {
       releaseCall();
       if (signal.aborted) {
@@ -657,7 +660,11 @@ export function storeSuspendedRun(
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return recordCodeModeToolOutcome(result, result, params.pending);
+  const recorded = recordCodeModeToolOutcome(result, result, params.pending);
+  // Successful observers can close before the next wait. Parked work remains
+  // owned by the parent run, catalog and expiry, not that completed call.
+  params.owner.releaseCall();
+  return recorded;
 }
 
 export function codeModeAbortedResult(params: {

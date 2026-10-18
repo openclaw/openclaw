@@ -34,6 +34,8 @@ open the run's session.
 
 With `announce`, the chat that receives the result owns it. The result is added to the conversation after the channel confirms delivery, using the content actually sent after channel transforms and hooks. OpenClaw writes one assistant message into that chat's transcript so the next reply can use it as context. The result records its job and run; retries do not duplicate it, and OpenClaw waits for active turns before committing it. Destination creation and remembered-route updates happen only after confirmed delivery; newly created destinations inherit the source session's required sandbox policy.
 
+A newly committed visible result refreshes the destination's idle freshness, so a reply within the idle window retains the scheduled question. Replaying the same result, silent runs, and failed or uncertain deliveries do not refresh it. Recurring visible results can keep the destination idle-fresh; daily reset still uses the session start time.
+
 - Delivery to the creating chat writes the result there.
 - Delivery to a different chat or topic writes the result **only in the destination**, not in the creating chat.
 - With no external route, such as a WebChat-created job, the creating conversation receives the result.
@@ -89,6 +91,8 @@ When announce delivery uses `channel: "last"` or omits `channel`, a provider-pre
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
+A send to the delivery target does not end the job's turn unless it sets `final: true`, so steps after the send, such as updating a state file, still run.
+
 Scheduled `message` actions use the Gateway that owns the live run. Keep the
 job's account, channel, target, and configured delivery route, but do not supply
 per-call `gatewayUrl` or `gatewayToken` fields. Ordinary and standalone message
@@ -102,7 +106,7 @@ an active bound Gateway.` Run the job on its owning Gateway instead of copying
 connection fields into the prompt. The next send then uses the live binding,
 including current cancellation and tool-policy withdrawal.
 
-When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
+When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
 
@@ -111,7 +115,8 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 Failure-alert webhooks stay **Unknown** when the request may have reached the
 receiver but its response is lost. An explicit HTTP rejection or a failure proven
 to precede sending records **Not delivered** and allows the in-app fallback
-notification. An unknown outcome does not trigger that fallback.
+notification, including when Gateway work admission refuses an alert before its
+transport starts. An unknown outcome does not trigger that fallback.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
@@ -153,6 +158,8 @@ When a job created from a conversation (it has an owner session) reaches its exe
 
 The conversation handles the request as an ordinary agent turn, as if it had received a message: it runs in that conversation's session, with its transcript, workspace, and tool policy, and the reply goes to the conversation's own route, including its thread or topic. Heartbeat settings do not apply. For recurring jobs, a transient outage gets no reply, a problem it can fix in the workspace (for example the helper script or instructions file the job follows) gets fixed with a one-line note, and otherwise it asks you for exactly what it needs. For a terminal one-shot failure, the agent does the still-needed work or schedules a corrected automation, stays silent if the work is no longer needed, or asks you for what is missing. The request does not carry your sender identity, so owner-only tools such as automation control stay unavailable; changing the job itself happens in your reply turn.
 
+The scheduler's repair instructions stay in the model transcript, not the chat feed. Chat shows only the agent's repair note or request for help; pending inputs, live updates, and reloaded history omit the internal request.
+
 Each failure streak gets at most one repair request, even if its cause changes later. The alert is sent as before when the job has no owner conversation or is excluded from repair. If a one-shot's repair request cannot start, the normal failure alert is sent instead. Recurring jobs keep running while the repair turn works. A failed run only verifies the repair if it started after the repair turn finished; earlier runs still count toward the failure streak but do not trigger the unsuccessful-repair alert. If the repair turn exceeds its normal agent timeout, the next failure sends the alert instead. Later alerts in the streak follow the usual cooldown. A successful run clears the streak silently. Existing incidents recorded before settlement tracking was added keep the previous behavior: the next failure after the request can alert.
 
 While a provider network failure, request timeout, overload, rate limit, or server error gets its quick scheduler re-runs (30 seconds, 1 minute, then 5 minutes, or the job's next scheduled run when that comes first), the alert and the repair request wait. The hold covers at most those three re-runs, whatever the schedule, and never applies when the job has no next run (disabled job, finished one-shot, or a schedule with no future slot). If those re-runs also fail, the normal alert or repair follows with the full failure count; if one succeeds, nothing is sent. Failures the job causes itself are not held: its own execution timeout, script failures, and command-job timeouts usually point at the job, so they alert or repair at the normal threshold.
@@ -161,7 +168,7 @@ Script setup refreshes retired tools after a plugin reload before execution begi
 
 A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
-The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
+The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the auto-disable notice is sent directly through the job's failure route: the threshold, cooldown, and any pending repair request do not hold it back, and no repair turn or other model turn is involved, so it still arrives when the failing model provider is the cause. Only a job with no failure route hands the notice to its owning agent as a system event. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
 
 ### Output language
 

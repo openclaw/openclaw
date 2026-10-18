@@ -81,7 +81,9 @@ describe("createIdleImport", () => {
     window.dispatchEvent(new Event("online"));
     await Promise.resolve();
 
-    expect(removeEventListener).toHaveBeenCalledWith("online", expect.any(Function));
+    expect(removeEventListener.mock.calls).toContainEqual(
+      expect.arrayContaining(["online", expect.any(Function)]),
+    );
     expect(importModule).toHaveBeenCalledTimes(1);
   });
 

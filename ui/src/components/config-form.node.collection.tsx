@@ -24,10 +24,12 @@ import { ConfigMapField } from "./config-form.node.collection-map.tsx";
 import { resolveConfigObjectFields } from "./config-form.node.collection.ts";
 import {
   configChildRenderOptions,
+  createCollectionFocus,
   getSensitiveRenderState,
   CollectionRemoveButton,
   FieldRow,
   renderSchemaDefaultDescription,
+  type CollectionRowFocus,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.tsx";
@@ -170,7 +172,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
     isSupportedConfigValueValid(schema, [])
       ? []
       : undefined);
-  const atomicCandidate = wholeArrayDefault && structuredClone(wholeArrayDefault);
+  const atomicCandidate = wholeArrayDefault;
   const canAppend = maximumItems === undefined || arrayValue.length < maximumItems;
   const requiresDraft = atomicCandidate === undefined && autoCandidate === undefined;
   const nextItemSchema = itemSchemaAt(arrayValue.length);
@@ -279,6 +281,7 @@ function ConfigArrayRow(
     content: ArrayContent;
     item: unknown;
     index: number;
+    focus: CollectionRowFocus;
   },
 ): JSX.Element {
   const nextValue = createMemo(() => props.content.arrayValue.toSpliced(props.index, 1));
@@ -312,6 +315,7 @@ function ConfigArrayRow(
     props.content.patch(nextValue(), props.content.rowIdentities.toSpliced(props.index, 1));
   const removeControl = () => (
     <CollectionRemoveButton
+      focus={props.focus}
       label={t("configForm.removeItem")}
       disabled={
         props.params.disabled ||
@@ -366,6 +370,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
         identity: content()!.rowIdentities[index],
       })) ?? [],
   );
+  const focus = createCollectionFocus(() => entries().map((entry) => entry.identity));
   return (
     <Show
       when={content()}
@@ -404,6 +409,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                 </span>
               </Show>
               <button
+                ref={focus.addRef}
                 type="button"
                 class={props.params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
                 aria-label={t("configForm.add")}
@@ -443,6 +449,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
                     content={current()}
                     item={entry().item}
                     index={index()}
+                    focus={focus.row(() => entry().identity)}
                   />
                 )}
               </For>

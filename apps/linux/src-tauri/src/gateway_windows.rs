@@ -4135,21 +4135,27 @@ mod tests {
 
     #[test]
     fn dashboard_authority_stays_inside_its_origin_and_path() {
-        let expected = Url::parse("https://gateway.example/team").unwrap();
-        for (url, allowed) in [
-            ("https://gateway.example/team", true),
-            ("https://gateway.example/team/chat/main", true),
-            ("https://gateway.example/teamwork", false),
-            ("https://gateway.example/", false),
-            ("https://other.example/team", false),
-            ("http://gateway.example/team", false),
-            ("https://user@gateway.example/team", false),
+        for base in [
+            "https://gateway.example/team",
+            "https://gateway.example/team/",
         ] {
-            assert_eq!(
-                matches_route(&Url::parse(url).unwrap(), &expected),
-                allowed,
-                "{url}"
-            );
+            let expected = Url::parse(base).unwrap();
+            for (url, allowed) in [
+                ("https://gateway.example/team", true),
+                ("https://gateway.example/team/chat/main", true),
+                ("https://gateway.example/teamwork", false),
+                ("https://gateway.example/", false),
+                ("https://gateway.example:444/team", false),
+                ("https://other.example/team", false),
+                ("http://gateway.example/team", false),
+                ("https://user@gateway.example/team", false),
+            ] {
+                assert_eq!(
+                    matches_route(&Url::parse(url).unwrap(), &expected),
+                    allowed,
+                    "{base}: {url}"
+                );
+            }
         }
         assert!(local_settings_url(
             &Url::parse("tauri://localhost/gateways.html").unwrap()

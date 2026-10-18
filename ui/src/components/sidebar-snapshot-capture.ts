@@ -95,7 +95,7 @@ export function captureSidebarSnapshotModel(
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
   const presentation = (row: SidebarRecentSession) => ({
-    childrenDisplayMode: host.sessionProjection.captureChildrenDisplay(row.key),
+    childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   });
   const sessions = snapshotSessions(rows, presentation);
@@ -144,7 +144,7 @@ export function captureSidebarSnapshotModel(
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
     peoplePresenceFilter: host.people.presenceFilter,
-    offlineUsers: (host.people.directory?.result?.profiles ?? [])
+    offlineUsers: (host.peopleView?.directory()?.result?.profiles ?? [])
       .filter((profile) => !profile.mergedInto)
       .map(profilePresenceViewer),
     ownerId: host.sessionOwnerFilterId,

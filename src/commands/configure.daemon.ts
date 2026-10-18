@@ -4,8 +4,8 @@ import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { createConfigurePrompts } from "./configure.prompts.js";
+import { defaultRuntime } from "../runtime.js";
+import { configurePrompts as prompts } from "./configure.prompts.js";
 import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
@@ -16,11 +16,9 @@ import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 export type DaemonSetupOutcome = "succeeded" | "failed" | "skipped";
 
 export async function maybeInstallDaemon(params: {
-  runtime: RuntimeEnv;
   port: number;
   daemonRuntime?: GatewayDaemonRuntime;
 }): Promise<DaemonSetupOutcome> {
-  const prompts = createConfigurePrompts(params.runtime);
   const service = resolveGatewayService();
   let loaded;
   try {
@@ -123,7 +121,7 @@ export async function maybeInstallDaemon(params: {
   }
 
   await ensureSystemdUserLingerInteractive({
-    runtime: params.runtime,
+    runtime: defaultRuntime,
     prompter: {
       confirm: prompts.confirm,
       note,
