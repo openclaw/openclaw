@@ -11,7 +11,13 @@ import {
   withSessionInputActor,
   type SessionInputActorBinding,
 } from "../config/sessions/session-input-actor.js";
-import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  runWithSessionSourceScope,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -372,6 +378,10 @@ export function createUserTurnTranscriptRecorder(
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
+        const assertOriginalInput =
+          candidate.idempotencyKey === message?.idempotencyKey
+            ? recorder.assertOriginalInputCommit
+            : undefined;
         const persist = () =>
           persistUserTurnInput(recorder, {
             ...resolvedTarget,
@@ -383,10 +393,12 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
-            beforeFreshMessageCommit:
-              candidate.idempotencyKey === message?.idempotencyKey
-                ? recorder.assertOriginalInputCommit
-                : undefined,
+            beforeFreshMessageCommit: options.beforeFreshMessageCommit
+              ? composeSessionSourceAssertion([
+                  options.beforeFreshMessageCommit,
+                  assertOriginalInput,
+                ])
+              : assertOriginalInput,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
             onCommitted: (committed, acceptCompletion) => {
               committedInput = committed;
@@ -468,8 +480,23 @@ export function createUserTurnTranscriptRecorder(
       throw error;
     }
   };
-  const persistPrepared = (options: Parameters<typeof persistPreparedWithoutActor>[0]) =>
-    withSessionInputActor(inputActorBinding, () => persistPreparedWithoutActor(options));
+  const persistPrepared = (options: Parameters<typeof persistPreparedWithoutActor>[0]) => {
+    const persist = () =>
+      withSessionInputActor(inputActorBinding, () => persistPreparedWithoutActor(options));
+    const guard: SessionSourceAssertion | undefined = params.sessionTurnMutation?.assertCurrent;
+    if (!guard?.prepareSessionSourceScope || (!options.message && persistedResult)) {
+      return persist();
+    }
+    // Goal admission may enter a worker-owned database runtime. Prepare sharing
+    // predicates before that boundary, rather than recursively reading its writer.
+    const source = Object.assign(() => guard(), {
+      async prepareSessionSourceScope() {
+        const prepared = await prepareSessionSourceAuthority(guard);
+        return { ...prepared, scopedSources: new Map([[guard, prepared]]) };
+      },
+    });
+    return runWithSessionSourceScope(source, persist);
+  };
   const recorder: UserTurnTranscriptRecorder = {
     get message() {
       return message;
@@ -480,7 +507,7 @@ export function createUserTurnTranscriptRecorder(
     assertOriginalInputCommit: params.assertOriginalInputCommit
       ? createDynamicSessionSourceAssertion(
           () =>
-            !blocked && !persistedResult && !runtimePersisted && !pendingInput
+            !blocked && !persistedResult && !runtimePersisted && !pendingInput && !sentToProvider
               ? params.assertOriginalInputCommit
               : undefined,
           () => {
@@ -500,6 +527,7 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
+            retryInterrupted: params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: candidate,
             onCommitted: (receipt) => {
@@ -649,6 +677,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
         retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {

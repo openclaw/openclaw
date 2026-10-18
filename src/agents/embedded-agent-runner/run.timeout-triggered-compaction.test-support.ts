@@ -17,13 +17,13 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import { resolveEmbeddedRunAbandonment, markActiveEmbeddedRunAbandoned } from "./runs.js";
 import {
-  clearActiveEmbeddedRun,
-  resolveEmbeddedRunAbandonment,
-  markActiveEmbeddedRunAbandoned,
-  setActiveEmbeddedRun,
-} from "./runs.js";
-import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  testing as runsTesting,
+} from "./runs.test-support.js";
 
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
@@ -231,9 +231,9 @@ describe("runEmbeddedAgent timeout recovery composition", () => {
     fixture = session;
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
-    mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
+    mockedGetApiKeyForModel.mockImplementation(async (params = {}) => ({
       apiKey: "fixture",
-      profileId: profileId ?? "profile-a",
+      profileId: params.profileId ?? "profile-a",
       source: "test",
       mode: "api-key",
     }));

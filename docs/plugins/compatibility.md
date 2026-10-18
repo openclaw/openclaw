@@ -32,8 +32,8 @@ Plugin compatibility contracts are tracked in the core registry at
 - replacement guidance
 - docs, diagnostics, and tests that cover the old and new behavior
 
-The registry is the source for maintainer planning and future plugin
-inspector checks. If a plugin-facing behavior changes, add or update the
+The registry is the source for maintainer planning and deprecated SDK import
+notices. If a plugin-facing behavior changes, add or update the
 compatibility record in the same change that adds the adapter.
 
 Doctor repair and migration compatibility is tracked separately at
@@ -61,6 +61,25 @@ expired; first verify there is no supported upgrade path that still needs
 the repair. Revalidate each replacement annotation during release planning
 too, since plugin ownership and config footprint can change as providers
 and channels move out of core.
+
+## Observed SDK usage
+
+OpenClaw records deprecated SDK subpaths when a plugin imports them and
+deprecated members when the plugin calls them. Importing a supported module
+does not flag its unused deprecated members. Observations stay in memory,
+once per plugin and API per Gateway process; they do not add database work.
+
+The Control UI plugin list shows an informational row with the announced
+retirement date, when available, and a link to the
+[migration guide](/plugins/sdk-migration/how-to-migrate). Plugin details list
+the observed APIs and their replacements. The notice does not change plugin
+health or prevent the plugin from running. Existing plugin inspection,
+Doctor, status, and setup compatibility reports also include observations
+made in their process.
+
+This is usage detection, not an exhaustive source audit: unexecuted imports
+and calls are not reported. After updating a plugin, restart the Gateway to
+clear previous observations and collect its current usage.
 
 ## Deprecation policy
 

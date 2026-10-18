@@ -21,6 +21,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
+  equivalentLegacySessionHeaders,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "../config/sessions/session-entry-codec.js";
@@ -88,13 +89,14 @@ export function readLegacyPrimaryTranscriptIdentity(
   const filenameId =
     extractGeneratedTranscriptSessionId(filename) ?? filename.slice(0, -".jsonl".length);
   let sessionId: string | undefined;
+  let header: Record<string, unknown> | undefined;
   let version = 1;
   let messages = 0;
   for (const { event: raw } of iterateTranscriptEvents(filePath, false)) {
     if (!isRecord(raw) || raw.traceSchema !== undefined) {
       return undefined;
     }
-    if (!sessionId) {
+    if (!header) {
       const id = raw.id ?? raw.sessionId;
       if (
         raw.type !== "session" ||
@@ -115,9 +117,13 @@ export function readLegacyPrimaryTranscriptIdentity(
         throw new Error("Unsupported primary transcript version");
       }
       sessionId = id;
+      header = raw;
       continue;
     }
     if (raw.type === "session") {
+      if (equivalentLegacySessionHeaders(header, raw)) {
+        continue;
+      }
       throw new Error("Multiple primary transcript headers");
     }
     const classified = classifySessionFileEntry(raw, version);

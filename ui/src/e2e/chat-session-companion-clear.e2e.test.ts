@@ -11,7 +11,7 @@ import {
   navigateToControlUiSession,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -124,8 +124,8 @@ suite.define(() => {
           );
         }
 
-        const details = await openChatDetails(page);
-        await details.getByRole("button", { name: "Close details", exact: true }).click();
+        await openChatDetails(page);
+        await closeChatDetails(page);
         await alert.getByRole("button", { name: "Dismiss error" }).click();
         await gateway.setMethodResponse("sessions.companion.reset", { ok: true });
         await gateway.deferNext("sessions.companion.reset");

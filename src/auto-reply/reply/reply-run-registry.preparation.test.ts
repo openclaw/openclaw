@@ -11,26 +11,57 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ReplyBackendMessageInjectionV2,
+  ReplyBackendQueueMessageOptions,
+  ReplyMessageInjectionOptions,
+} from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import type {
-  ReplyBackendMessageInjectionV2,
-  ReplyBackendQueueMessageOptions,
-} from "./reply-run-registry.contracts.js";
-import { beginReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 
 const overlay = { senderIsOwner: true, disableTools: false, traceAuthorized: false };
+type Operation = ReturnType<typeof createTestReplyOperation>;
+type Attempt = Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>>;
+
+function begin(operation: Operation, options: ReplyMessageInjectionOptions) {
+  return beginReplyMessageInjectionTarget(
+    captureCurrentReplyMessageInjectionTarget(operation.key)!,
+    "retained source",
+    { isInboundUserMessage: true, ...options },
+  );
+}
+function preparationGate() {
+  const entered = createDeferred();
+  const resume = createDeferred();
+  return {
+    async pause() {
+      entered.resolve();
+      await resume.promise;
+    },
+    open: () => resume.resolve(),
+    wait: (attempt: Attempt) =>
+      awaitGateBeforeSettlement(entered.promise, attempt.outcome, "Preparation was not reached"),
+    async settle(attempt?: Attempt) {
+      resume.resolve();
+      await attempt?.outcome;
+    },
+  };
+}
 
 async function createPolicyOperation(
   name: string,
@@ -43,25 +74,19 @@ async function createPolicyOperation(
   const { mainAlias } = options;
   const policyKey = `agent:main:${name}-policy`;
   const config: OpenClawConfig = {
-    ...(mainAlias || options.store
-      ? {
-          session: {
-            ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
-            ...(options.store ? { store: options.store } : {}),
-          },
-        }
-      : {}),
     agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
     tools: { sandbox: { tools: { deny: ["exec"] } } },
   };
+  if (mainAlias || options.store) {
+    config.session = {
+      ...(mainAlias ? { mainKey: `${name}-policy` } : {}),
+      ...(options.store ? { store: options.store } : {}),
+    };
+  }
   setRuntimeConfigSnapshot(config);
   const policyEntry = await upsertSessionEntryCore(
     { agentId: "main", sessionKey: policyKey, storePath: options.policyStorePath },
-    {
-      sessionId: name,
-      updatedAt: 1,
-      sandboxMode: "off",
-    },
+    { sessionId: name, updatedAt: 1, sandboxMode: "off" },
   );
   if (!policyEntry) {
     throw new Error("Policy fixture entry was not created");
@@ -69,20 +94,23 @@ async function createPolicyOperation(
   const run = createQueueTestRun({ prompt: name });
   Object.assign(run.run, {
     agentId: "main",
-    sessionId: name,
+    sessionId: `${name}-run`,
     sessionKey: `agent:main:${name}`,
     runtimePolicySessionKey: mainAlias ? "agent:main:main" : policyKey,
     senderIsOwner: true,
     config,
   });
-  const operation = createTestReplyOperation({ sessionKey: run.run.sessionKey, sessionId: name });
+  const operation = createTestReplyOperation({
+    sessionKey: run.run.sessionKey,
+    sessionId: run.run.sessionId,
+  });
   await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
   const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
   return { operation, fingerprint, policyKey, policyEntry };
 }
 
 function attachPreparedNativeBackend(
-  operation: ReturnType<typeof createTestReplyOperation>,
+  operation: Operation,
   fingerprint: string | undefined,
   beforePreparation?: () => void,
 ) {
@@ -136,41 +164,30 @@ it.each(["worker", "compatibility"] as const)(
         bindWorkerToolPreparation(sourcePreparation);
       }
       const effect = attachPreparedNativeBackend(target.operation, target.fingerprint);
-      const entered = createDeferred();
-      const resume = createDeferred();
+      const gate = preparationGate();
       const read = sessionReads.withSessionEntriesFromStoresInWorker;
       const delayed = vi
         .spyOn(sessionReads, "withSessionEntriesFromStoresInWorker")
         .mockImplementation(async (inputs, consume, options) => {
           if (options?.ordered || (kind === "compatibility" && inputs.length === 0)) {
-            entered.resolve();
-            await resume.promise;
+            await gate.pause();
           }
           return read(inputs, consume, options);
         });
       const calls = kind === "worker" ? observeMainThreadSql() : undefined;
-      let attempt: Awaited<ReturnType<typeof beginReplyMessageInjectionTarget>> | undefined;
+      let attempt: Attempt | undefined;
       try {
-        attempt = await beginReplyMessageInjectionTarget(
-          replyRunRegistry.resolveCurrentMessageInjectionTarget(target.operation.key)!,
-          "overlay with retained source",
-          {
-            isInboundUserMessage: true,
-            toolAuthorityOverlay: overlay,
-            toolAuthorityPreparation: sourcePreparation,
-          },
-        );
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          attempt.outcome,
-          "Native admission was not reached",
-        );
+        attempt = await begin(target.operation, {
+          toolAuthorityOverlay: overlay,
+          toolAuthorityPreparation: sourcePreparation,
+        });
+        await gate.wait(attempt);
         calls?.expectIdle();
         await updateSessionEntry({ agentId: "main", sessionKey: source.policyKey }, () => ({
           sandboxMode: undefined,
         }));
         calls?.clear();
-        resume.resolve();
+        gate.open();
         expect((await attempt.outcome).status).toBe(kind === "worker" ? "rejected" : "failed");
         await expect(attempt.acceptance).resolves.toBe(false);
         expect(effect).not.toHaveBeenCalled();
@@ -179,8 +196,7 @@ it.each(["worker", "compatibility"] as const)(
         );
         calls?.expectIdle();
       } finally {
-        resume.resolve();
-        await attempt?.outcome;
+        await gate.settle(attempt);
         calls?.restore();
         delayed.mockRestore();
       }
@@ -202,55 +218,43 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
       const multipleStores = change.startsWith("other-store") || change === "missing-store";
-      const store = state.statePath(
-        "configured",
-        "agents",
-        "{agentId}",
-        "sessions",
-        "sessions.json",
-      );
-      const configuredStorePath = resolveSessionStorePathCore(store, {
-        agentId: "main",
-        env: state.env,
-      });
-      const defaultStorePath = resolveSessionStorePathCore(undefined, {
-        agentId: "main",
-        env: state.env,
-      });
-      const otherKey = "agent:main:unrelated-policy";
+      const store = state.statePath("configured/agents/{agentId}/sessions/sessions.json");
+      const resolveStore = (template?: string) =>
+        resolveSessionStorePathCore(template, { agentId: "main", env: state.env });
+      const configuredStorePath = resolveStore(store);
+      const defaultStorePath = resolveStore();
       if (multipleStores && change !== "missing-store") {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: otherKey, storePath: defaultStorePath },
+          {
+            agentId: "main",
+            sessionKey: "agent:main:unrelated-policy",
+            storePath: defaultStorePath,
+          },
           { sessionId: "unrelated-policy", updatedAt: 1 },
         );
       }
+      const options = multipleStores
+        ? {
+            store,
+            policyStorePath: change === "missing-store" ? defaultStorePath : configuredStorePath,
+          }
+        : {};
       const { operation, fingerprint, policyKey, policyEntry } = await createPolicyOperation(
         "retained-policy",
-        {
-          mainAlias: true,
-          ...(multipleStores
-            ? {
-                store,
-                policyStorePath:
-                  change === "missing-store" ? defaultStorePath : configuredStorePath,
-              }
-            : {}),
-        },
+        { mainAlias: true, ...options },
       );
       let atBackend = false;
       const effect = attachPreparedNativeBackend(operation, fingerprint, () => {
         atBackend = true;
       });
-      const entered = createDeferred();
-      const resume = createDeferred();
+      const gate = preparationGate();
       const project = operation.projectToolAuthorityFingerprintAsync;
       const delayed = vi
         .spyOn(operation, "projectToolAuthorityFingerprintAsync")
         .mockImplementation(async (caller) => {
           const value = await project(caller);
           if (atBackend) {
-            entered.resolve();
-            await resume.promise;
+            await gate.pause();
           }
           return value;
         });
@@ -262,21 +266,12 @@ it.each([
       if (admission === "worker") {
         bindWorkerToolPreparation(preparation);
       }
-      const attempt = await beginReplyMessageInjectionTarget(
-        replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
-        "retained policy input",
-        {
-          isInboundUserMessage: true,
-          toolAuthorityOverlay: overlay,
-          toolAuthorityPreparation: preparation,
-        },
-      );
+      const attempt = await begin(operation, {
+        toolAuthorityOverlay: overlay,
+        toolAuthorityPreparation: preparation,
+      });
       try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          attempt.outcome,
-          "Final policy preparation was not reached",
-        );
+        await gate.wait(attempt);
         if (multipleStores) {
           if (change === "other-store-move") {
             await deleteSessionEntryLifecycle({
@@ -307,14 +302,13 @@ it.each([
                 : { label: "renamed" },
           );
         }
-        resume.resolve();
+        gate.open();
         await attempt.outcome;
         const accepted = change === "metadata";
         await expect(attempt.acceptance).resolves.toBe(accepted);
         expect(effect).toHaveBeenCalledTimes(accepted ? 1 : 0);
       } finally {
-        resume.resolve();
-        await attempt.outcome;
+        await gate.settle(attempt);
         delayed.mockRestore();
       }
     });
@@ -327,8 +321,7 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
     const operation = createTestReplyOperation();
     operation.bindToolAuthoritySnapshot({ fingerprint: () => "policy", project: () => "policy" });
     operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
-    const entered = createDeferred();
-    const resume = createDeferred();
+    const gate = preparationGate();
     const effect = vi.fn(async () => {});
     const source = { current: true };
     const legacy = kind === "legacy" || kind === "legacy-run-with-caller";
@@ -350,8 +343,7 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
               isAvailable: () => true,
               queueMessage: effect,
               queueMessageAsync: async (_text, _options, preparation) => {
-                entered.resolve();
-                await resume.promise;
+                await gate.pause();
                 preparation.assertCurrent();
                 await effect();
               },
@@ -359,41 +351,90 @@ it.each(["with-overlay", "separate-caller", "legacy", "legacy-run-with-caller"] 
           }),
     });
     operation.setPhase("running");
-    const attempt = await beginReplyMessageInjectionTarget(
-      replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
-      "retained source",
-      {
-        isInboundUserMessage: true,
-        toolAuthorityFingerprint: "policy",
-        ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
-        assertCurrent: separateCaller ? assertSource : undefined,
-        toolAuthorityPreparation: {
-          ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),
-          assertCurrent: separateCaller ? () => {} : assertSource,
-          async prepareCurrent() {},
-          compatAssertCurrent: assertSource,
-        },
+    const attempt = await begin(operation, {
+      toolAuthorityFingerprint: "policy",
+      ...(kind === "with-overlay" ? { toolAuthorityOverlay: overlay } : {}),
+      assertCurrent: separateCaller ? assertSource : undefined,
+      toolAuthorityPreparation: {
+        ...(kind === "legacy-run-with-caller" ? { authorityKind: "run" as const } : {}),
+        assertCurrent: separateCaller ? () => {} : assertSource,
+        async prepareCurrent() {},
+        compatAssertCurrent: assertSource,
       },
-    );
+    });
     try {
       if (!legacy) {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          attempt.outcome,
-          "Prepared backend was not reached",
-        );
+        await gate.wait(attempt);
         source.current = false;
-        resume.resolve();
+        gate.open();
       }
       await expect(attempt.outcome).resolves.toMatchObject(
-        legacy ? { status: "rejected", reason: "injection_unavailable" } : { status: "failed" },
+        legacy
+          ? { status: "rejected", reason: "guarded_injection_unsupported" }
+          : { status: "failed" },
       );
       await expect(attempt.acceptance).resolves.toBe(false);
       expect(effect).not.toHaveBeenCalled();
     } finally {
-      resume.resolve();
-      await attempt.outcome;
+      await gate.settle(attempt);
     }
+  },
+);
+
+it.each(["completion", "observer", "before-acceptance"] as const)(
+  "retains prepared native input custody after %s failure",
+  async (failurePoint) => {
+    const completionError = new Error("backend completion failed");
+    const observerError = new Error("acceptance observer failed");
+    const onQueueAccepted = vi.fn(() => {
+      if (failurePoint === "observer") {
+        throw observerError;
+      }
+    });
+    const queueMessage = vi.fn(async () => {});
+    const queueMessageAsync = vi.fn<
+      NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
+    >(async (_text, options, preparation) => {
+      await preparation.prepareCurrent();
+      preparation.assertCurrent();
+      if (failurePoint !== "before-acceptance") {
+        options?.onQueueAccepted?.(true);
+      }
+      throw completionError;
+    });
+    const operation = createTestReplyOperation();
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage,
+        queueMessageAsync,
+      },
+    });
+    operation.setPhase("running");
+    const target = captureCurrentReplyMessageInjectionTarget(operation.key)!;
+    const attempt = await beginReplyMessageInjectionTarget(target, "continue", {
+      onQueueAccepted,
+      toolAuthorityPreparation: {
+        assertCurrent() {},
+        compatAssertCurrent() {},
+        async prepareCurrent() {},
+      },
+    });
+
+    await expect(attempt.outcome).resolves.toMatchObject(
+      failurePoint === "before-acceptance"
+        ? { status: "rejected", reason: "runtime_rejected" }
+        : { status: "indeterminate" },
+    );
+    await expect(attempt.acceptance).resolves.toBe(failurePoint !== "before-acceptance");
+    expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(failurePoint !== "before-acceptance");
+    expect(queueMessageAsync).toHaveBeenCalledOnce();
+    expect(queueMessage).not.toHaveBeenCalled();
+    expect(operation.result).toBeNull();
+    expect(operation.abortSignal.aborted).toBe(false);
   },
 );
 
@@ -408,6 +449,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
     operation.attachBackend({
       kind: "embedded",
       runId: "run-a",
+      supportsTranscriptCommitWait: true,
       toolAuthorityFingerprint: "policy",
       cancel: vi.fn(),
       messageInjection: {
@@ -424,7 +466,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
           throw new Error("participant registration failed");
         })
       : undefined;
-    const confirmSteerTargetRunIdForPersistence = vi.fn(async () => {
+    const confirm = vi.fn(async () => {
       throw new Error("transcript confirmation failed");
     });
     const recorder = {
@@ -432,16 +474,19 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
         input: { text: "uncertain" },
         target: createTestUserTurnTranscriptTarget(),
       }),
-      confirmSteerTargetRunIdForPersistence,
+      confirmSteerTargetRunIdForPersistence: confirm,
     };
-    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
-    const attempt = await beginReplyMessageInjectionTarget(target, "uncertain", {
-      isInboundUserMessage: true,
-      toolAuthorityFingerprint: "policy",
-      personalToolParticipant: participantFailure ? { senderId: "incoming" } : undefined,
-      waitForTranscriptCommit: failure === "confirmation-rejection",
-      userTurnTranscriptRecorder: recorder,
-    });
+    const attempt = await beginReplyMessageInjectionTarget(
+      captureCurrentReplyMessageInjectionTarget(operation.key)!,
+      "uncertain",
+      {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "policy",
+        personalToolParticipant: participantFailure ? { senderId: "incoming" } : undefined,
+        waitForTranscriptCommit: failure === "confirmation-rejection",
+        userTurnTranscriptRecorder: recorder,
+      },
+    );
 
     if (failure === "participant-callback") {
       try {
@@ -455,9 +500,7 @@ it.each(["confirmation-rejection", "participant-callback", "participant-fulfille
 
     await expect(attempt.outcome).resolves.toMatchObject({ status: "indeterminate" });
     await expect(attempt.acceptance).resolves.toBe(true);
-    expect(confirmSteerTargetRunIdForPersistence).toHaveBeenCalledTimes(
-      failure === "confirmation-rejection" ? 1 : 0,
-    );
+    expect(confirm).toHaveBeenCalledTimes(failure === "confirmation-rejection" ? 1 : 0);
     if (participant) {
       expect(participant).toHaveBeenCalledOnce();
       expect(() => operation.personalToolParticipants!.resolve("incoming")).toThrow(

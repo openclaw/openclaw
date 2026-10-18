@@ -8,11 +8,11 @@ import { captureSessionStoreReadCandidates } from "../config/sessions/session-st
 import { withSessionStoreTarget } from "../config/sessions/session-store-target-runtime.js";
 import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   readSessionProgressCard,
@@ -173,20 +173,11 @@ export const progressCardStore: ProgressCardStore = {
                 await owner.refreshBeforeDispatch(() => execution.assertCurrent());
                 await runOpenClawAgentWorkerWrite(options, () =>
                   execution.prepare({
-                    assertCurrent: assertOwnerCurrent,
+                    ...createSessionWorkerExecutionSource(
+                      assertOwnerCurrent,
+                      "Progress-card preparation authority expired",
+                    ),
                     onRegistryChange: owner.onRegistryChange,
-                    createAdmission(binding) {
-                      return () => ({
-                        nativeLocations: binding.nativeLocations,
-                        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                          binding.authorize(request);
-                          assertOwnerCurrent();
-                          if (!grant()) {
-                            throw new Error("Progress-card preparation authority expired");
-                          }
-                        }, binding.attachment),
-                      });
-                    },
                   }),
                 );
                 await owner.revalidateTarget();

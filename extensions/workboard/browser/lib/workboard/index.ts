@@ -1,4 +1,3 @@
-// Control UI Workboard public surface.
 export {
   WORKBOARD_PRIORITIES,
   WORKBOARD_CHANGED_EVENT,

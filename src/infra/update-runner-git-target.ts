@@ -1,14 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import {
-  parsePackageOpenClawSchemaVersions,
-  type OpenClawSchemaVersions,
-} from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errno.js";
 import { executeGitCommand, gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import {
@@ -30,6 +24,7 @@ import { isFailedUpdateStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 import { createGitStepFactory, gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
+import { readGitTargetSchemaVersions } from "./update-runner-git-schema.js";
 import { runClassifiedGitStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -295,52 +290,6 @@ export async function withGitTargetInspectionRoot<T>(
   }
 }
 
-type GitTargetSchemaMetadata =
-  | {
-      status: "ok";
-      version?: string;
-      schemaVersions?: OpenClawSchemaVersions;
-      databaseEngines?: unknown;
-    }
-  | { status: "unreadable"; reason: string };
-
-export async function readGitTargetSchemaVersions(params: {
-  runCommand: CommandRunner;
-  root: string;
-  revision: string;
-  timeoutMs: number;
-}): Promise<GitTargetSchemaMetadata> {
-  let result: Awaited<ReturnType<CommandRunner>>;
-  try {
-    result = await params.runCommand(
-      ["git", "-C", params.root, "show", `${params.revision}:package.json`],
-      { cwd: params.root, timeoutMs: params.timeoutMs },
-    );
-  } catch (error) {
-    return { status: "unreadable", reason: String(error) };
-  }
-  if (result.code !== 0) {
-    return {
-      status: "unreadable",
-      reason: `git show ${params.revision}:package.json exited ${result.code}`,
-    };
-  }
-  try {
-    const manifest: unknown = JSON.parse(result.stdout);
-    const schemaVersions = parsePackageOpenClawSchemaVersions(manifest);
-    const version = normalizeNullableString(asNullableRecord(manifest)?.version);
-    const databaseEngines = asNullableRecord(asNullableRecord(manifest)?.openclaw)?.databaseEngines;
-    return {
-      status: "ok",
-      ...(version ? { version } : {}),
-      ...(schemaVersions ? { schemaVersions } : {}),
-      ...(databaseEngines === undefined ? {} : { databaseEngines }),
-    };
-  } catch (error) {
-    return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
-  }
-}
-
 export async function prepareGitMutation(params: {
   runCommand: CommandRunner;
   root: string;
@@ -359,6 +308,9 @@ export async function prepareGitMutation(params: {
           ...(target.databaseEngines === undefined
             ? {}
             : { databaseEngines: target.databaseEngines }),
+          ...(target.postgresFamilies === undefined
+            ? {}
+            : { postgresFamilies: target.postgresFamilies }),
         }
       : { metadataUnreadable: target.reason }),
   });
@@ -393,8 +345,7 @@ export async function readBranchName(
   const result = await runCommand(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
     timeoutMs,
   }).catch(() => null);
-  const branch = result?.code === 0 ? result.stdout.trim() : "";
-  return branch || null;
+  return result?.code === 0 ? result.stdout.trim() || null : null;
 }
 
 async function resolveChannelTag(
@@ -510,21 +461,30 @@ export async function fetchGitUpdateTarget(params: {
   // Implicit Dev updates use the same live source as discovery. Only an explicit
   // detached target may search for its requested object on other remotes.
   const authority =
-    channel !== "dev"
-      ? tagRemote
-      : devTarget?.mode === "detached"
-        ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
-        : devSource?.remote;
+    devTarget?.mode === "detached"
+      ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
+      : devSource?.remote;
   if (channel === "dev" && devTarget?.mode !== "detached" && !devSource) {
     return devTarget ? { ...result(false), reason: "tracked-upstream-invalid" } : result(true);
   }
-  const fetchRemotes = authority
-    ? [authority]
-    : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
+  const fetchRemotes =
+    channel !== "dev"
       ? []
-      : targetRef && !isFullGitObjectId(targetRef)
-        ? remotes.filter((candidate) => candidate === "origin")
-        : remotes;
+      : authority
+        ? [authority]
+        : remoteRef || targetRef?.startsWith("refs/tags/")
+          ? []
+          : targetRef && !isFullGitObjectId(targetRef)
+            ? remotes.filter((candidate) => candidate === "origin")
+            : remotes;
+  const fetchConfigKey = `remote.${devSource?.remote}.fetch`;
+  const exclusions = devSource
+    ? await runStep(step("git-config-update-upstream", "config", "--get-all", fetchConfigKey))
+    : undefined;
+  if (exclusions && isFailedUpdateStep(exclusions) && exclusions.exitCode !== 1) {
+    return result(false);
+  }
+  const negatives = (exclusions?.stdoutTail ?? "").split("\n").filter((ref) => ref.startsWith("^"));
   for (const fetchRemote of fetchRemotes) {
     if (fetchRemote === ".") {
       continue;
@@ -533,9 +493,11 @@ export async function fetchGitUpdateTarget(params: {
       authority ? name : `${name}:${fetchRemote}`,
       "fetch",
       fetchRemote,
-      "--prune",
+      devSource ? "--no-prune" : "--prune",
       "--no-tags",
       "--no-prune-tags",
+      // Keep configured refs literal; an option-shaped source could fetch all branches.
+      ...(devSource ? ["--no-recurse-submodules", "--", devSource.mergeRef, ...negatives] : []),
     );
     const fetchOutcome = await runClassifiedGitStep(options, (fetch) => {
       const interrupted =
@@ -561,7 +523,12 @@ export async function fetchGitUpdateTarget(params: {
     }
   }
   if (channel === "dev") {
-    return result(true);
+    // FETCH_HEAD proves freshness; an excluded source can otherwise look current.
+    const fetched =
+      devSource && devSource.remote !== "."
+        ? await runStep(step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"))
+        : undefined;
+    return result(!fetched || !isFailedUpdateStep(fetched));
   }
   if (!tagRemote) {
     steps.push({

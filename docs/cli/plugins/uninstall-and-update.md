@@ -106,6 +106,8 @@ During `openclaw update`, a locally linked plugin with an explicit load path kee
 
 `update --all` reports and skips orphaned path-source install records so remaining plugins can update. Remove an orphan record with `openclaw plugins uninstall <id>` when its files are no longer needed.
 
+A plugin selected through `plugins.load.paths` is operator-managed. Named updates and `update --all` report it with a `plugin-operator-managed` warning and skip it so remaining plugins can update; the selected copy and any install record it shadows stay unchanged. Update that copy at its source, or remove its path from `plugins.load.paths` to use the managed installation again.
+
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Stored dist-tags such as `@beta` retain their selected release line.

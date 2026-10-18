@@ -9,7 +9,7 @@ import {
   listOpencodeGoModelCatalogEntries,
 } from "./provider-catalog.js";
 
-const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_GO_MODELS_URL = "https://opencode.ai/inference/go/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
 const LIVE = isLiveTestEnabled(["OPENCODE_GO_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
@@ -18,7 +18,7 @@ const describeLive = LIVE ? describe : describe.skip;
 type ModelsResponse = { data?: Array<{ id?: unknown; object?: unknown }> };
 
 describeLive("OpenCode Go live dynamic catalog", () => {
-  it("discovers the active advertised models with trusted upstream metadata", async () => {
+  it("discovers every advertised model except inactive metadata rows", async () => {
     const response = await fetch(OPENCODE_GO_MODELS_URL, {
       headers: {
         accept: "application/json",
@@ -39,14 +39,16 @@ describeLive("OpenCode Go live dynamic catalog", () => {
       discoveryApiKey: OPENCODE_API_KEY,
     });
     const discoveredIds = live.models.map((model) => model.id).toSorted();
-    const trustedRows = listOpencodeGoModelCatalogEntries();
-    const activeIds = new Set(
-      trustedRows.filter((row) => !row.status).map((row) => row.id.toLowerCase()),
+    // Listed ids without public metadata stay visible; only inactive metadata rows hide them.
+    const inactiveIds = new Set(
+      listOpencodeGoModelCatalogEntries()
+        .filter((row) => row.status)
+        .map((row) => row.id.toLowerCase()),
     );
 
     expect(discoveredIds.length).toBeGreaterThan(0);
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
-    expect(discoveredIds).toEqual([...new Set(liveIds)].filter((id) => activeIds.has(id)));
+    expect(discoveredIds).toEqual([...new Set(liveIds)].filter((id) => !inactiveIds.has(id)));
   }, 30_000);
 
   it("runs a discovered Go model with the account credential", async () => {

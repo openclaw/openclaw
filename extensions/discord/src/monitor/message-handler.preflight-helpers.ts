@@ -8,7 +8,6 @@ import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { Message } from "../internal/discord.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 
 const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
@@ -27,34 +26,12 @@ export function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
-type BoundThreadLookupRecordLike = {
-  webhookId?: string | null;
-  metadata?: {
-    webhookId?: string | null;
-  };
-};
-
 export function isDiscordThreadChannelMessage(params: {
   isGuildMessage: boolean;
   message: Message;
   channelInfo: DiscordChannelInfo | null;
 }): boolean {
   return params.isGuildMessage && isDiscordThreadChannelType(params.channelInfo?.type);
-}
-
-export function resolveInjectedBoundThreadLookupRecord(params: {
-  threadBindings: DiscordMessagePreflightParams["threadBindings"];
-  threadId: string;
-}): BoundThreadLookupRecordLike | undefined {
-  const getByThreadId = (params.threadBindings as { getByThreadId?: (threadId: string) => unknown })
-    .getByThreadId;
-  if (typeof getByThreadId !== "function") {
-    return undefined;
-  }
-  const binding = getByThreadId(params.threadId);
-  return binding && typeof binding === "object"
-    ? (binding as BoundThreadLookupRecordLike)
-    : undefined;
 }
 
 export function resolveDiscordMentionState(params: {
@@ -159,7 +136,7 @@ export function matchesActiveDiscordMentionPatterns(
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
   threadId?: string;
   webhookId?: string | null;
-  threadBinding?: BoundThreadLookupRecordLike;
+  threadBinding?: { webhookId?: string | null; metadata?: Record<string, unknown> };
 }): boolean {
   const webhookId = normalizeOptionalString(params.webhookId) ?? "";
   if (!webhookId) {

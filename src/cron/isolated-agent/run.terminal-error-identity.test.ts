@@ -90,6 +90,7 @@ describe("persistent automation terminal error identity", () => {
     });
     const params = makeIsolatedAgentParamsFixture({
       agentId: target.agentId,
+      cfg: { session: { store: target.storePath } },
       sessionKey: target.sessionKey,
       job: makeIsolatedAgentJobFixture({
         sessionTarget: `session:${target.sessionKey}`,
@@ -213,6 +214,7 @@ describe("synthetic exact cron terminal error persistence", () => {
       const result = await runCronIsolatedAgentTurn(
         makeIsolatedAgentParamsFixture({
           agentId: "main",
+          cfg: { session: { store: storePath } },
           sessionKey: "cron:synthetic-job",
           job: makeIsolatedAgentJobFixture({ id: "synthetic-job", delivery: { mode: "none" } }),
         }),

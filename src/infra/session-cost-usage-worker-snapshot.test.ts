@@ -55,9 +55,13 @@ vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
 afterEach(() => vi.resetAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.for([false, true])(
-  "yields whole transcripts and retains every pending selector (selected: %s)",
-  async (selected) => {
+it.for([
+  { selected: false, scanMs: 11_000 },
+  { selected: true, scanMs: 11_000 },
+  { selected: true, scanMs: 0 },
+])(
+  "batches whole transcripts and retains pending selectors ($selected, $scanMs ms)",
+  async ({ selected, scanMs }) => {
     const root = tempDirs.make("usage-batch-quantum-");
     const text =
       JSON.stringify({
@@ -103,6 +107,7 @@ it.for([false, true])(
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     const written: string[] = [];
+    const batches: number[] = [];
     try {
       const result = await executeUsageCostWorker(
         {
@@ -123,15 +128,16 @@ it.for([false, true])(
           notify() {},
           async request(value) {
             let output: unknown;
-            if (
-              isRecord(value) &&
-              value.kind === "write" &&
-              isRecord(value.input) &&
-              typeof value.input.key === "string"
-            ) {
-              written.push(value.input.key);
-              now += 11_000;
+            if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+              batches.push(value.input.length);
+              for (const row of value.input) {
+                if (isRecord(row) && typeof row.key === "string") {
+                  written.push(row.key);
+                }
+              }
               output = true;
+            } else if (isRecord(value) && value.kind === "refresh-session") {
+              now += scanMs;
             } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
               output = value.input.map(() => undefined);
             }
@@ -142,14 +148,19 @@ it.for([false, true])(
         async (_database, read) => read(),
       );
       clock.mockRestore();
-      expect(written).toEqual([files[0]!.filePath]);
+      expect(batches).toEqual(scanMs ? [1] : [2]);
+      expect(written).toEqual((scanMs ? files.slice(0, 1) : files).map((file) => file.filePath));
       expect(result).toEqual({
         kind: "refresh",
         changed: true,
-        remainingFiles: (selected ? requested.slice(1) : files.slice(1)).map((file) => ({
-          sessionFile: file.sourcePath,
-          rollupId: file.filePath,
-        })),
+        ...(scanMs
+          ? {
+              remainingFiles: (selected ? requested.slice(1) : files.slice(1)).map((file) => ({
+                sessionFile: file.sourcePath,
+                rollupId: file.filePath,
+              })),
+            }
+          : {}),
       });
     } finally {
       clock.mockRestore();

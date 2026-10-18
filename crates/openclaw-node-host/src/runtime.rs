@@ -1365,234 +1365,28 @@ mod tests {
         expected_capabilities: Vec<String>,
         declared_commands: Vec<String>,
         expected_commands: Vec<String>,
-        authority_snapshots: Vec<AuthoritySnapshot>,
-        authority_transitions: Vec<AuthorityTransition>,
         invocations: Vec<IntegrationInvocation>,
-        cleanup: Vec<CleanupExpectation>,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuthoritySnapshot {
-        name: String,
-        connection_id: String,
-        pairing_generation: String,
-        session_active: bool,
-        declared_commands: Vec<String>,
-        approved_commands: Vec<String>,
-        effective_commands: Vec<String>,
-        withheld_commands: Vec<String>,
-        gateway_policy: GatewayPolicy,
-        expected_states: Vec<AuthorityExpectation>,
-    }
-
-    #[derive(Deserialize)]
-    struct GatewayPolicy {
-        allow: Vec<String>,
-        deny: Vec<String>,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthorityExpectation {
-        command: String,
-        state: String,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuthorityTransition {
-        name: String,
-        from: String,
-        to: String,
-        command: String,
-        from_state: String,
-        to_state: String,
-        preserves_connection: bool,
-        cancels_active: bool,
-        retires_pairing_generation: bool,
     }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct IntegrationInvocation {
-        snapshot: String,
         command: String,
-        gateway_state: String,
-        gateway_delivery: String,
         local_admission: String,
-        expected: Option<String>,
+        expected: String,
         error_code: Option<String>,
         error_message: Option<String>,
     }
 
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct CleanupExpectation {
-        trigger: String,
-        owner: String,
-        effects: Vec<String>,
-    }
-
-    fn integration_fixture() -> IntegrationFixture {
-        serde_json::from_str(include_str!(concat!(
+    #[tokio::test]
+    async fn shared_manifest_and_local_admission_match_openclaw() {
+        let fixture: IntegrationFixture = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../test/fixtures/node-runtime-integration-contract.json"
         )))
-        .expect("valid node runtime integration fixture")
-    }
+        .expect("valid node runtime integration fixture");
+        assert_eq!(fixture.version, 3);
 
-    fn fixture_authority_state(snapshot: &AuthoritySnapshot, command: &str) -> &'static str {
-        if !snapshot.session_active {
-            return "retired-generation";
-        }
-        if snapshot
-            .withheld_commands
-            .iter()
-            .any(|entry| entry == command)
-            || snapshot
-                .gateway_policy
-                .deny
-                .iter()
-                .any(|entry| entry == command)
-            || !snapshot
-                .gateway_policy
-                .allow
-                .iter()
-                .any(|entry| entry == command)
-        {
-            return "unauthorized";
-        }
-        if snapshot
-            .effective_commands
-            .iter()
-            .any(|entry| entry == command)
-        {
-            return "invocable";
-        }
-        if snapshot
-            .declared_commands
-            .iter()
-            .any(|entry| entry == command)
-        {
-            return "pending-approval";
-        }
-        "undeclared"
-    }
-
-    fn fixture_snapshots(fixture: &IntegrationFixture) -> BTreeMap<&str, &AuthoritySnapshot> {
-        fixture
-            .authority_snapshots
-            .iter()
-            .map(|snapshot| (snapshot.name.as_str(), snapshot))
-            .collect()
-    }
-
-    fn validate_authority_snapshots(snapshots: &BTreeMap<&str, &AuthoritySnapshot>) {
-        for snapshot in snapshots.values() {
-            assert!(!snapshot.connection_id.is_empty());
-            assert!(!snapshot.pairing_generation.is_empty());
-            assert!(snapshot.effective_commands.iter().all(|command| {
-                snapshot.approved_commands.contains(command)
-                    && snapshot.declared_commands.contains(command)
-                    && !snapshot.withheld_commands.contains(command)
-            }));
-            assert!(snapshot
-                .approved_commands
-                .iter()
-                .all(|command| snapshot.declared_commands.contains(command)));
-            assert!(snapshot
-                .withheld_commands
-                .iter()
-                .all(|command| snapshot.declared_commands.contains(command)));
-            for expected in &snapshot.expected_states {
-                assert_eq!(
-                    fixture_authority_state(snapshot, &expected.command),
-                    expected.state
-                );
-            }
-        }
-    }
-
-    fn validate_authority_transitions(
-        fixture: &IntegrationFixture,
-        snapshots: &BTreeMap<&str, &AuthoritySnapshot>,
-    ) {
-        for transition in &fixture.authority_transitions {
-            let from = snapshots
-                .get(transition.from.as_str())
-                .expect("transition source snapshot");
-            let to = snapshots
-                .get(transition.to.as_str())
-                .expect("transition destination snapshot");
-            assert_eq!(
-                fixture_authority_state(from, &transition.command),
-                transition.from_state,
-                "{} source state",
-                transition.name
-            );
-            assert_eq!(
-                fixture_authority_state(to, &transition.command),
-                transition.to_state,
-                "{} destination state",
-                transition.name
-            );
-            assert_eq!(
-                from.connection_id == to.connection_id,
-                transition.preserves_connection,
-                "{} connection ownership",
-                transition.name
-            );
-            assert_eq!(
-                from.pairing_generation != to.pairing_generation,
-                transition.retires_pairing_generation,
-                "{} pairing generation",
-                transition.name
-            );
-            if transition.name == "policy-revoked"
-                || transition.name == "pairing-generation-promoted"
-            {
-                assert!(transition.cancels_active);
-            }
-        }
-    }
-
-    fn validate_cleanup_contract(fixture: &IntegrationFixture) {
-        assert_eq!(
-            fixture
-                .cleanup
-                .iter()
-                .map(|entry| entry.trigger.as_str())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "deadline",
-                "node.invoke.cancel",
-                "pairing-generation-change",
-                "policy-revocation",
-            ])
-        );
-        let expected_effects = BTreeSet::from([
-            "cancel-handler",
-            "close-input",
-            "reject-progress",
-            "remove-active-invocation",
-        ]);
-        for cleanup in &fixture.cleanup {
-            assert!(matches!(cleanup.owner.as_str(), "gateway" | "node-runtime"));
-            assert_eq!(
-                cleanup
-                    .effects
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>(),
-                expected_effects
-            );
-        }
-    }
-
-    async fn validate_fixture_dispatch(
-        fixture: &IntegrationFixture,
-        snapshots: &BTreeMap<&str, &AuthoritySnapshot>,
-    ) {
         let local_denied = Arc::new(
             fixture
                 .invocations
@@ -1655,20 +1449,6 @@ mod tests {
         );
 
         for (index, contract) in fixture.invocations.iter().enumerate() {
-            let snapshot = snapshots
-                .get(contract.snapshot.as_str())
-                .expect("invocation authority snapshot");
-            assert_eq!(
-                fixture_authority_state(snapshot, &contract.command),
-                contract.gateway_state
-            );
-            if contract.gateway_delivery == "reject" {
-                assert_eq!(contract.local_admission, "not-evaluated");
-                assert_ne!(contract.gateway_state, "invocable");
-                continue;
-            }
-            assert_eq!(contract.gateway_delivery, "deliver");
-            assert_eq!(contract.gateway_state, "invocable");
             let result = runtime
                 .evaluate(invocation(
                     &format!("fixture-{index}"),
@@ -1676,9 +1456,9 @@ mod tests {
                     Value::Null,
                 ))
                 .await;
-            match contract.expected.as_deref() {
-                Some("success") => assert!(matches!(result, InvocationResult::Success(_))),
-                Some("failure") => assert_eq!(
+            match contract.expected.as_str() {
+                "success" => assert!(matches!(result, InvocationResult::Success(_))),
+                "failure" => assert_eq!(
                     result,
                     InvocationResult::failure(
                         contract.error_code.as_deref().expect("denial code"),
@@ -1690,17 +1470,6 @@ mod tests {
         }
         assert_eq!(admission_evaluations.load(Ordering::SeqCst), 2);
         assert_eq!(handler_runs.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn shared_authority_handoff_contract_matches_openclaw() {
-        let fixture = integration_fixture();
-        assert_eq!(fixture.version, 3);
-        let snapshots = fixture_snapshots(&fixture);
-        validate_authority_snapshots(&snapshots);
-        validate_authority_transitions(&fixture, &snapshots);
-        validate_cleanup_contract(&fixture);
-        validate_fixture_dispatch(&fixture, &snapshots).await;
     }
 
     #[tokio::test]

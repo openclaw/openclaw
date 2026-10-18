@@ -111,7 +111,13 @@ the CLI fallback on the Gateway host.
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for
-readiness does not release the lock.
+readiness does not release the lock. A non-Gateway holder, such as a CLI
+command or embedded agent run, gets time to finish first (up to 20 minutes by
+default, less on a host whose Doctor runs slowly); Doctor prints its PID and
+progress while it waits. The same applies to a process that only has an agent
+database open ("An agent database is in use"). An idle CLI process
+closes an unused agent database about 30 seconds after its last use; one started
+from an older release can keep it open for up to 30 minutes, so stop it first.
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.
@@ -178,7 +184,7 @@ prefix in the shell. An unrelated installation at that shell prefix does not
 block an update to the original installation. pnpm global installations retain
 their pnpm owner and do not use this npm destination check.
 
-The actual destination must be empty, or its canonical package path must match
+The actual destination must be empty, or its resolved package path must match
 the running installation or selected managed service, with any existing launcher
 pointing inside that package. An inaccessible or unreadable destination stops the
 update before staging; an unknown destination is never treated as empty. Restore
@@ -543,7 +549,7 @@ Windows host-wide legacy capture cleanup remains report-only.
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
   the updater already installed: on macOS, `Package rollback launcher backup
-changed` when the updater's umask differs from the installed launcher's
+  changed` when the updater's umask differs from the installed launcher's
   permissions, and on busy hosts or slow disks a 30-second baseline package
   fingerprint timeout reported as a changed package tree. Retrying with the
   same installed updater repeats them. Install the target once with the

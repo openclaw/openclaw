@@ -522,14 +522,12 @@ describe("cron run receipt store", () => {
       job,
       agentId: job.agentId!,
       startedAtMs: 300,
-      observed: undefined,
     });
     prepared.handle.ownerStartTime = null;
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: (current) => current.agentId!,
       }),
     );
     await saveCronStore(storePath, {

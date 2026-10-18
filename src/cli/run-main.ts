@@ -1,5 +1,3 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
 import process from "node:process";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -9,13 +7,12 @@ import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
 } from "../config/io.invalid-config.js";
-import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
-import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
@@ -63,13 +60,16 @@ import {
   isDebugProxyCaptureEnvEnabled,
   isGatewayRunFastPathArgv,
   isRemoteAgentDispatchInvocation,
+  resolveBareRootLaunchPolicy,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
   shouldBootstrapCliProxyBeforeFastPath,
   shouldEnsureCliPath,
+  shouldLoadCliDotEnv,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
+  TUI_REQUIRES_TTY,
 } from "./run-main-policy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import type {
@@ -91,8 +91,6 @@ import {
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
-const TUI_REQUIRES_TTY =
-  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
 
 function requireInteractiveTty(message: string): boolean {
   if (process.stdin.isTTY && process.stdout.isTTY) {
@@ -173,6 +171,9 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -416,14 +417,6 @@ function pauseNonTtyStdinForCliExit(): void {
   } catch {
     // Best-effort cleanup for command paths that only inspected stdin.
   }
-}
-
-function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
-  const cwd = tryProcessCwd();
-  if (cwd && existsSync(path.join(cwd, ".env"))) {
-    return true;
-  }
-  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -704,14 +697,7 @@ export async function runCli(
               }
             } finally {
               if (resources) {
-                await runCliDisposer("plugin-registration-resources", async () => {
-                  try {
-                    await resources.release();
-                  } catch (error) {
-                    console.error(`Plugin CLI resource disposal failed: ${String(error)}`);
-                    throw error;
-                  }
-                });
+                await runCliDisposer("plugin-registration-resources", () => resources.release());
               }
               pauseNonTtyStdinForCliExit();
             }
@@ -868,14 +854,23 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
+  if (selectionHandled) {
+    return;
+  }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
-    // Debug capture can migrate shared state before Commander reaches Doctor.
-    // Resolve the update guard after selectors settle, before any bootstrap writer.
-    const { preflightUpdateDoctorCli } = await import("../commands/doctor-update-schema-guard.js");
-    doctorDatabasePreflight = await preflightUpdateDoctorCli({
+    const { prepareDoctorCliStartup } = await import("./run-main-doctor-startup.js");
+    const startup = await prepareDoctorCliStartup(normalizedArgv, {
       json: options.builtInMachineOutput,
     });
+    if (startup.handled) {
+      return;
+    }
+    doctorDatabasePreflight = startup.preflight;
   }
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
@@ -1126,16 +1121,13 @@ async function runCliWithPreparedOutputMode(
       : null;
 
     if (bareRootLaunchTarget) {
-      const ttyMessage =
-        bareRootLaunchTarget.kind === "remote-gateway-inference"
-          ? "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway."
-          : bareRootLaunchTarget.kind === "onboarding"
-            ? bareRootLaunchTarget.classic
-              ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
-              : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation."
-            : TUI_REQUIRES_TTY;
-      if (!requireInteractiveTty(ttyMessage)) {
+      const launchPolicy = resolveBareRootLaunchPolicy(bareRootLaunchTarget);
+      if (!requireInteractiveTty(launchPolicy.ttyMessage)) {
         return;
+      }
+      if (launchPolicy.startProxy) {
+        const config = await withConsoleLogsRoutedToStderr(readBestEffortCliConfig);
+        await replaceStartedProxy(config?.proxy ?? undefined);
       }
       if (bareRootLaunchTarget.kind === "remote-gateway-inference") {
         const { runRemoteGatewayInferenceOnboarding } =
@@ -1282,7 +1274,7 @@ async function runCliWithPreparedOutputMode(
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception");
         exitAfterSignalExitBarriers(1, "uncaught exception");
       });
 

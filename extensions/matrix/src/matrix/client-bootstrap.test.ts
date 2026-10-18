@@ -43,7 +43,7 @@ describe("client bootstrap", () => {
   });
 
   beforeEach(() => {
-    primeMatrixClientResolverMocks({ resolved: {} });
+    primeMatrixClientResolverMocks();
     captureAuthority.mockReturnValue(undefined);
   });
 

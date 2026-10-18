@@ -27,13 +27,11 @@ it("commits execution, delivery, and history once despite an owner edit and a du
       job,
       agentId: "main",
       startedAtMs: now,
-      observed: undefined,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: () => "main",
       }),
     );
     job.state.runningReceiptId = receipt.receiptId;

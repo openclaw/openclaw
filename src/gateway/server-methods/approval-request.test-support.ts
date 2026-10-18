@@ -1,6 +1,45 @@
 import { expect } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+} from "./types.js";
+
+type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
+
+export function createApprovalClient(params: {
+  connId: string;
+  clientId: string;
+  deviceId?: string;
+  scopes?: string[];
+  approvalRuntime?: boolean;
+}): GatewayClient {
+  return {
+    connId: params.connId,
+    connect: {
+      client: { id: params.clientId },
+      device: params.deviceId ? { id: params.deviceId } : undefined,
+      scopes: params.scopes ?? ["operator.approvals"],
+    },
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+  } as GatewayClient;
+}
+
+export function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLookup {
+  return (opts = {}) =>
+    new Set(
+      clients
+        .filter((client) => {
+          if (opts.excludeConnId && client.connId === opts.excludeConnId) {
+            return false;
+          }
+          return opts.filter?.(client, opts.record) ?? true;
+        })
+        .map((client) => client.connId)
+        .filter((connId): connId is string => typeof connId === "string" && connId.length > 0),
+    );
+}
 
 /** Install before starting: a previous request's publication cannot admit the next one. */
 export async function waitForApprovalRequested<T>(

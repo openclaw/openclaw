@@ -62,7 +62,6 @@ export async function extractFilename(url: string): Promise<string> {
     const prefix = mime.startsWith("image/") ? "image" : "file";
     return basename ? `${basename}${ext}` : `${prefix}${ext}`;
   } catch {
-    // Local paths - use extractOriginalFilename to extract embedded original name
     return extractOriginalFilename(url);
   }
 }

@@ -344,7 +344,7 @@ describe("main session recovery state", () => {
     ).toMatchObject({ kind: "admitted_recovery" });
     expect(entry).toMatchObject({
       abortedLastRun: false,
-      pendingFinalDelivery: { kind: "replayable", text: "captured reply", createdAt: 1 },
+      pendingFinalDelivery: { kind: "replayable", text: " captured reply ", createdAt: 1 },
       restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
       mainRestartRecovery: {
         revision: 3,
@@ -374,6 +374,57 @@ describe("main session recovery state", () => {
     expect(entry.lifecycleRunId).toBeUndefined();
     expect(entry.lastRunId).toBeUndefined();
   });
+
+  it.each(["started", "terminal"] as const)(
+    "does not restore a %s recovery attempt during pre-start cleanup",
+    (outcome) => {
+      const entry = interruptedEntry({
+        status: undefined,
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-1",
+        restartRecoveryDeliveryRunId: "recovery-1",
+        restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration: "generation-1" }],
+        ...(outcome === "terminal" ? { restartRecoveryTerminalRunIds: ["recovery-1"] } : {}),
+        mainRestartRecovery: recoveryState({
+          chargedAttempts: 1,
+          ...(outcome === "started" ? { startedAttempt: 1 } : {}),
+        }),
+      });
+      const before = structuredClone(entry);
+
+      expect(
+        transitionMainSessionRecovery(entry, {
+          kind: "mark_admitted_recovery_interrupted",
+          cycleId: "cycle-1",
+          attempt: 1,
+          lifecycleGeneration: "generation-1",
+          now: 400,
+          runId: "recovery-1",
+          sessionId: "session-1",
+          unstartedOnly: true,
+        }),
+      ).toEqual({ kind: "rejected", reason: "stale_reservation" });
+      expect(entry).toEqual(before);
+    },
+  );
+
+  it.each([undefined, "interrupted"] as const)(
+    "records an explicit interrupt of owed %s recovery without charging a retry",
+    (status) => {
+      const entry = interruptedEntry({
+        status,
+        restartRecoveryDeliverySourceRunId: "source-1",
+      });
+
+      expect(transitionMainSessionRecovery(entry, { kind: "interrupt_owed", now: 400 })).toEqual({
+        kind: "applied",
+      });
+      expect(entry).toMatchObject({ status: "killed", endedAt: 400, abortedLastRun: false });
+      expect(entry.mainRestartRecovery).toBeUndefined();
+      expect(entry.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(entry.restartRecoveryTerminalRunIds).toContain("source-1");
+    },
+  );
 
   it("rejects a reservation created by an older lifecycle generation", () => {
     const entry = interruptedEntry({

@@ -1,7 +1,8 @@
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliOutput } from "../cli-output-contracts.js";
 import { formatCliOutputError } from "../cli-output.js";
-import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { classifyFailoverReason } from "../failover/classify.js";
 
 export function createCliOutputFailoverError(params: {
   output: CliOutput;
@@ -10,6 +11,7 @@ export function createCliOutputFailoverError(params: {
   runId?: string;
   sessionId?: string;
   lane?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 }): FailoverError | undefined {
   if (!params.output.errorText) {
     return undefined;
@@ -30,7 +32,7 @@ export function createCliOutputFailoverError(params: {
     ? `cli_${terminalFailure}`
     : reason === "context_overflow"
       ? "cli_context_overflow"
-      : undefined;
+      : params.classifyErrorCode?.(params.output.errorText);
   return new FailoverError(message, {
     reason,
     provider: params.provider,

@@ -31,7 +31,6 @@ import {
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
-  createSharedGitHubPublicationReadMethods,
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
@@ -96,7 +95,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
   const makeRow = async (input: {
     session: SessionIdentity;
     workspace: SessionRepositoryWorkspaceRecord;
-    request: { idempotencyKey: string; title?: string; body?: string };
+    request: { idempotencyKey: string; title?: string; body?: string; draft?: boolean };
     identity: PreparedGitHubPublicationIdentity;
     target: Awaited<ReturnType<typeof prepareRepositoryGitHubPublicationTarget>>;
     action?: PersonalGitHubSessionActionV2;
@@ -128,6 +127,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       requester_authority_json: input.requesterAuthorityJson,
       title: input.request.title ?? null,
       body: input.request.body ?? null,
+      draft: input.request.draft ? 1 : 0,
       push_repository: input.target.pushRepository,
       repository: input.target.repository,
       base_branch: input.target.baseBranch,
@@ -216,7 +216,10 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       existing &&
       (existing.workspace_id !== initial.workspace.workspaceId ||
         existing.title !== (input.title ?? null) ||
-        existing.body !== (input.body ?? null))
+        existing.body !== (input.body ?? null) ||
+        (existing.draft == null
+          ? input.draft === false
+          : existing.draft !== Number(input.draft ?? false)))
     ) {
       throw new Error("GitHub publication idempotency key was reused.");
     }
@@ -456,7 +459,6 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
       isExecuting: (requestId) => active.has(requestId),
       execute: (row, assertCustody) => execute(row, { assertCustody }),
     }),
-    ...createSharedGitHubPublicationReadMethods("repository"),
     preparePersonalStatus,
     async personalStatusAsync(
       action: PersonalGitHubAction,

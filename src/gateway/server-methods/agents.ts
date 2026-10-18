@@ -7,11 +7,7 @@ import {
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSharedStoreOwnerError } from "../../agents/agent-delete-databases.js";
-import {
-  formatSharedAuthStoreOwnerDeleteError,
-  isInheritedAuthStoreOwner,
-} from "../../agents/agent-delete-safety.js";
-import { resolveAgentWorkspaceDir, tryResolveSoleAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   createAgentIdentityConfig,
   normalizeIdentityForFile,
@@ -31,11 +27,11 @@ import {
 } from "../../config/runtime-write-application.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { normalizeAgentIdStrict } from "../../routing/session-key.js";
-import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
 import { resolveUserPath } from "../../utils.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "../server-reload-agent-databases.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
+import { agentAvatarGenerateHandler } from "./agents-avatar.js";
 import {
   AgentConfigPreconditionError,
   AgentModelSelectionError,
@@ -45,11 +41,7 @@ import {
   updateAgentConfigEntry,
   validateAgentModelSelectionUpdate,
 } from "./agents-config-mutations.js";
-import {
-  AgentSharedAuthStoreOwnerError,
-  agentOwnsSharedAuthStore,
-  deleteGatewayAgent,
-} from "./agents-delete.js";
+import { AgentSharedAuthStoreOwnerError, deleteGatewayAgent } from "./agents-delete.js";
 import {
   agentFileHandlers,
   buildIdentityMarkdownOrRespondUnsafe,
@@ -93,6 +85,7 @@ function createAgentConfigApplication(respond: RespondFn) {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
+  "agents.avatar.generate": agentAvatarGenerateHandler,
   "agents.list": agentListHandler,
   "agents.create": async (options) => {
     const { params, respond, client, context } = options;
@@ -314,51 +307,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
     const normalized = normalizeAgentIdStrict(params.agentId);
     if (!normalized.ok) {
       respondAgentNotFound(respond, params.agentId);
       return;
     }
     const agentId = normalized.value;
-    if (await agentOwnsSharedAuthStore(cfg, agentId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, formatSharedAuthStoreOwnerDeleteError(agentId)),
-      );
-      return;
-    }
-    const existingJournal = await readAgentDeletionJournalAsync(agentId);
-    if (
-      !isConfiguredAgent(cfg, agentId) &&
-      (!existingJournal || existingJournal.cleanupCompleted)
-    ) {
-      respondAgentNotFound(respond, agentId);
-      return;
-    }
-    if (agentId === tryResolveSoleAgentId(cfg)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
-        ),
-      );
-      return;
-    }
-    if (isInheritedAuthStoreOwner(cfg, agentId)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
-        ),
-      );
-      return;
-    }
 
     const requestedDeleteFiles = params.deleteFiles ?? true;
     const application = createAgentConfigApplication(respond);
@@ -395,7 +349,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (error instanceof AgentConfigPreconditionError) {
-        respondAgentNotFound(respond, agentId);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
         return;
       }
       throw error;

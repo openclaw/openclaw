@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type { CurrentInboundPromptContext } from "../internal-runtime-context.js";
-import { withoutPluginHarnessPrivateState } from "./plugin-private-state.js";
+import { prepareHarnessFinalizationParams } from "./plugin-private-state.js";
 
-describe("plugin current-turn context", () => {
+type FinalizationInput = Parameters<typeof prepareHarnessFinalizationParams>[0];
+
+describe("plugin finalization current-turn context", () => {
   it.each<CurrentInboundPromptContext | undefined>([
     undefined,
     {
@@ -18,6 +20,7 @@ describe("plugin current-turn context", () => {
       const params = {
         prompt: "Visible command",
         extraSystemPrompt: "Stable guidance",
+        model: {},
         currentInboundContext: context,
         runtimeContextFragments: [
           {
@@ -28,8 +31,9 @@ describe("plugin current-turn context", () => {
         ],
       };
       const original = structuredClone(params);
-      const projected = withoutPluginHarnessPrivateState(
-        params as Parameters<typeof withoutPluginHarnessPrivateState>[0],
+      const projected = prepareHarnessFinalizationParams(
+        params as unknown as FinalizationInput,
+        false,
       );
       expect(projected.prompt).toBe("Visible command");
       expect(projected.extraSystemPrompt).toBe("Stable guidance");
@@ -47,31 +51,40 @@ describe("plugin current-turn context", () => {
         ...(context?.fragments ?? []),
         ...params.runtimeContextFragments,
       ]);
-      expect(projected).not.toHaveProperty("runtimeContextFragments");
       if (context) {
         expect(projected.currentInboundContext?.text.endsWith(context.text)).toBe(true);
-        if (context.resumableText) {
-          expect(
-            projected.currentInboundContext?.resumableText?.endsWith(context.resumableText),
-          ).toBe(true);
-        }
+        expect(
+          projected.currentInboundContext?.resumableText?.endsWith(context.resumableText!),
+        ).toBe(true);
         expect(projected.currentInboundContext?.resumableText).toContain("### Delivery Format");
         expect(projected.currentInboundContext?.promptJoiner).toBe(" ");
       }
-      const again = withoutPluginHarnessPrivateState(
-        projected as Parameters<typeof withoutPluginHarnessPrivateState>[0],
-      );
-      expect(again.currentInboundContext).toEqual(projected.currentInboundContext);
       expect(params).toEqual(original);
     },
   );
 
   it("does not create a carrier for empty runtime fragments", () => {
-    const projected = withoutPluginHarnessPrivateState({
-      prompt: "Visible command",
-      runtimeContextFragments: [{ kind: "runtime-instruction", text: "  " }],
-    } as Parameters<typeof withoutPluginHarnessPrivateState>[0]);
+    const projected = prepareHarnessFinalizationParams(
+      {
+        prompt: "Visible command",
+        model: {},
+        runtimeContextFragments: [{ kind: "runtime-instruction", text: "  " }],
+      } as unknown as FinalizationInput,
+      false,
+    );
     expect(projected.currentInboundContext).toBeUndefined();
-    expect(projected).not.toHaveProperty("runtimeContextFragments");
+  });
+
+  it("leaves built-in finalization to the built-in runtime", () => {
+    const params = {
+      prompt: "Visible command",
+      model: {},
+      runtimeContextFragments: [{ kind: "runtime-instruction", text: "Built-in note" }],
+    };
+    const projected = prepareHarnessFinalizationParams(
+      params as unknown as FinalizationInput,
+      true,
+    );
+    expect(projected.currentInboundContext).toBeUndefined();
   });
 });

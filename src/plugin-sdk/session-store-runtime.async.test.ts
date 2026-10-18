@@ -310,6 +310,10 @@ it("keeps the complete public projection for durable and memory entry reads", as
   expect(publicEntry).not.toHaveProperty("cliHistoryBoundary");
   expect(publicEntry).not.toBeInstanceOf(Promise);
   await expect(getSessionEntryAsync(durable)).resolves.toEqual(publicEntry);
+  const detachedEntry = (await getSessionEntryAsync(durable))!;
+  detachedEntry.skillsSnapshot!.prompt = "Plugin-local replacement";
+  detachedEntry.skillsSnapshot!.skills.push({ name: "plugin-local" });
+  await expect(getSessionEntryAsync(durable)).resolves.toEqual(publicEntry);
   await expect(getSessionEntryByIdAsync({ ...durable, sessionId: "selected" })).resolves.toEqual({
     sessionKey: durable.sessionKey,
     entry: publicEntry,

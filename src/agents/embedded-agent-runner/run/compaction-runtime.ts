@@ -1,10 +1,10 @@
-import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { sameSessionTranscriptStorePath } from "../../../config/sessions/transcript-store-identity.js";
 import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -15,6 +15,7 @@ import {
   type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { acknowledgeReplySessionTransition } from "../../../sessions/session-controller.session-reader.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -233,7 +234,8 @@ export async function compactEmbeddedRunForRecovery(
     (!successor.sessionFile || successor.sessionFile === activeSession.file) &&
     (!target?.agentId || target.agentId === activeSession.target?.agentId) &&
     (!target?.sessionKey || target.sessionKey === activeSession.target?.sessionKey) &&
-    (!target?.storePath || target.storePath === activeSession.target?.storePath);
+    (!target?.storePath ||
+      sameSessionTranscriptStorePath(target.storePath, activeSession.target?.storePath));
   const reportedTokens = result.result?.tokensAfter;
   const tokensAfter =
     typeof reportedTokens === "number" && Number.isFinite(reportedTokens) && reportedTokens >= 0
@@ -321,7 +323,8 @@ export function createEmbeddedRunCompactionRuntime(input: {
     }
     if (
       incognito &&
-      (target?.agentId !== initialTarget?.agentId || target?.storePath !== initialTarget?.storePath)
+      (target?.agentId !== initialTarget?.agentId ||
+        !sameSessionTranscriptStorePath(target?.storePath, initialTarget?.storePath))
     ) {
       throw new SessionTranscriptWriterClaimReboundError();
     }
@@ -393,7 +396,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
           sessionPromptState.sessionFile !== sessionFile ||
           current?.agentId !== target.agentId ||
           current?.sessionKey !== target.sessionKey ||
-          current?.storePath !== target.storePath
+          !sameSessionTranscriptStorePath(current?.storePath, target.storePath)
         ) {
           throw new Error("active session changed after recovery transcript preparation");
         }

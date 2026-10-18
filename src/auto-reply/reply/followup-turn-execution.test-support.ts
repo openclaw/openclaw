@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
@@ -12,14 +12,19 @@ vi.mock("./agent-runner-execution.js", () => ({
 
 // mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
 vi.mock("../../config/sessions/session-accessor.js", async () => {
-  const { bindSessionPendingInputSources } =
+  const { bindSessionPendingInputSources, withSessionPendingInputPersistence } =
     await import("../../config/sessions/session-accessor.pending-inputs.js");
-  const { loadSessionEntry, replaceSessionEntry } =
+  const { loadSessionEntry, patchSessionEntryTarget, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.sqlite-entry.js");
+  const { persistSessionTranscriptTurn } =
+    await import("../../config/sessions/session-accessor.transcript-turn.js");
   return {
     bindSessionPendingInputSources,
     loadSessionEntry,
+    patchSessionEntryTarget,
+    persistSessionTranscriptTurn,
     replaceSessionEntry,
+    withSessionPendingInputPersistence,
   };
 });
 
@@ -83,7 +88,6 @@ export function createFollowupTurnTestTurn(
       key: "main",
       current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" }),
       publish: () => undefined,
-      adopt: () => undefined,
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,

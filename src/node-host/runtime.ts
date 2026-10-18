@@ -52,12 +52,43 @@ import {
   type NodeHostInventory,
 } from "./runtime-manifest.js";
 import { resolveExecutableTrustPathFromEnv, SkillBinsCache } from "./runtime-skill-bins.js";
-import { createNodeHostUpdatePause } from "./runtime-update-pause.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WORKER_INITIALIZATION_RETRY_MS = 5_000;
+
+function createNodeHostUpdatePause(params: {
+  hasLocalActiveWork: () => boolean;
+  hasWorkerActiveWork: () => Promise<boolean> | undefined;
+}) {
+  let updatePause = false;
+  return {
+    get isPaused() {
+      return updatePause;
+    },
+    async tryPauseForUpdate(this: void) {
+      if (updatePause || params.hasLocalActiveWork()) {
+        return false;
+      }
+      // The update loop awaits this check before resuming; close invoke admission first.
+      updatePause = true;
+      let admitted = false;
+      try {
+        const workerBusy = await params.hasWorkerActiveWork();
+        admitted = !workerBusy && !params.hasLocalActiveWork();
+        return admitted;
+      } finally {
+        if (!admitted) {
+          updatePause = false;
+        }
+      }
+    },
+    resumeAfterUpdate(this: void) {
+      updatePause = false;
+    },
+  };
+}
 
 type ActiveNodeInvoke = {
   controller: AbortController;
@@ -97,7 +128,6 @@ export async function prepareNodeHostRuntime(params?: {
   installedAppsSharingEnabled?: boolean;
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
-  platform?: NodeJS.Platform;
 }) {
   const commandAllowlist = params?.commands === undefined ? undefined : new Set(params.commands);
   if (!commandAllowlist) {
@@ -105,7 +135,7 @@ export async function prepareNodeHostRuntime(params?: {
   }
   const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
-  const platform = params?.platform ?? process.platform;
+  const platform = process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
@@ -560,7 +590,6 @@ export async function prepareNodeHostRuntime(params?: {
                 desktopHostConfig,
                 ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
                 installedAppsSharingEnabled,
-                installedAppsPlatform: platform,
                 pluginCommandContext,
                 ...(params?.ephemeral === true && !commandAllowlist
                   ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }

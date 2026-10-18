@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -71,10 +72,15 @@ function runIndependentSchemaWriter(env: ReturnType<typeof freshEnvironment>, va
   ).trim();
 }
 
-function createTargetDatabase() {
+let targetDatabaseBytes: Buffer | undefined;
+
+async function createTargetDatabase() {
+  if (targetDatabaseBytes) {
+    return targetDatabaseBytes;
+  }
   const env = freshEnvironment();
   const filename = openOpenClawStateDatabase({ env }).path;
-  closeOpenClawStateDatabaseForTest();
+  await closeOpenClawStateDatabaseAsync();
   const db = new DatabaseSync(filename);
   try {
     removePreparedWorkerOwnershipColumns(db);
@@ -84,13 +90,15 @@ function createTargetDatabase() {
   } finally {
     db.close();
   }
-  return filename;
+  // Schema construction is shared; each Doctor case still owns an independent file.
+  targetDatabaseBytes = fs.readFileSync(filename);
+  return targetDatabaseBytes;
 }
 
-function publishTargetDatabase(source: string, env: NodeJS.ProcessEnv) {
+function publishTargetDatabase(source: Buffer, env: NodeJS.ProcessEnv) {
   const filename = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.copyFileSync(source, filename);
+  fs.writeFileSync(filename, source);
   return filename;
 }
 
@@ -140,7 +148,7 @@ describe("selected-target state initialization", () => {
     "refuses target Doctor $label after staging created a compatible database",
     async ({ completion }) => {
       const env = freshEnvironment();
-      const filename = publishTargetDatabase(createTargetDatabase(), env);
+      const filename = publishTargetDatabase(await createTargetDatabase(), env);
       const before = fs.readFileSync(filename);
       mocks.doctor.mockResolvedValue({
         ...doctorSuccess,
@@ -229,7 +237,9 @@ describe("initialization schema coordination", () => {
         });
       });
       expect(mocks.doctor).toHaveBeenCalledOnce();
-      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(/offline maintenance/);
+      await expect(updateStateNeedsInitialization(env)).rejects.toThrow(
+        "without an active schema lease or maintenance scope",
+      );
       const reader = new DatabaseSync(databasePath, { readOnly: true });
       try {
         expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });

@@ -1,6 +1,7 @@
 // Yielded private settle finals require completion evidence and the original requester.
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
@@ -16,8 +17,21 @@ describe("yielded private settle outcomes", () => {
       expected: { delivered: true, requesterVisibleFinalDelivered: true },
     },
     {
+      name: "required public reply in a group that allows silence",
+      public: true,
+      group: true,
+      response: {
+        status: "ok",
+        result: { payloads: [{ text: "parent answer" }], deliveryStatus: sentDeliveryStatus },
+      },
+      expected: { delivered: true, requesterVisibleFinalDelivered: true },
+    },
+    {
       name: "intentional silence",
-      response: { status: "ok", result: { payloads: [{ text: "NO_REPLY" }] } },
+      response: {
+        status: "ok",
+        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
+      },
       expected: { delivered: true },
     },
     ...["ok", "timeout"].map((status) => ({
@@ -59,7 +73,10 @@ describe("yielded private settle outcomes", () => {
       name: "failed silence",
       response: {
         status: "ok",
-        result: { payloads: [{ text: "NO_REPLY" }], meta: { aborted: true } },
+        result: {
+          payloads: [],
+          meta: { aborted: true, terminalReply: { disposition: "silent" } },
+        },
       },
       expected: { delivered: false, reason: "visible_reply_missing" },
     },
@@ -149,18 +166,31 @@ describe("yielded private settle outcomes", () => {
       expected: { delivered: false, reason: "completion_handoff_unavailable", terminal: true },
     },
   ])("requires real completion evidence: $name", async (testCase) => {
-    const sessionKey = "agent:main:discord:dm:U123";
-    const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
+    const to = "group" in testCase ? "channel:room-1" : "dm:U123";
+    const sessionKey = `agent:main:discord:${to}`;
+    const origin = { channel: "discord", to, accountId: "acct-1" };
     const current = "replaced" in testCase ? "replacement-parent" : "requester-session-dm";
-    const dispatch = vi.fn(async function <T>(_method: string, _params: Record<string, unknown>) {
+    const dispatch = vi.fn(async function <T>(
+      _method: string,
+      _params: Record<string, unknown>,
+      _options?: unknown,
+    ) {
       return testCase.response as T;
     });
     const send = vi.fn<typeof sendMessage>();
     onTestFinished(() => testing.setDepsForTest());
     testing.setDepsForTest({
       dispatchGatewayMethodInProcess: dispatch,
-      getRequesterSessionActivity: () => ({ sessionId: current, isActive: false }),
-      getRuntimeConfig: () => ({}),
+      getRequesterSessionActivity: () => ({
+        sessionId: current,
+        isActive: false,
+        target: captureSessionTarget({
+          storeScope: "/synthetic/yielded-settle/sessions.json",
+          sessionKey,
+          incarnation: current,
+        }),
+      }),
+      getRuntimeConfig: () => ({ surfaces: { discord: { silentReply: { group: "allow" } } } }),
       loadRequesterSessionEntry: (key) => ({
         cfg: {},
         canonicalKey: key,
@@ -177,7 +207,6 @@ describe("yielded private settle outcomes", () => {
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
-      requireDirectDelivery: true,
       ...("public" in testCase
         ? { requireVisibleReply: true }
         : { completionRequesterSessionId: "requester-session-dm" }),
@@ -187,11 +216,14 @@ describe("yielded private settle outcomes", () => {
     if ("replaced" in testCase) {
       expect(dispatch).not.toHaveBeenCalled();
     } else {
+      expect(dispatch.mock.calls[0]?.[2]).toMatchObject({
+        replyExpectation: "public" in testCase ? "required" : "optional",
+      });
       const agentParams = dispatch.mock.calls[0]?.[1];
       expect(agentParams).toMatchObject({
         deliver: true,
         channel: "discord",
-        to: "dm:U123",
+        to,
         ...("public" in testCase ? {} : { expectedExistingSessionId: "requester-session-dm" }),
       });
       // The conversation's configured reply policy decides, not this handoff.

@@ -18,21 +18,21 @@ import {
   FollowupRunDeferredError,
   isFollowupRunAborted,
   type FollowupRun,
+  type InternalFollowupRun,
   type QueuedFollowupReplyBatch,
 } from "./types.js";
 
-export function hasPreparedCurrentTurnImages(run: FollowupRun): boolean {
-  return (
-    // SAFETY: queue producers attach this private marker; only literal true selects prepared input.
-    (run as FollowupRun & { currentTurnImagesPrepared?: true }).currentTurnImagesPrepared === true
-  );
+export function hasPreparedCurrentTurnImages(run: InternalFollowupRun): boolean {
+  return run.currentTurnImagesPrepared === true;
 }
 
-const QUEUED_ADMISSION_OWNER_STATE_KEY = Symbol.for("openclaw.queuedAdmissionOwnerState");
-const queuedAdmissionOwnerState = resolveGlobalSingleton(QUEUED_ADMISSION_OWNER_STATE_KEY, () => ({
-  keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
-  nextId: 1,
-}));
+const queuedAdmissionOwnerState = resolveGlobalSingleton(
+  Symbol.for("openclaw.queuedAdmissionOwnerState"),
+  () => ({
+    keys: new WeakMap<NonNullable<FollowupRun["turnAdoptionLifecycle"]>, string>(),
+    nextId: 1,
+  }),
+);
 
 export function hasExclusiveTurnAdmission(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
@@ -70,8 +70,6 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
     admissionOwnerKey = `admission:${queuedAdmissionOwnerState.nextId++}`;
     queuedAdmissionOwnerState.keys.set(lifecycle, admissionOwnerKey);
   }
-  // Durable admission callbacks own separate ingress identities. Combining
-  // them would let one source commit before a sibling rejects the aggregate.
   return JSON.stringify([explicitOwnerKey, admissionOwnerKey]);
 }
 
@@ -90,6 +88,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
+    Boolean(run.createChannelCronAuthority),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
     execution.execOverrides?.ask ?? "",
@@ -161,6 +160,8 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
+    run.forceRestartSafeTools === true,
+    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -207,7 +208,7 @@ export async function prepareNextDeliveryGroup(
     { env: { ...process.env }, cwd: process.cwd(), assertCurrent },
     (prepared) => prepared,
   );
-  return withPreparedSessionCapabilityRead(() => {
+  return await withPreparedSessionCapabilityRead(() => {
     const group: FollowupRun[] = [];
     let firstKey: string | undefined;
     for (const item of items) {
@@ -260,6 +261,7 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
 type FollowupRuntimeMetadata = Pick<
   FollowupRun,
   | "sourceTurnId"
+  | "createChannelCronAuthority"
   | "operatorAuthority"
   | "personalBootstrapEligible"
   | "currentInboundEventKind"
@@ -270,6 +272,8 @@ type FollowupRuntimeMetadata = Pick<
   | "gatewayLocalUserIngress"
   | "toolsAllow"
   | "disableTools"
+  | "forceRestartSafeTools"
+  | "forceCodeModeTools"
   | "abortSignal"
   | "queueAbortSignal"
   | "deliveryCorrelations"
@@ -379,10 +383,12 @@ export function collectRuntimeMetadata(
   ];
   return {
     sourceTurnId: authoritySource?.sourceTurnId,
+    createChannelCronAuthority: authoritySource?.createChannelCronAuthority,
     operatorAuthority: authoritySource?.operatorAuthority,
-    ...(items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
-      ? { personalBootstrapEligible: true }
-      : {}),
+    personalBootstrapEligible:
+      items.length > 0 && items.every((item) => item.personalBootstrapEligible === true)
+        ? true
+        : undefined,
     currentInboundEventKind: currentTurnSource?.currentInboundEventKind,
     currentInboundAudio: currentTurnSource?.currentInboundAudio,
     currentInboundContext: collectCurrentInboundContext(items),
@@ -396,6 +402,8 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
+    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
+    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -446,10 +454,12 @@ export function getFollowupOriginRouting(source: FollowupRun) {
   };
 }
 
-export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupRun {
+export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
+    controllerInput: source.controllerInput,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
+    createChannelCronAuthority: source.createChannelCronAuthority,
     admissionSessionId: source.admissionSessionId,
     operatorAuthority: source.operatorAuthority,
     personalBootstrapEligible: source.personalBootstrapEligible,
@@ -459,8 +469,12 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
+    forceRestartSafeTools: source.forceRestartSafeTools,
+    forceCodeModeTools: source.forceCodeModeTools,
+    currentTurnImagesPrepared: source.currentTurnImagesPrepared,
     images: source.images,
     imageOrder: source.imageOrder,
+    mediaImageLayout: source.mediaImageLayout,
     media: source.media,
     channelAdmissionEvidence: source.channelAdmissionEvidence,
     gatewayLocalUserIngress: source.gatewayLocalUserIngress,
@@ -469,6 +483,8 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
     abortSignal: source.abortSignal,
+    deliveryCorrelations: source.deliveryCorrelations,
+    onQueueDisposition: source.onQueueDisposition,
     turnAdoptionLifecycle: source.turnAdoptionLifecycle,
     replyOperationRunStates: source.replyOperationRunStates,
     queuedFollowupReplyDisposition: source.queuedFollowupReplyDisposition,

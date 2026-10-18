@@ -214,6 +214,7 @@ export async function initializeAndRunUpdate(
                     assertCurrent,
                     nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    fullIntegrityCheck: opts.fullIntegrityCheck,
                   });
                   assertCurrent();
                   initialization.originalRecoveryCapture = captured.ref;
@@ -228,7 +229,11 @@ export async function initializeAndRunUpdate(
                   if (hasCommandProcessCleanupError(error)) {
                     throw error;
                   }
-                  warn(`Original state capture is unavailable: ${formatErrorMessage(error)}`);
+                  // Capture is best effort. Lead with continuation guidance because the
+                  // warning is length-bounded and the nested cause can be long.
+                  warn(
+                    `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                  );
                 }
                 assertCurrent();
                 if (resolveDebugProxySettings(env).enabled) {

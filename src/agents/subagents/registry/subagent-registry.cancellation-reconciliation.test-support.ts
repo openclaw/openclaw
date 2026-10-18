@@ -75,7 +75,11 @@ export function registerCancellationReconciliationTests({
             lifecycleRevision: "revision-stable-cancellation",
           },
           task: "preserve authoritative cancellation outcome",
-          killReconciliation: { killedAt, taskCancellationAccepted: true },
+          killReconciliation: {
+            killedAt,
+            taskCancellationAccepted: true,
+            suppressTaskDelivery: true,
+          },
           expectsCompletionMessage: !earlierDeadline,
           createdAt: startedAt,
           startedAt,
@@ -155,6 +159,7 @@ export function registerCancellationReconciliationTests({
       captureEntered.resolve();
       return finishCapture.promise;
     });
+    // Leave producer metadata absent so reconciliation must await transcript capture.
     await mod.addSubagentRunForTests(
       makeKilledRun(killedAt, {
         runId,

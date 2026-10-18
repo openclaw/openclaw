@@ -230,7 +230,7 @@ export async function buildTalkTranscriptionConfig(
   };
 }
 
-export async function configuredOrFalseAsync(
+async function configuredOrFalseAsync(
   callback: () => boolean | Promise<boolean>,
 ): Promise<boolean> {
   try {

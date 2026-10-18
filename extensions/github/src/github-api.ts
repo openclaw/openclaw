@@ -268,13 +268,15 @@ export async function fetchGitHubApi(
   fetchImpl: typeof fetch,
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
-  identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
+  identity?: { revalidate: () => Promise<void>; assertSelected: () => void; signal?: AbortSignal },
   etag?: string,
   callerSignal?: AbortSignal,
   graphql?: { query: string; variables: Record<string, string> },
   apiBaseUrl = GITHUB_API_BASE_URL,
+  redirect: "follow" | "manual" = "follow",
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
+  identity?.signal?.throwIfAborted();
   const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
   const apiBase = new URL(baseUrl);
   const graphqlUrl = githubGraphqlUrl(baseUrl);
@@ -291,7 +293,11 @@ export async function fetchGitHubApi(
   transportCooldowns.set(fetchImpl, cooldowns);
 
   const timeout = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
-  const signal = callerSignal ? AbortSignal.any([timeout, callerSignal]) : timeout;
+  const signal = AbortSignal.any(
+    [timeout, callerSignal, identity?.signal].filter(
+      (candidate): candidate is AbortSignal => candidate !== undefined,
+    ),
+  );
   for (let redirects = 0; ; redirects += 1) {
     const startedAt = performance.now();
     // Recheck every dispatch, including redirects and auxiliary metadata reads.
@@ -303,6 +309,7 @@ export async function fetchGitHubApi(
     const authorizedAt = performance.now();
     const authMs = Math.round(authorizedAt - startedAt);
     callerSignal?.throwIfAborted();
+    identity?.signal?.throwIfAborted();
     const resource = githubApiResource(url, baseUrl, graphqlUrl);
     const sharedCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:*`);
     const resourceCooldown = activeGitHubCooldown(cooldowns, `${credentialScope}:${resource}`);
@@ -327,7 +334,7 @@ export async function fetchGitHubApi(
       }).finally(() => {
         const finishedAt = performance.now();
         if (authMs + finishedAt - authorizedAt >= 500) {
-          log.info("Slow GitHub API request", {
+          log.debug("Slow GitHub API request", {
             authMs,
             networkMs: Math.round(finishedAt - authorizedAt),
             resource,
@@ -336,6 +343,9 @@ export async function fetchGitHubApi(
         }
       });
     } catch (error) {
+      // Invocation cancellation is not a cacheable upstream failure.
+      identity?.signal?.throwIfAborted();
+      identity?.assertSelected();
       const timedOut = signal.aborted || (error instanceof Error && error.name === "TimeoutError");
       throw new ControlUiGitHubTransportError(
         timedOut ? "GitHub request timed out" : "Could not reach GitHub",
@@ -352,7 +362,7 @@ export async function fetchGitHubApi(
       await discardResponse(response);
       throw retained;
     }
-    if (!isGitHubApiRedirect(response.status)) {
+    if (!isGitHubApiRedirect(response.status) || redirect === "manual") {
       responseRequestScopes.set(response, { credentialScope, fetchImpl, resource });
       return response;
     }

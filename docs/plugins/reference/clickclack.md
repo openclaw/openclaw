@@ -15,7 +15,7 @@ OpenClaw ClickClack channel plugin.
 ## Distribution
 
 - Package: `@openclaw/clickclack`
-- Install route: npm or ClawHub: `clawhub:@openclaw/clickclack`
+- Install route: npm or ClawHub: `@openclaw/clickclack`
 
 ## Surface
 

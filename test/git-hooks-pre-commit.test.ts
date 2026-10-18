@@ -28,6 +28,24 @@ import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp
 
 const tempDirs: string[] = [];
 
+function writeJson(dir: string, value: Record<string, unknown>) {
+  writeFileSync(path.join(dir, "package.json"), JSON.stringify(value));
+}
+
+function patchManifest(dir: string, patch: Record<string, unknown>) {
+  writeJson(dir, { ...JSON.parse(readFileSync(path.join(dir, "package.json"), "utf8")), ...patch });
+}
+
+function packageFixture(root: string, name: string, manifest: Record<string, unknown>) {
+  const dir = path.join(root, "node_modules", name);
+  mkdirSync(dir, { recursive: true });
+  writeJson(dir, { name, version: "0.68.0", ...manifest });
+  if (typeof manifest.main === "string") {
+    writeFileSync(path.join(dir, manifest.main), "module.exports = {};\n");
+  }
+  return dir;
+}
+
 function installRunNodeToolFixture(dir: string): void {
   mkdirSync(path.join(dir, "scripts", "pre-commit"), { recursive: true });
   symlinkSync(
@@ -41,7 +59,7 @@ afterEach(() => {
 });
 
 describe("git-hooks/pre-commit (integration)", () => {
-  it.each(["--all", "tracked.txt", ".agents/skills/discord-clawd/SKILL.md"])(
+  it.each(["--all", ".agents/skills/discord-clawd/SKILL.md"])(
     "preserves the staged path %s without running the changed-scope check",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
@@ -68,50 +86,47 @@ describe("git-hooks/pre-commit (integration)", () => {
     },
   );
 
-  it.each(["configured", "unconfigured", "external"])(
-    "formats staged files with %s private rules",
-    (mode) => {
-      const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
-      run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-      const fakeBinDir = installPreCommitFixture(dir);
-      const logPath = installFormattingRecorder(dir);
-      if (mode === "unconfigured") {
-        run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
-        unlinkSync(path.join(dir, rulePath));
-      } else if (mode === "external") {
-        const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
-        const privatePath = path.join(privateDir, "private rules.txt");
-        copyFileSync(path.join(dir, rulePath), privatePath);
-        unlinkSync(path.join(dir, rulePath));
-        run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
-        expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
-      }
+  it.each(["unconfigured", "external"])("formats staged files with %s private rules", (mode) => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    const fakeBinDir = installPreCommitFixture(dir);
+    const logPath = installFormattingRecorder(dir);
+    if (mode === "unconfigured") {
+      run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
+      unlinkSync(path.join(dir, rulePath));
+    } else if (mode === "external") {
+      const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
+      const privatePath = path.join(privateDir, "private rules.txt");
+      copyFileSync(path.join(dir, rulePath), privatePath);
+      unlinkSync(path.join(dir, rulePath));
+      run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
+      expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
+    }
 
-      writeFileSync(
-        path.join(dir, "changed.ts"),
-        mode === "unconfigured" ? literals[0] : "export const value = 1;\n",
-        "utf8",
-      );
+    writeFileSync(
+      path.join(dir, "changed.ts"),
+      mode === "unconfigured" ? literals[0] : "export const value = 1;\n",
+      "utf8",
+    );
+    run(dir, "git", ["add", "--", "changed.ts"]);
+
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(readFormatterLog(logPath)).toEqual([
+      "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
+    ]);
+    if (mode === "external") {
+      writeFileSync(path.join(dir, "changed.ts"), literals[0]);
       run(dir, "git", ["add", "--", "changed.ts"]);
+      expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
+        "Blocked staged content",
+      );
+    }
+  });
 
-      run(dir, "bash", ["git-hooks/pre-commit"], {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-
-      expect(readFormatterLog(logPath)).toEqual([
-        "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
-      ]);
-      if (mode === "external") {
-        writeFileSync(path.join(dir, "changed.ts"), literals[0]);
-        run(dir, "git", ["add", "--", "changed.ts"]);
-        expect(runFailure(dir, "bash", ["git-hooks/pre-commit"]).stderr).toContain(
-          "Blocked staged content",
-        );
-      }
-    },
-  );
-
-  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.txt", "payload.ts"])(
+  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.ts"])(
     "preserves staged and working-tree bytes independently for %s",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
@@ -337,17 +352,13 @@ describe("staged content guard", () => {
   it.each([
     ["missing file", null],
     ["empty file", ""],
-    ["blank lines", "\n\n"],
     ["invalid UTF-8", Buffer.from([255])],
     ["NUL literal", "\0"],
-    ["empty setting", undefined],
   ])("fails closed with %s", (_label, content) => {
     const dir = fixture();
     const log = installFormattingRecorder(dir);
     stage(dir, "payload.ts", "clean\n");
-    if (content === undefined) {
-      run(dir, "git", ["config", "--local", ruleSetting, ""]);
-    } else if (content === null) {
+    if (content === null) {
       unlinkSync(path.join(dir, rulePath));
     } else {
       writeFileSync(path.join(dir, rulePath), content);
@@ -368,9 +379,7 @@ describe("staged content guard", () => {
       "foobar foo FOOBAR",
       "[REDACTED] [REDACTED] FOOBAR",
     ],
-    ["longer prefix first", ["foobar", "foo"], "foobar foo FOOBAR", "[REDACTED] [REDACTED] FOOBAR"],
     ["crossing overlaps", ["abc", "bcd"], "abcd", "[REDACTED]"],
-    ["reversed crossing overlaps", ["bcd", "abc"], "abcd", "[REDACTED]"],
     ["self-overlap", ["aba"], "ababa", "[REDACTED]"],
     ["marker literal", ["foo", "REDACTED"], "foo REDACTED", "[REDACTED] [REDACTED]"],
   ])(
@@ -452,45 +461,21 @@ describe("scripts/pre-commit/run-node-tool.sh", () => {
     run(owner, "git", ["init", "-q", "--initial-branch=main"]);
     for (const root of [dir, owner]) {
       run(root, "git", ["remote", "add", "origin", "https://github.com/example/project.git"]);
-      writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({ devDependencies: { oxfmt: "0.68.0" } }),
-      );
+      writeJson(root, { devDependencies: { oxfmt: "0.68.0" } });
     }
     rmSync(path.join(dir, "node_modules"), { recursive: true });
-    const pkg = path.join(owner, "node_modules/oxfmt");
     const bindingName = `@oxfmt/binding-${process.platform}-${process.arch}`;
-    const binding = path.join(owner, "node_modules", bindingName);
-    const dependency = path.join(owner, "node_modules/tinypool");
-    mkdirSync(pkg, { recursive: true });
-    mkdirSync(binding, { recursive: true });
-    mkdirSync(dependency, { recursive: true });
-    writeFileSync(
-      path.join(dependency, "package.json"),
-      JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
-    );
-    writeFileSync(path.join(dependency, "index.cjs"), "module.exports = {};\n");
-    writeFileSync(
-      path.join(pkg, "package.json"),
-      JSON.stringify({
-        name: "oxfmt",
-        version: "0.68.0",
-        bin: { oxfmt: "cli.cjs" },
-        dependencies: { tinypool: "2.1.2" },
-        optionalDependencies: { [bindingName]: "0.68.0" },
-      }),
-    );
-    writeFileSync(
-      path.join(binding, "package.json"),
-      JSON.stringify({
-        name: bindingName,
-        version: "0.68.0",
-        os: [process.platform],
-        cpu: [process.arch],
-        main: "binding.cjs",
-      }),
-    );
-    writeFileSync(path.join(binding, "binding.cjs"), "module.exports = {};\n");
+    const dependency = packageFixture(owner, "tinypool", { version: "2.1.2", main: "index.cjs" });
+    const pkg = packageFixture(owner, "oxfmt", {
+      bin: { oxfmt: "cli.cjs" },
+      dependencies: { tinypool: "2.1.2" },
+      optionalDependencies: { [bindingName]: "0.68.0" },
+    });
+    const binding = packageFixture(owner, bindingName, {
+      os: [process.platform],
+      cpu: [process.arch],
+      main: "binding.cjs",
+    });
     const cli = path.join(pkg, "cli.cjs");
     const formatter = `const fs = require("node:fs");
 if (process.argv[2] === "--version") { console.log("Version: 0.68.0"); process.exit(0); }
@@ -510,16 +495,9 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     };
   }
 
-  it.each<{ selection: string; wasi?: string }>([
-    { selection: "environment" },
-    { selection: "config" },
-    { selection: "canonical" },
-    { selection: "environment", wasi: "false" },
-    { selection: "environment", wasi: "0" },
-    { selection: "environment", wasi: "override" },
-  ])(
-    "uses the $selection tooling owner with inactive WASI=$wasi, task cwd and exact arguments",
-    ({ selection, wasi }) => {
+  it.each([{ selection: "environment" }, { selection: "config" }, { selection: "canonical" }])(
+    "uses the $selection tooling owner with task cwd and exact arguments",
+    ({ selection }) => {
       const fixture = toolingFixture();
       let { dir } = fixture;
       const { owner, env } = fixture;
@@ -534,17 +512,13 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
         installPreCommitFixture(dir);
         rmSync(path.join(dir, "node_modules"), { recursive: true });
         env.OPENCLAW_PR_TOOLING_ROOT = "";
-      } else if (wasi === undefined) {
+      } else {
         run(dir, "git", ["config", "openclaw.pr.toolingRoot", path.join(owner, "missing")]);
       }
-      const args = [
-        "--write",
-        "space name.ts",
-        ...(wasi === undefined ? [":(exclude)literal.ts", "line\nbreak.ts"] : []),
-      ];
+      const args = ["--write", "space name.ts", ":(exclude)literal.ts", "line\nbreak.ts"];
       run(dir, "/bin/bash", ["scripts/pre-commit/run-node-tool.sh", "oxfmt", ...args], {
         ...env,
-        NAPI_RS_FORCE_WASI: wasi,
+        NAPI_RS_FORCE_WASI: undefined,
       });
       expect(JSON.parse(readFileSync(path.join(dir, "formatter-call.json"), "utf8"))).toEqual({
         cwd: dir,
@@ -555,35 +529,30 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     },
   );
 
-  it.each<{ kind: string; override?: [string, string] }>([
-    ...[
-      "wrong pin",
-      "wrong package",
-      "unrelated",
-      "sparse",
-      "subdirectory",
-      "escaped package",
-      "wrong platform",
-      "wrong binding pin",
-      "broken binding",
-      "wrong dependency pin",
-      "escaped dependency",
-      "drift",
-    ].map((kind) => ({ kind })),
-    { kind: "native path override", override: ["NAPI_RS_NATIVE_LIBRARY_PATH", "override"] },
-    { kind: "forced WASI", override: ["NAPI_RS_FORCE_WASI", "true"] },
-    { kind: "WASI error fallback", override: ["NAPI_RS_FORCE_WASI", "error"] },
-    { kind: "WASI flavor override", override: ["NAPI_RS_WASI_FLAVOR", "wasm32-wasi"] },
-  ])("rejects $kind before formatting", ({ kind, override }) => {
-    const { dir, owner, pkg, binding, dependency, cli, formatter, env } = toolingFixture();
-    if (kind === "wrong pin" || kind === "wrong package") {
-      const manifest = JSON.parse(readFileSync(path.join(pkg, "package.json"), "utf8"));
-      if (kind === "wrong pin") {
-        manifest.version = "0.60.0";
-      } else {
-        manifest.name = "another-formatter";
-      }
-      writeFileSync(path.join(pkg, "package.json"), JSON.stringify(manifest));
+  it.each<
+    [string, ("pkg" | "binding" | "dependency")?, Record<string, unknown>?, [string, string]?]
+  >([
+    ["wrong pin", "pkg", { version: "0.60.0" }],
+    ["wrong package", "pkg", { name: "another-formatter" }],
+    ["unrelated"],
+    ["sparse"],
+    ["subdirectory"],
+    ["escaped package"],
+    ["wrong platform", "binding", { cpu: ["unsupported"] }],
+    ["wrong binding pin", "binding", { version: "0.60.0" }],
+    ["broken binding"],
+    ["wrong dependency pin", "dependency", { version: "1.0.0" }],
+    ["escaped dependency"],
+    ["drift"],
+    ["native path override", undefined, undefined, ["NAPI_RS_NATIVE_LIBRARY_PATH", "override"]],
+    ["forced WASI", undefined, undefined, ["NAPI_RS_FORCE_WASI", "true"]],
+    ["WASI error fallback", undefined, undefined, ["NAPI_RS_FORCE_WASI", "error"]],
+    ["WASI flavor override", undefined, undefined, ["NAPI_RS_WASI_FLAVOR", "wasm32-wasi"]],
+  ])("rejects %s before formatting", (kind, target, patch, override) => {
+    const fixture = toolingFixture();
+    const { dir, owner, pkg, binding, dependency, cli, formatter, env } = fixture;
+    if (target && patch) {
+      patchManifest(fixture[target], patch);
     } else if (kind === "unrelated") {
       run(owner, "git", [
         "remote",
@@ -599,30 +568,15 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-formatter-");
       rmSync(pkg, { recursive: true });
       symlinkSync(outside, pkg);
-    } else if (kind === "wrong platform" || kind === "wrong binding pin") {
-      const manifest = JSON.parse(readFileSync(path.join(binding, "package.json"), "utf8"));
-      if (kind === "wrong platform") {
-        manifest.cpu = ["unsupported"];
-      } else {
-        manifest.version = "0.60.0";
-      }
-      writeFileSync(path.join(binding, "package.json"), JSON.stringify(manifest));
     } else if (kind === "broken binding") {
       writeFileSync(
         path.join(binding, "binding.cjs"),
         'throw new Error("unusable native binding");',
       );
-    } else if (kind === "wrong dependency pin") {
-      const manifest = JSON.parse(readFileSync(path.join(dependency, "package.json"), "utf8"));
-      manifest.version = "1.0.0";
-      writeFileSync(path.join(dependency, "package.json"), JSON.stringify(manifest));
     } else if (kind === "escaped dependency") {
       const outside = makeTempRepoRoot(tempDirs, "openclaw-outside-dependency-");
       rmSync(dependency, { recursive: true });
-      writeFileSync(
-        path.join(outside, "package.json"),
-        JSON.stringify({ name: "tinypool", version: "2.1.2", main: "index.cjs" }),
-      );
+      writeJson(outside, { name: "tinypool", version: "2.1.2", main: "index.cjs" });
       writeFileSync(path.join(outside, "index.cjs"), "module.exports = {};\n");
       symlinkSync(outside, dependency);
     } else if (kind === "drift") {

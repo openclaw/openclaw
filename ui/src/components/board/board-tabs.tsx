@@ -30,6 +30,7 @@ export function BoardTabs(props: {
     return props.tabs.filter((tab) => !visibleIds.has(tab.tabId));
   });
   let track: HTMLDivElement | undefined;
+  let tabElement: ((value: string) => HTMLElement | undefined) | undefined;
   const layoutKey = createMemo(() =>
     JSON.stringify([props.activeTabId, visible().map((tab) => tab.tabId)]),
   );
@@ -37,7 +38,7 @@ export function BoardTabs(props: {
     // Read selection after the keyed tab items have committed.
     queueMicrotask(() => {
       const scroller = track;
-      const selected = scroller?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      const selected = tabElement?.(props.activeTabId);
       if (!scroller || !selected) {
         return;
       }
@@ -54,8 +55,9 @@ export function BoardTabs(props: {
     <Show when={props.tabs.length > 1}>
       <nav class="board-tabs" aria-label={t("board.tabsLabel")}>
         <Tabs
-          ref={(element) => {
+          ref={(element, tab) => {
             track = element;
+            tabElement = tab;
           }}
           class="board-tabs__track"
           active={props.activeTabId}
@@ -64,13 +66,11 @@ export function BoardTabs(props: {
           items={visible().map((tab) => ({
             value: tab.tabId,
             label: tab.title,
-            className: [
-              "board-tabs__tab",
-              tab.tabId === props.activeTabId ? "board-tabs__tab--active" : "",
-              tab.tabId === props.hoverTabId ? "board-tabs__tab--drop" : "",
-            ]
-              .filter(Boolean)
-              .join(" "),
+            className: {
+              "board-tabs__tab": true,
+              "board-tabs__tab--active": tab.tabId === props.activeTabId,
+              "board-tabs__tab--drop": tab.tabId === props.hoverTabId,
+            },
             attributes: { "data-board-tab-id": tab.tabId },
           }))}
           onSelect={(tabId) => props.onSelect(tabId)}

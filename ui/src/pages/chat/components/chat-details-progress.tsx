@@ -1,91 +1,20 @@
-import { Show, createEffect } from "solid-js";
+import { Show } from "solid-js";
 import { SessionProgressCard } from "../../../components/session-progress-card-solid.tsx";
-import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-type Props = { props?: ChatDetailsProps; presented: boolean; menuRef?: (menu: MenuHandle) => void };
-export type ChatDetailsProgress = SolidBridgeElement<Props>;
-let nextMenuId = 0;
+type Props = {
+  props?: ChatDetailsProps;
+  presented: boolean;
+  menuRef?: (menu: MenuHandle) => void;
+  onHideProgress?: () => void;
+};
 
 /** The pane owns the durable card, lifetime and all actions. */
-export const ChatDetailsProgress = defineSolidBridge<Props>(
-  "openclaw-chat-details-progress",
-  (props) => {
-    const menuId = `chat-progress-options-${++nextMenuId}`;
-    let handle: MenuHandle | undefined;
-    let menu!: HTMLElement;
-    const stopSummaryToggle = (event: MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    const items = (): MenuEntry[] => [
-      { id: "hide", label: t("chat.sessionDetails.hideProgress") },
-      {
-        id: "collapse",
-        label: t("chat.sessionDetails.collapseDefault"),
-        type: "checkbox",
-        checked: props.props?.collapseTaskProgress === true,
-      },
-      { id: "settings", label: t("chat.sessionDetails.settings") },
-      ...(props.props?.onClearSavedProgressCard
-        ? [{ id: "clear", label: t("sessionProgressCard.clearSaved") }]
-        : []),
-    ];
-    <div
-      ref={(element) => {
-        menu = element;
-      }}
-      onClick={stopSummaryToggle}
-    >
-      <Menu
-        id={menuId}
-        class="chat-details-progress__menu"
-        triggerClass="session-progress-card__refresh"
-        label={t("chat.sessionDetails.progressOptions")}
-        placement="bottom-end"
-        trigger={<Icon name="moreHorizontal" />}
-        items={items()}
-        disabled={!props.presented}
-        ref={(value) => {
-          handle = value;
-          props.menuRef?.(value);
-        }}
-        onSelect={(item) => {
-          if (!props.presented) {
-            return;
-          }
-          const current = props.props;
-          switch (item.id) {
-            case "hide":
-              current?.onHideTaskProgress?.();
-              break;
-            case "collapse":
-              current?.onCollapseTaskProgressChange?.(!current.collapseTaskProgress);
-              break;
-            case "settings":
-              current?.onOpenTaskProgressSettings?.();
-              break;
-            case "clear":
-              if (current?.progressCard) {
-                current.onClearSavedProgressCard?.(current.progressCard);
-              }
-              break;
-          }
-        }}
-      />
-    </div>;
-    createEffect(
-      () => props.presented,
-      (presented) => {
-        if (!presented) {
-          handle?.close();
-        }
-      },
-    );
-    return (
+export function ChatDetailsProgress(props: Props) {
+  return (
+    <openclaw-chat-details-progress>
       <Show
         when={props.props?.progressCard}
         fallback={
@@ -100,6 +29,7 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
           card={props.props?.progressCard}
           placement="details"
           onDismiss={props.props?.onDismissProgressCard}
+          onClearSaved={props.props?.onClearSavedProgressCard}
           sessionStatus={props.props?.selectedSession?.status}
           startedAt={props.props?.selectedSession?.startedAt}
           endedAt={props.props?.selectedSession?.endedAt}
@@ -113,22 +43,45 @@ export const ChatDetailsProgress = defineSolidBridge<Props>(
             manualOnly: true,
           }}
           refreshAction={props.props?.progressCardRefresh}
-          headingMenu={menu}
+          menuRef={props.menuRef}
+          menuOptions={{
+            class: "chat-details-progress__menu",
+            disabled: !props.presented,
+            items: [
+              { id: "hide", label: t("chat.sessionDetails.hideProgress") },
+              {
+                id: "collapse",
+                label: t("chat.sessionDetails.collapseDefault"),
+                type: "checkbox",
+                checked: props.props?.collapseTaskProgress === true,
+              },
+              { id: "settings", label: t("chat.sessionDetails.settings") },
+            ],
+            onSelect: (item) => {
+              switch (item.id) {
+                case "hide":
+                  props.onHideProgress?.();
+                  props.props?.onHideTaskProgress?.();
+                  break;
+                case "collapse":
+                  props.props?.onCollapseTaskProgressChange?.(!props.props?.collapseTaskProgress);
+                  break;
+                case "settings":
+                  props.props?.onOpenTaskProgressSettings?.();
+                  break;
+              }
+            },
+          }}
         />
       </Show>
-    );
-  },
-  {
-    properties: {
-      props: { default: undefined, attribute: false },
-      presented: { default: false, type: Boolean },
-      menuRef: { default: undefined, attribute: false },
-    },
-  },
-);
+    </openclaw-chat-details-progress>
+  );
+}
 
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-chat-details-progress": ChatDetailsProgress;
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-details-progress": HTMLAttributes<HTMLElement>;
+    }
   }
 }

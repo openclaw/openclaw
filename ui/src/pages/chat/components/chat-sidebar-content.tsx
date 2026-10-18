@@ -1,9 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, Match, Show, Switch } from "solid-js";
+import { createMemo, Match, onCleanup, refresh, Show, Switch } from "solid-js";
 import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
 import { isStaleChunkImportError } from "../../../app/stale-chunk-reload.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
+import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { markdownBlocksRef } from "../../../components/markdown-element-refs-solid.ts";
 import {
   markdownFileLinkFromEvent,
@@ -16,12 +17,14 @@ import {
   markdownSessionLinkFromKeyboardEvent,
   type SessionLinkTarget,
 } from "../../../components/markdown-session-links.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
-import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -31,7 +34,6 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { emptyLegacyContent } from "../../../lit/solid-content.tsx";
 import {
   AttachmentCardHeader,
   AttachmentPreviewSkeleton,
@@ -44,10 +46,12 @@ import {
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
 import "./chat-audio-player.tsx";
-import { openInlineChatImage } from "./chat-image-lightbox.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
+import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import { isPdfAttachment } from "./chat-pdf-preview.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
+import { ChatPdfPreview, isPdfAttachment } from "./chat-pdf-preview.tsx";
 import type {
   AttachmentSidebarRuntime,
   SidebarContent,
@@ -61,15 +65,14 @@ registerEnglishCatalog(registerFilePreviewEnglish);
 
 type SidebarAttachmentProps = {
   content: Extract<SidebarContent, { kind: "attachment" }>;
-  onRequestUpdate: () => void;
   runtime: AttachmentSidebarRuntime;
   embedSandboxMode: EmbedSandboxMode;
   download?: { pending: boolean; error: string | null; onDownload: () => void };
 };
 
-function prepareAttachment(input: SidebarAttachmentProps) {
+function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => void) {
   const content = input.content;
-  const resolution = content.resolveSource?.(input.onRequestUpdate, input.runtime);
+  const resolution = content.resolveSource?.(onSourceChange, input.runtime);
   const source = resolution ? (resolution.status === "ready" ? resolution : null) : content;
   const mimeType = content.mimeType?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   const kind: NonNullable<SidebarAttachmentProps["content"]["attachmentKind"]> =
@@ -147,7 +150,20 @@ function SidebarAttachment(props: SidebarAttachmentProps) {
 }
 
 function AttachmentPreview(props: SidebarAttachmentProps) {
-  const model = createMemo(() => prepareAttachment(props));
+  const sourceChanged = () => void refresh(model);
+  let resolver: SidebarAttachmentProps["content"]["resolveSource"];
+  let identity: string | undefined;
+  const model = createMemo(() => {
+    const nextResolver = props.content.resolveSource;
+    const nextIdentity = props.content.sourceIdentity ?? props.content.src;
+    if (resolver !== nextResolver || identity !== nextIdentity) {
+      releaseChatMediaResourceOwner(sourceChanged);
+      resolver = nextResolver;
+      identity = nextIdentity;
+    }
+    return prepareAttachment(props, sourceChanged);
+  });
+  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
   return (
     <Switch
       fallback={
@@ -168,12 +184,12 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           !isCrossOriginHttpSource(model().src ?? "")
         }
       >
-        <openclaw-chat-pdf-preview
-          prop:src={model().src ?? ""}
-          prop:sourceIdentity={model().sourceIdentity}
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+        <ChatPdfPreview
+          src={model().src ?? ""}
+          sourceIdentity={model().sourceIdentity}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? ""}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
         />
       </Match>
       <Match
@@ -185,7 +201,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       >
         <ChatTextAttachment
           plainText={props.content.plainText ?? false}
-          actions={props.content.renderActions?.() ?? emptyLegacyContent}
+          actions={props.content.renderActions?.()}
           embedSandboxMode={props.embedSandboxMode}
           src={model().src ?? ""}
           sourceIdentity={model().sourceIdentity}
@@ -212,7 +228,11 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       </Match>
       <Match when={!model().src || model().imagePreview}>
         <div
-          class={`chat-assistant-attachment-card chat-assistant-attachment-card--${model().kind} sidebar-attachment-preview__state-card`}
+          class={[
+            "chat-assistant-attachment-card",
+            `chat-assistant-attachment-card--${model().kind}`,
+            "sidebar-attachment-preview__state-card",
+          ]}
           aria-busy={model().pending ? "true" : undefined}
         >
           <AttachmentCardHeader
@@ -324,7 +344,6 @@ export type SidebarPanelProps = {
   githubRepo?: MarkdownRenderOptions["githubRepo"];
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
-  onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
   attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
   onClick: (event: MouseEvent) => void;
@@ -346,7 +365,10 @@ function sidebarTitle(content: ChatDetailPanelContent | null, showingRawText: bo
     case "session-diff":
       return t("chat.sessionDiff.title");
     case "markdown":
-      return t(showingRawText ? "chat.detailPanel.viewSource" : "chat.detailPanel.markdownPreview");
+      return (
+        content.fileDownload?.name ??
+        t(showingRawText ? "chat.detailPanel.viewSource" : "chat.detailPanel.markdownPreview")
+      );
     default:
       return t("chat.detailPanel.toolDetails");
   }
@@ -380,18 +402,26 @@ function CanvasPreview(props: {
       props.canvasPluginSurfaceUrl,
       props.allowExternalEmbedUrls ?? false,
     );
-  // A changed sandbox, URL, or height restarts the iframe, matching the original keyed preview.
+  let initialized = false;
+  const presentation = createCanvasFramePresentation(
+    () => `${sandbox()}\0${props.content.entryUrl ?? ""}\0${src() ? 1 : 0}`,
+    src,
+    () => initialized,
+  );
   return (
-    <Show
-      when={`${sandbox()}\u0000${src() ?? ""}\u0000${props.content.preferredHeight ?? ""}`}
-      keyed
-    >
+    <Show when={presentation.identity()} keyed>
       {(_identity) => (
         <iframe
+          ref={() => {
+            initialized = false;
+          }}
+          onLoad={() => {
+            initialized = true;
+          }}
           class="chat-tool-card__preview-frame"
           title={props.title}
           sandbox={sandbox()}
-          src={src() ?? undefined}
+          src={presentation.src()}
           style={{
             height: props.content.preferredHeight
               ? `${props.content.preferredHeight}px`
@@ -409,11 +439,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
     ["file", "markdown", "attachment", "session-diff"].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
-  const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
-      class={fillHost() ? "sidebar-panel-host--fill" : ""}
-      ref={markdownRef}
+      class={{ "sidebar-panel-host--fill": fillHost() }}
+      ref={markdownBlocksRef(markdownPresented)}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}
     >
@@ -546,7 +575,6 @@ export function SidebarPanel(props: SidebarPanelProps) {
                   <div class="sidebar-attachment-preview">
                     <SidebarAttachment
                       content={content()}
-                      onRequestUpdate={props.onAttachmentUpdate}
                       runtime={props.attachmentRuntime}
                       embedSandboxMode={props.embedSandboxMode ?? "scripts"}
                       download={props.attachmentDownload}
@@ -557,28 +585,68 @@ export function SidebarPanel(props: SidebarPanelProps) {
               <Match when={props.content?.kind === "markdown" ? props.content : undefined}>
                 {(content) => (
                   <section class="sidebar-markdown-shell">
-                    <div class="sidebar-markdown-shell__toolbar">
-                      <div class="sidebar-markdown-shell__intro">
-                        <div class="sidebar-markdown-shell__eyebrow">
-                          <Icon name="scrollText" />
-                          <span>
-                            {t(
-                              props.showingRawText
-                                ? "chat.detailPanel.viewSource"
-                                : "chat.detailPanel.renderedMarkdown",
-                            )}
-                          </span>
+                    <Show when={content().fileDownload}>
+                      {(file) => (
+                        <div class="sidebar-file-view__path-bar">
+                          <div class="sidebar-file-view__path-field">
+                            <span class="sidebar-file-view__path" title={file().path}>
+                              {file().path}
+                            </span>
+                            <CopyButton
+                              text={file().path}
+                              idleLabel={t("chat.detailPanel.copyPath")}
+                            />
+                          </div>
+                          <div class="sidebar-file-view__actions">
+                            <FileDownloadButton
+                              scopeKey={[
+                                content().fileLinkSessionKey,
+                                file().path,
+                                props.attachmentRuntime.connectionEpoch,
+                              ].join("\0")}
+                              download={(signal) => file().download(signal)}
+                              class="btn btn--sm sidebar-file-view__action"
+                            />
+                            <Show when={props.fileView?.onReveal}>
+                              <openclaw-tooltip prop:content={t("chat.detailPanel.showInFiles")}>
+                                <button
+                                  class="btn btn--sm sidebar-file-view__action"
+                                  type="button"
+                                  aria-label={t("chat.detailPanel.showInFiles")}
+                                  onClick={() => props.fileView?.onReveal?.(file().path)}
+                                >
+                                  <Icon name="folder" />
+                                </button>
+                              </openclaw-tooltip>
+                            </Show>
+                          </div>
+                        </div>
+                      )}
+                    </Show>
+                    <Show when={!content().fileDownload}>
+                      <div class="sidebar-markdown-shell__toolbar">
+                        <div class="sidebar-markdown-shell__intro">
+                          <div class="sidebar-markdown-shell__eyebrow">
+                            <Icon name="scrollText" />
+                            <span>
+                              {t(
+                                props.showingRawText
+                                  ? "chat.detailPanel.viewSource"
+                                  : "chat.detailPanel.renderedMarkdown",
+                              )}
+                            </span>
+                          </div>
+                          <Show when={!props.showingRawText}>
+                            <div class="sidebar-markdown-shell__hint">
+                              {t("chat.detailPanel.renderedMarkdownHint")}
+                            </div>
+                          </Show>
                         </div>
                         <Show when={!props.showingRawText}>
-                          <div class="sidebar-markdown-shell__hint">
-                            {t("chat.detailPanel.renderedMarkdownHint")}
-                          </div>
+                          <RawButton onClick={props.onViewRawText} class="btn btn--sm" />
                         </Show>
                       </div>
-                      <Show when={!props.showingRawText}>
-                        <RawButton onClick={props.onViewRawText} class="btn btn--sm" />
-                      </Show>
-                    </div>
+                    </Show>
                     <Show
                       when={content().content.trim()}
                       fallback={
@@ -587,20 +655,26 @@ export function SidebarPanel(props: SidebarPanelProps) {
                         </div>
                       }
                     >
-                      <MarkdownHtml
-                        as="article"
-                        class="sidebar-markdown-reader sidebar-markdown"
-                        dir={detectTextDirection(content().content)}
-                        markdown={content().content}
-                        options={{
-                          codeBlockInteraction: "interactive",
-                          fileLinks: true,
-                          githubRepo: props.githubRepo ?? null,
-                          githubRepositories: props.githubRepositories,
-                          interactiveImages: props.onOpenImage !== undefined,
-                          sessionLinks: true,
-                        }}
-                      />
+                      {(_visible) => {
+                        const markdown = createMarkdownRef(() => ({
+                          incremental: true,
+                          content: toSanitizedMarkdownHtml(content().content, {
+                            codeBlockInteraction: "interactive",
+                            fileLinks: true,
+                            githubRepo: props.githubRepo ?? null,
+                            githubRepositories: props.githubRepositories,
+                            interactiveImages: props.onOpenImage !== undefined,
+                            sessionLinks: true,
+                          }),
+                        }));
+                        return (
+                          <article
+                            ref={markdown}
+                            class="sidebar-markdown-reader sidebar-markdown"
+                            dir={detectTextDirection(content().content)}
+                          />
+                        );
+                      }}
                     </Show>
                   </section>
                 )}

@@ -252,18 +252,14 @@ function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undef
   return error instanceof Error ? error.message : String(error);
 }
 
-function readConfigExport(options: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  stateDir: string;
-}): ConfigExport {
-  const redactedConfigPath = redactPathForSupport(options.configPath, options);
+function readConfigExport(configPath: string, options: SupportRedactionContext): ConfigExport {
+  const redactedConfigPath = redactPathForSupport(configPath, options);
   let stat: fs.Stats | undefined;
   try {
-    assertNotUpdateCapturePath(options.configPath, options.stateDir);
-    stat = fs.statSync(options.configPath);
+    assertNotUpdateCapturePath(configPath, options.stateDir);
+    stat = fs.statSync(configPath);
     const { buffer } = readRegularFileSync({
-      filePath: options.configPath,
+      filePath: configPath,
       maxBytes: SUPPORT_EXPORT_CONFIG_MAX_BYTES,
     });
     const parsed = parseConfigJson5(buffer.toString("utf8"));
@@ -623,7 +619,7 @@ export async function writeDiagnosticSupportExport(input: DiagnosticSupportExpor
     maxBytes: normalizePositiveInteger(options.logMaxBytes, DEFAULT_LOG_MAX_BYTES),
     redaction,
   });
-  const config = readConfigExport({ configPath, env, stateDir });
+  const config = readConfigExport(configPath, redaction);
   const [statusSnapshot, healthSnapshot] = await Promise.all([
     collectSupportSnapshot({
       path: "status/gateway-status.json",

@@ -6,6 +6,7 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
 import {
   enableOpenClawCompileCache,
@@ -19,12 +20,15 @@ import {
   isNativeHookRelayInvocation,
   recoverNodeRuntime,
   runRespawnedChild,
+  watchCliRespawnParent,
 } from "./node-runtime-recovery.mjs";
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
   formatUnsupportedNodeDiagnosticWarning,
 } from "./node-version.mjs";
+
+watchCliRespawnParent();
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
@@ -130,9 +134,10 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
-    process.execPath,
-    [...process.execArgv, resolveCompileCacheRespawnLauncher(), ...process.argv.slice(2)],
-    env,
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
   );
 };
 
@@ -142,15 +147,18 @@ const respawnWithPackagedCompileCacheIfNeeded = (directory) => {
   if (!env) {
     return false;
   }
-  const args = [
-    ...process.execArgv,
-    resolveCompileCacheRespawnLauncher(),
-    ...process.argv.slice(2),
-  ];
+  const { command, args } = resolveOpenClawCliInvocation({
+    entryPath: resolveCompileCacheRespawnLauncher(),
+  });
   if (foregroundGateway && process.platform !== "win32" && process.execve) {
-    process.execve(process.execPath, [process.execPath, ...args], env);
+    process.execve(command, [command, ...args], env);
   }
-  return runRespawnedChild(process.execPath, args, env);
+  return runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: resolveCompileCacheRespawnLauncher(),
+      env,
+    }),
+  );
 };
 
 const getErrorMessage = (err) =>

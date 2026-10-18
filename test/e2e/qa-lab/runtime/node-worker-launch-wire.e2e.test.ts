@@ -46,7 +46,9 @@ const TEST_TIMEOUT_MS = PROOF_TIMEOUT_MS + 60_000;
 const CONTROL_PROBE_MAX_MS = 4_000;
 const CONTROL_PROBE_P95_MS = 1_000;
 const FINALIZATION_LOAD_CONCURRENCY = 12;
-const FINALIZATION_LOAD_WAVES = 3;
+// One full-capacity wave covers readiness sampling and a fresh connection during
+// finalization; repeated waves add no distinct assertion before the restart audit.
+const FINALIZATION_LOAD_WAVES = 1;
 const MIN_CONTROL_PROBE_SAMPLES = 12;
 const WORKSPACE_INVENTORY_FILES = 4_096;
 
@@ -102,6 +104,23 @@ describe("node worker launch wire", () => {
       const pendingCleanupOwners = new Set<string>();
       const loadTerminals = new Map<string, (payload: Record<string, unknown>) => void>();
       let phase = "provider startup";
+      const markPhase = (next: string) => {
+        phase = next;
+        process.stderr.write(
+          `[node-worker-launch-wire] ${JSON.stringify({
+            elapsedMs: Math.round(performance.now() - testStartedAt),
+            phase,
+            aborted: context.signal.aborted,
+            cleanupStartedAfterMs,
+          })}\n`,
+        );
+      };
+      markPhase(phase);
+      const onAbort = () => markPhase(phase);
+      context.signal.addEventListener("abort", onAbort, { once: true });
+      context.onTestFinished(() => {
+        context.signal.removeEventListener("abort", onAbort);
+      });
       onTestFailed(() => {
         process.stderr.write(
           redactSensitiveText(
@@ -129,17 +148,17 @@ describe("node worker launch wire", () => {
         async ({ signal, createTempDir }) => {
           const root = createTempDir("openclaw-node-worker-launch-wire-");
           provider = await startMidturnProvider();
-          phase = "workspace publication";
+          markPhase("workspace publication");
           const published = (publishedResource = await createPublishedWireWorkspace(root));
           const settlement = createWireWorkspaceSettlementWaiter();
-          phase = "gateway startup";
+          markPhase("gateway startup");
           gateway = await startPairedNodeWorkerGateway({
             owner: gatewayOwner,
             providerBaseUrl: provider.baseUrl,
             executionIdentity: true,
             useRepoCli: false,
           });
-          phase = "operator connection";
+          markPhase("operator connection");
           operator = await connectWireClient({
             gateway,
             role: "operator",
@@ -161,7 +180,7 @@ describe("node worker launch wire", () => {
             },
           });
           await operator.request("sessions.subscribe", {});
-          phase = "node connection";
+          markPhase("node connection");
           workerNode = await createPairedNodeWorkerHost({
             gateway,
             operator,
@@ -203,7 +222,7 @@ describe("node worker launch wire", () => {
           });
           expect(workerNode.client).toBeTruthy();
 
-          phase = "baseline workspace creation";
+          markPhase("baseline workspace creation");
           await operator.request("sessions.create", {
             key: SESSION_KEY,
             agentId: "qa",
@@ -236,7 +255,7 @@ describe("node worker launch wire", () => {
               ),
             );
           }
-          phase = "baseline dispatch";
+          markPhase("baseline dispatch");
           const dispatched = await gateway.call(
             "sessions.dispatch",
             { key: SESSION_KEY, deviceId: workerNode.identity.deviceId },
@@ -273,7 +292,7 @@ describe("node worker launch wire", () => {
           ).resolves.toBe("workspace inventory fixture\n");
           await fs.writeFile(path.join(remoteWorkspaceDir, "node-result.txt"), "device result\n");
 
-          phase = "baseline turn";
+          markPhase("baseline turn");
           const runId = `node-worker-launch-wire-${Date.now()}`;
           const started = await operator.request<{ runId?: string; status?: string }>("chat.send", {
             sessionKey: SESSION_KEY,
@@ -293,7 +312,7 @@ describe("node worker launch wire", () => {
             );
           }
           await settlement.wait(operator, SESSION_KEY, signal);
-          phase = "baseline node invocations";
+          markPhase("baseline node invocations");
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
           expect(reconnected).toBe(true);
@@ -307,7 +326,7 @@ describe("node worker launch wire", () => {
             state: "completed",
           });
 
-          phase = "baseline audit";
+          markPhase("baseline audit");
           workerAuditBeforeRestart = await gateway.runCli([
             "audit",
             "--run",
@@ -333,7 +352,7 @@ describe("node worker launch wire", () => {
                 wireMessageText(message).includes(BASELINE_REPLY),
             ),
           ).toHaveLength(1);
-          phase = "baseline workspace verification";
+          markPhase("baseline workspace verification");
           const described = (await gateway.call("sessions.describe", { key: SESSION_KEY })) as {
             session?: {
               execCwd?: string;
@@ -367,7 +386,7 @@ describe("node worker launch wire", () => {
               },
             );
           }
-          phase = "permission turn";
+          markPhase("permission turn");
           const permissionRunId = `node-worker-permission-${Date.now()}`;
           await expect(
             operator.request<{ runId?: string; status?: string }>("chat.send", {
@@ -437,7 +456,7 @@ describe("node worker launch wire", () => {
           );
           expect(permissionReplies).toHaveLength(1);
           expect(wireMessageText(permissionReplies?.[0])).toContain(provider.execOutput);
-          phase = "permission workspace verification";
+          markPhase("permission workspace verification");
           const permissionDescribed = (await gateway.call("sessions.describe", {
             key: SESSION_KEY,
           })) as { session?: { execCwd?: string; spawnedCwd?: string } };
@@ -450,7 +469,7 @@ describe("node worker launch wire", () => {
 
           // Simulate the old capability declaration with the current supervisor over real wire.
           // This proves negotiation and same-identity reconnect, not an older binary upgrade.
-          phase = "legacy node connection";
+          markPhase("legacy node connection");
           legacyWorkerNode = await createPairedNodeWorkerHost({
             gateway,
             operator,
@@ -464,7 +483,7 @@ describe("node worker launch wire", () => {
               }
             },
           });
-          phase = "legacy workspace dispatch";
+          markPhase("legacy workspace dispatch");
           const legacySessionKey = `${SESSION_KEY}-legacy-node`;
           await operator.request("sessions.create", {
             key: legacySessionKey,
@@ -479,7 +498,7 @@ describe("node worker launch wire", () => {
             { key: legacySessionKey, deviceId: legacyWorkerNode.identity.deviceId },
             { timeoutMs: PROOF_TIMEOUT_MS },
           );
-          phase = "legacy unsupported turn";
+          markPhase("legacy unsupported turn");
           const unsupportedRunId = `node-worker-lifetime-unsupported-${Date.now()}`;
           await expect(
             operator.request("chat.send", {
@@ -507,7 +526,7 @@ describe("node worker launch wire", () => {
             gateway.call("sessions.describe", { key: legacySessionKey }),
           ).resolves.toMatchObject({ session: { placement: { state: "active" } } });
 
-          phase = "legacy reconnect and supported turn";
+          markPhase("legacy reconnect and supported turn");
           await legacyWorkerNode.disconnect();
           await legacyWorkerNode.connect({ environmentSession: true });
           const legacyRunId = `node-worker-launch-wire-legacy-${Date.now()}`;
@@ -541,10 +560,10 @@ describe("node worker launch wire", () => {
             ),
           ).toHaveLength(1);
 
-          phase = "load fixture setup";
+          markPhase("load fixture setup");
           const loadSessions: string[] = [];
           for (let index = 0; index < FINALIZATION_LOAD_CONCURRENCY; index += 1) {
-            phase = `load workspace creation ${index + 1}/${FINALIZATION_LOAD_CONCURRENCY}`;
+            markPhase(`load workspace creation ${index + 1}/${FINALIZATION_LOAD_CONCURRENCY}`);
             const sessionKey = `${SESSION_KEY}-load-${index}`;
             await operator.request("sessions.create", {
               key: sessionKey,
@@ -556,7 +575,7 @@ describe("node worker launch wire", () => {
             });
             loadSessions.push(sessionKey);
           }
-          phase = "load workspace dispatch";
+          markPhase("load workspace dispatch");
           const loadGateway = gateway;
           const loadDeviceId = workerNode.identity.deviceId;
           // Worktree creation shares Git state; independent remote transfers can overlap.
@@ -598,7 +617,7 @@ describe("node worker launch wire", () => {
           const freshConnectionSamples: number[] = [];
           try {
             for (let wave = 0; wave < FINALIZATION_LOAD_WAVES; wave += 1) {
-              phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} admission`;
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} admission`);
               const waveFinalizationStarted = new Promise<number>((resolve) => {
                 resolveWaveFinalizationStarted = resolve;
               });
@@ -632,13 +651,13 @@ describe("node worker launch wire", () => {
                   ).toMatchObject({ state: "final" });
                 }),
               );
-              phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} finalization`;
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} finalization`);
               // Committed replies may precede workspace finalization; failures still stop the wait.
               await withinTest(
                 Promise.race([waveFinalizationStarted, waits.then(() => waveFinalizationStarted)]),
                 signal,
               );
-              phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} control connection`;
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} control connection`);
               const freshConnectionStartedAt = performance.now();
               const freshClient = await connectWireClient({
                 gateway,
@@ -648,7 +667,7 @@ describe("node worker launch wire", () => {
               });
               freshConnectionSamples.push(performance.now() - freshConnectionStartedAt);
               await freshClient.stopAndWait({ timeoutMs: 2_000 });
-              phase = `load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} completion`;
+              markPhase(`load wave ${wave + 1}/${FINALIZATION_LOAD_WAVES} completion`);
               await waits;
               await Promise.all(
                 loadSessions.map((sessionKey) => settlement.wait(waveOperator, sessionKey, signal)),
@@ -669,23 +688,23 @@ describe("node worker launch wire", () => {
           expect(Math.max(...freshConnectionSamples)).toBeLessThan(CONTROL_PROBE_MAX_MS);
           expect(freshConnectionSamples).toHaveLength(FINALIZATION_LOAD_WAVES);
 
-          phase = "workspace settlement before node shutdown";
+          markPhase("workspace settlement before node shutdown");
           const settlementOperator = operator;
           await Promise.all(
             [SESSION_KEY, legacySessionKey, ...loadSessions].map((key) =>
               settlement.wait(settlementOperator, key, signal),
             ),
           );
-          phase = "node shutdown";
+          markPhase("node shutdown");
           await workerNode.stop();
           workerNode = undefined;
           await legacyWorkerNode.stop();
           legacyWorkerNode = undefined;
           await operator.stopAndWait({ timeoutMs: 2_000 });
           operator = undefined;
-          phase = "gateway restart";
+          markPhase("gateway restart");
           await gateway.restartAfterStateMutation(async () => {});
-          phase = "audit after restart";
+          markPhase("audit after restart");
           const workerAuditAfterRestart = await gateway.runCli([
             "audit",
             "--run",
@@ -697,10 +716,11 @@ describe("node worker launch wire", () => {
             JSON.parse(workerAuditAfterRestart) as AuditRunInspectResult,
           );
           expect(workerAuditAfterRestart).toBe(workerAuditBeforeRestart);
-          phase = "fixture cleanup";
+          markPhase("fixture cleanup");
         },
         async () => {
           cleanupStartedAfterMs = Math.round(performance.now() - testStartedAt);
+          markPhase("fixture cleanup start");
           const cleanups = {
             workerNode: workerNode?.stop(),
             legacyWorkerNode: legacyWorkerNode?.stop(),

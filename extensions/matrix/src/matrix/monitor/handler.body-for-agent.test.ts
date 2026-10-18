@@ -50,6 +50,18 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     });
   });
 
+  it("keeps inbound content in the agent context, not verbose diagnostics", async () => {
+    const diagnostics: string[] = [];
+    const f = createMatrixHandlerTestHarness({
+      logVerboseMessage: (line) => diagnostics.push(line),
+    });
+    const body = "private-matrix-message-contents";
+    await f.handler(roomId, createMatrixTextMessageEvent({ eventId: "$private", body }));
+    expect(f.runPrepared.mock.calls.at(-1)?.[0].ctxPayload.BodyForAgent).toBe(body);
+    expect(diagnostics.join("\n")).toContain(`matrix inbound: room=${roomId}`);
+    expect(diagnostics.join("\n")).not.toContain(body);
+  });
+
   it("records formatted poll results for inbound poll response events", async () => {
     const vote = {
       type: "m.poll.response",

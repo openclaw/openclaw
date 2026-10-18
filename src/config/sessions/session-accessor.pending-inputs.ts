@@ -14,6 +14,7 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contrac
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import {
   preparePendingInputRequest,
   resolveCommittedPendingInputRequestHash,
@@ -199,9 +200,12 @@ export function bindSessionPendingInputSources(
 }
 
 type PendingInputStageOptions = PendingInputRequest & {
+  lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
+  /** An idempotent pre-commit operation may reclaim interrupted custody in this process. */
+  retryInterrupted?: boolean;
   assertCurrent: () => void;
   assertAdmittedCurrent?: () => void;
   assertCompletionCurrent?: () => void;
@@ -249,10 +253,11 @@ export function stageSessionPendingInput(
       const store = await preparePendingInputStore(
         captured,
         options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
+        options.lifecycleAdmission,
       );
       const accept = () =>
         stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);
-      // Actor commands own the physical FIFO and revalidate the prepared snapshot.
+      // Actor commands own the physical FIFO and check the admitted input's identity.
       // Holding the legacy reservation here would make native acceptance queue behind itself.
       return inputActor ? accept() : store.withAdmission(accept, admission !== undefined);
     };
@@ -357,7 +362,9 @@ async function stagePreparedPendingInput(
       if (
         (!options.requestFingerprint && !options.trackCompletion) ||
         (existing.state !== "queued" && existing.state !== "interrupted") ||
-        (existing.lifecycle_generation === lifecycleGeneration && !options.trackCompletion)
+        (existing.lifecycle_generation === lifecycleGeneration &&
+          !options.trackCompletion &&
+          !(options.retryInterrupted && existing.state === "interrupted"))
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
@@ -482,7 +489,11 @@ async function stagePreparedPendingInput(
         if (!committedHash) {
           return undefined;
         }
-        requestHash = committedHash;
+        // A retained receipt owns the raw request hash, even when JSON storage
+        // normalized its message. Reconstruct identity only after receipt retirement.
+        if (!previous && !existing) {
+          requestHash = committedHash;
+        }
         await assertCurrent();
       }
       retained = true;

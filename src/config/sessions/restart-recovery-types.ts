@@ -74,7 +74,7 @@ export type RestartRecoveryTerminalDeliveryEvidence =
     runId: string;
     harnessCompletion?: HarnessCompletionRecovery;
     deliveryContext?: DeliveryContext;
-    /** Identified queue completion retained before its exact harness task settles. */
+    /** Identified queue completion retained for its original admitted source. */
     durableFinalReceipt?: { intentId: string; deliveryId: string; platformMessageId: string };
     /** Actual completion run; a resumed run can differ from its queued source. */
     transcriptRunId?: string;

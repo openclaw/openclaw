@@ -108,7 +108,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     outcome.code = vitestInfrastructureExitCode(outcome.code);
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
         console.error(error);
         outcome.code = vitestInfrastructureExitCode(outcome.code);
       });

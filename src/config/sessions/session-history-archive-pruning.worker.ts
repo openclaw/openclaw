@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { readSqliteFreePageCount } from "../../infra/sqlite-wal-reclamation.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -28,7 +29,7 @@ export function readSessionArchivePruningInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   limit = 1,
 ): SessionArchivePruningSnapshot {
-  const freePages = readSqliteFreePageCount(database.db);
+  const freePages = isPostgresSqlConnection(database.db) ? 0 : readSqliteFreePageCount(database.db);
   if (!tableExists(database.db, "session_transcript_archives")) {
     return { archives: [], freePages };
   }
@@ -103,29 +104,37 @@ export function pruneSessionArchivesByRetentionInDatabase(
       );
       const db = getSessionKysely(transactionDb.db);
       const directory = path.resolve(input.archiveDirectory);
-      let removed = 0;
-      for (const row of input.candidates) {
+      const removable = input.candidates.filter((row) => {
         const archivePath = path.resolve(directory, row.archive_name);
-        if (
-          referenced.has(row.session_id) ||
-          path.dirname(archivePath) !== directory ||
-          path.basename(archivePath) !== row.archive_name ||
-          fs.existsSync(archivePath)
-        ) {
-          continue;
-        }
+        return (
+          !referenced.has(row.session_id) &&
+          path.dirname(archivePath) === directory &&
+          path.basename(archivePath) === row.archive_name &&
+          !fs.existsSync(archivePath)
+        );
+      });
+      let removed = 0;
+      if (removable.length > 0) {
         // Selection can wait behind publication or restore; stale rows simply wait for another sweep.
         const result = executeSqliteQuerySync(
           transactionDb.db,
           db
             .deleteFrom("session_transcript_archives")
-            .where("session_id", "=", row.session_id)
-            .where("generation", "=", row.generation)
-            .where("archive_name", "=", row.archive_name)
-            .where("created_at", "=", row.created_at)
-            .where("published_at", "=", row.published_at),
+            .where((eb) =>
+              eb.or(
+                removable.map((row) =>
+                  eb.and([
+                    eb("session_id", "=", row.session_id),
+                    eb("generation", "=", row.generation),
+                    eb("archive_name", "=", row.archive_name),
+                    eb("created_at", "=", row.created_at),
+                    eb("published_at", "=", row.published_at),
+                  ]),
+                ),
+              ),
+            ),
         );
-        removed += Number(result.numAffectedRows ?? 0n);
+        removed = Number(result.numAffectedRows ?? 0n);
       }
       admit("commit");
       return removed;

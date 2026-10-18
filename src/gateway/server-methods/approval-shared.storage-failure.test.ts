@@ -8,7 +8,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { handlePendingApprovalRequest, registerPendingApprovalRecord } from "./approval-shared.js";
+import { registerPendingApprovalRecord } from "./approval-registration.js";
+import { handlePendingApprovalRequest } from "./approval-shared.js";
 import { handleApprovalResolve } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 

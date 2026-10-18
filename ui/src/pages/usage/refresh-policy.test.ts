@@ -33,11 +33,11 @@ describe("UsageRefreshPolicy", () => {
     const { policy, reload } = createPolicy();
     policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS);
 
-    policy.request("reconnect");
+    void policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    policy.request("focus");
+    void policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -49,11 +49,11 @@ describe("UsageRefreshPolicy", () => {
     policy.interrupt();
     loading = false;
 
-    policy.request("reconnect");
+    void policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    policy.request("focus");
+    void policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -68,12 +68,12 @@ describe("UsageRefreshPolicy", () => {
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
 
-    policy.request("manual");
+    void policy.request("manual");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(5);
 
-    policy.request("focus");
+    void policy.request("focus");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(7);
@@ -116,4 +116,31 @@ describe("UsageRefreshPolicy", () => {
       expect(reload).toHaveBeenCalledTimes(reason === "connection" ? 1 : 0);
     },
   );
+
+  it("replays a deferred provider retry as a provider-only retry", async () => {
+    let loading = true;
+    const { policy, reload } = createPolicy(() => loading);
+
+    await policy.request("poll");
+    expect(reload).not.toHaveBeenCalled();
+    loading = false;
+    policy.flushPending();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenLastCalledWith("poll");
+  });
+
+  it("lets a deferred broader refresh outrank a deferred provider retry", async () => {
+    let loading = true;
+    const { policy, reload } = createPolicy(() => loading);
+    policy.setLastLoadedAtMs(null);
+
+    await policy.request("poll");
+    await policy.request("focus");
+    await policy.request("poll");
+    loading = false;
+    policy.flushPending();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenLastCalledWith("focus");
+  });
 });

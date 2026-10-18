@@ -34,6 +34,7 @@ it.each([false, true])(
         started.resolve();
         return (await gate.promise).clone();
       });
+      vi.stubGlobal("fetch", fetchImpl);
       try {
         const repository = await getSessionRepositoryWorkspaceStore().create({
           agentId: "main",
@@ -65,7 +66,6 @@ it.each([false, true])(
             loadControlUiSessionPullRequests(
               { sessionKey, refresh },
               {
-                fetchImpl,
                 read: {
                   target,
                   sourceIdentity,

@@ -10,10 +10,10 @@ import {
   unregisterOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  closeOpenClawAgentDatabasesAsync,
 } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,7 +21,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStore,
+  loadCandidateAuthProfileStoreAsync,
   updateCandidateAuthProfileStore,
 } from "./candidate-stores.js";
 import { closeAuthProfileReadPool } from "./sqlite.js";
@@ -29,6 +29,115 @@ import { closeAuthProfileReadPool } from "./sqlite.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("candidate auth profile stores", () => {
+  async function freshCandidate(
+    root = fs.realpathSync(tempDirs.make("openclaw-auth-candidate-creation-")),
+  ) {
+    const agentDir = path.join(root, "agents", "probe", "agent");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const candidates = await listCandidateAuthProfileStores({
+      cfg: { agents: { entries: { probe: { agentDir } } } },
+      env,
+    });
+    const candidate = candidates.find((entry) => entry.agentId === "probe");
+    if (!candidate) {
+      throw new Error("Missing configured probe candidate");
+    }
+    return { root, candidate };
+  }
+
+  async function closeCandidateStores(root: string) {
+    closeAuthProfileReadPool({ kind: "root", rootPath: root });
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  }
+
+  it.each(["async", "async-pending", "update"] as const)(
+    "adopts a database created after discovery by an unrelated creator (%s)",
+    async (firstCheck) => {
+      const { root, candidate } = await freshCandidate();
+      const credential = { type: "api_key" as const, provider: "fixture", key: "synthetic-key" };
+      try {
+        expect(fs.existsSync(candidate.databasePath)).toBe(false);
+        const pending =
+          firstCheck === "async-pending"
+            ? loadCandidateAuthProfileStoreAsync(candidate)
+            : undefined;
+        openOpenClawAgentDatabase({
+          agentId: candidate.agentId,
+          path: candidate.databasePath,
+          env: candidate.env,
+        });
+        if (pending) {
+          expect(await pending).toBeNull();
+        }
+        await closeOpenClawAgentDatabasesAsync();
+        if (firstCheck === "async") {
+          expect(await loadCandidateAuthProfileStoreAsync(candidate)).toBeNull();
+        }
+        await updateCandidateAuthProfileStore({
+          candidate,
+          profileId: "fixture:manual",
+          updater(store) {
+            store.profiles["fixture:manual"] = credential;
+            return true;
+          },
+        });
+        expect(
+          (await loadCandidateAuthProfileStoreAsync(candidate))?.profiles["fixture:manual"],
+        ).toEqual(credential);
+      } finally {
+        await closeCandidateStores(root);
+      }
+    },
+  );
+
+  // Windows does not permit replacing a database while its native owner has it open.
+  it.skipIf(process.platform === "win32").each(["adopted", "existing"] as const)(
+    "rejects replacement of a known file (%s)",
+    async (state) => {
+      const { root, candidate: missingCandidate } = await freshCandidate();
+      let candidate = missingCandidate;
+      const retained = `${candidate.databasePath}.retained`;
+      try {
+        openOpenClawAgentDatabase({
+          agentId: candidate.agentId,
+          path: candidate.databasePath,
+          env: candidate.env,
+        });
+        await closeOpenClawAgentDatabasesAsync();
+        if (state === "existing") {
+          candidate = (await freshCandidate(root)).candidate;
+        } else {
+          expect(await loadCandidateAuthProfileStoreAsync(candidate)).toBeNull();
+        }
+        closeAuthProfileReadPool({ kind: "root", rootPath: root });
+        fs.renameSync(candidate.databasePath, retained);
+        const replacement = `${candidate.databasePath}.replacement`;
+        fs.writeFileSync(replacement, "foreign");
+        fs.renameSync(replacement, candidate.databasePath);
+        await expect(loadCandidateAuthProfileStoreAsync(candidate)).rejects.toThrow(
+          /identity changed/,
+        );
+        const updater = vi.fn(() => true);
+        await expect(
+          updateCandidateAuthProfileStore({
+            candidate,
+            profileId: "fixture:manual",
+            updater,
+          }),
+        ).rejects.toThrow(/identity changed/);
+        expect(updater).not.toHaveBeenCalled();
+      } finally {
+        if (fs.existsSync(retained)) {
+          fs.renameSync(retained, candidate.databasePath);
+        }
+        await closeCandidateStores(root);
+      }
+    },
+  );
+
   it("fails closed when the state-root agent inventory cannot be read", async () => {
     const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
     vi.spyOn(fsPromises, "readdir").mockRejectedValueOnce(error);
@@ -109,8 +218,10 @@ describe("candidate auth profile stores", () => {
       } finally {
         sql.restore();
       }
-      closeOpenClawAgentDatabaseByPath(customDatabasePath, "custom");
-      expect(loadCandidateAuthProfileStore(custom!)?.profiles["openai:default"]).toMatchObject({
+      await closeOpenClawAgentDatabaseByPathAsync(customDatabasePath, "custom");
+      expect(
+        (await loadCandidateAuthProfileStoreAsync(custom!))?.profiles["openai:default"],
+      ).toMatchObject({
         access: "custom-access",
         refresh: "custom-refresh",
       });

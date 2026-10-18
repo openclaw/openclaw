@@ -24,8 +24,8 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
-- Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, `th`, and `sv`.
+- Docs translation workflows generate the same non-English locale set in `openclaw/docs`, including Swedish (`sv`) once its first translation refresh completes.
 - The custom docs website supports the generated locale set, including Thai (`th`) and Persian (`fa`).
 - Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
@@ -35,6 +35,7 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 - `zh-Hans-navigation.json` — curated zh-Hans tab and group labels overlaid onto the current English navigation tree during publish sync. It labels all 11 published tabs. 8 of 57 top-level groups still show their English label because no translated label exists for them yet.
 - `ar-navigation.json`, `de-navigation.json`, `es-navigation.json`, `fr-navigation.json`, `id-navigation.json`, `it-navigation.json`, `ja-navigation.json`, `ko-navigation.json`, `pl-navigation.json`, and `pt-BR-navigation.json` — starter locale labels kept alongside the source repo. Publish sync clones the full English navigation tree, prefixes locale routes, and overlays translated labels by matching shared page anchors. Each starter file currently labels 1 tab and 2 groups, so these locales publish an almost fully English sidebar. Extend a starter file to translate more of the sidebar.
 - `tr-navigation.json` — curated Turkish tab and nested group labels. Publish sync overlays the labels onto the current English navigation tree by matching shared page anchors; English owns the page inventory and ordering.
+- `sv-navigation.json` — curated Swedish tab and nested group labels, matched by shared page anchors. English owns the page inventory and ordering.
 - `<lang>.tm.jsonl` — translation memory keyed by workflow, prompt version, language, and text hash.
 
 ### Locale code mapping
@@ -67,6 +68,7 @@ the source of truth for this mapping.
 | `pl`                | `docs/pl/`       | `pl-navigation.json`                    | `glossary.pl.json`    | `pl.tm.jsonl`    | clone-en |
 | `th`                | `docs/th/`       | `th-navigation.json` (not present)      | `glossary.th.json`    | `th.tm.jsonl`    | clone-en |
 | `ru`                | `docs/ru/`       | `ru-navigation.json` (not present)      | `glossary.ru.json`    | `ru.tm.jsonl`    | clone-en |
+| `sv`                | `docs/sv/`       | `sv-navigation.json`                    | `glossary.sv.json`    | `sv.tm.jsonl`    | overlay  |
 
 Only three locales differ between the two code families: `zh-Hans`/`zh-CN`,
 `zh-Hant`/`zh-TW`, and `ja`/`ja-JP`. Every other locale uses the same code in both

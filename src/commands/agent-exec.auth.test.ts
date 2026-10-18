@@ -212,7 +212,7 @@ describe("agent exec stored auth", () => {
     );
   });
 
-  it("uses one system-agent owner for credentials, the run, and its SQLite scope", async () => {
+  it("uses an overridden system-agent owner for credentials, the run, and its SQLite scope", async () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-cfg-auth-");
     const customAgentDir = path.join(stateDir, "custom-home");
     await fs.mkdir(customAgentDir);
@@ -222,7 +222,7 @@ describe("agent exec stored auth", () => {
       JSON.stringify({
         agents: {
           ownership: "explicit",
-          defaults: { systemAgent: { agentId: "alpha" } },
+          defaults: { systemAgent: { agentId: "beta" } },
           entries: { alpha: { agentDir: customAgentDir }, beta: {} },
         },
       }),
@@ -249,7 +249,10 @@ describe("agent exec stored auth", () => {
           return success();
         },
       },
-      { config },
+      {
+        config,
+        configOverride: ['{"agents":{"defaults":{"systemAgent":{"agentId":"alpha"}}}}'],
+      },
     );
     expect(result.exitCode).toBe(0);
   });

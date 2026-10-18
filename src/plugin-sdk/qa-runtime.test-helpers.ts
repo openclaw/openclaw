@@ -19,15 +19,6 @@ export function cleanupTempDirs(tempDirs: string[]): void {
   }
 }
 
-/** Restores the private QA CLI env flag after a test mutates it. */
-export function restorePrivateQaCliEnv(originalPrivateQaCli: string | undefined): void {
-  if (originalPrivateQaCli === undefined) {
-    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-  } else {
-    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
-  }
-}
-
 /** Creates a minimal source checkout shape that enables private QA runtime loading. */
 export function makePrivateQaSourceRoot(tempDirs: string[], prefix: string): string {
   const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));

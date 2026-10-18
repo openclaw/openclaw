@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { DOCKER_SANDBOX_ENGINE, execContainer } from "./container-engine.js";
 import { resolveDockerSourceNamespace } from "./docker-mount-source.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import {
+  prepareSandboxMountPlan,
+  sandboxMountPlanMatchesContainer,
+  sandboxContainerShowsWorkspacePaths,
+} from "./mount-plan.js";
 
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -465,3 +469,48 @@ describe("retained mount identity", () => {
     ).toBe(true);
   });
 });
+
+it.each([false, true])(
+  "checks visible workspace backing for a running=%s container",
+  async (running) => {
+    const workspaceDir = path.join(root, "private");
+    let source = "/host/state/private";
+    let nested: { Type: string; Source?: string; Destination: string; RW: boolean }[] = [];
+    vi.mocked(execContainer).mockImplementation(async (_engine, args) => {
+      const stdout = args.includes("{{.Id}} {{.State.Running}} {{.State.Paused}}")
+        ? `${"a".repeat(64)} ${running} false`
+        : args[0] === "inspect"
+          ? JSON.stringify({
+              Mounts: [
+                {
+                  Type: "bind",
+                  Source: source,
+                  Destination: "/workspace",
+                  RW: true,
+                },
+                ...nested,
+              ],
+              Tmpfs: {},
+            })
+          : "1 1 0:1 / / rw - overlay overlay rw\n2 1 0:2 /private /workspace rw - ext4 /dev/root rw\n";
+      return { stdout, stderr: "", code: 0 };
+    });
+    const read = () =>
+      sandboxContainerShowsWorkspacePaths({
+        engine: DOCKER_SANDBOX_ENGINE,
+        containerName: "owned",
+        workspaceDir,
+        containerRoot: "/workspace/",
+        targets: ["/workspace/cache/screenshot.png"],
+        assertCurrent() {},
+      });
+    await expect(read()).resolves.toBe(true);
+    vi.mocked(resolveDockerSourceNamespace).mockResolvedValue(undefined);
+    source = workspaceDir;
+    await expect(read()).resolves.toBe(true);
+    for (const Type of ["tmpfs", "volume", "bind"]) {
+      nested = [{ Type, Source: "/different/source", Destination: "/workspace/cache", RW: true }];
+      await expect(read()).resolves.toBe(false);
+    }
+  },
+);

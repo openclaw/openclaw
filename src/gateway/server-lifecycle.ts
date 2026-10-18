@@ -1,6 +1,4 @@
 import { closeAuthProfileUsage } from "../agents/auth-profiles/usage-lifecycle.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { prepareSandboxRegistryClose } from "../agents/sandbox/registry-lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycle.js";
@@ -90,8 +88,6 @@ export async function prepareGatewayLifecycle(params: {
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
-    chatAbortControllers,
-    chatQueuedTurns,
     removeChatRun,
     agentRunSeq,
     listActiveGatewayMethods,
@@ -395,11 +391,8 @@ export async function prepareGatewayLifecycle(params: {
     void closeAuthProfileUsage(params.sdkResourceHost);
     runtime.scheduler.beginClose();
     void runtimeState.maintenance?.stopPeriodicTasks();
-    // Publish the exact cancellation before withdrawing capabilities or running
-    // disposal callbacks; startup can otherwise fail before restart marking.
-    runtime.connectionWork.beginClose(
-      notice.restartExpectedMs !== undefined ? createAgentRunRestartAbortError() : undefined,
-    );
+    // Fence new entry now; the run-shutdown owner records recovery before
+    // canceling admitted work or withdrawing its runtime capabilities.
     requestEntryLifetime.beginClose();
     void mentionInbox.dispose();
     healthWork.beginClose();
@@ -414,8 +407,6 @@ export async function prepareGatewayLifecycle(params: {
     void runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     runtime.stopPresencePublications();
-    kernel.setDispatchReady(false);
-    gatewayInstanceRuntimeRef.current?.close();
     cronReconciliation.invalidate();
     return prelude;
   };
@@ -512,8 +503,6 @@ export async function prepareGatewayLifecycle(params: {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
         chatRunState,
-        chatAbortControllers,
-        chatQueuedTurns,
         restartRecoveryCandidates,
         removeChatRun,
         agentRunSeq,
@@ -526,12 +515,18 @@ export async function prepareGatewayLifecycle(params: {
         ) => {
           void nodeSendToSession(sessionKey, event, payload, opts);
         },
-        resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
         markMainSessionsAbortedForRestart: async (restart) => {
           await shutdownRuntime.markRestartAbortedMainSessions({
             cfg: getRuntimeConfig(),
             ...restart,
           });
+        },
+        cancelReceivedWork: (reason) => {
+          // Publish cancellation before retained principals lose their authority,
+          // so interrupted preparation observes the exact restart reason.
+          runtime.connectionWork.beginClose(reason);
+          kernel.setDispatchReady(false);
+          gatewayInstanceRuntimeRef.current?.close();
         },
         getPendingReplyCount: getTotalPendingReplies,
         disposeAllCodeModeRuns: shutdownRuntime.disposeAllCodeModeRuns,

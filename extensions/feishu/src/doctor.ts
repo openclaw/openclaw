@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { readDirectoryEntriesSync, safeStatSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
@@ -15,7 +15,6 @@ import {
   getSessionEntryAsync,
   listSessionEntriesAsync,
   loadTranscriptEvents,
-  resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -95,24 +94,8 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function existsDir(dir: string): boolean {
-  return safeStatSync(dir)?.isDirectory() ?? false;
-}
-
-function existsFile(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
-
 function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
-}
-
-function safeReadDir(dir: string): fs.Dirent[] {
-  try {
-    return fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -217,13 +200,13 @@ function collectFeishuSessionTargets(params: {
   }
 
   const agentsDir = path.join(params.stateDir, "agents");
-  for (const agentDir of safeReadDir(agentsDir)) {
+  for (const agentDir of readDirectoryEntriesSync(agentsDir)) {
     if (!agentDir.isDirectory()) {
       continue;
     }
     const agentId = normalizeAgentId(agentDir.name);
     const storePath = path.join(agentsDir, agentDir.name, "sessions", "sessions.json");
-    if (existsFile(storePath)) {
+    if (safeStatSync(storePath)?.isFile()) {
       addTarget({ agentId, storePath });
     }
   }
@@ -239,7 +222,7 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
     if (files.length >= limit) {
       return;
     }
-    for (const entry of safeReadDir(dir).toSorted((left, right) =>
+    for (const entry of readDirectoryEntriesSync(dir).toSorted((left, right) =>
       left.name.localeCompare(right.name),
     )) {
       const fullPath = path.join(dir, entry.name);
@@ -255,7 +238,7 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
       }
     }
   };
-  if (existsDir(rootDir)) {
+  if (safeStatSync(rootDir)?.isDirectory()) {
     visit(rootDir);
   }
   return files;
@@ -477,7 +460,7 @@ async function collectFeishuSessionFindings(params: {
   if (!transcriptPath) {
     return [];
   }
-  if (!existsFile(transcriptPath)) {
+  if (!safeStatSync(transcriptPath)?.isFile()) {
     return [
       {
         kind: "missing-session-transcript",
@@ -608,21 +591,6 @@ function movePathToBackup(params: {
   return true;
 }
 
-function copyStoreBackup(params: { storePath: string; backupDir: string; agentId: string }) {
-  const targetDir = path.join(params.backupDir, "session-stores", params.agentId);
-  for (const sourcePath of resolveSessionStoreBackupPaths({
-    agentId: params.agentId,
-    storePath: params.storePath,
-  })) {
-    if (!existsFile(sourcePath)) {
-      continue;
-    }
-    const targetPath = path.join(targetDir, path.basename(sourcePath));
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-    fs.copyFileSync(sourcePath, resolveUniquePath(targetPath));
-  }
-}
-
 function collectSessionArtifactPaths(params: {
   agentId: string;
   storePath: string;
@@ -652,7 +620,7 @@ function archiveSessionArtifacts(params: {
       agentId: entry.agentId,
       entry: entry.entry,
     })) {
-      if (seen.has(artifactPath) || !existsFile(artifactPath)) {
+      if (seen.has(artifactPath) || !safeStatSync(artifactPath)?.isFile()) {
         continue;
       }
       seen.add(artifactPath);
@@ -708,7 +676,9 @@ async function repairFeishuDoctorState(params: {
   )) {
     const agentId = entries[0]!.agentId;
     try {
-      copyStoreBackup({ storePath, backupDir, agentId });
+      let storeBackupDir: string | undefined = resolveUniquePath(
+        path.join(backupDir, "session-stores", agentId),
+      );
       const removedEntries: typeof entries = [];
       for (const entry of entries) {
         const { key } = entry;
@@ -719,9 +689,11 @@ async function repairFeishuDoctorState(params: {
         const deleted = await deleteSessionEntry({
           agentId,
           archiveTranscript: true,
+          backupDir: storeBackupDir,
           sessionKey: key,
           storePath,
         });
+        storeBackupDir = undefined;
         if (!deleted) {
           continue;
         }

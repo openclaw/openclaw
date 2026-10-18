@@ -128,7 +128,12 @@ local tool calls are also denied, with at most two additional inference attempts
 On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
-Snapshots stay in bounded process memory until expiry or session cleanup.
+The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
+request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+Keeping a snapshot does not retain the completed parent session or its transcript manager.
+The built-in runtime retains the prepared provider prefix instead of a second copy
+of conversation history. Forks convert only later publications and the side question;
+HTTP continuations retain the full prefix even when the parent sends only a suffix.
 Read-only forks do not acquire workspace placement authority, so a parent's
 pending placement publication does not block them. Normal parent settlement and
 usage updates preserve the fork's read authority. Session reset or deletion
@@ -241,6 +246,22 @@ nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
+
+Tool factories and provider schema normalizers keep the same tool-object API.
+The host separates their definition data from executable callbacks: schemas and
+metadata retain their identities, while execution and preparation callbacks keep
+the original receiver and the exact plugin invocation scope. Reusable descriptor
+snapshots contain no run authority or cancellation signal. A retired plugin or
+closed invocation still rejects retained callbacks, including callbacks reached
+after rebuilding a tool's hooks. Definition accessors remain lazy and scoped, so
+an unreadable schema can be quarantined without invoking the tool.
+Callable tools and Proxy-backed objects retain their admitted callable and live
+property contracts, including execution methods supplied by `get` traps.
+
+`before_tool_call` inputs and approval parameters retain detached snapshots so
+plugin mutations cannot alter caller arguments or an approved request. These
+snapshots reject shared memory in the cloned graph; properties omitted by
+structured cloning do not cross this boundary.
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async
@@ -404,11 +425,24 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+Doctor migrations can use `withSqliteReadOnlyInspection(path, inspect)` from
+`openclaw/plugin-sdk/sqlite-runtime`. The synchronous callback borrows a read-only
+connection in one transaction snapshot. For a shared-state path already admitted
+by Doctor after backup, the maintenance scope owns the reader. Other sources use
+an artifact-preserving private copy with the existing unstable-source refusal.
+The helper owns cleanup; callbacks must not retain or close the connection.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips
 unchanged assignments, and discards it on close; raw timeout PRAGMAs on an owned
 connection would bypass that policy.
+
+Connection-bound backends use `bindSqliteWorkerDatabase(db, backend)` from the
+same entrypoint for scope closure and synchronous transaction settlement checks.
+The backend supplies its command implementation and optional preparation or
+scope cleanup; it never closes the borrowed database. Transaction and commit
+admission remain with the executor and the store's write operation.
 
 Worker kernels that write derived data without changing any session facts wrap
 their synchronous DML in `withSqliteDatabaseWriteScope(db, [], write)` from the
@@ -416,6 +450,16 @@ same subpath. This preserves resident session caches while the database-wide
 write receipt still advances. Only certify the kernel's own writes; keep user
 callbacks and authority admission outside the scope. Schema changes continue to
 invalidate all scopes.
+
+Built-in engine-aware stores consume their boot-selected family through
+`getDatabaseEngineInput(family)` from
+`openclaw/plugin-sdk/database-engine-runtime`. The host resolves the shared
+PostgreSQL secret once; plugin openers and reopens use this immutable choice.
+The experimental mixed-mode configuration is described in
+[Database engines](/reference/database-engines).
+
+External stores continue using `resolveDatabaseEngineInput(config)`, which follows
+`database.engine` independently of the built-in family overrides.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -443,6 +487,12 @@ use the latter to attach the committed scope receipt to a transaction result.
 Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
+
+`readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
+write revision without SQL. PostgreSQL owners retaining a snapshot across their own
+commit capture this revision under the writer lock and accept only that commit's
+advance afterward. Another advance invalidates the snapshot, including during
+post-commit reads. Read the scope token before the final revision check.
 
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native
@@ -516,6 +566,17 @@ metadata, including page globals and audio/manual-action prefixes.
 `lifecycleSource` and `manualActionSource`. Callbacks receive shared fragments for
 guest names, preserved identity, virtual audio input, microphone control, and
 manual actions. Existing string-based callers keep their generated source.
+
+## Browser meeting configuration
+
+Use `resolveMeetingChromeConfig` and `resolveMeetingRealtimeConfig` from
+the production-private `openclaw/plugin-sdk/meeting-config` subpath when sharing browser-meeting settings.
+This lightweight entry point parses common Chrome, audio, realtime, and provider-map
+fields without loading meeting engines or transports. Pass object records for
+each section; the adapter retains its format aliases, in-call timeout default,
+realtime instructions, and transcription-provider default. The same subpath exposes
+`buildMeetingConfigAudioCommands` for default audio command pairs; command construction
+uses the shared audio backend owner without starting it.
 
 ## Browser meeting status ownership
 
@@ -613,6 +674,18 @@ declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness execution identity
+
+The harness host's closure-bound `preparedEnvironment()` returns non-secret
+execution facts. When `hostExecutionRequired` is true, use the host's
+`createToolSurfaceAsync()` execution tools rather than a native runtime shell
+environment overlay. The host captures credential selection before plugin
+handoff and binds it privately at child launch. Tool construction overrides
+cannot replace that selection. The tools retain the host's existing approvals,
+source authority, process lifecycle, and failure handling; this fact grants no
+credential export or remote delegation authority. Hosts without a managed
+selection omit the optional fact and retain native execution defaults.
 
 ## Other top-level `api` fields
 

@@ -236,9 +236,22 @@ async function runPreparedChannelTurnCoreInTrace<
       const agentId =
         params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
       if (agentId) {
-        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+        const preparation = getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
           signal: getPluginServiceSchedulerBinding()?.().signal,
         });
+        if (preparation) {
+          log.info("channel message waiting for agent database preparation", {
+            agentId,
+            channel: params.channel,
+            accountId: params.accountId,
+          });
+          emit(params, {
+            stage: "record",
+            event: "start",
+            reason: "agent-database-preparation-pending",
+          });
+          await preparation;
+        }
       }
       if (params.ctxPayload.SessionTranscriptContext) {
         const { mergeSessionTranscriptContext } =

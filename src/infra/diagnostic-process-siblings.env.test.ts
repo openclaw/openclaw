@@ -1,5 +1,4 @@
-import fs, { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import fs, { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -45,17 +44,19 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function lockRecord(root: string, extra: { pid?: number; port?: number; startTime?: number } = {}) {
+  return JSON.stringify({
+    pid: 424242,
+    port: 43123,
+    createdAt: "2026-09-03T00:00:00Z",
+    configPath: path.join(root, "openclaw.json"),
+    ...extra,
+  });
+}
+
 it("enforces the lock observation deadline after native argv inspection", async () => {
   const root = tempDirs.make("lock-argv-budget-");
-  await writeFile(
-    path.join(root, "gateway.state.lock"),
-    JSON.stringify({
-      pid: 424242,
-      port: 43123,
-      createdAt: "2026-09-03T00:00:00Z",
-      configPath: path.join(root, "openclaw.json"),
-    }),
-  );
+  await writeFile(path.join(root, "gateway.state.lock"), lockRecord(root));
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   vi.spyOn(process, "kill").mockReturnValue(true);
   mocks.identity.mockImplementation((pid) => ({
@@ -109,15 +110,7 @@ it("stops a canceled lock observation before process inspection resumes", async 
     await entered.promise;
     const reason = new Error("observation canceled");
     controller.abort(reason);
-    released.resolve(
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: "2026-09-03T00:00:00Z",
-        configPath: path.join(root, "openclaw.json"),
-        startTime: 111,
-        port: 48789,
-      }),
-    );
+    released.resolve(lockRecord(root, { pid: process.pid, startTime: 111, port: 48789 }));
     expect(await observed).toBe(reason);
     expect(readProcessStartTime).not.toHaveBeenCalled();
   } finally {
@@ -137,7 +130,7 @@ it.each([
   "CLI fuser KILL",
 ])("projects the environment at the %s launch boundary", async (surface) => {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "diagnostic-siblings-")));
+  const root = tempDirs.make("diagnostic-siblings-");
   const routing = createDiagnosticFixtureRouting({
     PATH: root,
     HOME: root,
@@ -269,6 +262,5 @@ it.each([
     });
   } finally {
     setLoggerOverride(previousLoggerOverride as Parameters<typeof setLoggerOverride>[0]);
-    await rm(root, { recursive: true, force: true });
   }
 });

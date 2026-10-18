@@ -17,7 +17,7 @@ function pageIdentityFunctionSource(): string {
       const webClient = parsed.pathname.match(/^\\/wc\\/(\\d{9,11})\\/join\\/?$/);
       const meetingId = invitation?.[1] || webClient?.[1];
       return meetingId ? "zoom:" + meetingId : undefined;
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
   };`;
 }
@@ -93,7 +93,7 @@ export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
   try {
     const currentUrl = new URL(location.href);
     webClientHome = !leave && currentUrl.hostname === "app.zoom.us" && /^\\/wc\\/?$/.test(currentUrl.pathname);
-  } catch {}`,
+  } catch { /* An unparseable page URL is not proof of departure. */ }`,
     departedMarkerSource: "(postCall || webClientHome)",
     documentSetupSource: `const topDocument = globalThis.document;
   const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;`,

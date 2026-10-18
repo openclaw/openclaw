@@ -66,7 +66,11 @@ function makeRun(overrides: RunOverrides = {}): SubagentRunRecord {
     createdAt: overrides.createdAt ?? 1_000,
     execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
-    completion: { required: true, resultText: `result for ${runId}` },
+    completion: {
+      required: true,
+      resultText: `result for ${runId}`,
+      terminalReply: { disposition: "visible", text: `result for ${runId}` },
+    },
     delivery: {
       status: "pending",
       createdAt: endedAt + 1,
@@ -337,7 +341,7 @@ describe("agent steering queue", () => {
       "retry",
       makeRun({
         runId: "retry",
-        delivery: { status: "pending", attemptCount: 2, payload: payload("retry") },
+        delivery: { status: "pending", payload: payload("retry") },
       }),
     );
     await leaseItems({
@@ -357,7 +361,6 @@ describe("agent steering queue", () => {
     ).toBe(1);
     expect(runs.get("retry")?.delivery).toMatchObject({
       status: "pending",
-      attemptCount: 2,
       lastError: "hook blocked prompt submission",
     });
     expect(runs.get("retry")?.cleanupHandled).toBe(false);
@@ -441,7 +444,7 @@ describe("agent steering queue", () => {
     expect(runs.get(run.runId)?.delivery?.status).toBe("suspended");
   });
 
-  it("uses captured fallback output when a resumed completion returns NO_REPLY", async () => {
+  it("does not substitute captured fallback output for a resumed silent completion", async () => {
     const runs = runMap([
       makeRun({
         runId: "run-1",
@@ -452,6 +455,7 @@ describe("agent steering queue", () => {
         completion: {
           required: true,
           resultText: "NO_REPLY",
+          terminalReply: { disposition: "silent" },
           fallbackResultText: "findings captured before the wake",
         },
       }),
@@ -464,7 +468,8 @@ describe("agent steering queue", () => {
       leaseId: "lease-fallback",
     });
 
-    expect(leased?.prompt).toContain("findings captured before the wake");
+    expect(leased?.prompt).toContain("No completion text was captured.");
+    expect(leased?.prompt).not.toContain("findings captured before the wake");
     expect(leased?.prompt).not.toContain("NO_REPLY");
   });
 
@@ -481,7 +486,11 @@ describe("agent steering queue", () => {
               task: `task ${index + 1}`,
             }),
           },
-          completion: { required: true, resultText: "x".repeat(6_000) },
+          completion: {
+            required: true,
+            resultText: "x".repeat(6_000),
+            terminalReply: { disposition: "visible", text: "x".repeat(4_096) },
+          },
         }),
       ),
     );

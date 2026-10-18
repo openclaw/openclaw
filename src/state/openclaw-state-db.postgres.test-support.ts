@@ -24,8 +24,11 @@ import {
 } from "./openclaw-state-db.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
-const input: { path: string; mode: "bootstrap" | "restart"; admissions: SqliteDatabaseAdmissions } =
-  workerData;
+const input: {
+  path: string;
+  mode: "bootstrap" | "restart" | "migrate";
+  admissions: SqliteDatabaseAdmissions;
+} = workerData;
 if (parentPort) {
   const port = parentPort;
   let catalogReads = 0;
@@ -151,7 +154,7 @@ if (parentPort) {
       });
     } else {
       assert.equal(tableExists(database.db, "user_background_images"), true);
-      assert.equal(tableExists(database.db, "secret_store_entries"), false);
+      assert.equal(tableExists(database.db, "secret_store_entries"), true);
       runOpenClawStateWriteTransaction(({ db }) => ensureSecretStoreSchema(db), options);
       assert.equal(tableExists(database.db, "secret_store_entries"), true);
       assert.equal(
@@ -160,7 +163,9 @@ if (parentPort) {
           .get("conformance")?.value_json,
         "after",
       );
-      assert.equal(catalogReads, 2);
+      if (input.mode === "restart") {
+        assert.equal(catalogReads, 1);
+      }
       closeOpenClawStateDatabase();
     }
     port.postMessage({

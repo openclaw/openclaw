@@ -20,12 +20,10 @@ export function createChatPaneRunRecoveryActions(
   >,
   options: {
     canSend: boolean;
-    canChangeModel: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
-    openModelPicker: () => void;
   },
-): Pick<ChatProps, "onRetryRun" | "onChangeFailureModel"> {
+): Pick<ChatProps, "onRetryRun"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -41,13 +39,6 @@ export function createChatPaneRunRecoveryActions(
             // Continue with the existing history, rather than replaying a prompt
             // whose tools may already have completed side effects.
             void state.handleSendChat(t("chat.recovery.continuePrompt"));
-          }
-        }
-      : undefined,
-    onChangeFailureModel: options.canChangeModel
-      ? (runId) => {
-          if (ownsFailure(runId)) {
-            options.openModelPicker();
           }
         }
       : undefined,
@@ -183,10 +174,6 @@ export function chatSubmitState(
     submitPending: pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {
       state.handleChatDraftChange(...args);
-      // Nonempty draft edits can skip a pane render, but this gate depends on command intent.
-      if (pendingReason && controlCommand !== isChatControlCommand(state.chatMessage)) {
-        state.requestUpdate?.();
-      }
     },
   };
 }

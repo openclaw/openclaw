@@ -8,6 +8,7 @@ import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDevInstallGitBranch } from "../infra/dev-install-branch.js";
 import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { sendJson as sendJsonResponse } from "../infra/http-json.js";
 import { createHttpRequestAbortSignal } from "../infra/http-request-lifecycle.js";
 import {
   replacePlaybackFileExtension,
@@ -15,6 +16,7 @@ import {
 } from "../media/playback-transcode.js";
 import { extractOriginalFilename } from "../media/store.js";
 import { resolveAvatarMime } from "../shared/avatar-policy.js";
+import { normalizeChatImageRenditionWidth } from "../shared/chat-image-renditions.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -24,13 +26,18 @@ import {
   prepareGatewayAssistantAvatar,
   resolveGatewayAssistantAvatar,
 } from "./assistant-avatar.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import {
+  DEFAULT_ASSISTANT_IDENTITY,
+  resolveAssistantIdentity,
+  resolveAssistantIdentityAvatar,
+} from "./assistant-identity.js";
 import {
   buildAssistantMediaContentDisposition,
   resolveAssistantMediaFilename,
 } from "./assistant-media-content-disposition.js";
 import {
   resolveAssistantMediaPolicy,
+  resolveAssistantMediaWorkspaceTicketKey,
   assertAssistantMediaPolicyCurrent,
   verifyAssistantMediaTicket,
 } from "./assistant-media-policy.js";
@@ -38,7 +45,9 @@ import {
   normalizeAssistantMediaSource,
   openAssistantMedia,
   resolveAssistantMediaAvailability,
+  resolveAssistantMediaSource,
 } from "./control-ui-assistant-media-read.js";
+import { prepareAssistantMessageMedia } from "./control-ui-assistant-message-media.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
 import { resolveControlUiBootstrapPresentation } from "./control-ui-bootstrap-presentation.js";
 import {
@@ -85,6 +94,7 @@ import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { isTerminalConfigEnabled } from "./terminal/enabled.js";
 
@@ -109,10 +119,8 @@ type ControlUiRequestOptions = Partial<GatewayHttpRequestAuthOptions> & {
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(JSON.stringify(body));
+  sendJsonResponse(res, status, body);
 }
 
 function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
@@ -165,6 +173,7 @@ export async function handleControlUiAssistantMediaRequest(
     return true;
   }
   const sessionKey = url.searchParams.get("sessionKey")?.trim() || undefined;
+  const messageId = sessionKey ? url.searchParams.get("messageId")?.trim() || undefined : undefined;
   const agentId = sessionKey ? url.searchParams.get("agentId")?.trim() || undefined : opts?.agentId;
   const relativeSource = !path.isAbsolute(source) && !/^[a-z][a-z0-9+.-]*:/iu.test(source);
   // Relative tickets bind the resolved path; authenticate their reader before resolving the cwd.
@@ -186,6 +195,7 @@ export async function handleControlUiAssistantMediaRequest(
         res,
         cfg: opts?.cfg ?? opts?.config,
         allowQueryToken: !explicitAllow,
+        requiredOperatorMethod: messageId ? "chat.message.get" : "assistant.media.get",
       })
     : undefined;
   if (needsAuthentication && !requestAuth) {
@@ -220,7 +230,7 @@ export async function handleControlUiAssistantMediaRequest(
       return true;
     }
   }
-  const policyParams = { config: opts?.config ?? {}, sessionKey, agentId };
+  const policyParams = { config: opts?.config ?? {}, sessionKey, agentId, messageId };
   const policy = await resolveAssistantMediaPolicy({
     ...policyParams,
     requestAuth: requestAuth ?? undefined,
@@ -230,14 +240,13 @@ export async function handleControlUiAssistantMediaRequest(
     respondControlUiNotFound(res);
     return true;
   }
-  using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.placementRead?.release() };
-  if (relativeSource) {
-    if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
-      respondControlUiNotFound(res);
-      return true;
-    }
-    source = path.resolve(policy.executionCwd, source);
+  using mediaPolicy = { ...policy, [Symbol.dispose]: () => policy.release() };
+  const resolvedSource = resolveAssistantMediaSource(source, policy);
+  if (!resolvedSource) {
+    respondControlUiNotFound(res);
+    return true;
   }
+  source = resolvedSource;
   const ticket = ticketCandidate?.source === source ? ticketCandidate : undefined;
   if (explicitAllow && !policy.canAllow) {
     sendJson(res, 403, { error: "Allowing an outside image requires operator.admin" });
@@ -247,7 +256,9 @@ export async function handleControlUiAssistantMediaRequest(
     ticket &&
     ticket.session?.sessionKey === policy.session?.sessionKey &&
     ticket.session?.agentId === policy.session?.agentId &&
-    ticket.session?.sessionId === policy.session?.sessionId;
+    ticket.session?.sessionId === policy.session?.sessionId &&
+    ticket.messageId === policy.messageId &&
+    ticket.workspaceKey === resolveAssistantMediaWorkspaceTicketKey(source, policy);
   if (!isMetaRequest && url.searchParams.has("mediaTicket") && (!ticket || !sameSession)) {
     respondControlUiNotFound(res);
     return true;
@@ -266,10 +277,24 @@ export async function handleControlUiAssistantMediaRequest(
       requestAuth ?? undefined,
     );
   };
+  const requestAbort = createHttpRequestAbortSignal(res.req, res);
+  using _ = { [Symbol.dispose]: requestAbort.cleanup };
+  let publishMessage: Awaited<ReturnType<typeof prepareAssistantMessageMedia>>;
+  try {
+    assertCurrentPolicy();
+    publishMessage = await prepareAssistantMessageMedia(source, policy, requestAbort.signal);
+    assertCurrentPolicy();
+  } catch {
+    respondControlUiNotFound(res);
+    return true;
+  }
+  const publishResponse = (publish: () => void) =>
+    publishMessage(() => {
+      assertCurrentPolicy();
+      publish();
+    });
   if (isMetaRequest) {
-    const requestAbort = createHttpRequestAbortSignal(res.req, res);
-    using _ = { [Symbol.dispose]: requestAbort.cleanup };
-    const availability = await resolveAssistantMediaAvailability(
+    const { assertSourceCurrent, ...availability } = await resolveAssistantMediaAvailability(
       source,
       policy,
       allowance,
@@ -280,26 +305,26 @@ export async function handleControlUiAssistantMediaRequest(
     if (requestAbort.signal.aborted) {
       return true;
     }
-    let current;
     try {
-      current = assertCurrentPolicy();
+      await publishResponse(() => {
+        assertSourceCurrent?.();
+        sendJson(
+          res,
+          200,
+          !availability.available && availability.code === "outside-allowed-folders"
+            ? { ...availability, retryable: false, ...(policy.canAllow ? { canAllow: true } : {}) }
+            : availability,
+        );
+      });
     } catch {
       respondControlUiNotFound(res);
-      return true;
     }
-    sendJson(
-      res,
-      200,
-      !availability.available && availability.code === "outside-allowed-folders"
-        ? { ...availability, retryable: false, ...(current.canAllow ? { canAllow: true } : {}) }
-        : availability,
-    );
     return true;
   }
 
   let byteStream: ReturnType<typeof createGatewayByteStream> | undefined;
   try {
-    const media = await openAssistantMedia(source, policy, allowance);
+    const media = await openAssistantMedia(source, policy, allowance, assertCurrentPolicy);
     let opened = media.opened;
     byteStream = createGatewayByteStream(res, opened.handle, () => respondControlUiNotFound(res));
     const mime = media.mimeType;
@@ -312,6 +337,31 @@ export async function handleControlUiAssistantMediaRequest(
           )
         : path.basename(media.reference.path);
     const mediaKind = kindFromMime(contentType);
+    // Local assistant-media previews retain their original animation bytes.
+    if (
+      media.reference.kind === "inbound" &&
+      mediaKind === "image" &&
+      url.searchParams.get("variant") === "thumbnail"
+    ) {
+      const { readImageThumbnailFromFile } = await import("./managed-image-thumbnail-cache.js");
+      const thumbnail = await readImageThumbnailFromFile(
+        opened,
+        undefined,
+        normalizeChatImageRenditionWidth(url.searchParams.get("width")),
+      );
+      await byteStream.close();
+      await publishResponse(() => {
+        res.setHeader("Content-Type", "image/webp");
+        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Cache-Control", "private, no-cache");
+        res.setHeader(
+          "Content-Disposition",
+          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
+        );
+        res.end(req.method === "HEAD" ? undefined : thumbnail);
+      });
+      return true;
+    }
     if (
       url.searchParams.get("playback") === "1" &&
       (mediaKind === "audio" || mediaKind === "video")
@@ -331,8 +381,7 @@ export async function handleControlUiAssistantMediaRequest(
       });
       if (playback.kind === "preparing") {
         await byteStream.close();
-        assertCurrentPolicy();
-        sendJson(res, 202, { status: "preparing" });
+        await publishResponse(() => sendJson(res, 202, { status: "preparing" }));
         return true;
       }
       if (playback.kind === "transcoded") {
@@ -348,24 +397,40 @@ export async function handleControlUiAssistantMediaRequest(
         }
       }
     }
-    assertCurrentPolicy();
-    if (media.outsideRoots && mediaKind === "image") {
-      applyHttpImageContentSecurityPolicy(res);
-    }
-    res.setHeader("Content-Type", contentType);
-    res.setHeader(
-      "Content-Disposition",
-      buildAssistantMediaContentDisposition(filename, contentType),
-    );
-    res.setHeader("Cache-Control", "no-cache");
     const byteResponse = resolveByteResponse({
       // Allowed paths are mutable; matching size and mtime cannot prove unchanged bytes.
       file: { size: opened.stat.size },
       method: req.method,
       request: req,
     });
-    writeByteHeaders(res, byteResponse);
-    await byteStream.pipe(byteResponse, req.method);
+    const emptyResponse =
+      req.method === "HEAD" ||
+      byteResponse.kind === "not-modified" ||
+      byteResponse.contentLength === 0;
+    if (emptyResponse) {
+      await byteStream.close();
+    }
+    let delivery: Promise<void> | undefined;
+    const stream = byteStream;
+    await publishResponse(() => {
+      media.assertSourceCurrent();
+      if (media.outsideRoots && mediaKind === "image") {
+        applyHttpImageContentSecurityPolicy(res);
+      }
+      res.setHeader("Content-Type", contentType);
+      res.setHeader(
+        "Content-Disposition",
+        buildAssistantMediaContentDisposition(filename, contentType),
+      );
+      res.setHeader("Cache-Control", "no-cache");
+      writeByteHeaders(res, byteResponse);
+      if (emptyResponse) {
+        res.end();
+      } else {
+        delivery = stream.pipe(byteResponse, req.method);
+      }
+    });
+    await delivery;
     return true;
   } catch {
     await byteStream?.close();
@@ -419,7 +484,7 @@ export async function handleControlUiAvatarRequest(
   requestAuth.assertCurrent();
 
   try {
-    const identity = await resolveAssistantIdentity({ cfg: opts.config, agentId });
+    const identity = await resolveAssistantIdentityAvatar({ cfg: opts.config, agentId });
     const projection = await prepareGatewayAssistantAvatar({
       cfg: opts.config,
       identity,
@@ -522,6 +587,7 @@ async function prepareControlUiBootstrapConfig(
     res,
     cfg: opts?.cfg ?? opts?.config,
     replyOnFailure,
+    requiredOperatorMethod: "sessions.list",
     onPluginFrameGrants: (grants) => {
       pluginFrameGrants = grants;
     },
@@ -550,13 +616,15 @@ async function prepareControlUiBootstrapConfig(
           : { avatar: identity.avatar, resolution: null };
       return { identity, agentId: resolvedIdentity?.agentId, avatarProjection };
     })(),
-    import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
-      listControlUiPluginCatalog().then(
-        ({ plugins }) => plugins,
-        // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
-        () => [],
-      ),
-    ),
+    authorizeOperatorScopesForMethod("plugins.controlUi.list", requestAuth.operatorScopes).allowed
+      ? import("./control-ui-plugin-assets.js").then(({ listControlUiPluginCatalog }) =>
+          listControlUiPluginCatalog().then(
+            ({ plugins }) => plugins,
+            // The post-connect plugins.controlUi.list RPC owns user-visible catalog errors.
+            () => [],
+          ),
+        )
+      : [],
     resolveDevInstallGitBranch(),
     import("./control-ui-bootstrap-preferences.js").then(
       ({ prepareControlUiBootstrapPreferences }) =>

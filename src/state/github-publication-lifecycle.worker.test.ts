@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -12,9 +12,14 @@ import {
   insertPersonalGitHubPublicationInDatabase,
   type PersonalGitHubPublicationRow,
 } from "../gateway/github-personal-publication-store.worker.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { preparePersonalGitHubSessionReceiptDeletion } from "./github-personal-publication-lifecycle.js";
+import {
+  holdStateRead,
+  observePublicationAuthority,
+  publicationRowDefaults,
+  waitForPublicationGate,
+} from "./github-publication-fixtures.test-support.js";
 import { prepareGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
 import {
   insertGitHubPublicationSessionLifecycle,
@@ -26,7 +31,6 @@ import {
   releaseHeldGitHubPublicationMessages,
 } from "./github-publication.worker.test-support.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -34,6 +38,16 @@ import {
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+
+const receiptFault = useSqliteWorkerFault([
+  {
+    name: "fail_receipt_batch",
+    match: /^delete from github_personal_publication_requests\b/u,
+    sql: `CREATE TEMP TRIGGER fail_receipt_batch BEFORE DELETE ON main.github_personal_publication_requests
+      WHEN OLD.request_id = '00000000-0000-4000-8000-000000000064'
+      BEGIN SELECT RAISE(ABORT, 'synthetic receipt deletion failure'); END;`,
+  },
+]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterAll(cleanup));
 
@@ -63,41 +77,13 @@ describe("retained publication lifecycle authority", () => {
 
   function personalRow(requestId: string): PersonalGitHubPublicationRow {
     const row: PersonalGitHubPublicationRow = {
-      request_id: requestId,
+      ...publicationRowDefaults(requestId),
       owner_profile_id: profileId,
       connection_generation: connectionGeneration,
-      idempotency_key: requestId,
-      request_digest: "",
-      session_id: requestId,
-      session_key: `agent:main:${requestId}`,
-      agent_id: "main",
       worktree_id: "fixture-worktree",
       repository_fingerprint: "fixture-fingerprint",
       identity_source: "personal",
       identity_profile_id: profileId,
-      identity_account_id: 42,
-      identity_login: "fixture-bot",
-      title: null,
-      body: null,
-      status: "requested",
-      gateway_instance_id: null,
-      execution_id: null,
-      push_repository: "example/repository",
-      repository: "example/repository",
-      branch: "openclaw/worker-proof",
-      base_branch: "main",
-      source_head_commit: "b".repeat(40),
-      source_index_tree: "c".repeat(40),
-      workspace_tree: "c".repeat(40),
-      head_commit: null,
-      pull_request_url: null,
-      error_code: null,
-      next_action: null,
-      last_effect: null,
-      effect_state: null,
-      created_at_ms: 1000,
-      updated_at_ms: 1000,
-      reported_at_ms: null,
     };
     row.request_digest = personalGitHubRequestDigest(row);
     return row;
@@ -112,17 +98,14 @@ describe("retained publication lifecycle authority", () => {
       ),
     );
   }
-  function prepareDeletion(requestId: string) {
-    const row = personalRow(requestId);
+  function prepareDeletion(...requestIds: string[]) {
     return preparePersonalGitHubSessionReceiptDeletion({
-      agentId: row.agent_id,
-      generations: [
-        {
-          sessionKey: row.session_key,
-          sessionId: row.session_id,
-          lifecycleRevision: "original-revision",
-        },
-      ],
+      agentId: "main",
+      generations: requestIds.map((requestId) => ({
+        sessionKey: `agent:main:${requestId}`,
+        sessionId: requestId,
+        lifecycleRevision: "original-revision",
+      })),
     });
   }
   function durable(requestId: string) {
@@ -130,6 +113,21 @@ describe("retained publication lifecycle authority", () => {
       { publicationKind: "personal", requestId },
       openOpenClawStateDatabase().db,
     );
+  }
+  function expectSelectedRows(kind: "requests" | "lifecycles", requestIds: string[]) {
+    const table =
+      kind === "requests"
+        ? "github_personal_publication_requests"
+        : "github_publication_session_lifecycles";
+    const personal = kind === "lifecycles" ? "publication_kind = 'personal' AND" : "";
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare(
+          `SELECT request_id FROM ${table} WHERE ${personal}
+       request_id LIKE '00000000-0000-4000-8000-%' ORDER BY request_id`,
+        )
+        .all(),
+    ).toEqual(requestIds.map((request_id) => ({ request_id })));
   }
 
   beforeAll(async () => {
@@ -213,14 +211,7 @@ describe("retained publication lifecycle authority", () => {
     });
     const deleting = remove();
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          Promise.all([reply.ready, receipt.ready]),
-          deleting,
-          "deletion was not held before its receipt and reply",
-        ),
-        signal,
-      );
+      await waitForPublicationGate(signal, deleting, reply.ready, receipt.ready);
       expect(deniedBeforeDispatch).toBe(true);
       expect(durable(input.requestId)).toBeUndefined();
       expect(binding.readCurrent).toThrow(unavailable);
@@ -243,29 +234,92 @@ describe("retained publication lifecycle authority", () => {
   it("rejects a cold worker result overtaken by a canonical deletion", async ({ signal }) => {
     const input = { publicationKind: "personal" as const, requestId: coldRequestId };
     const remove = await prepareDeletion(input.requestId);
-    const readReady = createDeferredCore();
-    const release = createDeferredCore();
-    const read = stateReads.executeExistingOpenClawStateRead;
-    const delayedRead: typeof read = async (options, command, readOptions) => {
-      const result = await read(options, command, readOptions);
-      readReady.resolve();
-      await release.promise;
-      return result;
-    };
-    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementationOnce(delayedRead);
+    const read = holdStateRead();
     const preparing = prepareGitHubPublicationSessionLifecycle(input);
     const rejected = expect(preparing).rejects.toThrow(unavailable);
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(readReady.promise, preparing, "cold read was not held"),
-        signal,
-      );
+      await waitForPublicationGate(signal, preparing, read.ready);
       await remove();
       expect(durable(input.requestId)).toBeUndefined();
     } finally {
-      release.resolve();
+      read.release();
     }
     await rejected;
     expect((await prepareGitHubPublicationSessionLifecycle(input)).readCurrent()).toBeUndefined();
+  });
+
+  it("rolls back receipt batches and publishes only the exact committed tombstones", async () => {
+    const databasePath = lifecycleContext.admission.databasePath;
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    openOpenClawStateDatabase();
+    lifecycleContext = captureOpenClawStateWorkerContext();
+    const selected = Array.from({ length: 65 }, (_, index) =>
+      personalRow(`00000000-0000-4000-8000-${String(index).padStart(12, "0")}`),
+    );
+    const selectedIds = selected.map((row) => row.request_id);
+    const retained = personalRow(randomUUID());
+    runOpenClawStateWriteTransaction((database) => {
+      for (const row of [...selected, retained]) {
+        insertPersonalGitHubPublicationInDatabase(
+          database,
+          row,
+          "original-revision",
+          lifecycleContext.admission.assertCurrent,
+        );
+      }
+      // Shared and personal lifecycle keys can use the same request ID.
+      insertGitHubPublicationSessionLifecycle(database.db, {
+        publicationKind: "shared",
+        requestId: selected[0]!.request_id,
+        lifecycleRevision: "shared-revision",
+        requester,
+      });
+    });
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    lifecycleContext = captureOpenClawStateWorkerContext();
+    const { facts: installed, stop } = observePublicationAuthority();
+    try {
+      const remove = await prepareDeletion(...selectedIds);
+      receiptFault.enable();
+      await expect(remove()).rejects.toThrow("synthetic receipt deletion failure");
+      receiptFault.disable();
+      expect(installed.size).toBe(0);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      expectSelectedRows("requests", selectedIds);
+      expectSelectedRows("lifecycles", selectedIds);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      lifecycleContext = captureOpenClawStateWorkerContext();
+      const retry = await prepareDeletion(...selectedIds);
+      await retry();
+      const expected = new Map<string, unknown>();
+      for (const row of selected) {
+        expected.set(JSON.stringify(["personal", row.request_id]), { kind: "absent" });
+        expected.set(JSON.stringify(["personal-lifecycle", row.request_id]), { kind: "absent" });
+      }
+      expect(installed).toEqual(expected);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      const reopened = openOpenClawStateDatabase().db;
+      expectSelectedRows("requests", []);
+      expectSelectedRows("lifecycles", []);
+      expect(
+        reopened
+          .prepare(
+            "SELECT request_id FROM github_personal_publication_requests WHERE request_id = ?",
+          )
+          .get(retained.request_id),
+      ).toEqual({ request_id: retained.request_id });
+      expect(durable(retained.request_id)?.lifecycle_revision).toBe("original-revision");
+      expect(
+        readGitHubPublicationSessionLifecycle(
+          { publicationKind: "shared", requestId: selected[0]!.request_id },
+          reopened,
+        )?.lifecycle_revision,
+      ).toBe("shared-revision");
+    } finally {
+      receiptFault.disable();
+      stop();
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      lifecycleContext = captureOpenClawStateWorkerContext();
+    }
   });
 });

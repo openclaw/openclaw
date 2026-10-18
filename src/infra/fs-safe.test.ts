@@ -39,20 +39,28 @@ async function expectRejectCode(promise: Promise<unknown>, expected: string | Re
   }
 }
 
-async function runWriteOpenRace(params: {
-  slotPath: string;
-  outsideDir: string;
-  runWrite: () => Promise<void>;
-}): Promise<void> {
+async function makeFile(name: string, data: string | Buffer) {
+  const file = path.join(await tempDirs.make("openclaw-fs-safe-"), name);
+  await fs.writeFile(file, data);
+  return file;
+}
+
+async function runSymlinkWriteRace(
+  runWrite: (root: Awaited<ReturnType<typeof openRoot>>, relativePath: string) => Promise<void>,
+  seedInsideTarget = true,
+): Promise<void> {
+  const { root, slot, outside, outsideTarget } = await setupSymlinkWriteRaceFixture({
+    seedInsideTarget,
+  });
   await withRealpathSymlinkRebindRace({
     realpathApi: "native-sync",
     shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("slot", "target.txt")),
-    symlinkPath: params.slotPath,
-    symlinkTarget: params.outsideDir,
+    symlinkPath: slot,
+    symlinkTarget: outside,
     timing: "before-realpath",
     run: async () => {
       try {
-        await params.runWrite();
+        await runWrite(await openRoot(root), path.join("slot", "target.txt"));
       } catch (err) {
         expect((err as NodeJS.ErrnoException).code).toMatch(
           /outside-workspace|path-mismatch|path-alias|invalid-path|not-file/,
@@ -60,19 +68,7 @@ async function runWriteOpenRace(params: {
       }
     },
   });
-}
-
-async function runSymlinkWriteRace(params: {
-  slotPath: string;
-  outsideDir: string;
-  runWrite: (relativePath: string) => Promise<void>;
-}): Promise<void> {
-  const relativePath = path.join("slot", "target.txt");
-  await runWriteOpenRace({
-    slotPath: params.slotPath,
-    outsideDir: params.outsideDir,
-    runWrite: async () => await params.runWrite(relativePath),
-  });
+  await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
 }
 
 async function withOutsideHardlinkAlias(params: {
@@ -98,12 +94,7 @@ async function withOutsideHardlinkAlias(params: {
   }
 }
 
-async function setupSymlinkWriteRaceFixture(options?: { seedInsideTarget?: boolean }): Promise<{
-  root: string;
-  outside: string;
-  slot: string;
-  outsideTarget: string;
-}> {
+async function setupSymlinkWriteRaceFixture(options?: { seedInsideTarget?: boolean }) {
   const root = await tempDirs.make("openclaw-fs-safe-root-");
   const inside = path.join(root, "inside");
   const outside = await tempDirs.make("openclaw-fs-safe-outside-");
@@ -123,9 +114,7 @@ async function setupSymlinkWriteRaceFixture(options?: { seedInsideTarget?: boole
 
 describe("fs-safe", () => {
   it("reads a local file safely", async () => {
-    const dir = await tempDirs.make("openclaw-fs-safe-");
-    const file = path.join(dir, "payload.txt");
-    await fs.writeFile(file, "hello");
+    const file = await makeFile("payload.txt", "hello");
 
     const result = await readLocalFileSafely({ filePath: file });
     expect(result.buffer.toString("utf8")).toBe("hello");
@@ -194,9 +183,7 @@ describe("fs-safe", () => {
   });
 
   it("enforces maxBytes", async () => {
-    const dir = await tempDirs.make("openclaw-fs-safe-");
-    const file = path.join(dir, "big.bin");
-    await fs.writeFile(file, Buffer.alloc(8));
+    const file = await makeFile("big.bin", Buffer.alloc(8));
 
     await expectRejectCode(readLocalFileSafely({ filePath: file, maxBytes: 4 }), "too-large");
   });
@@ -485,9 +472,7 @@ describe("fs-safe", () => {
 
   it("enforces maxBytes when copying into root", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
-    const sourcePath = path.join(sourceDir, "big.bin");
-    await fs.writeFile(sourcePath, Buffer.alloc(8));
+    const sourcePath = await makeFile("big.bin", Buffer.alloc(8));
 
     await expectRejectCode(
       (await openRoot(root)).copyIn("nested/big.bin", sourcePath, {
@@ -533,42 +518,15 @@ describe("fs-safe", () => {
   });
 
   it("does not truncate out-of-root file when symlink retarget races write open", async () => {
-    const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture({
-      seedInsideTarget: true,
-    });
-
-    await runSymlinkWriteRace({
-      slotPath: slot,
-      outsideDir: outside,
-      runWrite: async (relativePath) =>
-        await (
-          await openRoot(root)
-        ).write(relativePath, "new-content", {
-          mkdir: false,
-        }),
-    });
-
-    await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
+    await runSymlinkWriteRace((root, relativePath) =>
+      root.write(relativePath, "new-content", { mkdir: false }),
+    );
   });
 
   it("does not clobber out-of-root file when symlink retarget races append open", async () => {
-    const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture({
-      seedInsideTarget: true,
-    });
-
-    await runSymlinkWriteRace({
-      slotPath: slot,
-      outsideDir: outside,
-      runWrite: async (relativePath) =>
-        await (
-          await openRoot(root)
-        ).append(relativePath, "new-content", {
-          mkdir: false,
-          prependNewlineIfNeeded: true,
-        }),
-    });
-
-    await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
+    await runSymlinkWriteRace((root, relativePath) =>
+      root.append(relativePath, "new-content", { mkdir: false, prependNewlineIfNeeded: true }),
+    );
   });
 
   it.runIf(process.platform !== "win32")(
@@ -599,15 +557,7 @@ describe("fs-safe", () => {
   it.runIf(process.platform !== "win32")(
     "does not create out-of-root directories when symlink retarget races mkdir",
     async () => {
-      const root = await tempDirs.make("openclaw-fs-safe-root-");
-      const inside = path.join(root, "inside");
-      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
-      const slot = path.join(root, "slot");
-      await fs.mkdir(inside, { recursive: true });
-      await createRebindableDirectoryAlias({
-        aliasPath: slot,
-        targetPath: inside,
-      });
+      const { root, outside, slot } = await setupSymlinkWriteRaceFixture();
 
       await withRealpathSymlinkRebindRace({
         realpathApi: "native-sync",
@@ -628,23 +578,11 @@ describe("fs-safe", () => {
   );
 
   it("does not clobber out-of-root file when symlink retarget races write-from-path open", async () => {
-    const { root, outside, slot, outsideTarget } = await setupSymlinkWriteRaceFixture();
-    const sourceDir = await tempDirs.make("openclaw-fs-safe-source-");
-    const sourcePath = path.join(sourceDir, "source.txt");
-    await fs.writeFile(sourcePath, "new-content");
-
-    await runSymlinkWriteRace({
-      slotPath: slot,
-      outsideDir: outside,
-      runWrite: async (relativePath) =>
-        await (
-          await openRoot(root)
-        ).copyIn(relativePath, sourcePath, {
-          mkdir: false,
-        }),
-    });
-
-    await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("X".repeat(4096));
+    const sourcePath = await makeFile("source.txt", "new-content");
+    await runSymlinkWriteRace(
+      (root, relativePath) => root.copyIn(relativePath, sourcePath, { mkdir: false }),
+      false,
+    );
   });
 
   it("returns not-found for missing files", async () => {

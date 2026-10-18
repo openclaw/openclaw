@@ -190,7 +190,8 @@ describe("session menu navigation actions", () => {
       await runSessionNavigationAction("copy-markdown", params);
       const copied = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
       expect(copied).toContain("Visible response");
-      expect(copied).not.toMatch(/NO_REPLY|HEARTBEAT_OK|transcript repair|## You/);
+      expect(copied).toContain("NO_REPLY");
+      expect(copied).not.toMatch(/HEARTBEAT_OK|transcript repair|## You/);
     },
   );
 

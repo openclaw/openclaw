@@ -15,6 +15,7 @@ import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.j
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 
 // Prompt data is sanitized then JSON-quoted so active subagent state cannot add
 // executable prompt instructions through labels or task text.
@@ -60,7 +61,7 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     `session_json=${quotePromptData(entry.childSessionKey)};`,
     `outcome=${entry.execution.outcome?.status ?? "unknown"};`,
     `delivery=${entry.delivery?.status ?? "pending"};`,
-    `requester_continuation=${entry.requesterSettleWake?.status ?? "none"};`,
+    `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
     `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
     `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,
@@ -72,6 +73,7 @@ export async function buildActiveSubagentRuntimeContext(params: {
   cfg: OpenClawConfig;
   controllerSessionKey?: string;
   controllerAgentId?: string;
+  runId?: string;
   recentMinutes?: number;
   includeSpawnContext?: boolean;
 }): Promise<string | undefined> {
@@ -121,6 +123,22 @@ export async function buildActiveSubagentRuntimeContext(params: {
       // execution or a recent-history cutoff cannot acknowledge an older result.
       const pending = visible
         .filter(hasOutstandingCompletion)
+        // Only the exact dispatching turn already carries this batch as input.
+        .filter(
+          (entry) =>
+            !(
+              params.runId &&
+              entry.requesterSettleWake?.status === "dispatching" &&
+              entry.requesterSettleWake.nextAttemptAt === undefined &&
+              isRequesterSettleWakeForRun({
+                entry,
+                runId: params.runId,
+                requesterSessionKey: controllerSessionKey,
+                requesterAgentId: agentId,
+                runsById: snapshot,
+              })
+            ),
+        )
         .toSorted(
           (left, right) =>
             (left.execution.endedAt ?? 0) - (right.execution.endedAt ?? 0) ||

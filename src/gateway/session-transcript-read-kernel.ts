@@ -363,6 +363,8 @@ export async function filterSessionMessageHistoryVisibility(
     const projected = projectChatDisplayMessagesWithState([result.message, ...context], {
       maxChars: MAX_PAYLOAD_BYTES,
       subagentCoordination: readers.subagentCoordination,
+      // Visibility does not need names; the response owner prepares forwarded labels.
+      resolveCronJobName: () => undefined,
     });
     const projectedMessage = projected.messages.find(
       (message) => readChatHistoryMessageId(message) === messageId,
@@ -371,6 +373,20 @@ export async function filterSessionMessageHistoryVisibility(
       return { found: false, oversized: false, historyHidden: true };
     }
     return { ...result, message: projectedMessage };
+  }
+  if (visibility.requireVisible) {
+    const projected = projectChatDisplayMessagesWithState([result.message], {
+      maxChars: MAX_PAYLOAD_BYTES,
+      includeCommentaryFallbacks: true,
+      subagentCoordination: readers.subagentCoordination,
+      resolveCronJobName: () => undefined,
+    });
+    const message = projected.messages.find(
+      (entry) => readChatHistoryMessageId(entry) === messageId,
+    );
+    return message
+      ? { ...result, message }
+      : { found: false, oversized: false, historyHidden: true };
   }
   return result;
 }

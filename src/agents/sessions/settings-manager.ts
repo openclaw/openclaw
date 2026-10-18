@@ -14,6 +14,7 @@ import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dis
 import {
   FileSettingsStorage,
   InMemorySettingsStorage,
+  readSettingsScope,
   SETTINGS_SCOPES,
   type PackageSource,
   type Settings,
@@ -41,7 +42,7 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
   return mergeDeep(base, overrides) as Settings;
 }
 
-function requireSupportedSettings(value: unknown, scope: SettingsScope): Settings {
+export function requireSupportedSettings(value: unknown, scope: SettingsScope): Settings {
   if (!isRecord(value)) {
     throw new TypeError("Session settings must be an object");
   }
@@ -110,24 +111,21 @@ export class SettingsManager {
 
   static inMemory(settings: Partial<Settings> = {}): SettingsManager {
     const storage = new InMemorySettingsStorage();
-    const initialSettings = requireSupportedSettings(structuredClone(settings), "global");
+    const initialSettings = requireSupportedSettings(settings, "global");
     storage.withLock("global", () => JSON.stringify(initialSettings, null, 2));
     return SettingsManager.fromStorage(storage);
   }
 
   private static loadScope(storage: SettingsStorage, scope: SettingsScope): SettingsScopeState {
-    const state: SettingsScopeState = { settings: {}, modified: new Map(), loadError: null };
-    let content: string | undefined;
+    const state: SettingsScopeState = {
+      ...readSettingsScope(storage, scope),
+      modified: new Map(),
+    };
+    if (isInvalidConfigError(state.loadError)) {
+      throw state.loadError;
+    }
     try {
-      if (storage.readSettingsScope) {
-        content = storage.readSettingsScope(scope);
-      } else {
-        storage.withLock(scope, (current) => {
-          content = current;
-          return undefined;
-        });
-      }
-      state.settings = content ? requireSupportedSettings(JSON.parse(content), scope) : {};
+      state.settings = requireSupportedSettings(state.settings, scope);
     } catch (error) {
       if (isInvalidConfigError(error)) {
         throw error;

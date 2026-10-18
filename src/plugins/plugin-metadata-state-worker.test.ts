@@ -5,6 +5,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
 import {
   resolveConfigWidePluginMetadataSnapshot,
   resolveConfigWidePluginMetadataSnapshotAsync,
@@ -32,6 +33,7 @@ import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-roo
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
 import { preparePluginMetadataMachineStateAsync } from "./installed-plugin-index-record-state.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   parseInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
@@ -108,6 +110,32 @@ function familyHashes(databasePath: string) {
       : [suffix, null];
   });
 }
+
+it("prepares Claw metadata off-thread and observes committed inventory and policy changes", async () => {
+  const env = environment();
+  await seed(env, index());
+  const pkg = {
+    kind: "plugin",
+    source: "clawhub",
+    ref: "@example/fixture",
+    version: "1.0.0",
+  } as const;
+  const check = async (
+    records: InstalledPluginIndex["installRecords"],
+    mode: "compat" | undefined,
+  ) => {
+    await withoutMainThreadSql(async () => {
+      expect(await sourceHostPluginConflict(pkg, "fixture", { env })).toBeUndefined();
+      expect(await loadInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+      expect(readStartupBundledDiscoveryMode({}, env)).toBe(mode);
+    });
+  };
+  await check({}, undefined);
+  const installRecords = { fixture: { source: "npm" as const, spec: "@example/fixture@1.0.0" } };
+  await writePersistedInstalledPluginIndex({ ...index(), installRecords }, { env });
+  migrateLegacyConfigMachineState({ config: { plugins: { allow: ["fixture"] } }, env });
+  await check(installRecords, "compat");
+});
 
 async function withoutMainThreadSql(run: () => Promise<void>) {
   requireNodeSqlite();
@@ -494,21 +522,6 @@ it("shares a pending index read and returns the same validated inventory", async
     expect(left?.diagnostics).toEqual([{ level: "warn", message: "synthetic index" }]);
     expect(right).toBe(left);
     expect(read).toHaveBeenCalledTimes(1);
-  });
-});
-
-it("uses a newer synchronous index publication when an older worker read finishes", async () => {
-  const env = environment();
-  await seed(env, index("current ledger"));
-  const row = createDeferredCore<{ value_json: string }>();
-  vi.spyOn(metadataWorker, "readPluginMetadataStateRow").mockReturnValue(row.promise);
-  await using cache = createPluginCache();
-  await withPluginCache(cache, async () => {
-    const pending = readPersistedInstalledPluginIndex({ env });
-    const current = readPersistedInstalledPluginIndexSync({ env });
-    row.resolve({ value_json: JSON.stringify({ revision: 1, index: index("stale ledger") }) });
-    expect(await pending).toBe(current);
-    expect(current?.diagnostics).toEqual([{ level: "warn", message: "current ledger" }]);
   });
 });
 

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { withSessionControllerOwner } from "../../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
@@ -76,5 +79,26 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
         replyOperation: { acceptedSteeredInboundAudio: false },
       }).hasCurrentInboundAudio?.(),
     ).toBe(false);
+  });
+
+  it("captures host-owned audio for the matching turn without lending it to detached work", () => {
+    const identity = { sessionId: "audio-context", sessionKey: "agent:main:audio-context" };
+    const operation = createReplyOperation({ ...identity, resetTriggered: false });
+    try {
+      withSessionControllerOwner(operation, () => {
+        const context = buildEmbeddedAttemptToolRunContext(identity);
+        const foreign = buildEmbeddedAttemptToolRunContext({ ...identity, sessionId: "other" });
+        const detached = runWithSessionControllerCleanup(() =>
+          buildEmbeddedAttemptToolRunContext(identity),
+        );
+        expect(context.hasCurrentInboundAudio()).toBe(false);
+        operation.markSteeredInputAccepted({ inboundAudio: true });
+        expect(context.hasCurrentInboundAudio()).toBe(true);
+        expect(foreign.hasCurrentInboundAudio()).toBe(false);
+        expect(detached.hasCurrentInboundAudio()).toBe(false);
+      });
+    } finally {
+      operation.complete();
+    }
   });
 });

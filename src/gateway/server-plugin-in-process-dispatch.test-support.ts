@@ -7,16 +7,38 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import type {
+  GatewayMethodDescriptorInput,
+  GatewayMethodHandler,
+  GatewayMethodScope,
+} from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
-export function createContext(): GatewayRequestContext {
+export function createContext(
+  methods: Array<
+    [name: string, scope: GatewayMethodScope, area: string, handler: GatewayMethodHandler]
+  > = [],
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({}),
+): GatewayRequestContext {
   const context = {
     trackExecution: trackAsyncWork,
     dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig,
     logGateway: { error: vi.fn(), warn: vi.fn() },
   } as unknown as GatewayRequestContext;
+  if (methods.length) {
+    const registry = createGatewayMethodRegistry(
+      methods.map(([name, scope, area, handler]): GatewayMethodDescriptorInput => ({
+        name,
+        scope,
+        owner: { kind: "core", area },
+        handler,
+      })),
+    );
+    context.getGatewayMethodRegistry = () => registry;
+  }
   context.resolveSessionRequestTargets = (request) =>
     resolveSessionRequestTargets({ ...request, context });
   context.createAgentTurnFacade = (principal) =>

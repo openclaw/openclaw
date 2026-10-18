@@ -13,8 +13,8 @@ import { resolveBootstrapContextForDiagnostics } from "../agents/bootstrap-files
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../agents/embedded-agent-helpers.js";
-import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
+  USER_BOOTSTRAP_MAX_CHARS,
+} from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.

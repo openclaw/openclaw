@@ -64,11 +64,7 @@ import {
   buildSystemRunPrepareCoverageEnv,
 } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
-import type {
-  NodeInvokeRequestPayload,
-  SkillBinsProvider,
-  SystemRunParams,
-} from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, SystemRunParams } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { buildNodeEventParams } from "./node-event-params.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
@@ -77,6 +73,7 @@ import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contr
 import type { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-host.js";
 import { preferMacAppExecHost } from "./runtime-manifest.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
@@ -163,7 +160,7 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
   return { ...coverage, complete: coverage.complete && complete };
 }
 
-export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
+export type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : DEFAULT_SECURITY;
@@ -333,8 +330,6 @@ async function dispatchInvoke(
       ? await invokeDeviceApps({
           paramsJSON: frame.paramsJSON,
           sharingEnabled: runtime.installedAppsSharingEnabled === true,
-          ...(runtime.installedAppsPlatform ? { platform: runtime.installedAppsPlatform } : {}),
-          ...(runtime.scanInstalledApps ? { scan: runtime.scanInstalledApps } : {}),
         })
       : undefined;
   if (result) {

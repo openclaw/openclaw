@@ -325,10 +325,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           expect(disconnected?.selection).toEqual({ kind: "disconnected" });
         },
       );
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("personal.cancelAuthorizationAsync"),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
+      const warningOptions = { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" };
+      expect(warning.mock.calls).toEqual([
+        [expect.stringContaining("personal.cancelAuthorizationAsync"), warningOptions],
+        [expect.stringContaining("personal.disconnectAsync"), warningOptions],
+      ]);
     } finally {
       unobserve();
       warning.mockRestore();
@@ -926,13 +927,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const lease = vi
         .spyOn(stateLease, "withOpenClawStateLease")
         .mockImplementation((options, run) =>
-          acquire(options, async (owned) => {
+          acquire(options, async (owned, identity) => {
             updateUserGitHubConnection(
               owner(),
               () => current,
               () => owned.assertOwned(),
             );
-            return run(owned);
+            return run(owned, identity);
           }),
         );
       try {

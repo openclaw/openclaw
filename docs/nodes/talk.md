@@ -220,7 +220,7 @@ realtime Talk. See [Talk realtime migration](/gateway/doctor/config-migrations#t
 ## Notes
 
 - Native speech recognition requires the platform's speech and microphone access. Standalone Watch realtime requires microphone access, not local speech recognition.
-- Native Talk uses the active Gateway session and only falls back to history polling when response events are unavailable.
+- Native Talk uses the active Gateway session. macOS observes the accepted run through Gateway completion and retrieves its complete matching reply from history before speaking.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development. The helper streams PCM, keeps one selected model resident, and supports Fish S2 Pro reference audio through `providers.mlx.referenceAudioPath` plus `referenceText`.
 - Voice directive value ranges (ElevenLabs): the `stability`, `similarity`, and `style` keys accept `0..1`. The `speed` key accepts `0.5..2`. The `latency_tier` key accepts `0..4`.

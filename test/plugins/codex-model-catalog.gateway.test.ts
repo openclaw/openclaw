@@ -4,12 +4,15 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import * as codexPluginModule from "../../extensions/codex/index.js";
 import type { ModelsListResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../src/agents/prepared-model-catalog.js";
 import { getRuntimeConfig } from "../../src/config/config.js";
+import type { ModelProviderConfig } from "../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { waitForCatalogPublication } from "../../src/gateway/server-methods/models-auth-catalog.test-support.js";
 import {
@@ -30,392 +33,282 @@ import {
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
-describe("models.list native account catalog", () => {
-  afterEach(() => vi.restoreAllMocks());
-  it("models.list selects a native user-home API-key catalog through the prepared Gateway owner", async (ctx) => {
-    let stage = "isolated state setup";
-    const startedAt = performance.now();
-    const stages = [{ stage, startedAtMs: 0 }];
-    const requests: string[] = [];
-    let lastCatalog:
-      | (Pick<ModelsListResult, "pendingProviders"> & {
-          models: Pick<ModelsListResult["models"][number], "id" | "available">[];
-        })
-      | undefined;
-    const reportStage = () =>
-      console.error(`[native-catalog-test] aborted while awaiting ${stage}`, {
-        elapsedMs: Math.round(performance.now() - startedAt),
-        stages: stages.slice(-16),
-        requests: requests.slice(-32),
-        lastCatalog,
-      });
-    const markStage = (next: string) => {
-      stage = next;
-      stages.push({ stage, startedAtMs: Math.round(performance.now() - startedAt) });
-      if (ctx.signal.aborted) {
-        reportStage();
-      }
-    };
-    ctx.signal.addEventListener("abort", reportStage, { once: true });
-    ctx.onTestFinished(() => ctx.signal.removeEventListener("abort", reportStage));
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "native-catalog-" },
-      async (state) => {
-        await withEnvAsync(
-          {
-            ...WITHOUT_OPENAI_ENV_AUTH,
-            CODEX_HOME: `${state.home}/codex`,
-            SYNTHETIC_ABSENT_KEY: undefined,
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-            OPENCLAW_SKIP_CRON: "1",
-            OPENCLAW_SKIP_CANVAS_HOST: "1",
-            OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          },
-          async () => {
-            // macOS Unix sockets have a short path limit; keep them outside the state fixture.
-            const socketDir = await mkdtemp(
-              path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "oc-catalog-"),
-            );
-            const socketPath =
-              process.platform === "win32"
-                ? `\\\\.\\pipe\\${path.basename(socketDir)}`
-                : path.join(socketDir, "s");
-            const httpServer = createServer();
-            const server = new WebSocketServer({ server: httpServer });
-            ctx.onTestFinished(async () => {
-              markStage("native app-server cleanup");
-              for (const socket of server.clients) {
-                socket.terminate();
-              }
-              await new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-              });
-              await new Promise<void>((resolve) => {
-                httpServer.close(() => resolve());
-              });
-              await rm(socketDir, { recursive: true, force: true });
-            });
-            let account: Record<string, unknown> | null = { type: "apiKey" };
-            server.on("connection", (socket) => {
-              socket.on("message", (data) => {
-                const encoded = Array.isArray(data)
-                  ? Buffer.concat(data)
-                  : Buffer.from(data instanceof ArrayBuffer ? new Uint8Array(data) : data);
-                const request = JSON.parse(encoded.toString("utf8")) as {
-                  id?: number;
-                  method: string;
-                };
-                requests.push(request.method);
-                if (request.id !== undefined) {
-                  const result =
-                    request.method === "initialize"
-                      ? { userAgent: "openclaw/0.149.1 (test)" }
-                      : request.method === "account/read"
-                        ? { account, requiresOpenaiAuth: true }
-                        : request.method === "model/list"
-                          ? {
-                              data: [
-                                {
-                                  id: "synthetic-opaque",
-                                  model: "synthetic-opaque",
-                                  displayName: "Synthetic name",
-                                  description: "Synthetic model",
-                                  supportsPersonality: false,
-                                  inputModalities: ["text"],
-                                  supportedReasoningEfforts: [
-                                    { reasoningEffort: "low", description: "Low" },
-                                  ],
-                                  defaultReasoningEffort: "low",
-                                  hidden: false,
-                                  isDefault: true,
-                                },
-                              ],
-                              nextCursor: null,
-                            }
-                          : {};
-                  socket.send(JSON.stringify({ id: request.id, result }));
-                }
-              });
-            });
-            httpServer.listen(socketPath);
-            markStage("native app-server listening");
-            await once(server, "listening");
-            const token = "native-catalog-gateway-token";
-            let config: OpenClawConfig = {
-              gateway: { mode: "local", auth: { mode: "token", token } },
-              agents: {
-                defaults: {
-                  workspace: state.workspaceDir,
-                  model: "openai/synthetic-opaque",
-                  models: { "openai/synthetic-opaque": { agentRuntime: { id: "codex" } } },
-                },
-              },
-              plugins: {
-                allow: ["codex", "openai"],
-                slots: { memory: "none" },
-                entries: {
-                  codex: {
-                    enabled: true,
-                    config: {
-                      appServer: {
-                        transport: "unix",
-                        url: `unix://${socketPath}`,
-                        homeScope: "user",
-                        approvalPolicy: "on-request",
-                        sandbox: "workspace-write",
-                      },
-                      computerUse: { enabled: false },
-                    },
-                  },
-                },
-              },
-            };
-            const codexRoot = fileURLToPath(new URL("../../extensions/codex/", import.meta.url));
-            const bundledModules = new Map<string, unknown>([
-              [path.join(codexRoot, "index.ts"), codexPluginModule],
-            ]);
-            const actualModuleLoader = pluginModuleLoader.getCachedPluginModuleLoader;
-            // Keep real bundled modules in the host graph; the Gateway still owns registration.
-            vi.spyOn(pluginModuleLoader, "getCachedPluginModuleLoader").mockImplementation(
-              (params) => {
-                const load = actualModuleLoader(params);
-                return (target) => {
-                  const modulePath = target.startsWith("file:")
-                    ? fileURLToPath(target)
-                    : path.resolve(target);
-                  return bundledModules.has(modulePath)
-                    ? bundledModules.get(modulePath)
-                    : load(target);
-                };
-              },
-            );
-            markStage("config write");
-            await state.writeConfig(config);
-            markStage("Gateway start and client connection");
-            const gateway = await startGatewayWithClient({
-              cfg: config,
-              configPath: state.configPath,
-              token,
-              scopes: ["operator.admin"],
-            });
-            try {
-              markStage("Gateway startupSettled");
-              await gateway.server.startupSettled;
-              const registeredList = (refresh = false) =>
-                gateway.client.request<ModelsListResult>("models.list", {
-                  agentId: "main",
-                  view: "all",
-                  refresh,
-                  ...(refresh ? { provider: "openai" } : {}),
-                });
-              // Cold catalog preparation and native discovery are host-dependent; wake on owner
-              // publications instead of timing the first demanded read.
-              const nativeCatalogSettled = (available: boolean) => {
-                const phase = stage;
-                return waitForCatalogPublication({
-                  signal: ctx.signal,
-                  read: async () => {
-                    markStage(`${phase}: models.list request`);
-                    const result = await registeredList();
-                    lastCatalog = {
-                      pendingProviders: result.pendingProviders,
-                      models: result.models
-                        .filter((row) => row.id === "synthetic-opaque")
-                        .map((row) => ({ id: row.id, available: row.available })),
-                    };
-                    markStage(`${phase}: publication wait`);
-                    return result;
-                  },
-                  ready: (result) =>
-                    !result.pendingProviders?.includes("openai") &&
-                    result.models.find((row) => row.id === "synthetic-opaque")?.available ===
-                      available,
-                });
-              };
-              markStage("initial native catalog publication");
-              await nativeCatalogSettled(true);
-              markStage("published catalog assertions");
-              const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
-                agentId: "main",
-                config: getRuntimeConfig(),
-              });
-              const registry = owner?.pluginRegistry;
-              const harness = registry?.agentHarnesses.find(
-                (entry) => entry.harness.id === "codex",
-              )?.harness;
-              if (!owner || !registry || !harness?.loadModelCatalog) {
-                throw new Error("Gateway did not publish the bundled native harness owner");
-              }
-              config = owner.observationConfig;
-              const scope = {
-                config,
-                agentId: "main",
-                agentDir: state.agentDir(),
-                workspaceDir: state.workspaceDir,
-              };
-              const loadCatalog = harness.loadModelCatalog.bind(harness);
-              const previous = captureActivePluginRegistrySnapshot();
-              try {
-                const result = await registeredList();
-                expect(result.models).toEqual(
-                  expect.arrayContaining([
-                    expect.objectContaining({
-                      id: "synthetic-opaque",
-                      name: "Synthetic name",
-                      available: true,
-                      reasoning: true,
-                    }),
-                  ]),
-                );
-                expect(requests).toContain("account/read");
-                expect(requests).not.toContain("account/login/start");
-                const rows =
-                  owner
-                    .readFullModelCatalog?.()
-                    ?.entries.filter((row) => row.id === "synthetic-opaque") ?? [];
-                expect(rows[0]).toMatchObject({ nativeRuntime: "codex", name: "Synthetic name" });
-                expect(rows[0]).not.toHaveProperty("api");
-                expect(rows[0]).not.toHaveProperty("baseUrl");
-                expect(
-                  result.models.find((row) => row.id === "synthetic-opaque"),
-                ).not.toHaveProperty("nativeRuntime");
-                const readiness = (cfg = config) =>
-                  harness.readModelCatalogReadiness?.({
-                    ...scope,
-                    config: cfg,
-                    provider: "openai",
-                    modelId: "synthetic-opaque",
-                  });
-                expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
-                const configured = (cfg = config) =>
-                  listModels({
-                    ...scope,
-                    pluginRegistry: registry,
-                    cfg,
-                    catalog: structuredClone(rows),
-                    view: "configured",
-                    preparedOnly: true,
-                  });
-                const calls = requests.length;
-                expect((await configured()).models[0]?.available).toBe(true);
-                expect(requests).toHaveLength(calls);
-                expect((await configured({ ...config })).models[0]?.available).toBe(false);
-
-                for (const socket of server.clients) {
-                  socket.send(
-                    JSON.stringify({ method: "account/updated", params: { authMode: null } }),
-                  );
-                }
-                await expect.poll(() => readiness()).toBeUndefined();
-                expect((await configured()).models[0]?.available).toBe(false);
-                for (const observed of [
-                  {
-                    value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                    readiness: { accountType: "chatgpt" },
-                    available: true,
-                  },
-                  { value: null, readiness: undefined, available: false },
-                  {
-                    value: { type: "apiKey" },
-                    readiness: { accountType: "apiKey", authMode: "api_key" },
-                    available: true,
-                  },
-                ]) {
-                  account = observed.value;
-                  const beforeModels = requests.filter((method) => method === "model/list").length;
-                  markStage("native account catalog refresh");
-                  await registeredList(true);
-                  markStage("native model/list request");
-                  await expect
-                    .poll(() => requests.filter((method) => method === "model/list").length, {
-                      timeout: 15_000,
-                    })
-                    .toBeGreaterThan(beforeModels);
-                  markStage("refreshed native catalog publication");
-                  await nativeCatalogSettled(observed.available);
-                  expect(readiness()).toEqual(observed.readiness);
-                }
-                const hostRoutes: OpenClawConfig["models"][] = [
-                  {
-                    providers: {
-                      openai: {
-                        api: "openai-responses",
-                        baseUrl: "https://host.example.test/v1",
-                        models: [],
-                      },
-                    },
-                  },
-                  {
-                    providers: {
-                      openai: {
-                        baseUrl: "",
-                        models: [
-                          {
-                            id: " openai/synthetic-opaque ",
-                            name: "Synthetic name",
-                            api: "openai-responses",
-                            baseUrl: "https://host.example.test/v1",
-                            reasoning: true,
-                            input: ["text"],
-                            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                            maxTokens: 100,
-                          },
-                        ],
-                      },
-                    },
-                  },
-                  {
-                    providers: {
-                      openai: {
-                        baseUrl: "",
-                        apiKey: { source: "env", provider: "default", id: "SYNTHETIC_ABSENT_KEY" },
-                        models: [],
-                      },
-                    },
-                  },
-                ];
-                for (const [routeIndex, models] of hostRoutes.entries()) {
-                  const hostConfig = { ...config, models };
-                  markStage(`host route ${routeIndex} catalog load`);
-                  await loadCatalog({ ...scope, config: hostConfig });
-                  const host = await listModels({
-                    ...scope,
-                    pluginRegistry: registry,
-                    cfg: hostConfig,
-                    catalog: rows,
-                    view: "configured",
-                    preparedOnly: true,
-                  });
-                  expect(readiness(hostConfig)).toEqual({
-                    accountType: "apiKey",
-                    authMode: "api_key",
-                  });
-                  expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
-                }
-                expect(requests).not.toContain("account/login/start");
-                markStage("native disconnect publication");
-                for (const socket of server.clients) {
-                  socket.close();
-                }
-                await expect.poll(() => readiness()).toBeUndefined();
-                expect((await configured()).models[0]?.available).toBe(false);
-                const replacement = createEmptyPluginRegistry();
-                setActivePluginRegistry(replacement);
-                expect((await configured()).models[0]?.available).toBe(false);
-              } finally {
-                restoreActivePluginRegistrySnapshot(previous);
-              }
-            } finally {
-              markStage("Gateway client disconnect");
-              await disconnectGatewayClient(gateway.client);
-              markStage("Gateway server close");
-              await gateway.server.close();
-              markStage("environment and isolated state cleanup");
-            }
-          },
-        );
+afterEach(() => vi.restoreAllMocks());
+it("models.list selects a native user-home API-key catalog through the prepared Gateway owner", async (ctx) => {
+  const requests: string[] = [];
+  await withOpenClawTestState({ layout: "state-only", prefix: "native-catalog-" }, (state) =>
+    withEnvAsync(
+      {
+        ...WITHOUT_OPENAI_ENV_AUTH,
+        CODEX_HOME: `${state.home}/codex`,
+        SYNTHETIC_ABSENT_KEY: undefined,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       },
-    );
-  }, 120_000);
-});
+      async () => {
+        // macOS Unix sockets have a short path limit; keep them outside the state fixture.
+        const socketDir = await mkdtemp(
+          path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "oc-catalog-"),
+        );
+        const socketPath =
+          process.platform === "win32"
+            ? `\\\\.\\pipe\\${path.basename(socketDir)}`
+            : path.join(socketDir, "s");
+        const model = {
+          id: "synthetic-opaque",
+          model: "synthetic-opaque",
+          displayName: "Synthetic name",
+          description: "Synthetic model",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
+          defaultReasoningEffort: "low",
+          hidden: false,
+          isDefault: true,
+        };
+        const httpServer = createServer();
+        const server = new WebSocketServer({ server: httpServer });
+        ctx.onTestFinished(async () => {
+          for (const socket of server.clients) {
+            socket.terminate();
+          }
+          await promisify(server.close.bind(server))();
+          await new Promise<void>((resolve) => {
+            httpServer.close(() => resolve());
+          });
+          await rm(socketDir, { recursive: true, force: true });
+        });
+        let account: Record<string, unknown> | null = { type: "apiKey" };
+        server.on("connection", (socket) => {
+          socket.on("message", (data) => {
+            const request = JSON.parse(rawDataToString(data)) as {
+              id?: number;
+              method: string;
+            };
+            requests.push(request.method);
+            if (request.id !== undefined) {
+              const result =
+                request.method === "initialize"
+                  ? { userAgent: "openclaw/0.149.1 (test)" }
+                  : request.method === "account/read"
+                    ? { account, requiresOpenaiAuth: true }
+                    : request.method === "model/list"
+                      ? { data: [model], nextCursor: null }
+                      : {};
+              socket.send(JSON.stringify({ id: request.id, result }));
+            }
+          });
+        });
+        httpServer.listen(socketPath);
+        await once(server, "listening");
+        const token = "native-catalog-gateway-token";
+        const pluginConfig = {
+          appServer: {
+            transport: "unix",
+            url: `unix://${socketPath}`,
+            homeScope: "user",
+            approvalPolicy: "on-request",
+            sandbox: "workspace-write",
+          },
+          computerUse: { enabled: false },
+        };
+        let config: OpenClawConfig = {
+          gateway: { mode: "local", auth: { mode: "token", token } },
+          agents: {
+            defaults: {
+              workspace: state.workspaceDir,
+              model: "openai/synthetic-opaque",
+              models: { "openai/synthetic-opaque": { agentRuntime: { id: "codex" } } },
+            },
+          },
+          plugins: {
+            allow: ["codex", "openai"],
+            slots: { memory: "none" },
+            entries: { codex: { enabled: true, config: pluginConfig } },
+          },
+        };
+        const codexRoot = fileURLToPath(new URL("../../extensions/codex/", import.meta.url));
+        const bundledModulePath = path.join(codexRoot, "index.ts");
+        const actualModuleLoader = pluginModuleLoader.getCachedPluginModuleLoader;
+        // Keep real bundled modules in the host graph; the Gateway still owns registration.
+        vi.spyOn(pluginModuleLoader, "getCachedPluginModuleLoader").mockImplementation((params) => {
+          const load = actualModuleLoader(params);
+          return (target) => {
+            const modulePath = target.startsWith("file:")
+              ? fileURLToPath(target)
+              : path.resolve(target);
+            return modulePath === bundledModulePath ? codexPluginModule : load(target);
+          };
+        });
+        await state.writeConfig(config);
+        const gateway = await startGatewayWithClient({
+          cfg: config,
+          configPath: state.configPath,
+          token,
+          scopes: ["operator.admin"],
+        });
+        try {
+          await gateway.server.startupSettled;
+          const registeredList = (refresh = false) =>
+            gateway.client.request<ModelsListResult>("models.list", {
+              agentId: "main",
+              view: "all",
+              refresh,
+              ...(refresh ? { provider: "openai" } : {}),
+            });
+          // Cold catalog preparation and native discovery are host-dependent; wake on owner
+          // publications instead of timing the first demanded read.
+          const nativeCatalogSettled = (available: boolean) =>
+            waitForCatalogPublication({
+              signal: ctx.signal,
+              read: () => registeredList(),
+              ready: (result) =>
+                !result.pendingProviders?.includes("openai") &&
+                result.models.find((row) => row.id === model.id)?.available === available,
+            });
+          await nativeCatalogSettled(true);
+          const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+            agentId: "main",
+            config: getRuntimeConfig(),
+          });
+          const registry = owner?.pluginRegistry;
+          const harness = registry?.agentHarnesses.find(
+            (entry) => entry.harness.id === "codex",
+          )?.harness;
+          if (!owner || !registry || !harness?.loadModelCatalog) {
+            throw new Error("Gateway did not publish the bundled native harness owner");
+          }
+          config = owner.observationConfig;
+          const scope = {
+            config,
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+          };
+          const previous = captureActivePluginRegistrySnapshot();
+          try {
+            const result = await registeredList();
+            const publicRow = result.models.find((row) => row.id === model.id);
+            expect(publicRow).toMatchObject({
+              name: "Synthetic name",
+              available: true,
+              reasoning: true,
+            });
+            expect(requests).toContain("account/read");
+            const rows =
+              owner.readFullModelCatalog?.()?.entries.filter((row) => row.id === model.id) ?? [];
+            expect(rows[0]).toMatchObject({ nativeRuntime: "codex", name: "Synthetic name" });
+            expect(rows[0]).not.toHaveProperty("api");
+            expect(rows[0]).not.toHaveProperty("baseUrl");
+            expect(publicRow).not.toHaveProperty("nativeRuntime");
+            const readiness = (cfg = config) =>
+              harness.readModelCatalogReadiness?.({
+                ...scope,
+                config: cfg,
+                provider: "openai",
+                modelId: model.id,
+              });
+            expect(readiness()).toEqual({ accountType: "apiKey", authMode: "api_key" });
+            const configured = (cfg = config, catalog = structuredClone(rows)) =>
+              listModels({
+                ...scope,
+                pluginRegistry: registry,
+                cfg,
+                catalog,
+                view: "configured",
+                preparedOnly: true,
+              });
+            const calls = requests.length;
+            expect((await configured()).models[0]?.available).toBe(true);
+            expect(requests).toHaveLength(calls);
+            expect((await configured({ ...config })).models[0]?.available).toBe(false);
+
+            for (const socket of server.clients) {
+              socket.send(
+                JSON.stringify({ method: "account/updated", params: { authMode: null } }),
+              );
+            }
+            await expect.poll(() => readiness()).toBeUndefined();
+            expect((await configured()).models[0]?.available).toBe(false);
+            for (const observed of [
+              {
+                value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
+                readiness: { accountType: "chatgpt" },
+                available: true,
+              },
+              { value: null, readiness: undefined, available: false },
+              {
+                value: { type: "apiKey" },
+                readiness: { accountType: "apiKey", authMode: "api_key" },
+                available: true,
+              },
+            ]) {
+              account = observed.value;
+              const beforeModels = requests.filter((method) => method === "model/list").length;
+              await registeredList(true);
+              await expect
+                .poll(() => requests.filter((method) => method === "model/list").length, {
+                  timeout: 15_000,
+                })
+                .toBeGreaterThan(beforeModels);
+              await nativeCatalogSettled(observed.available);
+              expect(readiness()).toEqual(observed.readiness);
+            }
+            const hostRoutes: ModelProviderConfig[] = [
+              {
+                api: "openai-responses",
+                baseUrl: "https://host.example.test/v1",
+                models: [],
+              },
+              {
+                baseUrl: "",
+                models: [
+                  {
+                    id: " openai/synthetic-opaque ",
+                    name: "Synthetic name",
+                    api: "openai-responses",
+                    baseUrl: "https://host.example.test/v1",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    maxTokens: 100,
+                  },
+                ],
+              },
+              {
+                baseUrl: "",
+                apiKey: { source: "env", provider: "default", id: "SYNTHETIC_ABSENT_KEY" },
+                models: [],
+              },
+            ];
+            for (const [routeIndex, openai] of hostRoutes.entries()) {
+              const hostConfig = { ...config, models: { providers: { openai } } };
+              await harness.loadModelCatalog({ ...scope, config: hostConfig });
+              const host = await configured(hostConfig, rows);
+              expect(readiness(hostConfig)).toEqual({
+                accountType: "apiKey",
+                authMode: "api_key",
+              });
+              expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
+            }
+            expect(requests).not.toContain("account/login/start");
+            for (const socket of server.clients) {
+              socket.close();
+            }
+            await expect.poll(() => readiness()).toBeUndefined();
+            expect((await configured()).models[0]?.available).toBe(false);
+            setActivePluginRegistry(createEmptyPluginRegistry());
+            expect((await configured()).models[0]?.available).toBe(false);
+          } finally {
+            restoreActivePluginRegistrySnapshot(previous);
+          }
+        } finally {
+          await disconnectGatewayClient(gateway.client);
+          await gateway.server.close();
+        }
+      },
+    ),
+  );
+}, 120_000);

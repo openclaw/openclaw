@@ -11,16 +11,17 @@ import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { getSafeSessionStorage } from "../local-storage.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
+const RENDER_RELOAD_STORAGE_KEY = "openclaw.controlUi.renderErrorReloadAttempted";
 // Bounds document probes across rapid re-renders of the same error state.
 const ATTEMPT_COOLDOWN_MS = 5_000;
-// Keep timeout below the cooldown so a timed-out retry re-render cannot start
-// another probe immediately while the gateway is still unreachable.
-const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
+// Allow slow links to answer; callers share the in-flight probe.
+const DOCUMENT_PROBE_TIMEOUT_MS = 10_000;
 const BUILD_RELOAD_JITTER_MS = 2_000;
 const RELOAD_GUARD_WINDOW_MS = 30_000;
 
@@ -44,13 +45,53 @@ type RecoveryState = {
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
 const unavailableStorage = {};
+let routeReachability: Promise<boolean> | undefined;
+const routeImportErrors = new WeakSet<Error>();
 // A shared probe can release automatic and manual recovery in the same microtask.
 // Admit one navigation before either path can replace the guard or reload.
 let inFlightDocumentProbe: Promise<boolean> | null = null;
 
 // These browser errors identify failed assets, not whether the deployed build changed.
-export function isStaleChunkImportError(error: unknown): boolean {
+export function isStaleChunkImportError(error: unknown): error is Error {
   return error instanceof Error && MODULE_IMPORT_ERROR_PATTERN.test(error.message);
+}
+
+/** Keep a cold route pending through an outage, then retry its actual import. */
+export async function retryControlUiImport<T>(
+  load: () => T | Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await load();
+  } catch (error) {
+    if (!isStaleChunkImportError(error)) {
+      throw error;
+    }
+    routeImportErrors.add(error);
+    routeReachability ??= waitForReachableControlUiDocument(
+      { timeoutMs: Infinity },
+      () => true,
+    ).finally(() => {
+      routeReachability = undefined;
+    });
+    await routeReachability;
+    signal?.throwIfAborted();
+    // Vite marks CSS preloads seen before they finish; retrying that import can
+    // mount an unstyled page. Its error surface must use guarded document recovery.
+    if (/unable to preload css/i.test(error.message)) {
+      throw error;
+    }
+    // Chromium can retain the first failed import in its module map. A persistent
+    // failure now reaches the route error surface and its guarded reload owner.
+    try {
+      return await load();
+    } catch (retryError) {
+      if (isStaleChunkImportError(retryError)) {
+        routeImportErrors.add(retryError);
+      }
+      throw retryError;
+    }
+  }
 }
 
 export function reloadControlUiDocument(url = new URL(window.location.href)): void {
@@ -160,6 +201,8 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     const controller = new AbortController();
     const target: RecoveryState = { buildId, attemptedAt: now, controller };
     recoveryByStorage.set(storageIdentity, target);
+    // Reachability is shared by build, not owned by the first caller's connection.
+    // Each caller checks its current authority at the reload below.
     const wait = () =>
       waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? Infinity : undefined },
@@ -200,6 +243,42 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   }
   recovery.buildId = null;
   reload();
+  return true;
+}
+
+/** Render bugs get one automatic reload per tab, not the stale-asset retry loop. */
+export async function reloadAfterRenderErrorOnce(
+  deps: Omit<StaleChunkReloadDeps, "buildId"> = {},
+): Promise<boolean> {
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
+  if (!storage || deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  // Do not replace a recoverable error with a browser network-error document.
+  if (!(await waitForReachableControlUiDocument({ timeoutMs: 0 }, () => true))) {
+    return false;
+  }
+  if (deps.canReload?.() === false || !canReloadControlUiDocument()) {
+    return false;
+  }
+  try {
+    // Recheck after the shared probe: another failing surface may have claimed it.
+    if (storage.getItem(RENDER_RELOAD_STORAGE_KEY) !== null) {
+      return false;
+    }
+    // Never clear on mount, Retry, or a timer: a persistent bug must stay stopped.
+    storage.setItem(RENDER_RELOAD_STORAGE_KEY, "1");
+  } catch {
+    return false;
+  }
+  (deps.reload ?? reloadControlUiDocument)();
   return true;
 }
 
@@ -257,9 +336,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
   return new Promise((resolve) => {
     const finish = () => {
       clearTimeout(timer);
-      window.removeEventListener("online", finish);
-      document.removeEventListener("visibilitychange", onVisibility);
-      signal?.removeEventListener("abort", finish);
+      stopOnline();
+      stopVisibility();
+      stopAbort?.();
       resolve();
     };
     const onVisibility = () => {
@@ -268,9 +347,9 @@ function waitForRecoverySignal(delayMs: number, signal?: AbortSignal): Promise<v
       }
     };
     const timer = setTimeout(finish, delayMs);
-    window.addEventListener("online", finish);
-    document.addEventListener("visibilitychange", onVisibility);
-    signal?.addEventListener("abort", finish, { once: true });
+    const stopOnline = listen(window, "online", finish);
+    const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const stopAbort = signal && listen(signal, "abort", finish, { once: true });
     if (signal?.aborted) {
       finish();
     }
@@ -328,20 +407,31 @@ export async function retryStaleChunkReloadWhenReachable(
 }
 
 /**
- * Vite dispatches `vite:preloadError` for every lazy-import rejection,
- * including ordinary module evaluation errors — reload only for recognized
- * stale-asset failures so a plain code bug cannot trigger a reload loop.
+ * Caught lazy-surface failures still need recovery. Give route imports the
+ * rejection microtasks to claim their errors before starting global recovery.
  */
 export function installStaleChunkReloadListener(): () => void {
-  const onPreloadError = (event: Event) => {
-    const payload = (event as Event & { payload?: unknown }).payload;
+  const pending = new Set<ReturnType<typeof setTimeout>>();
+  const onPreloadError = (event: Event & { payload?: unknown }) => {
+    const payload = event.payload;
     if (!isStaleChunkImportError(payload)) {
       return;
     }
-    void scheduleStaleChunkReload();
+    const timer = setTimeout(() => {
+      pending.delete(timer);
+      if (!routeImportErrors.has(payload)) {
+        void scheduleStaleChunkReload();
+      }
+    }, 0);
+    pending.add(timer);
   };
-  window.addEventListener("vite:preloadError", onPreloadError);
-  return () => window.removeEventListener("vite:preloadError", onPreloadError);
+  const stopPreloadError = listen(window, "vite:preloadError", onPreloadError);
+  return () => {
+    stopPreloadError();
+    for (const timer of pending) {
+      clearTimeout(timer);
+    }
+  };
 }
 
 export function installMissingStylesheetRecovery(): () => void {
@@ -349,15 +439,14 @@ export function installMissingStylesheetRecovery(): () => void {
   let uninstalled = false;
   let banner: HTMLDivElement | null = null;
 
-  const removeListeners = () => {
-    window.removeEventListener("load", checkStylesheet);
-    window.removeEventListener("error", onResourceError, true);
-  };
+  let stopLoad: (() => void) | undefined;
 
-  const showBanner = () => {
-    if (uninstalled || banner) {
+  const detectMissingStylesheet = async () => {
+    if (detected || uninstalled) {
       return;
     }
+    detected = true;
+    stopLoad?.();
     banner = document.createElement("div");
     banner.role = "alert";
     // All styles are inline because the entry stylesheet is broken by definition.
@@ -365,21 +454,9 @@ export function installMissingStylesheetRecovery(): () => void {
       "position:fixed;inset:0 0 auto;z-index:2147483647;padding:12px;text-align:center;background:#1f2937;color:#fff;font:14px system-ui";
     const reloadButton = document.createElement("button");
     reloadButton.textContent = t("common.reload");
-    reloadButton.addEventListener(
-      "click",
-      () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }),
-    );
+    listen(reloadButton, "click", () => void retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
     banner.append(t("lazyView.stylesFailed"), " ", reloadButton);
     document.body.append(banner);
-  };
-
-  const detectMissingStylesheet = async () => {
-    if (detected || uninstalled) {
-      return;
-    }
-    detected = true;
-    removeListeners();
-    showBanner();
     await scheduleStaleChunkReload();
   };
 
@@ -388,32 +465,23 @@ export function installMissingStylesheetRecovery(): () => void {
       getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
       "1"
     ) {
-      removeListeners();
+      stopLoad?.();
       return;
     }
     void detectMissingStylesheet();
   }
 
-  function onResourceError(event: Event) {
-    const resource = event.target;
-    if (!(resource instanceof HTMLLinkElement) || !resource.relList.contains("stylesheet")) {
-      return;
-    }
-    // Resource errors do not bubble, so capture is required. This can miss an
-    // error fired before module evaluation; the load-time sentinel is authoritative.
-    void detectMissingStylesheet();
-  }
-
-  window.addEventListener("error", onResourceError, true);
+  // The entry stylesheet owns this sentinel. Individual resource errors include
+  // optional fonts, themes and plugins, which must not initiate document recovery.
   if (document.readyState === "complete") {
     checkStylesheet();
   } else {
-    window.addEventListener("load", checkStylesheet, { once: true });
+    stopLoad = listen(window, "load", checkStylesheet, { once: true });
   }
 
   return () => {
     uninstalled = true;
-    removeListeners();
+    stopLoad?.();
     banner?.remove();
     banner = null;
   };

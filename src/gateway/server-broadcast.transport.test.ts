@@ -1,7 +1,10 @@
 import { EventEmitter, getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -61,6 +64,39 @@ describe("broadcast transport retirement", () => {
     vi.useRealTimers();
   });
 
+  it("forgets presence baselines on rejected and asynchronously failed sends", () => {
+    const peers = [controlledPeer("rejected"), controlledPeer("failed")];
+    for (const { client } of peers) {
+      client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      preparePresenceProjection: (presence) => () => presence,
+    });
+    const publish = (version: number) =>
+      broadcast(
+        "presence",
+        { presence: listSystemPresence() },
+        {
+          dropIfSlow: true,
+          stateVersion: { presence: version },
+        },
+      );
+    publish(1);
+    for (const peer of peers) {
+      expect(peer.client.presenceSnapshot?.version).toBe(1);
+      peer.callbacks.shift()?.();
+    }
+    peers[0]!.socket.send.mockImplementationOnce(() => {
+      throw new Error("rejected send");
+    });
+    publish(2);
+    expect(peers[0]!.client.presenceSnapshot).toBeUndefined();
+    expect(peers[1]!.client.presenceSnapshot?.version).toBe(2);
+    peers[1]!.callbacks.shift()?.(new Error("failed send"));
+    expect(peers[1]!.client.presenceSnapshot).toBeUndefined();
+  });
+
   it("delivers identity invalidations only to agent identity readers", () => {
     const read = controlledPeer("read");
     const sessionRead = controlledPeer("session-read");
@@ -87,6 +123,115 @@ describe("broadcast transport retirement", () => {
     }
     expect(sessionRead.frames).toEqual([]);
     expect(node.frames).toEqual([]);
+  });
+
+  it("keeps drain events on authorized session subscriptions", () => {
+    const selected = controlledPeer("selected");
+    const other = controlledPeer("other");
+    const revoked = controlledPeer("revoked");
+    const node = controlledPeer("node");
+    const peers = [selected, other, revoked, node];
+    const subscribers = createSessionMessageSubscriberRegistry();
+    for (const peer of peers) {
+      peer.client.connect.scopes = ["operator.sessions.read"];
+      peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    node.client.connect.role = "node";
+    subscribers.subscribe("selected", "agent:work:global");
+    subscribers.subscribe("revoked", "agent:work:global");
+    subscribers.subscribe("node", "agent:work:global");
+    subscribers.subscribe("other", "agent:main:global");
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+      sessionMessageSubscribers: subscribers,
+      canReceiveSessionEvent: (client) => client.connId !== "revoked",
+    });
+
+    broadcastToConnIds(
+      "socket.drain",
+      { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+      new Set(peers.map((peer) => peer.client.connId)),
+      { agentId: "work", sessionKeys: ["agent:work:global"], dropIfSlow: false },
+    );
+
+    expect(selected.frames).toEqual([
+      {
+        type: "event",
+        event: "socket.drain",
+        payload: { sessionKey: "global", agentId: "work", reason: "reset", ts: 1 },
+        seq: 1,
+      },
+    ]);
+    for (const peer of [other, revoked, node]) {
+      expect(peer.frames).toEqual([]);
+    }
+  });
+
+  it("visits only the session audience and refreshes it through subscription and connection changes", () => {
+    const legacy = controlledPeer("legacy");
+    const selected = controlledPeer("selected");
+    const denied = controlledPeer("denied");
+    const unrelated = Array.from({ length: 32 }, (_, index) => controlledPeer(`other-${index}`));
+    for (const peer of [selected, denied, ...unrelated]) {
+      peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    denied.client.connect.scopes = [];
+    const clients = new GatewayClientRegistry([
+      legacy.client,
+      ...unrelated.map((peer) => peer.client),
+      selected.client,
+      denied.client,
+    ]);
+    const subscribers = createSessionMessageSubscriberRegistry();
+    for (const key of ["session-a", "session-b"]) {
+      subscribers.subscribe("selected", key);
+      subscribers.subscribe("denied", key);
+    }
+    let unrelatedVisits = 0;
+    for (const peer of unrelated) {
+      Object.defineProperty(peer.socket, "readyState", {
+        get: () => {
+          unrelatedVisits += 1;
+          return WebSocket.OPEN;
+        },
+      });
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients,
+      sessionMessageSubscribers: subscribers,
+    });
+    const publish = () =>
+      broadcast("chat", { sessionKey: "session-a" }, { sessionKeys: ["session-a", "session-b"] });
+
+    publish();
+    expect(legacy.frames).toHaveLength(1);
+    expect(selected.frames).toHaveLength(1);
+    expect(denied.frames).toEqual([]);
+    expect(unrelatedVisits).toBe(0);
+
+    selected.client.connect.scopes = [];
+    publish();
+    expect(selected.frames).toHaveLength(1);
+    clients.delete(legacy.client);
+    subscribers.unsubscribeAll("selected");
+    subscribers.unsubscribeAll("denied");
+    publish();
+    expect(unrelatedVisits).toBe(0);
+    expect(legacy.frames).toHaveLength(2);
+
+    clients.delete(selected.client);
+    const replacement = controlledPeer("selected");
+    clients.add(replacement.client);
+    publish();
+    expect(replacement.frames).toHaveLength(1);
+    clients.clear();
+    selected.client.connect.scopes = ["operator.read"];
+    clients.add(selected.client);
+    publish();
+    expect(selected.frames).toHaveLength(1);
+    subscribers.subscribe("selected", "session-b");
+    publish();
+    expect(selected.frames).toHaveLength(2);
   });
 
   it("shares encoded plugin events only after scope filtering and preserves recipient sequences", () => {
@@ -128,7 +273,7 @@ describe("broadcast transport retirement", () => {
   });
 
   it("shares encoded presence only after current recipient projection", () => {
-    const peers = ["first", "same", "same-again", "ahead", "other", "revoked"].map(controlledPeer);
+    const peers = ["first", "ahead", "other", "same", "same-again", "revoked"].map(controlledPeer);
     for (const peer of peers) {
       peer.client.preparedRecipientProfileId = peer.client.connId === "other" ? "other" : "reader";
     }
@@ -150,16 +295,16 @@ describe("broadcast transport retirement", () => {
 
     const frames = peers.map((peer) => peer.socket.send.mock.lastCall![0]);
     expect(Buffer.isBuffer(frames[0])).toBe(true);
-    expect(frames[1]).toBe(frames[0]);
-    expect(frames[2]).toBe(frames[1]);
+    expect(frames[3]).toBe(frames[0]);
+    expect(frames[4]).toBe(frames[0]);
     expect(project).toHaveBeenCalledTimes(6);
     for (const [index, frame] of frames.entries()) {
       expect(JSON.parse(String(frame))).toEqual({
         type: "event",
         event: "presence",
         payload: { presence: index === 5 ? hidden : visible },
-        seq: index === 3 ? 2 : 1,
-        recipientProfileId: index === 4 ? "other" : "reader",
+        seq: index === 1 ? 2 : 1,
+        recipientProfileId: index === 2 ? "other" : "reader",
       });
     }
     visible[0]!.ts = 2;

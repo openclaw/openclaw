@@ -3,8 +3,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -34,13 +36,17 @@ import { createNoopLogger } from "../service.test-harness.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
+  resolveConfiguredModelRefMock,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const { resolveAgentDir } = await import("./run.runtime.js");
 installRequesterCronAuthorityTestHooks();
 
 beforeEach(() => {
@@ -80,15 +86,36 @@ describe("manual run tool authority after the initiating invocation closes", () 
       withdraw: "remove",
     },
   ])("$name", async ({ toolsAllow, withdraw, senderIsOwner }) => {
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const sessionStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const config: OpenClawConfig = {
       ...cfg,
+      session: { store: sessionStorePath },
+      models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
       agents: {
-        defaults: { skipBootstrap: true, workspace: stateDir },
-        entries: { main: { workspace: stateDir } },
+        defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
+        entries: { main: { agentDir, workspace: stateDir } },
+      },
+      auth: {
+        profiles: { "openai:cron-fixture": { provider: "openai", mode: "api_key" } },
+        order: { openai: ["openai:cron-fixture"] },
       },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
     };
     setRuntimeConfigSnapshot(config);
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
+    // Capture and execution must address the same canonical credential owner.
+    vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
+    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
+    await persistAuthProfileBatch({
+      stateDir,
+      profiles: [
+        {
+          profileId: "openai:cron-fixture",
+          credential: { type: "api_key", provider: "openai", key: "gpt-4.1-key" },
+        },
+      ],
+    });
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
     context.resolveGatewayContext = () => context;
@@ -232,7 +259,12 @@ describe("manual run tool authority after the initiating invocation closes", () 
       );
       expect(accepted).toMatchObject({ ok: true, payload: { enqueued: true } });
       // Preparation finished under the stored job; now the admin request ends.
-      await toolsReady.promise;
+      await Promise.race([
+        toolsReady.promise,
+        finished.promise.then((event) => {
+          throw new Error(`Cron finished before tool construction: ${event.error ?? event.status}`);
+        }),
+      ]);
       source.release();
       if (withdraw === "disable") {
         await execution.update(jobId, { enabled: false });

@@ -11,9 +11,6 @@ import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
 import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
 
-/**
- * Result of resolving a concrete outbound target for a channel send.
- */
 export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 /**

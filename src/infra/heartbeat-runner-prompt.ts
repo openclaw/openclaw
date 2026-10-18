@@ -97,27 +97,6 @@ function resolveConversationCompletionRoute(
     : undefined;
 }
 
-/**
- * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
- * before retryable busy guards; wakes carrying heartbeat tasks keep deferral.
- */
-export function shouldPreflightWakeBeforeBusy(
-  source: HeartbeatWakeSource | undefined,
-  scheduledEveryMs: number | undefined,
-  scheduledTaskCount: number,
-): boolean {
-  return (
-    scheduledTaskCount === 0 &&
-    (source === "interval" ||
-      (source === "exec-event" &&
-        !(
-          typeof scheduledEveryMs === "number" &&
-          Number.isSafeInteger(scheduledEveryMs) &&
-          scheduledEveryMs > 0
-        )))
-  );
-}
-
 export async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -351,7 +330,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
       ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
+      : `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     basePrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}

@@ -125,7 +125,7 @@ export function fingerprintConfigSnapshotAuthoredConfig(
 ): unknown {
   const key = loadConfigJournalFingerprintKey(params);
   // This slot is a diff baseline, not a data store; fingerprint every leaf.
-  return fingerprintConfigSnapshotLeaves(structuredClone(value), key);
+  return fingerprintConfigSnapshotLeaves(value, key);
 }
 
 function resolveConfigAuditStoreContext(

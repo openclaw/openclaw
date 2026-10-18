@@ -11,7 +11,7 @@ import {
   setupBrowserPanelTestCleanup,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
@@ -29,7 +29,7 @@ function click(x: number, y: number) {
   return new MouseEvent("click", { bubbles: true, clientX: x, clientY: y });
 }
 
-function renderInput(controller: BrowserPanelController): HTMLTextAreaElement {
+function renderInput(controller: BrowserPanel): HTMLTextAreaElement {
   const root = controller.host.renderRoot;
   const rendered = mountSolid(() =>
     createComponent(BrowserPanelChrome, {
@@ -151,8 +151,8 @@ describe("Browser panel touch and pen input", () => {
       controller.input.handleOverlayPointerDown(pointer("pointerdown", 1, 20, 20, "pen"));
       await flushBrowserResponses();
       expect(controller.mode).toBe("interact");
-      controller.handleStageClick(click(20, 20));
-      controller.handleStageClick(click(40, 50));
+      controller.input.handleStageClick(click(20, 20));
+      controller.input.handleStageClick(click(40, 50));
       await flushBrowserResponses();
     } finally {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, acceptAnnotation);

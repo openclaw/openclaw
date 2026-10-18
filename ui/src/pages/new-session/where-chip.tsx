@@ -1,4 +1,4 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { CloudProfileIcon } from "../../components/solid/provider-icon.tsx";
@@ -70,23 +70,23 @@ function MacDeviceIcon(props: { form: "laptop" | "mini" | "studio" }) {
     </svg>
   );
 }
-function environmentDeviceIcon(device?: DevicePlacementOption) {
-  const platform = device?.platform?.trim();
-  if (platform && !/^(?:darwin|macos|mac os(?: x)?)\b/i.test(platform)) {
-    return <Icon name="monitor" />;
-  }
-  const form = resolveMacFormFactorFromName(device?.label);
-  const icon =
-    form === "laptop" || form === "mini" || form === "studio" ? (
-      <MacDeviceIcon form={form} />
-    ) : undefined;
-  if (!icon) {
-    return <Icon name="monitor" />;
-  }
+function EnvironmentDeviceIcon(props: { device?: DevicePlacementOption }) {
+  const form = createMemo(() => {
+    const platform = props.device?.platform?.trim();
+    if (platform && !/^(?:darwin|macos|mac os(?: x)?)\b/i.test(platform)) {
+      return undefined;
+    }
+    const value = resolveMacFormFactorFromName(props.device?.label);
+    return value === "laptop" || value === "mini" || value === "studio" ? value : undefined;
+  });
   return (
-    <span class="new-session-page__device-icon" data-form={form}>
-      {icon}
-    </span>
+    <Show when={form()} fallback={<Icon name="monitor" />}>
+      {(current) => (
+        <span class="new-session-page__device-icon" data-form={current()}>
+          <MacDeviceIcon form={current()} />
+        </span>
+      )}
+    </Show>
   );
 }
 
@@ -105,60 +105,65 @@ function renderEnvironmentSkeletons(section: "devices" | "cloud") {
   );
 }
 
-function renderEnvironmentHeading(
-  label: string,
-  action: "connect-machine" | "manage-cloud-workers",
-  disabled: boolean,
-  onAction: (() => void) | undefined,
-) {
+function EnvironmentHeading(props: {
+  label: string;
+  action: "connect-machine" | "manage-cloud-workers";
+  disabled: boolean;
+  onAction: (() => void) | undefined;
+}) {
   return (
     <div class="new-session-page__environment-heading new-session-page__devices-heading">
-      <span>{label}</span>
-      {onAction ? (
+      <span>{props.label}</span>
+      <Show when={props.onAction}>
         <button
           type="button"
           class="new-session-page__connect-device"
-          data-action={action}
+          data-action={props.action}
           aria-label={t(
-            action === "connect-machine"
+            props.action === "connect-machine"
               ? "newSession.connectMachine"
               : "newSession.manageCloudWorkers",
           )}
-          disabled={disabled}
-          ref={nativeListener("click", onAction)}
+          disabled={props.disabled}
+          ref={nativeListener("click", () => props.onAction?.())}
         >
           <ConnectDeviceIcon />
         </button>
-      ) : undefined}
+      </Show>
     </div>
   );
 }
 
 export function WhereChip(props: { params: WhereChipOptions }) {
+  const kind = createMemo(() => props.params.state.kind);
+  const triggerIcon = createMemo(() =>
+    kind() === "hosted" ? (
+      <Icon name="cloud" />
+    ) : kind() === "cloud" ? (
+      <CloudProfileIcon
+        profile={props.params.state.cloudProfiles.find(
+          (profile) => profile.id === props.params.cloudProfileId,
+        )}
+      />
+    ) : kind() === "local" ? (
+      <Icon name="home" />
+    ) : kind() === "auto-device" ? (
+      <DevicePoolIcon />
+    ) : (
+      <EnvironmentDeviceIcon
+        device={props.params.state.devices.find(
+          (device) => device.deviceId === props.params.deviceId,
+        )}
+      />
+    ),
+  );
+  const gatewayIcon = <Icon name="home" />;
   const view = createMemo(() => {
     const cloudPresentation = resolveCloudProfileIconData(
       props.params.state.cloudProfiles.find(
         (profile) => profile.id === props.params.cloudProfileId,
       ),
     );
-    const icon =
-      props.params.state.kind === "hosted" ? (
-        <Icon name="cloud" />
-      ) : props.params.state.kind === "cloud" ? (
-        <CloudProfileIcon
-          profile={props.params.state.cloudProfiles.find(
-            (profile) => profile.id === props.params.cloudProfileId,
-          )}
-        />
-      ) : props.params.state.kind === "local" ? (
-        <Icon name="home" />
-      ) : props.params.state.kind === "auto-device" ? (
-        <DevicePoolIcon />
-      ) : (
-        environmentDeviceIcon(
-          props.params.state.devices.find((device) => device.deviceId === props.params.deviceId),
-        )
-      );
     const localName = props.params.gatewayName.trim() || t("newSession.local");
     const label = props.params.state.kind === "local" ? localName : props.params.state.label;
     const configurationSummary =
@@ -247,7 +252,6 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       props.params.isAdmin && props.params.catalogLoading && cloudProfiles.length === 0;
     return {
       cloudPresentation,
-      icon,
       localName,
       label,
       configurationSummary,
@@ -270,7 +274,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
       kind="where"
       label={`${t("newSession.where")}: ${view().label}`}
       value={view().label}
-      icon={view().icon}
+      icon={triggerIcon()}
       summary={view().configurationSummary}
       triggerAttributes={{
         "aria-label": `${t("newSession.where")}: ${view().label}${view().configurationSummary ? `, ${view().configurationSummary}` : ""}`,
@@ -308,14 +312,14 @@ export function WhereChip(props: { params: WhereChipOptions }) {
             />
           </label>
           <div class="new-session-page__environment-list">
-            {view().showLocal || view().devices.length || view().showAuto
-              ? renderEnvironmentHeading(
-                  t("newSession.yourDevices"),
-                  "connect-machine",
-                  view().busy,
-                  props.params.isAdmin ? props.params.onConnectMachine : undefined,
-                )
-              : undefined}
+            <Show when={view().showLocal || view().devices.length || view().showAuto}>
+              <EnvironmentHeading
+                label={t("newSession.yourDevices")}
+                action="connect-machine"
+                disabled={view().busy}
+                onAction={props.params.isAdmin ? props.params.onConnectMachine : undefined}
+              />
+            </Show>
             {view().showAuto ? (
               <openclaw-tooltip
                 class="new-session-page__environment-details"
@@ -359,7 +363,7 @@ export function WhereChip(props: { params: WhereChipOptions }) {
                 item={{
                   value: "gateway",
                   label: view().localName,
-                  icon: <Icon name="home" />,
+                  icon: gatewayIcon,
                   summary: t("newSession.runsOnGateway"),
                   compact: true,
                   checked: props.params.state.kind === "local",
@@ -372,13 +376,14 @@ export function WhereChip(props: { params: WhereChipOptions }) {
             ) : undefined}
             <For each={view().devices} keyed={(device) => device.deviceId}>
               {(device) => {
+                const icon = <EnvironmentDeviceIcon device={device()} />;
                 const item = createMemo(() => {
                   const current = device();
                   return {
                     value: `device:${current.deviceId}`,
                     label: current.label,
                     sub: current.subtitle,
-                    icon: environmentDeviceIcon(current),
+                    icon,
                     platform: current.platform ? prettifyPlatform(current.platform) : undefined,
                     capabilityLabels: environmentCapabilityLabels(current.capabilities),
                     hideDetails: current.hideDetails,
@@ -448,19 +453,25 @@ export function WhereChip(props: { params: WhereChipOptions }) {
                 <span class="session-menu__text">{t("newSession.hostedSetup")}</span>
               </a>
             ) : undefined}
-            {view().cloudProfiles.length ||
-            view().showSuggestion ||
-            view().showMissingCloud ||
-            view().showCloudSkeletons
-              ? renderEnvironmentHeading(
-                  t("newSession.cloud"),
-                  "manage-cloud-workers",
-                  view().busy,
+            <Show
+              when={
+                view().cloudProfiles.length ||
+                view().showSuggestion ||
+                view().showMissingCloud ||
+                view().showCloudSkeletons
+              }
+            >
+              <EnvironmentHeading
+                label={t("newSession.cloud")}
+                action="manage-cloud-workers"
+                disabled={view().busy}
+                onAction={
                   props.params.isAdmin && !view().showCloudSkeletons && !view().showSuggestion
                     ? props.params.onManageCloudWorkers
-                    : undefined,
-                )
-              : undefined}
+                    : undefined
+                }
+              />
+            </Show>
             {view().showSuggestion ? (
               <SessionMenuItem
                 item={{

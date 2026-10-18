@@ -1,6 +1,10 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { setRpcSourceProjectSessionActive } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.core.js";
 import {
@@ -14,7 +18,6 @@ import {
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
   projectChatDisplayMessageMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
 } from "./server-session-events.test-support.js";
@@ -23,7 +26,6 @@ describe("live failed-attempt presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectChatDisplayMessageMock.mockImplementation(projectChatDisplayMessage);
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -32,6 +34,75 @@ describe("live failed-attempt presentation", () => {
     readSessionMessageByIdAsyncMock.mockReset();
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
+  });
+
+  it.each(["missing", "rebuilding", "overloaded", "quoted reply"])(
+    "invalidates broad and targeted history when the committed row needs page reconciliation: %s",
+    async (kind) => {
+      if (kind === "missing") {
+        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({ found: false, oversized: false });
+      } else if (kind === "quoted reply") {
+        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({
+          found: true,
+          oversized: false,
+          seq: 2,
+          message: { role: "user", content: "Quoted reply", __openclaw: { replyToId: "original" } },
+        });
+      } else {
+        readSessionMessageByIdAsyncMock.mockRejectedValueOnce(
+          kind === "overloaded"
+            ? new WorkerTaskError("reader overloaded", "overloaded")
+            : new SessionTranscriptProjectionUnavailableError("sess-main"),
+        );
+      }
+      const { broadcastToConnIds, handler } = createHandler(
+        false,
+        true,
+        () => new Set(["targeted"]),
+      );
+      const outcome = await handler({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/canonical-update.sqlite",
+        },
+        messageId: "removed-id",
+        message: { role: "assistant", content: "stale queued content" },
+      });
+      expect(outcome).toBe(kind === "rebuilding" || kind === "overloaded" ? false : undefined);
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "sessions.changed",
+        expect.objectContaining({ sessionKey: "agent:main:main", phase: "message" }),
+        new Set(["conn-1", "targeted"]),
+        expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
+      );
+      expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("message");
+      expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("reports failed publication when the fallback cursor read is overloaded", async () => {
+    readSessionMessageCountAsyncMock.mockRejectedValueOnce(
+      new WorkerTaskError("reader overloaded", "overloaded"),
+    );
+    const { broadcastToConnIds, handler } = createHandler(false);
+    const outcome = await handler({
+      target: {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/canonical-update.sqlite",
+      },
+      message: { role: "assistant", content: "Keep this reply visible." },
+    });
+    expect(outcome).toBe(false);
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "sessions.changed",
+      expect.objectContaining({ sessionKey: "agent:main:main", phase: "message" }),
+      expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
+    );
   });
 
   it.each(["empty", "overflow", "sentinel", "overload"])(
@@ -63,13 +134,12 @@ describe("live failed-attempt presentation", () => {
         message,
       });
       const broadcastToConnIds = vi.fn();
-      const activeRun = createActiveRun(true);
-      const controllers = new Map([["recovering-run", activeRun]]);
+      const activeRun = createActiveRun(true, true, { storePath: "/tmp/recovery.sqlite" });
+      rpcSourceTesting.reset([["recovering-run", activeRun]]);
       const handler = createTranscriptUpdateBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["broad"]) },
         sessionMessageSubscribers: { get: () => new Set(["selected"]) },
-        chatAbortControllers: controllers,
       });
       const update = {
         target: {
@@ -87,7 +157,7 @@ describe("live failed-attempt presentation", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
 
       // Keeping the idempotency entry is not evidence that execution is still active.
-      activeRun.projectSessionActive = false;
+      setRpcSourceProjectSessionActive(activeRun, false);
       broadcastToConnIds.mockClear();
       await handler(update);
       expect(broadcastToConnIds).not.toHaveBeenCalled();

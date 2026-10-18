@@ -135,6 +135,63 @@ function doctorOperation(args: string[]) {
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {
+  it.each([false, true])("reports only final candidate warnings (pending=%s)", async (pending) => {
+    const migrations = await import("../../infra/deferred-plugin-migrations.js");
+    const freshDoctor = await import("./update-command-fresh-doctor.js");
+    const { renderUpdateRunReport, updateRunReportInputFromResult } =
+      await import("../../infra/update-run-report.js");
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("candidate-warnings-"));
+    vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
+    const migration = {
+      pluginId: "fixture-plugin",
+      reason: "The installed plugin has not confirmed its saved data and settings.",
+      command: "openclaw doctor --fix",
+    };
+    const earlyWarning = migrations.formatDeferredPluginMigration(migration, {
+      OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    });
+    const finalWarning = migrations.formatDeferredPluginMigration(migration, {});
+    const advisory = "Optional Doctor inspection needs attention.";
+    vi.spyOn(migrations, "readDeferredPluginMigrationsAsync").mockResolvedValue(
+      pending ? [migration] : [],
+    );
+    vi.spyOn(freshDoctor, "completePostCorePluginUpdate").mockImplementationOnce(async (params) => {
+      params.onWarnings?.([earlyWarning, advisory, advisory]);
+      return {
+        pluginUpdate: {
+          ...pluginUpdate,
+          status: pending ? "warning" : "ok",
+          warnings: pending
+            ? [
+                {
+                  pluginId: migration.pluginId,
+                  reason: "doctor-advisory",
+                  message: finalWarning,
+                  guidance: [
+                    `Run "${migration.command}" to finish the plugin data/settings upgrade.`,
+                  ],
+                },
+              ]
+            : [],
+        },
+        configSnapshot: snapshot,
+      };
+    });
+    const { resultWithPostUpdate } = await convergeUpdatePlugins(
+      convergenceParams({
+        candidateRuntime: true,
+        result: {},
+      }),
+    );
+    expect(resultWithPostUpdate.status).toBe("ok");
+    const report = renderUpdateRunReport(updateRunReportInputFromResult(resultWithPostUpdate));
+    expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
+      `Warning: ${advisory}`,
+      ...(pending ? [`Warning: ${finalWarning}`] : []),
+    ]);
+    expect(report.markdown).not.toContain("Let the current update or repair finish.");
+  });
   it("records the failed post-core child even without supplied failure facts", async () => {
     vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockResolvedValueOnce({
       resumed: false,

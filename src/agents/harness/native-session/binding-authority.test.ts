@@ -11,17 +11,47 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
+import { withPluginRuntimePluginScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
+  combineNativeSessionBindingAuthority,
+  combinePreparedNativeSessionBindingAuthority,
   createNativeSessionBindingAuthority,
+  createNativeSessionBindingScope,
   readNativeSessionBindingEntries,
 } from "./binding-authority.js";
 
-afterEach(() => memorySessionActorOwners.reset());
+afterEach(() => {
+  memorySessionActorOwners.reset();
+  vi.restoreAllMocks();
+});
+
+it.each([
+  ["createNativeSessionBindingAuthority", "createPreparedNativeSessionBindingAuthority"],
+  ["combineNativeSessionBindingAuthority", "combinePreparedNativeSessionBindingAuthority"],
+] as const)("warns once for %s without warning on prepared authority", (method, replacement) => {
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  withPluginRuntimePluginScope({ pluginId: `native-authority-${method.toLowerCase()}` }, () => {
+    const scope = createNativeSessionBindingScope(() => {});
+    combinePreparedNativeSessionBindingAuthority(scope).assertCurrent();
+    expect(warning).not.toHaveBeenCalled();
+    const create = () =>
+      method === "createNativeSessionBindingAuthority"
+        ? createNativeSessionBindingAuthority([], () => {})
+        : combineNativeSessionBindingAuthority(scope);
+    create().assertCurrent();
+    create().assertCurrent();
+  });
+  expect(warning).toHaveBeenCalledOnce();
+  expect(warning.mock.calls[0]?.[0]).toContain(`${method} is deprecated`);
+  expect(warning.mock.calls[0]?.[0]).toContain(replacement);
+  expect(warning.mock.calls[0]?.[0]).toContain("Final compatibility day: 2026-12-31");
+  expect(warning.mock.calls[0]?.[0]).toContain("first January 2027 stable release");
+});
 
 it("admits incognito predecessor lineage without SQL and rejects changed lineage", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

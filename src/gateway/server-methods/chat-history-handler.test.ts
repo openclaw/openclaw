@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
@@ -25,13 +26,16 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import {
   registerMetadataCallerCases,
   registerMetadataRevocationCases,
 } from "./chat-metadata-ownership.test-support.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -99,6 +103,113 @@ function createPersonalMetadataFixture() {
   };
   return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
 }
+
+describe("plugin steering history audience", () => {
+  it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:plugin-steering",
+        sessionId: "plugin-steering",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        eventId: "question",
+        now: 1,
+        message: { role: "user", content: "Question" },
+      });
+      const context = await createHistoryReadContext();
+      const client = identifiedClient("steering-reader");
+      client.connect.scopes = ["operator.admin"];
+      const request = async (method: string, params: Record<string, unknown> = {}) => {
+        const handler = expectDefined(
+          { ...chatHistoryHandlers, ...chatMessageGetHandlers }[method],
+          "chat handler",
+        );
+        const respond = vi.fn<RespondFn>();
+        await handler({
+          params: { sessionKey: scope.sessionKey, ...params },
+          client,
+          context,
+          respond,
+          req: { type: "req", id: "steering-read", method },
+          isWebchatConnect: () => true,
+        });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "chat response");
+      };
+      const cursor = (await request("chat.history")).deltaCursor;
+      expect(typeof cursor).toBe("string");
+      await appendTranscriptMessage(scope, {
+        eventId: "plugin-note",
+        now: 2,
+        message: {
+          role: "user",
+          display: false,
+          content: "Private model prefix\n\nKeep the change small.",
+          provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
+          __openclaw: {
+            pluginSteering: {
+              pluginId: "reviewer",
+              pluginName: "Reviewer",
+              displayText: "Keep the change small.",
+            },
+          },
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "hidden-exec",
+        now: 3,
+        message: {
+          role: "user",
+          display: false,
+          content: "Private exec output",
+          provenance: { kind: "internal_system", sourceTool: "exec" },
+        },
+      });
+      for (const id of [
+        GATEWAY_CLIENT_IDS.CONTROL_UI,
+        GATEWAY_CLIENT_IDS.TUI,
+        GATEWAY_CLIENT_IDS.MACOS_APP,
+      ]) {
+        client.connect.client = { ...client.connect.client, id, mode: "webchat" };
+        const visible = id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        for (const method of ["chat.history", "chat.startup"]) {
+          const response = await request(method);
+          expect(response.messages).toHaveLength(visible ? 2 : 1);
+          if (visible) {
+            expect(response.messages).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  display: true,
+                  content: [{ type: "text", text: "Keep the change small." }],
+                  __openclaw: expect.objectContaining({
+                    pluginSteering: expect.objectContaining({
+                      pluginId: "reviewer",
+                      pluginName: "Reviewer",
+                    }),
+                  }),
+                }),
+              ]),
+            );
+          }
+        }
+        const delta = await request("chat.history", { cursor });
+        expect(delta.kind).toBe("delta");
+        expect(delta.messages).toHaveLength(visible ? 1 : 0);
+        const exact = await request("chat.message.get", { messageId: "plugin-note" });
+        expect(exact.ok).toBe(visible);
+        if (visible) {
+          expect(exact.message).toMatchObject({
+            display: true,
+            content: [{ type: "text", text: "Keep the change small." }],
+          });
+        }
+      }
+    });
+  });
+});
 
 describe("chat history model selection defaults", () => {
   it.each(["chat.history", "chat.startup"] as const)(
@@ -651,13 +762,16 @@ describe("chat history recovery byte budget", () => {
           expect(inactive.messages).toHaveLength(12);
           expect(inactive.inFlightRun).toBeUndefined();
           const historyJson = JSON.stringify(inactive.messages);
+          const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
           const registration = registerChatAbortController({
-            chatAbortControllers: context.chatAbortControllers,
+            target: captureRpcTargetForTest(scope),
             runId: "run-history-bytes",
             ...scope,
-            now: 1_000,
             timeoutMs: 60_000,
           });
+          const releaseSource = await claimRpcSourceForTest(
+            expectDefined(registration.entry, "history source"),
+          );
           const run = context.chatRunState.getOrCreate("run-history-bytes");
           run.buffer = "partial reply ".repeat(1_000);
           run.planSnapshot = { steps: [{ step: "Read history", status: "in_progress" }] };
@@ -669,7 +783,7 @@ describe("chat history recovery byte budget", () => {
           };
           const exactBytes =
             Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
-          const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+          clock.mockReturnValue(1_800_000_000_000);
           try {
             const bounded = await call({ maxBytes: exactBytes - 1 });
             expect(bounded.messages).toEqual(inactive.messages);
@@ -729,6 +843,7 @@ describe("chat history recovery byte budget", () => {
             expect(JSON.stringify(inactive.messages)).toBe(historyJson);
           } finally {
             clock.mockRestore();
+            releaseSource();
             registration.cleanup();
             context.chatRunState.clearRun("run-history-bytes");
           }

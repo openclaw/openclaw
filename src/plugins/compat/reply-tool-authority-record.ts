@@ -25,7 +25,7 @@ export const REPLY_TOOL_AUTHORITY_COMPAT_RECORD = {
   ],
   tests: [
     "src/plugins/compat/registry.test.ts",
-    "src/plugin-sdk/reply-tool-authority-compat.test.ts",
+    "test/type-contracts/reply-tool-authority-compat.ts",
   ],
   releaseNote:
     "Reply tool authority preparation gains awaited session-reader paths while retaining released synchronous snapshot, operation, and dispatcher contracts. Legacy external V2 dispatchers retain fresh native authority checks; schema, retention, and update behavior are unchanged.",

@@ -131,32 +131,44 @@ export function actionPointerEvents(button: Locator): Promise<string> {
   return button.evaluate((element) => globalThis.getComputedStyle(element).pointerEvents);
 }
 
-/**
- * Opens a session-menu submenu through the keyboard path. Submenu ARIA is ready
- * before Web Awesome finishes opening the dropdown, so hovering alone races the
- * menu; waiting on its focus contract first keeps navigation keys in order.
- */
-export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+/** The owned native menu renders each submenu beside its trigger. */
+export function sessionMenuSubmenu(trigger: Locator): Locator {
+  return trigger.locator("..").locator(':scope > [role="menu"]');
+}
+
+export function sessionMenuLabels(panel: Locator): Promise<string[]> {
+  return panel.evaluate((element) =>
+    [...element.querySelectorAll('[role^="menuitem"]')]
+      .filter((item) => item.closest('[role="menu"]') === element)
+      .map((item) => item.getAttribute("aria-label") ?? ""),
+  );
+}
+
+/** Moves to an owned menu row through its roving-focus keyboard path. */
+export async function focusSessionMenuItem(page: Page, name: string): Promise<Locator> {
   const parent = page.getByRole("menuitem", { name, exact: true });
-  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
-  const index = await parent.evaluate((element) =>
-    [...(element.parentElement?.children ?? [])]
+  const index = await parent.evaluate((element) => {
+    const panel = element.closest('[role="menu"]');
+    return [...(panel?.querySelectorAll('[role^="menuitem"]') ?? [])]
       .filter(
         (item) =>
-          item.localName === "wa-dropdown-item" &&
-          item.getAttribute("slot") === element.getAttribute("slot") &&
-          !(item as HTMLElement & { disabled?: boolean }).disabled,
+          item.closest('[role="menu"]') === panel &&
+          !item.matches(":disabled") &&
+          item.getAttribute("aria-disabled") !== "true",
       )
-      .indexOf(element),
-  );
+      .indexOf(element);
+  });
   expect(index).toBeGreaterThanOrEqual(0);
+  await parent.focus();
   await expect
     .poll(() =>
-      parent.evaluate((element) =>
-        [...(element.parentElement?.children ?? [])].some(
-          (item) => item.localName === "wa-dropdown-item" && item === document.activeElement,
-        ),
-      ),
+      parent.evaluate((element) => {
+        const active = document.activeElement;
+        return Boolean(
+          active?.matches('[role^="menuitem"]') &&
+          active.closest('[role="menu"]') === element.closest('[role="menu"]'),
+        );
+      }),
     )
     .toBe(true);
   await page.keyboard.press("Home");
@@ -166,8 +178,16 @@ export async function openSessionMenuSubmenu(page: Page, name: string): Promise<
   await expect
     .poll(() => parent.evaluate((element) => element === document.activeElement))
     .toBe(true);
+  return parent;
+}
+
+/** Opens a native submenu through its roving-focus keyboard path. */
+export async function openSessionMenuSubmenu(page: Page, name: string): Promise<void> {
+  const parent = await focusSessionMenuItem(page, name);
+  await expect.poll(() => parent.getAttribute("aria-haspopup")).toBe("menu");
   await page.keyboard.press("ArrowRight");
   await expect.poll(() => parent.getAttribute("aria-expanded")).toBe("true");
+  await sessionMenuSubmenu(parent).waitFor({ state: "visible" });
 }
 
 /** Fills the owned input dialog and submits it the way Enter does. */

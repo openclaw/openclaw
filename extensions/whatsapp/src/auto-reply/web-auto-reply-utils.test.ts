@@ -5,8 +5,8 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { debugMention } from "./mentions.js";
-import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
+import { isBotMentioned } from "./mentions.js";
+import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 type TestMessageOverrides = {
   admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
@@ -56,13 +56,13 @@ const makeMsg = (overrides: TestMessageOverrides): AdmittedWebInboundMessage => 
   });
 };
 
-describe("isBotMentionedFromTargets", () => {
+describe("isBotMentioned", () => {
   function expectMentioned(
     msg: AdmittedWebInboundMessage,
     cfg: { mentionRegexes: RegExp[]; allowFrom?: Array<string | number>; isSelfChat?: boolean },
     expected: boolean,
   ) {
-    expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
+    expect(isBotMentioned(msg, cfg)).toBe(expected);
   }
 
   it("detects an explicit group @mention even when self is in allowFrom (#49317)", () => {
@@ -108,59 +108,40 @@ describe("resolveMentionTargets with @lid mapping", () => {
         JSON.stringify("+1777"),
       );
 
-      const mentionDetails = debugMention(
+      const mentioned = isBotMentioned(
         makeMsg({
           body: "ping",
           mentionedJids: ["777@lid"],
-          selfE164: "+15551234567",
-          selfJid: "15551234567@s.whatsapp.net",
+          selfE164: "+1777",
+          selfJid: "1777@s.whatsapp.net",
         }),
         { mentionRegexes: [] },
         authDir,
-      ).details;
-      expect(mentionDetails.normalizedMentionedJids).toEqual([["+1777", "777@lid"]]);
+      );
+      expect(mentioned).toBe(true);
 
-      const selfDetails = debugMention(
+      const mentionedByNumber = isBotMentioned(
         makeMsg({
-          body: "ping",
+          body: "1777 ping",
           selfJid: "777@lid",
         }),
         { mentionRegexes: [] },
         authDir,
-      ).details;
-      expect(selfDetails.resolvedSelf).toEqual({
-        jid: null,
-        lid: "777@lid",
-        e164: "+1777",
-      });
+      );
+      expect(mentionedByNumber).toBe(true);
     });
   });
 });
 
 describe("web auto-reply util", () => {
-  describe("elide", () => {
-    const hasLoneSurrogate = (value: string): boolean =>
-      Array.from(value).some((char) => {
-        if (char.length !== 1) {
-          return false;
-        }
-        const codeUnit = char.charCodeAt(0);
-        return codeUnit >= 0xd800 && codeUnit <= 0xdfff;
-      });
-
-    it("returns undefined for undefined input", () => {
-      expect(elide(undefined)).toBe(undefined);
-    });
-
-    it("does not split surrogate pairs when the limit lands inside an emoji", () => {
-      const output = elide("😀😀😀", 5);
-
-      expect(output).toBe("😀😀… (truncated 2 chars)");
-      expect(hasLoneSurrogate(output ?? "")).toBe(false);
-    });
-  });
-
   describe("isLikelyWhatsAppCryptoError", () => {
+    it("recognizes authentication failures identified by the Baileys stack", () => {
+      const error = new Error("Unsupported state or unable to authenticate data");
+      error.stack = `${error.message}\n    at decrypt (noise-handler.js:10:2)`;
+      expect(isLikelyWhatsAppCryptoError(error)).toBe(true);
+      expect(isLikelyWhatsAppCryptoError(new Error(error.message))).toBe(false);
+    });
+
     it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;

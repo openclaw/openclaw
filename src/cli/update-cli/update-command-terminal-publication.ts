@@ -3,6 +3,7 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
 import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -99,7 +100,7 @@ export async function withUpdateProgressSettlement(
 }
 
 export function bindUpdateFinalizationFailure(progressFailure: { cause: unknown } | undefined) {
-  return (
+  const createFailure = (
     result: UpdateRunResult,
     detail?: string,
     options?: ErrorOptions,
@@ -119,6 +120,15 @@ export function bindUpdateFinalizationFailure(progressFailure: { cause: unknown 
           }
         : options;
     return new UpdateCommandFailure(result, exitCode, detail, failureOptions);
+  };
+  return {
+    createFailure,
+    settleResult: (...args: Parameters<typeof createFailure>): UpdateRunResult => {
+      if (args[0].status !== "ok") {
+        throw createFailure(...args);
+      }
+      return args[0];
+    },
   };
 }
 
@@ -149,7 +159,10 @@ export function completeUpdateCommandResult(
     ...(result.status === "error" &&
     result.reason !== UPDATE_ACTIVATION_TIMEOUT_REASON &&
     params.rollbackBlockedReason
-      ? { reason: params.rollbackBlockedReason }
+      ? {
+          reason: params.rollbackBlockedReason,
+          recovery: unsafeUpdateRecovery(result.recovery, params.rollbackBlockedReason),
+        }
       : {}),
     durationMs: Math.max(0, Date.now() - params.startedAt),
   });
@@ -210,6 +223,7 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  const refusal = classifyDoctorMaintenanceRefusal(error);
   const version = params.result.after?.version?.trim();
   return {
     message,
@@ -218,8 +232,12 @@ export function createPostUpdateFailureResult(
       status: "error",
       reason: "post-update-failed",
       recovery:
-        classifyDoctorMaintenanceRefusal(error).kind === "data-at-risk"
-          ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+        refusal.kind === "data-at-risk"
+          ? {
+              serviceRestartSafe: false,
+              reason: "runtime-verification-failed",
+              dataAtRisk: refusal.reason,
+            }
           : isUpdateStateReadContention(error) && version
             ? (params.result.recovery ?? { serviceRestartSafe: true, version })
             : params.result.recovery,

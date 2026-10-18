@@ -18,10 +18,16 @@ function syncAndHash(pathname: string) {
   }
 }
 
-/** Preserve damaged pages through the snapshot owner before a Doctor repair writes. */
+/** Preserve original pages through the snapshot owner before a Doctor repair writes. */
 export function backupDoctorSqliteRepair(
   pathname: string,
-  repair: "index" | "session-window",
+  repair:
+    | "index"
+    | "session-window"
+    | "transcript-headers"
+    | "transcript-labels"
+    | "media-persistence"
+    | "transcript-directives",
 ): string {
   // Closing a source descriptor here would release this process's SQLite locks on POSIX.
   const prepared = prepareSqliteReadOnlyLocationSync(pathname);
@@ -55,12 +61,13 @@ export function backupDoctorSqliteRepair(
 export function repairDoctorSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { label: string; assertCurrent: () => void },
+  options: { label: string; assertCurrent: () => void; ftsSchemas?: readonly string[] },
 ): string[] {
   let backupPath: string | undefined;
   let indexes: string[];
   try {
     indexes = repairSqliteIndexCorruption(database, pathname, {
+      ftsSchemas: options.ftsSchemas,
       assertCurrent: options.assertCurrent,
       backup: () => {
         options.assertCurrent();

@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createComponent, createRoot } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { CommandPaletteElement } from "../components/command-palette-contract.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import "../components/modal-dialog.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
-import { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import { COMMAND_PALETTE_ELEMENT, createLazyCustomElementRequests } from "./lazy-custom-element.ts";
 
 let restoreDialog: () => void;
 let container: HTMLDivElement;
@@ -33,19 +35,26 @@ function mountLoader() {
   document.body.prepend(foreground);
   foreground.focus();
   foreground.setSelectionRange(5, 9, "backward");
-  const [revision, setRevision] = createSignal(0);
-  const state = new CommandPaletteLoadingState({
-    requestUpdate: () => setRevision((value) => value + 1),
+  const { state, dispose: disposeOwner } = createRoot((dispose) => {
+    const loading = new ShellCommandPaletteOwner(
+      {
+        elements: {},
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      },
+      { request: () => {}, clear: () => {}, cancel: () => {}, pending: () => false },
+    ).loading;
+    loading.begin();
+    return { state: loading, dispose };
   });
-  state.begin();
+  onTestFinished(disposeOwner);
   const close = vi.fn(() => state.clear());
   mountSolid(
     () =>
       createComponent(CommandPaletteLoading, {
         state,
-        get revision() {
-          return revision();
-        },
         onClose: close,
       }),
     { container },
@@ -53,7 +62,7 @@ function mountLoader() {
   flush();
   const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
   input.focus();
-  return { state, input, foreground, close };
+  return { state, input, foreground, close, disposeOwner };
 }
 
 function type(input: HTMLTextAreaElement, value: string) {
@@ -62,6 +71,68 @@ function type(input: HTMLTextAreaElement, value: string) {
 }
 
 describe("cold command palette input custody", () => {
+  it.each(["open", "toggle"] as const)(
+    "preserves the %s intent when the retained palette is detached",
+    (action) => {
+      const palette = () =>
+        Object.assign(document.createElement("openclaw-command-palette"), {
+          custodianAvailable: false,
+          desktopAvailable: false,
+          isOpen: false,
+          openPalette: vi.fn<CommandPaletteElement["openPalette"]>(),
+          togglePalette: vi.fn<CommandPaletteElement["togglePalette"]>(),
+        });
+      const detached = palette();
+      container.append(detached);
+      detached.remove();
+      const host = {
+        elements: { commandPalette: detached },
+        commandPaletteElement: COMMAND_PALETTE_ELEMENT,
+        lazyCustomElements: createLazyCustomElementRequests(),
+        chatNavigationOptions: () => undefined,
+        navigate: () => {},
+      };
+      const request = vi.fn<ConstructorParameters<typeof ShellCommandPaletteOwner>[1]["request"]>();
+      const { owner, dispose } = createRoot((disposeRoot) => ({
+        owner: new ShellCommandPaletteOwner(host, {
+          request,
+          clear: () => {},
+          cancel: () => {},
+          pending: () => false,
+        }),
+        dispose: disposeRoot,
+      }));
+      onTestFinished(dispose);
+      mountSolid(
+        () => createComponent(CommandPaletteLoading, { state: owner.loading, onClose: () => {} }),
+        { container },
+      );
+
+      owner[action]();
+      flush();
+      expect(detached.openPalette).not.toHaveBeenCalled();
+      expect(detached.togglePalette).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledOnce();
+      const input = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input");
+      if (!input) {
+        throw new Error("Expected the replacement palette's loading input");
+      }
+      type(input, "Keep the replacement intent");
+
+      const replacement = palette();
+      container.append(replacement);
+      host.elements.commandPalette = replacement;
+      request.mock.calls[0]?.[2]?.();
+      expect(replacement.openPalette).toHaveBeenCalledOnce();
+      const take = replacement.openPalette.mock.calls[0]?.[0];
+      expect(typeof take).toBe("function");
+      expect(typeof take === "function" ? take() : undefined).toMatchObject({
+        value: "Keep the replacement intent",
+      });
+      expect(owner.loading.active()).toBe(false);
+    },
+  );
+
   it("retains its live field and selection while the shell refreshes and locks a queued submit", () => {
     const { state, input } = mountLoader();
     type(input, "Keep this selection");
@@ -82,7 +153,7 @@ describe("cold command palette input custody", () => {
       }),
     );
     flush();
-    expect(state.submitRequested).toBe(true);
+    expect(state.submitRequested()).toBe(true);
     expect(input.readOnly).toBe(true);
     expect(container.querySelector("textarea")).toBe(input);
   });
@@ -135,7 +206,7 @@ describe("cold command palette input custody", () => {
         cancelable: true,
       }),
     );
-    expect(state.submitRequested).toBe(true);
+    expect(state.submitRequested()).toBe(true);
     if (outcome === "dismiss") {
       state.clear();
       state.begin();
@@ -175,7 +246,7 @@ describe("cold command palette input custody", () => {
       expect(event.defaultPrevented).toBe(true);
       if (!submit) {
         expect(close).not.toHaveBeenCalled();
-        expect(state.value).toBe("unsent prompt");
+        expect(state.value()).toBe("unsent prompt");
         const newline = new KeyboardEvent("keydown", {
           key: "Enter",
           shiftKey: true,
@@ -184,7 +255,7 @@ describe("cold command palette input custody", () => {
         });
         input.dispatchEvent(newline);
         expect(newline.defaultPrevented).toBe(false);
-        expect(state.submitRequested).toBe(false);
+        expect(state.submitRequested()).toBe(false);
         return;
       }
       const take = state.captureHandoff();
@@ -209,10 +280,9 @@ describe("cold command palette input custody", () => {
       input.setSelectionRange(start, end, "backward");
       if (remount) {
         cleanupSolid();
-        mountSolid(
-          () => createComponent(CommandPaletteLoading, { state, revision: 0, onClose: close }),
-          { container },
-        );
+        mountSolid(() => createComponent(CommandPaletteLoading, { state, onClose: close }), {
+          container,
+        });
         flush();
         const replacement = container.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
         expect(replacement).not.toBe(input);
@@ -234,7 +304,7 @@ describe("cold command palette input custody", () => {
       });
       expect(foreground.value).toBe("Keep this foreground draft");
       expect([foreground.selectionStart, foreground.selectionEnd]).toEqual([5, 9]);
-      expect(state.active).toBe(false);
+      expect(state.active()).toBe(false);
       expect(take()).toBeUndefined();
     },
   );
@@ -247,7 +317,7 @@ describe("cold command palette input custody", () => {
     const take = state.captureHandoff();
     state.handoff(() => accepted(take()));
     expect(accepted).not.toHaveBeenCalled();
-    expect(state.waitingForComposition).toBe(true);
+    expect(state.waitingForComposition()).toBe(true);
     input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "日本" }));
     // Some engines emit the final input after compositionend.
     type(input, "日本");
@@ -262,6 +332,20 @@ describe("cold command palette input custody", () => {
         selectionDirection: "backward",
       }),
     );
+  });
+
+  it("retires a composition handoff when its shell owner is disposed", async () => {
+    const { state, input, disposeOwner } = mountLoader();
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    type(input, "retired prompt");
+    const take = state.captureHandoff();
+    const accepted = vi.fn();
+    state.handoff(accepted);
+    input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    disposeOwner();
+    expect(take()).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(accepted).not.toHaveBeenCalled();
   });
 
   it.each(["composing", "commit-pending"] as const)(
@@ -284,7 +368,7 @@ describe("cold command palette input custody", () => {
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
       expect(accepted).not.toHaveBeenCalled();
-      expect(state.value).toBe("");
+      expect(state.value()).toBe("");
     },
   );
 });
