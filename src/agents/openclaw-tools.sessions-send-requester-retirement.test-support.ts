@@ -2,8 +2,6 @@ import { expect, it, vi } from "vitest";
 import type { MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { captureGatewayOperatorRunAuthority } from "../gateway/operator-run-authority.js";
 import {
@@ -13,7 +11,6 @@ import {
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { mergeAcceptedSessionSpawnsForRun } from "./accepted-session-spawn.js";
@@ -53,33 +50,6 @@ export type GatewayCall = {
   params?: Record<string, unknown>;
   onAccepted?: (payload: unknown) => void;
 };
-
-type AgentCallParams = {
-  extraSystemPrompt?: string;
-  inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
-};
-export function readSessionsSendAgentParams(call: GatewayCall): AgentCallParams {
-  return (call.params ?? {}) as AgentCallParams;
-}
-export async function writeSessionsSendCoordinationEntry(
-  config: OpenClawConfig,
-  sessionKey: string,
-  entry: SessionEntry,
-  storePath?: string,
-) {
-  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
-  if (!agentId) {
-    throw new Error(`Expected an agent-scoped fixture key: ${sessionKey}`);
-  }
-  await replaceSessionEntry(
-    {
-      agentId,
-      sessionKey,
-      storePath: storePath ?? resolveSessionStorePathCore(config.session?.store, { agentId }),
-    },
-    entry,
-  );
-}
 
 /** Reuse the coordination suite's transport and state fixture for post-commit retirement. */
 export function registerSessionsSendRequesterRetirementTests({

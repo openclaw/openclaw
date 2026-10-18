@@ -9,6 +9,7 @@ import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -111,8 +112,6 @@ import {
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   registerSessionsSendRequesterRetirementTests,
-  readSessionsSendAgentParams as agentParams,
-  writeSessionsSendCoordinationEntry,
   type GatewayCall,
 } from "./openclaw-tools.sessions-send-requester-retirement.test-support.js";
 import {
@@ -142,6 +141,10 @@ async function settleSessionWork() {
   expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);
 }
 
+type AgentCallParams = {
+  extraSystemPrompt?: string;
+  inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+};
 const calls: GatewayCall[] = [];
 function mockGatewayReply(
   waitResult: Record<string, unknown> = {
@@ -164,6 +167,9 @@ function mockGatewayReply(
     }
     return {};
   });
+}
+function agentParams(call: GatewayCall): AgentCallParams {
+  return (call.params ?? {}) as AgentCallParams;
 }
 function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
   return createSessionsSendTool({
@@ -202,8 +208,20 @@ function expectCoordination(
     .toBe(requesterChild ? "subagent" : undefined);
   return agentCalls;
 }
-const writeEntry = (sessionKey: string, entry: SessionEntry, storePath?: string) =>
-  writeSessionsSendCoordinationEntry(config, sessionKey, entry, storePath);
+async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: string) {
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (!agentId) {
+    throw new Error(`Expected an agent-scoped fixture key: ${sessionKey}`);
+  }
+  await replaceSessionEntry(
+    {
+      agentId,
+      sessionKey,
+      storePath: storePath ?? resolveSessionStorePathCore(config.session?.store, { agentId }),
+    },
+    entry,
+  );
+}
 
 async function writeFinal(sessionKey: string, runId: string, text: string) {
   const target = await resolveGatewaySessionStoreTargetWithStoreAsync({

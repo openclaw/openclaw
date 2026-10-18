@@ -259,7 +259,10 @@ describe("personal USER.md self-service", () => {
   function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
     const { identity } = toolTurn();
     return withPersonalToolTurn(
-      { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
+      {
+        owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" },
+        allowCollaborativeSteering: true,
+      },
       (turn) =>
         withGatewayToolCallerIdentity(
           { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
@@ -272,52 +275,51 @@ describe("personal USER.md self-service", () => {
     (["get", "set"] as const).flatMap((action) =>
       (["before", "after preparation"] as const).map((phase) => ({ action, phase })),
     ),
-  )(
-    "keeps personal $action with its requester when another profile steers $phase",
-    async ({ action, phase }) => {
-      await withRequesterTurn(async (turn) => {
-        const tool = createPersonalInstructionsTool("main");
-        const execute = (params: Record<string, unknown>) => tool.execute("personal-call", params);
+  )("rejects personal $action when another profile steers $phase", async ({ action, phase }) => {
+    await withRequesterTurn(async (turn) => {
+      const tool = createPersonalInstructionsTool("main");
+      const execute = (params: Record<string, unknown>) => tool.execute("personal-call", params);
+      const steer = async () => {
+        expect(await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" })).toMatchObject({
+          status: "accepted",
+        });
+      };
+      if (phase === "before") {
         const saved = await execute({
           action: "set",
           content: "Alice's preferences",
           expectedHash: null,
         });
         expect(saved.details).toMatchObject({ profileId: "alice", content: "Alice's preferences" });
-        const steer = async () => {
-          state.beforeRoot = undefined;
-          expect(
-            await turn.steer({ profileId: "bob", senderId: "bob", name: "Bob" }),
-          ).toMatchObject({
-            status: "rejected",
-            reason: "tool_authority_mismatch",
-          });
-          expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe("alice-alias");
-        };
-        if (phase === "before") {
-          await steer();
-        } else {
-          state.beforeRoot = steer;
-        }
-        const result = await withGatewayPersonalToolUser("alice-alias", () =>
+        const before = state.rootCalls;
+        await steer();
+        await expect(
+          withGatewayPersonalToolUser("alice-alias", () =>
+            execute({
+              action,
+              ...(action === "set"
+                ? {
+                    content: "Bob's preferences",
+                    expectedHash: (saved.details as { hash: string }).hash,
+                  }
+                : {}),
+            }),
+          ),
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(state.rootCalls).toBe(before);
+        expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
+      } else {
+        state.beforeRoot = steer;
+        await expect(
           execute({
             action,
-            ...(action === "set"
-              ? {
-                  content: "Alice's updated preferences",
-                  expectedHash: (saved.details as { hash: string }).hash,
-                }
-              : {}),
+            ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
           }),
-        );
-        const content = action === "set" ? "Alice's updated preferences" : "Alice's preferences";
-        expect(result.details).toMatchObject({ profileId: "alice", content });
-        expect(await fs.readFile(personalPath(), "utf8")).toBe(content);
-        expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
-        expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-      });
-    },
-  );
+        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
+      }
+    });
+  });
 
   it.each([
     { kind: "shared-secret", boundary: "live" },

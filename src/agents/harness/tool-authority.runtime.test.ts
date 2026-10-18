@@ -324,21 +324,13 @@ describe("host-prepared embedded tool authority", () => {
         const entered = createDeferred();
         const release = createDeferred();
         handle.supportsTranscriptCommitWait = true;
-        handle.messageInjectionV2 = {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage: async (text, options, assertCurrent) => {
-            assertCurrent();
-            entered.resolve();
-            await release.promise;
-            assertCurrent();
-            return queue(text, options);
-          },
-        };
-        const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
-        if (!target) {
-          throw new Error("Expected the direct admitted owner to be injectable");
-        }
+        interceptMessages(handle, async (text, options, assertCurrent) => {
+          entered.resolve();
+          await release.promise;
+          assertCurrent();
+          return queue(text, options);
+        });
+        const target = currentTarget();
         const origin = getGatewayToolCallerIdentity()?.requesterOrigin;
         if (!origin) {
           throw new Error("Expected captured requester facts");
@@ -541,11 +533,7 @@ describe("host-prepared embedded tool authority", () => {
             }
             return { ...own, messageProvider: "discord-voice" };
           });
-          const pending = controlRealtimeVoiceAgentRun({
-            sessionKey,
-            text: "cancel",
-            getToolAuthorityOverlay: validateAdmission,
-          });
+          const pending = voiceControl(validateAdmission, "cancel");
           if (admission === "revoked") {
             await expect(pending).rejects.toThrow("Voice admission was revoked");
             expect(abort).not.toHaveBeenCalled();

@@ -52,14 +52,10 @@ import {
   registerSessionsSendTimeoutTests,
 } from "./openclaw-tools.sessions-timeout.test-support.js";
 import {
-  agentParams,
-  cloneTestConfig,
   createSessionsSendGatewayScope,
   getSessionTool,
   installMessagingTestRegistry,
   mockAcceptedChildFollowup,
-  mockGatewayResponses,
-  seedSession,
   TEST_CONFIG,
   type GatewayCall,
 } from "./openclaw-tools.sessions.test-support.js";
@@ -73,6 +69,13 @@ const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-s
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-scoped-session-send-");
 const continuations = observeSessionSendContinuations();
+
+async function seedSession(sessionKey: string, sessionId = sessionKey) {
+  await upsertSessionEntryCore(
+    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey },
+    { sessionId, updatedAt: 1 },
+  );
+}
 
 async function writeFinal(sessionKey: string, runId: string, text: string, sessionId = sessionKey) {
   await persistSessionTranscriptTurn(
@@ -95,6 +98,35 @@ async function writeFinal(sessionKey: string, runId: string, text: string, sessi
       ],
     },
   );
+}
+
+function cloneTestConfig() {
+  return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
+}
+
+function mockGatewayResponses(responses: Record<string, unknown>) {
+  callGatewayMock.mockImplementation(
+    async (request: GatewayCall) => responses[request.method ?? ""] ?? {},
+  );
+}
+
+type AgentCallParams = {
+  message?: string;
+  lane?: string;
+  channel?: string;
+  sessionKey?: string;
+  extraSystemPrompt?: string;
+  inputProvenance?: {
+    kind?: string;
+    sourceSessionKey?: string;
+    sourceChannel?: string;
+    sourceTool?: string;
+    sourceRole?: string;
+  };
+};
+
+function agentParams(call: { params?: unknown }): AgentCallParams {
+  return (call.params ?? {}) as AgentCallParams;
 }
 
 describe("sessions tools", () => {

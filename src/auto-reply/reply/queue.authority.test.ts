@@ -70,11 +70,13 @@ describe("followup queue authority", () => {
     "keeps restart-restricted input separate through a %s drain",
     async (mode) => {
       const q = createQueueCase({ mode: "collect", cap: mode === "overflow" ? 1 : 50 });
+      const admissionConfigs = [{ tools: { deny: ["write"] } }, { tools: { deny: ["exec"] } }];
       for (const restricted of [true, false]) {
         const run = createRun({
           prompt: restricted ? "interrupted task" : "new task",
           originatingChannel: "webchat",
         });
+        run.readAdmissionConfig = () => admissionConfigs[restricted ? 0 : 1]!;
         if (restricted) {
           run.forceRestartSafeTools = true;
           run.forceCodeModeTools = true;
@@ -85,6 +87,7 @@ describe("followup queue authority", () => {
         q.start();
         await vi.waitFor(() => expect(getExistingFollowupQueue(q.key)).toBeUndefined());
         expect(q.calls).toHaveLength(2);
+        expect(q.calls.map((run) => run.readAdmissionConfig?.())).toEqual(admissionConfigs);
         expect(q.calls[0]?.prompt).toContain("interrupted task");
         expect(q.calls[0]?.prompt).not.toContain("new task");
         expect(q.calls[0]).toMatchObject({

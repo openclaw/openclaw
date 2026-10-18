@@ -86,6 +86,9 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 
 const mainSession = (sessionKey: string) => loadSessionEntry({ agentId: "main", sessionKey });
 const localContext = () => expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+const draftMessages = {
+  messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+};
 const toolOptions = (config: OpenClawConfig) => ({ config, agentSessionKey: REQUESTER });
 const sessionKeys = () =>
   listSessionEntriesCore({ agentId: "main" }).map((entry) => entry.sessionKey);
@@ -146,14 +149,12 @@ describe("built-in session tool role authority", () => {
           turn.admittedRunContext.executionIdentityToken,
           "Alice admission",
         );
-        const options = { config: cfg, agentSessionKey: REQUESTER };
+        const options = toolOptions(cfg);
         const history = createSessionsHistoryTool(options);
         const read = (sessionKey: string, user?: string) =>
           history.execute("participant-history", { sessionKey, user });
         const expectDraft = async (user?: string) =>
-          expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject({
-            messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-          });
+          expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject(draftMessages);
 
         await expectDraft();
         const admittedFingerprint = turn.operation.toolAuthorityFingerprint;
@@ -231,15 +232,11 @@ describe("built-in session tool role authority", () => {
             user,
           });
         await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
-        expect(
-          loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label,
-        ).toBeUndefined();
+        expect(mainSession(PARTICIPANT_DRAFT)?.label).toBeUndefined();
         await expect(patch(alice.profileId)).resolves.toMatchObject({
           details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },
         });
-        expect(loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label).toBe(
-          "Selected participant write",
-        );
+        expect(mainSession(PARTICIPANT_DRAFT)?.label).toBe("Selected participant write");
         expect(decisions.at(-1)?.token).toBe(token);
         expect(decisions.at(-1)?.refs?.representedSubject).toMatchObject({
           state: "present",
@@ -266,8 +263,7 @@ describe("built-in session tool role authority", () => {
       const statusGateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest");
       onTestFinished(() => statusGateway.mockRestore());
       const sessionStatus = createSessionStatusTool({
-        config: cfg,
-        agentSessionKey: REQUESTER,
+        ...toolOptions(cfg),
         runSessionKey: REQUESTER,
       });
       await expect(
@@ -285,7 +281,7 @@ describe("built-in session tool role authority", () => {
     "preserves incumbent authority for %s when another participant steers during preparation",
     async (surface) => {
       await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
-        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const context = localContext();
         const steer = vi
           .fn(async () => undefined)
           .mockImplementationOnce(async () => {
@@ -303,10 +299,7 @@ describe("built-in session tool role authority", () => {
         } else {
           context.readChatStartupProjection = steer;
         }
-        const history = createSessionsHistoryTool({
-          config: cfg,
-          agentSessionKey: REQUESTER,
-        });
+        const history = createSessionsHistoryTool(toolOptions(cfg));
         const result = await (surface === "unselected wake"
           ? dispatchGatewayMethodInProcess("wake", {
               sessionKey: PARTICIPANT_DRAFT,
@@ -337,9 +330,7 @@ describe("built-in session tool role authority", () => {
               user: alice.profileId,
             })
           ).details,
-        ).toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        });
+        ).toMatchObject(draftMessages);
       });
     },
   );
@@ -348,17 +339,13 @@ describe("built-in session tool role authority", () => {
     await withParticipantSessionToolsFixture(async ({ turn, bob }) => {
       const read = (sessionKey: string) =>
         dispatchGatewayMethodInProcess("chat.history", { sessionKey, agentId: "main" });
-      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject({
-        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-      });
+      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject(draftMessages);
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
       await expect(read(REQUESTER)).resolves.toMatchObject({ sessionKey: REQUESTER });
       await expect(read(REQUESTER.replace("agent:main:", ""))).resolves.toMatchObject({
         messages: [],
       });
-      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject({
-        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-      });
+      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject(draftMessages);
       await expect(dispatchGatewayMethodInProcess("sessions.list", {})).resolves.toMatchObject({
         sessions: expect.arrayContaining([expect.objectContaining({ key: PARTICIPANT_DRAFT })]),
       });
@@ -383,10 +370,7 @@ describe("built-in session tool role authority", () => {
           idempotencyKey: "unselected-transcript-override",
         }),
       ).rejects.toThrow("conflicting session identity constraints");
-      const context = getPluginRuntimeGatewayRequestScope()?.context;
-      if (!context) {
-        throw new Error("expected local Gateway context");
-      }
+      const context = localContext();
       const custody = await captureAgentHarnessCompletionCustody(
         createAgentHarnessCompletionScope({ requesterSessionKey: REQUESTER }),
       );
@@ -402,9 +386,7 @@ describe("built-in session tool role authority", () => {
           runtime.recovery.dispatchSessionMethod("chat.history", {
             sessionKey: PARTICIPANT_DRAFT,
           }),
-        ).resolves.toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
-        });
+        ).resolves.toMatchObject(draftMessages);
         context.readChatStartupProjection = async () => {
           await turn.complete();
           return undefined;
@@ -448,40 +430,26 @@ describe("built-in session tool role authority", () => {
             respond,
           }),
         );
-      await expect(read()).resolves.toBeUndefined();
-      expect(respond.mock.calls).toMatchObject([
-        [
-          true,
-          { messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })] },
-        ],
-      ]);
+      const expectRead = async (sessionKey: string | undefined, response: unknown[]) => {
+        respond.mockClear();
+        await expect(read(sessionKey)).resolves.toBeUndefined();
+        expect(respond.mock.calls).toMatchObject([response]);
+      };
+      await expectRead(undefined, [true, draftMessages]);
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      respond.mockClear();
-      await expect(read(REQUESTER)).resolves.toBeUndefined();
-      expect(respond.mock.calls).toMatchObject([[true, { sessionKey: REQUESTER }]]);
-      respond.mockClear();
-      await expect(read()).resolves.toBeUndefined();
-      expect(respond.mock.calls).toMatchObject([
-        [
-          true,
-          { messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })] },
-        ],
-      ]);
-      respond.mockClear();
+      await expectRead(REQUESTER, [true, { sessionKey: REQUESTER }]);
+      await expectRead(undefined, [true, draftMessages]);
       context.readChatStartupProjection = async () => {
         await turn.complete();
         return undefined;
       };
-      await expect(read(REQUESTER)).resolves.toBeUndefined();
-      expect(respond.mock.calls).toMatchObject([
-        [
-          false,
-          undefined,
-          {
-            code: "INVALID_REQUEST",
-            message: expect.stringMatching(/turn has ended|no longer active/),
-          },
-        ],
+      await expectRead(REQUESTER, [
+        false,
+        undefined,
+        {
+          code: "INVALID_REQUEST",
+          message: expect.stringMatching(/turn has ended|no longer active/),
+        },
       ]);
     });
   });

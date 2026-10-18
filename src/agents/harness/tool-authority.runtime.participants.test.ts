@@ -31,6 +31,7 @@ import {
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 import {
   attempt,
+  interceptMessages,
   published,
   sessionId,
   sessionKey,
@@ -170,16 +171,11 @@ describe("host-prepared embedded tool authority", () => {
         const releaseQueue = createDeferred();
         let queueReturned = false;
         handle.supportsTranscriptCommitWait = true;
-        handle.messageInjectionV2 = {
-          version: 2,
-          isAvailable: () => true,
-          queueMessage: async (_text, options, assertCurrent) => {
-            assertCurrent();
-            options?.onQueueAccepted?.(true);
-            await releaseQueue.promise;
-            queueReturned = true;
-          },
-        };
+        interceptMessages(handle, async (_text, options) => {
+          options?.onQueueAccepted?.(true);
+          await releaseQueue.promise;
+          queueReturned = true;
+        });
         const incoming: ReplyToolAuthorityOverlay = {
           senderIsOwner: true,
           disableTools: false,

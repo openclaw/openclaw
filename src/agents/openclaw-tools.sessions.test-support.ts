@@ -1,8 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createContext } from "../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { callGatewayMock } from "./openclaw-tools.sessions.mocks.test-support.js";
 import {
   readFollowupRequest,
@@ -59,46 +57,10 @@ export function getSessionTool(
   });
 }
 
-export async function seedSession(sessionKey: string, sessionId = sessionKey) {
-  await upsertSessionEntryCore(
-    { agentId: parseAgentSessionKey(sessionKey)!.agentId, sessionKey },
-    { sessionId, updatedAt: 1 },
-  );
-}
-
-export function cloneTestConfig() {
-  return { ...TEST_CONFIG, session: { ...TEST_CONFIG.session } };
-}
-
 export type GatewayCall = {
   method?: string;
   params?: Record<string, unknown>;
 };
-
-export function mockGatewayResponses(responses: Record<string, unknown>) {
-  callGatewayMock.mockImplementation(
-    async (request: GatewayCall) => responses[request.method ?? ""] ?? {},
-  );
-}
-
-type AgentCallParams = {
-  message?: string;
-  lane?: string;
-  channel?: string;
-  sessionKey?: string;
-  extraSystemPrompt?: string;
-  inputProvenance?: {
-    kind?: string;
-    sourceSessionKey?: string;
-    sourceChannel?: string;
-    sourceTool?: string;
-    sourceRole?: string;
-  };
-};
-
-export function agentParams(call: { params?: unknown }): AgentCallParams {
-  return (call.params ?? {}) as AgentCallParams;
-}
 
 export function createSessionsSendGatewayScope() {
   const context = createContext();

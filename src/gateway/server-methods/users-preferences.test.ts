@@ -188,7 +188,6 @@ test("users.prefs reads merged-profile accents while an unrelated writer reply i
 async function withPreferenceToolTurn(
   run: (params: {
     ownerId: string;
-    guestId: string;
     steer: () => Promise<void>;
     revoke: () => void;
     request: (
@@ -226,18 +225,17 @@ async function withPreferenceToolTurn(
       { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
       () =>
         withPersonalToolTurn(
-          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          {
+            owner: { profileId: owner.id, senderId: "owner", name: "Owner" },
+            allowCollaborativeSteering: true,
+          },
           (turn) =>
             run({
               ownerId: owner.id,
-              guestId: guest.id,
               steer: async () => {
                 expect(
                   await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
-                ).toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-                expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe(
-                  owner.id,
-                );
+                ).toMatchObject({ status: "accepted" });
               },
               revoke: () => turn.revoke(owner.id),
               request: (method, params = {}) =>
@@ -253,8 +251,8 @@ async function withPreferenceToolTurn(
   }
 }
 
-test("users.prefs keeps personal calls with the owner after rejecting another requester", async () => {
-  await withPreferenceToolTurn(async ({ ownerId, guestId, steer, request }) => {
+test("users.prefs rejects mixed-person synthetic turn calls before reading or writing preferences", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
     await expect(request("users.prefs.set", { entries: { "ui.theme": "claw" } })).resolves.toEqual({
       status: "ok",
     });
@@ -265,32 +263,19 @@ test("users.prefs keeps personal calls with the owner after rejecting another re
     await steer();
     using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
     using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
-    await withGatewayPersonalToolUser(guestId, async () => {
-      await expect(request("users.prefs.get")).rejects.toThrow(/not a participant/i);
+    await withGatewayPersonalToolUser(ownerId, async () => {
+      await expect(request("users.prefs.get")).rejects.toThrow(/own Control UI turn/i);
       await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow(
-        /not a participant/i,
+        /own Control UI turn/i,
       );
     });
     expect(read).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
-    await withGatewayPersonalToolUser(ownerId, async () => {
-      await expect(request("users.prefs.get")).resolves.toEqual({
-        status: "ok",
-        entries: { "ui.theme": "claw" },
-      });
-      await expect(
-        request("users.prefs.set", { entries: { "ui.theme": "dark" } }),
-      ).resolves.toEqual({ status: "ok" });
-    });
-    expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
-      entries: { "ui.theme": "dark" },
-    });
-    expect(await preferences.getCanonicalUserPreferences(guestId)).toMatchObject({ entries: {} });
   });
 });
 
 test.each(["read", "write"] as const)(
-  "users.prefs preserves its requester when another person steers during a pending %s",
+  "users.prefs rejects a steer accepted while the personal %s is pending",
   async (operation) => {
     await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
       await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
@@ -327,18 +312,10 @@ test.each(["read", "write"] as const)(
         release.resolve();
         await outcome;
       }
-      expect(await outcome).toEqual([
-        {
-          status: "fulfilled",
-          value:
-            operation === "read"
-              ? { status: "ok", entries: { "ui.theme": "claw" } }
-              : { status: "ok" },
-        },
+      expect(await outcome).toMatchObject([
+        { status: "rejected", reason: { message: expect.stringMatching(/own Control UI turn/i) } },
       ]);
-      expect(await readPreferences(ownerId)).toMatchObject({
-        entries: { "ui.theme": operation === "read" ? "claw" : "dark" },
-      });
+      expect(await readPreferences(ownerId)).toMatchObject({ entries: { "ui.theme": "claw" } });
     });
   },
 );

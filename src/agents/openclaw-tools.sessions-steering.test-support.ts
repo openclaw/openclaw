@@ -117,11 +117,13 @@ export async function setSessionsSendTestActiveRun(
   })();
   // The owner stays open through the test; cleanup joins any late failure.
   void completion.catch(() => {});
-  activeOwners.push(async () => {
+  const close = async () => {
     closed.resolve();
     await completion;
-  });
+  };
+  activeOwners.push(close);
   await ready.promise;
+  return close;
 }
 
 export async function activeRun(
