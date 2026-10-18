@@ -6433,12 +6433,13 @@ their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
 Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
-one read, then insert payloads, identities, and active projection rows in bounded
-groups. Streaming imports retain per-row acceptance feedback and buffer only the
-accepted writes. Payloads precede their dependent rows, preserving immediate
-foreign keys. The cursor flushes its watermark once and folds final recency into
-the transcript mutation write. Rejected identities still update attempt recency
-without advancing the mutation watermark. If an iterator fails, its accepted
+one read, then insert payloads, identities, and active projection rows in groups
+of up to 512 rows, flushing earlier when buffered payloads reach 1 MiB. Streaming
+imports retain per-row acceptance feedback and buffer only the accepted writes.
+Payloads precede their dependent rows, preserving immediate foreign keys. The
+cursor reuses its initial context-classification fact, flushes its watermark once,
+and folds final recency into the transcript mutation write. Rejected identities
+still update attempt recency without advancing the mutation watermark. If an iterator fails, its accepted
 prefix settles before the error escapes; the enclosing transaction owns rollback.
 Scalar appends without complete actor facts fold identity rejection into the
 payload insertion. Rewrite generations, stored payloads, and commit boundaries
