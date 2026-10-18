@@ -5,7 +5,7 @@ import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
 import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 import "../../styles/systems.css";
@@ -195,7 +195,10 @@ function SystemsInventory(props: { controller: Systems }) {
           panelClass="sidebar-session-sort-menu"
           placement="bottom-end"
           label={t("systems.filterSort")}
-          triggerClass={`systems-filter__sort sidebar-session-sort${controller().state.statusFilter !== "all" ? " sidebar-session-sort--filtered" : ""}`}
+          triggerClass={[
+            "systems-filter__sort sidebar-session-sort",
+            { "sidebar-session-sort--filtered": controller().state.statusFilter !== "all" },
+          ]}
           triggerAttributes={{ title: t("systems.filterSort") }}
           trigger={<Icon name="listFilter" />}
           items={[

@@ -3,11 +3,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
+import {
+  CLAUDE_CLI_SETUP_GUIDANCE,
+  resolveModelRuntimeRoute,
+} from "../shared/model-runtime-route.js";
 import { FailoverError } from "./failover/error.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { AgentHarness } from "./harness/types.js";
+import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { findModelInCatalog } from "./model-catalog-lookup.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelKey, type ModelRef } from "./model-ref-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
@@ -31,6 +36,9 @@ const loadPluginGenerationScope = createLazyPromise(
   () => import("../plugins/runtime/generation-scope.js"),
 );
 const loadModelCatalogEntry = createLazyPromise(() => import("./model-catalog-entry.js"));
+const loadCatalogDecisionRuntime = createLazyPromise(
+  () => import("./model-catalog-decision-runtime.js"),
+);
 
 type PreparedModelChoice =
   | { kind: "resolved"; ref: ModelRef; model: ProviderRuntimeModel }
@@ -340,7 +348,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
         catalog.loadPublishedPreparedModelCatalogOwnerSnapshot(catalogParams),
       )
     : getPublishedPreparedModelCatalogOwnerSnapshot(catalogParams);
-  const unavailable = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}. Refresh the model catalog and choose again.`;
+  const unavailableSubject = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}`;
+  const unavailable = `${unavailableSubject}. Refresh the model catalog and choose again.`;
   if (!published) {
     return { kind: "unavailable", message: unavailable };
   }
@@ -403,6 +412,38 @@ export async function preparePublishedModelRuntimeChoice(params: {
         : undefined,
     profileProvider: params.sessionEntry?.providerOverride ?? params.sessionEntry?.modelProvider,
   });
+  // A known account failure needs sign-in guidance; a catalog refresh cannot repair it.
+  const describeUnavailable = async (
+    row: ModelCatalogEntry,
+    evaluation: ModelAuthAvailabilityEvaluation,
+    runtimeId: string | undefined,
+  ): Promise<string> => {
+    const reason = evaluation.availability === true ? undefined : evaluation.unavailableReason;
+    if (!reason) {
+      return unavailable;
+    }
+    const { resolveCatalogDecisionRuntime } = await loadCatalogDecisionRuntime();
+    const routeRuntimeId =
+      runtimeId ??
+      resolveCatalogDecisionRuntime({
+        cfg: owner.config,
+        agentId: owner.agentId ?? params.agentId,
+        entry: row,
+        evaluation,
+        pluginRegistry: owner.pluginRegistry,
+      })?.id;
+    const claudeCli = resolveModelRuntimeRoute(params.provider, routeRuntimeId) === "claudeCli";
+    switch (reason) {
+      case "missing-auth":
+        return `${unavailableSubject}: sign-in needed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Connect its provider account, or choose another model."}`;
+      case "auth-failed":
+        return `${unavailableSubject}: sign-in failed. ${claudeCli ? CLAUDE_CLI_SETUP_GUIDANCE : "Sign in to its provider again, or choose another model."}`;
+      case "cooldown":
+        return `${unavailableSubject}: temporarily unavailable. Try again later or choose another model.`;
+      default:
+        return unavailable;
+    }
+  };
   let entry =
     findModelInCatalog(decisions.snapshot.entries, params.provider, params.model) ??
     decisions.snapshot.entries.find(
@@ -427,7 +468,10 @@ export async function preparePublishedModelRuntimeChoice(params: {
       selectedAuth.selectedAuthMode,
     );
     if (selectedAuth.availability !== true || !authProfileMode) {
-      return { kind: "unavailable", message: unavailable };
+      return {
+        kind: "unavailable",
+        message: await describeUnavailable(requestedEntry, selectedAuth, materializationRuntime),
+      };
     }
     const resolved = await resolveModelAsync(
       params.provider,
@@ -457,16 +501,26 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const variants = decisions.snapshot.routeVariants.filter(
     (row) => identityKey(row) === selectedIdentity,
   );
-  const choices = decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
+  const entryVariants = variants.length ? variants : [entry];
+  const choices = decisions.runtimeChoices(entry, entryVariants);
   const runtimeId =
     params.runtimeId ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
       ? params.preferredRuntimeId
       : choices?.[0]);
   if (!runtimeId || !choices?.includes(runtimeId)) {
-    return { kind: "unavailable", message: unavailable };
+    const requestedRuntimeId = params.runtimeId ?? params.preferredRuntimeId;
+    const evaluation = decisions.evaluateNative(
+      entry,
+      decisions.evaluateEntry(entry, entryVariants, requestedRuntimeId),
+      requestedRuntimeId,
+    );
+    return {
+      kind: "unavailable",
+      message: await describeUnavailable(entry, evaluation, requestedRuntimeId),
+    };
   }
-  const host = decisions.evaluateEntry(entry, variants.length ? variants : [entry], runtimeId);
+  const host = decisions.evaluateEntry(entry, entryVariants, runtimeId);
   const validate = () =>
     decisions.isCurrent() && decisions.evaluateNative(entry, host, runtimeId).availability === true
       ? undefined

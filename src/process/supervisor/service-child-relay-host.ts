@@ -202,6 +202,7 @@ export async function createServiceChildRelayAdapter(
     if (completionSettled) {
       return;
     }
+    const diagnostics = retirement.diagnostics();
     const error = new Error(
       "service child cleanup did not complete before its hard deadline; pending: " +
         JSON.stringify({
@@ -213,7 +214,23 @@ export async function createServiceChildRelayAdapter(
           stdoutEnd: !stdoutRelay.ended,
           stderrEnd: !stderrRelay.ended,
         }),
-      { cause: retirement.diagnostics() },
+      {
+        // Stability bundles retain bounded Error messages, not arbitrary cause objects.
+        // Keep owner attribution payload-free and the signaling failure in the error graph.
+        cause: new Error(
+          "service child cleanup owner: " +
+            JSON.stringify({
+              generation,
+              relayPid: child.pid,
+              anchorPid,
+              commandPid,
+              treeOwnership: useLinuxSubreaper ? "linux-subreaper" : "process-group",
+              durationMs: diagnostics.durationMs,
+              escalationAfterMs: diagnostics.escalationAfterMs,
+            }),
+          { cause: diagnostics.signalError },
+        ),
+      },
     );
     // Extinction may already be confirmed while an output pipe remains open.
     // Reject pending results before destroy can turn that missing tail into success.

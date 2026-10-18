@@ -65,7 +65,6 @@ function createGateway(
 function createRuntimeConfig(config: Record<string, unknown>) {
   const ensureLoaded = vi.fn(async () => undefined);
   const patch = vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>(async () => true);
-  const refresh = vi.fn(async () => undefined);
   const listeners = new Set<() => void>();
   const state = {
     configSnapshot: { sourceConfig: config, hash: "base" },
@@ -84,13 +83,12 @@ function createRuntimeConfig(config: Record<string, unknown>) {
     ensureLoaded,
     patch,
     patchFromSnapshot,
-    refresh,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
   } as unknown as ApplicationContext["runtimeConfig"];
-  return { runtimeConfig, ensureLoaded, patch, refresh };
+  return { runtimeConfig, ensureLoaded, patch };
 }
 async function mountCard(
   options: {
@@ -203,6 +201,33 @@ describe("openclaw-mcp-servers-card", () => {
     cleanupSolid();
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+  it("keeps form toggles ordered before the next render", async () => {
+    const { card } = await mountCard();
+    const add = actionButton(card, "Add server");
+    add.click();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).toBeNull();
+    add.click();
+    flush();
+    expect(card.querySelector(".mcp-server-form")).not.toBeNull();
+  });
+  it("admits one mutation before rendering busy and releases it after completion", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+    });
+    const completion = deferred<boolean>();
+    harness.patch.mockReturnValueOnce(completion.promise);
+    const disable = actionButton(card, "Disable");
+    disable.click();
+    actionButton(card, "Remove local").click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    expect(disable.disabled).toBe(true);
+    completion.resolve(true);
+    await waitForFast(() => expect(disable.disabled).toBe(false));
+    disable.click();
+    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
   });
   it("starts the selected connector and keeps a usable link when the popup is blocked", async () => {
     const { card, request, open, connection } = await mountLoginCard();
@@ -547,6 +572,38 @@ describe("openclaw-mcp-servers-card", () => {
       ...(replacePaths.length ? { replacePaths } : {}),
     });
   });
+  it.each(["load", "patch rejection", "patch refusal"] as const)(
+    "shows a %s mutation failure and releases the controls for retry",
+    async (stage) => {
+      const { card, harness } = await mountCard({
+        config: configWith({ local: { command: "node" } }),
+      });
+      const failure = new Error("synthetic mutation failure");
+      if (stage === "load") {
+        harness.ensureLoaded.mockRejectedValueOnce(failure);
+      } else if (stage === "patch rejection") {
+        harness.patch.mockRejectedValueOnce(failure);
+      } else {
+        harness.runtimeConfig.state.lastError = failure.message;
+        harness.patch.mockResolvedValueOnce(false);
+      }
+
+      actionButton(card, "Disable").click();
+
+      await waitForFast(() =>
+        expect(card.querySelector('[role="alert"]')?.textContent).toBe(failure.message),
+      );
+      expect(actionButton(card, "Disable").disabled).toBe(false);
+
+      actionButton(card, "Disable").click();
+      await waitForFast(() =>
+        expect(card.querySelector('[role="status"]')?.textContent).toBe(
+          "Disabled MCP server local.",
+        ),
+      );
+    },
+  );
+
   it("builds removal intent from the snapshot after queued writes settle", async () => {
     const retained = { command: "node", args: ["retained.mjs"], opaque: null };
     let config: Record<string, unknown> = {
@@ -608,7 +665,7 @@ describe("openclaw-mcp-servers-card", () => {
       await waitForFast(() => expect(patches).toHaveLength(1));
       gate.resolve();
       await expect(priorWrite).resolves.toBe(true);
-      await expect(removal).resolves.toEqual({ ok: true });
+      await expect(removal).resolves.toBeUndefined();
       expect(patches).toHaveLength(2);
       expect(patches[1]).toMatchObject({
         baseHash: "queued-write",

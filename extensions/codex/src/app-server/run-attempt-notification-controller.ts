@@ -249,16 +249,6 @@ export function createCodexAttemptNotificationController(
       }
     }
   };
-  const enqueueNotification = async (
-    notification: CodexPreparedServerNotification,
-    scope: CodexThreadRouteScope,
-  ) => {
-    embeddedAgentLog.trace("codex app-server raw notification received", {
-      method: notification.method,
-      ...scope,
-    });
-    await handleNotification(notification);
-  };
   const drainNotificationQueue = async () => {
     await resourceState.turnRoute?.drain();
   };
@@ -266,7 +256,7 @@ export function createCodexAttemptNotificationController(
     waitForActiveNativeTurnCompletion,
     waitForNativeTerminalItems,
     noteNotificationReceived,
-    enqueueNotification,
+    enqueueNotification: handleNotification,
     drainNotificationQueue,
   };
 }

@@ -1,4 +1,4 @@
-import { For, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -16,12 +16,8 @@ export function useSessionMenuDetails(
   actions: SessionMenuActions,
   readState: () => MenuState,
   disabled: (kind: SessionManagementActionKind) => boolean,
-  revision: () => number,
 ) {
-  const ownerSnapshot = createMemo(() => {
-    revision();
-    return actions.ownerMenu.snapshot;
-  });
+  const ownerSnapshot = actions.ownerMenu.snapshot;
   const ownerStatus = (): MenuEntry[] => {
     const status = ownerSnapshot();
     if (!status.connected) {
@@ -55,7 +51,7 @@ export function useSessionMenuDetails(
     searchGeneration();
     return "";
   });
-  const owners = () => {
+  const owners = createMemo(() => {
     const state = ownerSnapshot();
     const options = [...state.owners];
     const currentOwner = readState().currentOwner;
@@ -81,7 +77,10 @@ export function useSessionMenuDetails(
           .includes(term),
       ),
     );
-  };
+  });
+  const ownersByKey = createMemo(
+    () => new Map(owners().map((owner) => [`${owner.type}:${owner.id}`, owner])),
+  );
   const ownerSearchEntry: MenuEntry = {
     kind: "content",
     id: "owners-search",
@@ -121,17 +120,37 @@ export function useSessionMenuDetails(
           checked,
           disabled: actions.actionDisabled("assign-owner") || checked,
           attributes: { title: readState().actionDisabledReasons["assign-owner"] },
-          icon: (
-            <span class="session-menu__avatar" aria-hidden="true">
-              <SessionOwnerAvatar owner={owner} />
-            </span>
+          render: (attributes) => (
+            <button
+              {...attributes}
+              type="button"
+              value={`assign-owner:${owner.type}:${encodeURIComponent(owner.id)}`}
+              class="oc-menu-item session-menu__item"
+              disabled={attributes["aria-disabled"] === "true"}
+              title={readState().actionDisabledReasons["assign-owner"]}
+            >
+              <span class="oc-menu-item__check" aria-hidden="true">
+                {attributes["aria-checked"] === "true" ? "✓" : ""}
+              </span>
+              <span class="oc-menu-item__icon">
+                <span class="session-menu__avatar" aria-hidden="true">
+                  <SessionOwnerAvatar
+                    owner={ownersByKey().get(`${owner.type}:${owner.id}`) ?? owner}
+                  />
+                </span>
+              </span>
+              <span class="oc-menu-item__label">
+                <span class="session-menu__text">{attributes["aria-label"]}</span>
+              </span>
+              <Show when={attributes["aria-checked"] === "true"}>
+                <span class="oc-menu-item__details">
+                  <span class="session-menu__check" aria-hidden="true">
+                    <Icon name="check" />
+                  </span>
+                </span>
+              </Show>
+            </button>
           ),
-          content: <span class="session-menu__text">{label}</span>,
-          details: checked ? (
-            <span class="session-menu__check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          ) : undefined,
         };
       }),
       ...(options.length === 0
@@ -150,10 +169,7 @@ export function useSessionMenuDetails(
       ...ownerStatus(),
     ];
   };
-  const communicationSnapshot = createMemo(() => {
-    revision();
-    return actions.advanced.communicationState();
-  });
+  const communicationSnapshot = createMemo(() => actions.advanced.communicationState());
   const policy = () => communicationSnapshot().session.communication;
   const effective = () => communicationSnapshot().session.effectiveCommunication;
   const reason = () => readState().actionDisabledReasons["set-communication"];
@@ -247,9 +263,6 @@ export function useSessionMenuDetails(
       : []),
     communicationEnd,
   ];
-  const error = createMemo(() => {
-    revision();
-    return actions.advanced.error;
-  });
+  const error = () => actions.advanced.error;
   return { ownerStatus, ownerOptions, communication, error };
 }

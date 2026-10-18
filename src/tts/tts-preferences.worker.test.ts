@@ -123,7 +123,7 @@ it("carries missing machine state without creating a store or falling back to a 
   expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
 });
 
-it("keeps legacy hints synchronous and warns once while explicit awaited hints skip machine state", async () => {
+it("keeps legacy hints synchronous and warns once per method while explicit awaited hints skip machine state", async () => {
   const root = tempDirs.make("openclaw-tts-hint-compat-");
   const prefsPath = path.join(root, "prefs.json");
   writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "always", maxLength: 123 } }));
@@ -137,10 +137,18 @@ it("keeps legacy hints synchronous and warns once while explicit awaited hints s
     expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
     expect(buildTtsSystemPromptHint({})).toContain("Keep spoken text ≤123 chars");
   });
-  expect(warning).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("api.runtime.tts.buildSystemPromptHintAsync"),
-    { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-  );
+  expect(warning.mock.calls).toEqual([
+    [
+      expect.stringContaining(
+        "buildTtsSystemPromptHint is deprecated; use api.runtime.tts.buildSystemPromptHintAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    ],
+    [
+      expect.stringContaining("resolveTtsPrefsPath is deprecated; use resolveTtsPrefsPathAsync"),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    ],
+  ]);
   expect(existsSync(path.join(root, "state", "openclaw.sqlite"))).toBe(false);
   expect(reads).not.toHaveBeenCalled();
 });

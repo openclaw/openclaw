@@ -6,6 +6,8 @@ import {
   resolveDaemonRuntimePinStorePath,
 } from "../daemon/runtime-pin-store.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
+import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
@@ -149,9 +151,11 @@ export async function inspectImmutableUpdateCoverage(params: {
           }
           const found = resolveUpdateStateContentVersion(version);
           const target =
-            file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateDir })
-              ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
-              : result.target.schemaVersions?.[file === shared ? "state" : "agent"];
+            file === resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: stateDir })
+              ? CLIENT_CREDENTIAL_SCHEMA_VERSION
+              : file === resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: stateDir })
+                ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
+                : result.target.schemaVersions?.[file === shared ? "state" : "agent"];
           const coverage: DatabaseCoverage["coverage"] =
             found === null
               ? "absent"

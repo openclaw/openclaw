@@ -7,6 +7,10 @@ import {
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import type { Message, Model } from "../llm/types.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import {
@@ -304,7 +308,10 @@ export async function runBtwSideQuestion(
             authProfileStore: selectedAuthProfileStore,
           });
       const runtimeAuthPlan = resolvedAttempt.plan;
-      const runtimeModel = resolvedAttempt.model;
+      const runtimeModel = attachProviderAuthAuthority(
+        resolvedAttempt.model,
+        getProviderAuthAuthority("auth" in resolvedAttempt ? resolvedAttempt.auth : undefined),
+      );
       const finalizedHarness = await prepareHarness(runtimeModel.provider, runtimeModel.id, {
         api: runtimeModel.api,
         baseUrl: runtimeModel.baseUrl,
@@ -457,6 +464,7 @@ export async function runBtwSideQuestion(
             provider: runtimeModel.provider,
             model: runtimeModel.id,
           });
+          getProviderAuthAuthority(runtimeModel)?.();
           result = await selectedHarness.runSideQuestion(sideParams);
         } finally {
           host.close();
@@ -486,7 +494,7 @@ export async function runBtwSideQuestion(
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;
     if (!cacheParityFork) {
-      if (Array.isArray(activeRunSnapshot?.messages) && activeRunSnapshot.messages.length > 0) {
+      if (activeRunSnapshot?.messages?.length) {
         messages = await toSimpleContextMessages({
           messages: activeRunSnapshot.messages,
           imageLimits,
@@ -626,9 +634,11 @@ export async function runBtwSideQuestion(
       provider: resolvedAttempt.model.provider,
       model: resolvedAttempt.model.id,
     });
-    const resolvedRuntimeAuthPlan = resolvedAttempt.plan;
-    const resolvedAuthProfileId = resolvedRuntimeAuthPlan.forwardedAuthProfileId;
-    let runtimeModel = resolvedAttempt.model;
+    const resolvedAuthProfileId = resolvedAttempt.plan.forwardedAuthProfileId;
+    let runtimeModel = attachProviderAuthAuthority(
+      resolvedAttempt.model,
+      getProviderAuthAuthority(apiKeyInfo),
+    );
     let apiKey =
       apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
         ? undefined
@@ -649,10 +659,7 @@ export async function runBtwSideQuestion(
             provider: runtimeModel.provider,
             modelId: runtimeModel.id,
             model: runtimeModel,
-            apiKey: unwrapSecretSentinelsForProviderEgress(
-              apiKey,
-              "provider runtime auth exchange",
-            ),
+            apiKey,
             authMode: apiKeyInfo.mode,
             profileId: resolvedAuthProfileId,
           },

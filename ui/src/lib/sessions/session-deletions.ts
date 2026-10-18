@@ -64,7 +64,7 @@ export function createSessionDeletions(host: DeletionHost) {
     const snapshot = host.snapshot();
     const selectedAgentId = resolveUiSelectedGlobalAgentId(snapshot);
     return (key: string, agentId?: string | null) => {
-      const canonical = resolveUiConversationIdentity(snapshot, key, agentId ?? undefined);
+      const canonical = resolveUiConversationIdentity(snapshot, key, agentId);
       return `${canonical.sessionKey}\0${canonical.agentId ?? normalizeAgentId(agentId ?? selectedAgentId)}`;
     };
   };

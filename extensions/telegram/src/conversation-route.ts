@@ -16,7 +16,6 @@ import {
   buildAgentMainSessionKey,
   sanitizeAgentId,
 } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { buildTelegramParentPeer, shouldUseTelegramDmThreadSession } from "./bot/helpers.js";
@@ -118,9 +117,6 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
         mainSessionKey,
       }),
     };
-    logVerbose(
-      `telegram: topic route override: topic=${resolvedThreadId} agent=${topicAgentId} sessionKey=${route.sessionKey}`,
-    );
   }
 
   const configuredRoute = resolveConfiguredBindingRoute({
@@ -162,16 +158,10 @@ function applyTelegramRuntimeRoute(
 ): TelegramConversationRouteResult {
   const route = runtimeRoute.route;
   let bindingMode: TelegramConversationBindingMode = prepared.bindingMode;
-  const runtimeBindingConversationId = prepared.conversation.conversationId;
   if (runtimeRoute.bindingRecord) {
     bindingMode = runtimeRoute.boundSessionKey
       ? { kind: "runtime-bound", sessionKey: runtimeRoute.boundSessionKey }
       : { kind: "plugin-owned-runtime", pluginId: runtimeRoute.pluginId ?? "" };
-    logVerbose(
-      runtimeRoute.boundSessionKey
-        ? `telegram: routed via bound conversation ${runtimeBindingConversationId} -> ${runtimeRoute.boundSessionKey}`
-        : `telegram: plugin-bound conversation ${runtimeBindingConversationId}`,
-    );
   }
 
   return {

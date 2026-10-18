@@ -197,7 +197,7 @@ it("keeps native transcript speech with its current application context", async 
   ).click();
   await waitForSolid(() => expect(replacementRequest).toHaveBeenCalledOnce());
   expect(request).toHaveBeenCalledOnce();
-  transcript.hostDisconnected();
+  transcript.dispose();
   cleanupSolid();
   // Retained transcript roots retire after the pane disconnection microtask.
   await Promise.resolve();

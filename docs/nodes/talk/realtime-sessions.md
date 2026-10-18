@@ -140,8 +140,13 @@ replies retain their existing visibility.
 
 Direct provider-owned consultations keep their own final answer visible in Chat.
 Accepted work can outlive a closed or replaced audio connection, so a spoken
-replacement is not guaranteed. If speech also arrives, both records may be visible;
-OpenClaw preserves the answer rather than guessing that the spoken text replaces it.
+replacement is not guaranteed. For native provider-owned calls, new assistant speech
+appears in an expandable **Voice transcript**, separately from the backing agent's answer.
+Speech-only dialogue remains available there, and chat search expands matching
+transcripts. The transcript does not claim that speech replaces a particular
+consultation. Raw history, exports, and model context retain both records;
+missing or failed audio never hides the backing answer. Chat-backed Talk and
+older speech records without the presentation marker retain their existing display.
 
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out

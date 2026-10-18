@@ -14,7 +14,6 @@ import { resolve } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const STATE_VERSION = 2;
-const DEPENDENCY_INPUTS = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc"];
 const ENVIRONMENT_INPUTS = [
   ".crabbox.yaml",
   ".github/actions/prepare-testbox-shell",
@@ -141,7 +140,21 @@ function buildTestboxLeaseFingerprint(
     checkoutKey: digest(realpathSync(repoRoot)),
     baseSha,
     headSha: git(repoRoot, ["rev-parse", "HEAD"]),
-    dependencyDigest: digestInputs(repoRoot, [...DEPENDENCY_INPUTS, "patches"]),
+    // Share one audited install contract, including raw patch bytes and sparse
+    // index inputs, so cache and lease reuse cannot disagree about install work.
+    dependencyDigest: digest(
+      execFileSync(
+        process.execPath,
+        [
+          resolve(repoRoot, ".github/actions/setup-node-env/dependency-fingerprint.mjs"),
+          "--workspace",
+          repoRoot,
+          "--frozen-lockfile",
+          "true",
+        ],
+        { cwd: repoRoot, env: { ...process.env, ...env }, encoding: "utf8" },
+      ).trim(),
+    ),
     environmentDigest: digestInputs(repoRoot, [
       ...ENVIRONMENT_INPUTS,
       ...(workflow ? [workflow] : []),

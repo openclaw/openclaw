@@ -232,6 +232,24 @@ async function mountNostrProfile() {
   return { gateway, source, refresh, page };
 }
 
+it("retains Nostr drafts and loaded channels through a same-client blip, but not replacement", async () => {
+  const { gateway, source, page } = await mountNostrProfile();
+  const hello = gateway.snapshot.hello;
+  gateway.emit({ phase: "reconnecting", hello: null });
+  await settle();
+  expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("Alice Updated");
+  expect(page.textContent).not.toContain("No channels connected");
+  expect(profileButton(page, "Save & Publish").disabled).toBe(true);
+  gateway.emit({ phase: "connected", hello });
+  await settle();
+  expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe("Alice Updated");
+  gateway.emit({ client: createGateway().snapshot.client });
+  await settle();
+  expect(page.querySelector("#nostr-profile-name")).toBeNull();
+  source.runtimeConfig.dispose();
+  source.channels.dispose();
+});
+
 afterEach(() => {
   for (const page of mountedPages.keys()) {
     disposePage(page);
@@ -243,6 +261,75 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
+  it("keeps channel details available but waits for reconnect before starting setup", async () => {
+    const gateway = createGateway();
+    setGatewayScopes(gateway, ["operator.admin", "operator.read"]);
+    const hello = gateway.snapshot.hello;
+    const source = createContext(gateway);
+    const request = vi.spyOn(gateway.snapshot.client!, "request");
+    const baseRequest = request.getMockImplementation();
+    request.mockImplementation(async (method: string, params?: unknown) => {
+      if (method === "wizard.start") {
+        return {
+          done: false,
+          status: "running",
+          sessionId: "channel-setup",
+          step: { id: "token", type: "text", title: "Channel token" },
+        };
+      }
+      return await baseRequest?.(method, params);
+    });
+    const page = mountPage(source.context);
+    await settle();
+    expect(profileButton(page, "Set up").disabled).toBe(false);
+
+    for (const phase of ["reconnecting", "offline"] as const) {
+      gateway.emit({ phase });
+      await settle();
+      expect(gateway.snapshot.hello).toBe(hello);
+      const setupButtons = Array.from(page.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "Set up",
+      );
+      expect(setupButtons.length).toBeGreaterThan(0);
+      for (const button of setupButtons) {
+        expect(button.disabled).toBe(true);
+        button.click();
+      }
+      const browse = page.querySelector<HTMLButtonElement>("button.channels-item")!;
+      expect(browse.textContent).toContain("More channels");
+      expect(browse.disabled).toBe(true);
+      browse.click();
+
+      const details = page.querySelector<HTMLButtonElement>(".channels-item__detail")!;
+      expect(details.disabled).toBe(false);
+      details.click();
+      await settle();
+      expect(page.querySelector(".channels-detail")).not.toBeNull();
+      const runSetup = profileButton(page, "Run setup");
+      expect(runSetup.disabled).toBe(true);
+      runSetup.click();
+      await settle();
+      expect(page.querySelector(".channels-wizard")).toBeNull();
+      expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(0);
+      page.querySelector<HTMLButtonElement>(".channels-detail__close")!.click();
+      await settle();
+      expect(page.querySelector(".channels-detail")).toBeNull();
+    }
+
+    gateway.emit({ phase: "connected" });
+    await settle();
+    const setup = profileButton(page, "Set up");
+    expect(setup.disabled).toBe(false);
+    setup.click();
+    await waitForSolid(() => {
+      expect(page.querySelector("#channel-wizard-text-input")).not.toBeNull();
+    });
+    expect(request.mock.calls.filter(([method]) => method === "wizard.start")).toHaveLength(1);
+    disposePage(page);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
   it("openclaw-channels-page Import from Relays preserves a null profile name with extra fields", async () => {
     vi.stubGlobal(
       "fetch",
@@ -923,7 +1010,7 @@ describe("ChannelsPage lifecycle", () => {
           break;
       }
       await settle();
-      expect(page.querySelector("#nostr-profile-name")).toBeNull();
+      expect(page.querySelector("#nostr-profile-name") === null).toBe(retirement !== "disconnect");
       if (retirement === "replacement form") {
         profileButton(page, "Edit Profile").click();
         await settle();
@@ -955,6 +1042,10 @@ describe("ChannelsPage lifecycle", () => {
           "Fresh draft",
         );
         expect(profileButton(page, "Import from Relays").disabled).toBe(false);
+      } else if (retirement === "disconnect") {
+        expect(page.querySelector<HTMLInputElement>("#nostr-profile-name")?.value).toBe(
+          "Alice Updated",
+        );
       } else {
         expect(page.querySelector("#nostr-profile-name")).toBeNull();
       }

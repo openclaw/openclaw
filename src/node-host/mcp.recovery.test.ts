@@ -1,5 +1,6 @@
 /** Behavior tests for live node-host MCP catalog and connection recovery. */
 
+import "./mcp-manager.test-support.js";
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,8 @@ import {
   OpenClawSSEClientTransport,
   OpenClawStreamableHTTPClientTransport,
 } from "../agents/mcp-http-transport.js";
-import { startNodeHostMcpManager } from "./mcp.js";
+
+const { startNodeHostMcpManager } = await import("./mcp-manager.test-support.js");
 
 function tool(name: string, inputSchema: Tool["inputSchema"] = { type: "object" }): Tool {
   return { name, inputSchema };

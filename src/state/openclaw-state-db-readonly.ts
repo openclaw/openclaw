@@ -56,6 +56,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerMayCopySourcesInProcess,
 } from "./openclaw-state-maintenance-context.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import {
   startOpenClawStateReadOperation,
   type OpenClawStateReadCompletion,
@@ -96,9 +97,22 @@ const stateSnapshotReads = resolveGlobalSingleton(
         cleanupRoot?: string;
         env: NodeJS.ProcessEnv;
         cleanClose?: boolean;
+        callerSignal?: AbortSignal;
+        postgresSnapshot?: string;
       }
     >(),
 );
+
+function exitStateReadSnapshot<T>(operation: () => T): T {
+  return stateSnapshotReads.exit(() => postgresStateReadSnapshot.exit(operation));
+}
+
+function resolveStateReadCallerSignal(): AbortSignal | undefined {
+  const signal = getAsyncWorkSignal();
+  const snapshot = stateSnapshotReads.getStore();
+  // Snapshot drainage closes physical custody; only the caller can cancel an admitted read.
+  return snapshot && signal === snapshot.work.signal ? snapshot.callerSignal : signal;
+}
 
 /** Stable identity and private bytes for reads within the enclosing snapshot scope. */
 export function getActiveOpenClawStateDatabaseReadSnapshot(
@@ -108,7 +122,7 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
   return current?.path === resolveReadOnlyPath(options) ? current : undefined;
 }
 
-/** Resolve a composite read from one online snapshot without redirecting live writers. */
+/** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
   options: OpenClawStateDatabaseOptions & {
@@ -116,14 +130,17 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     reuseCleanClose?: boolean;
   } = {},
 ): Promise<T> {
-  assertStateFileSnapshotAllowed();
+  const postgres = isStatePostgres();
+  if (!postgres) {
+    assertStateFileSnapshotAllowed();
+  }
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
   if ((current?.active && current.path === pathname) || !existingPathOrUndefined(pathname)) {
     return await operation();
   }
   const env = options.env ?? process.env;
-  const callerSignal = getAsyncWorkSignal();
+  const callerSignal = resolveStateReadCallerSignal();
   const controller = new AbortController();
   const admissionSignal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
@@ -135,6 +152,7 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
     let prepared: AsyncPreparedSqliteReadOnlyLocation;
     let cleanClose: boolean;
+    let postgresSnapshot: string | undefined;
     try {
       // Wait only before capturing private bytes; callbacks and cleanup must never replay.
       admission = await acquireWithWait({
@@ -150,8 +168,21 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         sleep: (ms) => sleepWithAbort(ms, admissionSignal),
       });
       admissionSignal.throwIfAborted();
-      cleanClose = options.reuseCleanClose === true && readSqliteDatabaseCleanClose(pathname);
-      if (cleanClose) {
+      cleanClose =
+        !postgres && options.reuseCleanClose === true && readSqliteDatabaseCleanClose(pathname);
+      if (postgres) {
+        const { openPostgresStateReadSnapshot } =
+          await import("./openclaw-state-postgres-snapshot.js");
+        const retained = await openPostgresStateReadSnapshot(
+          captureOpenClawStateReadWorkerContext({ path: pathname, env }),
+          admissionSignal,
+        );
+        postgresSnapshot = retained.snapshot;
+        prepared = {
+          location: pathname,
+          cleanupAsync: () => retained.close().then(() => true),
+        };
+      } else if (cleanClose) {
         prepared = { location: pathname, cleanupAsync: async () => true };
       } else if (
         isArtifactPreservingStateRead() &&
@@ -171,9 +202,10 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         { cause: error },
       );
     }
-    const releaseSource = cleanClose
-      ? () => {}
-      : retainSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
+    const releaseSource =
+      postgres || cleanClose
+        ? () => {}
+        : retainSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     let readSucceeded = false;
     const snapshot = Object.assign(
       createRetainedReadScope(pathname, admission.identity, async () => {
@@ -199,9 +231,14 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
         cleanupRoot: prepared.cleanupRoot,
         env,
         cleanClose,
+        callerSignal,
+        postgresSnapshot,
       },
     );
-    const lifecycle = stateSnapshotReads.run(snapshot, () => bindRetainedReadScope(snapshot));
+    const bind = () => stateSnapshotReads.run(snapshot, () => bindRetainedReadScope(snapshot));
+    const lifecycle = postgresSnapshot
+      ? postgresStateReadSnapshot.run({ path: pathname, snapshot: postgresSnapshot }, bind)
+      : bind();
     closeSnapshotWork = lifecycle.abort;
     const closeFromCaller = () => lifecycle.abort(callerSignal?.reason);
     callerSignal?.addEventListener("abort", closeFromCaller, { once: true });
@@ -279,7 +316,7 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
       // A composite assertion already selected fresh bytes for this database.
       return operation();
     }
-    return stateSnapshotReads.exit(() => {
+    return exitStateReadSnapshot(() => {
       synchronousReadSnapshots.current = undefined;
       synchronousReadSnapshots.currentAuthorityPath = pathname;
       try {
@@ -497,9 +534,9 @@ export function executeExistingOpenClawStateRead<Command extends OpenClawStateRe
     // Active writer observations use the retained worker connection, not a new
     // artifact-preserving copy. Admission and canonical close still own it.
     const read = live
-      ? () => artifactPreservingReads.run(false, () => stateSnapshotReads.exit(execute))
+      ? () => artifactPreservingReads.run(false, () => exitStateReadSnapshot(execute))
       : current
-        ? () => stateSnapshotReads.exit(execute)
+        ? () => exitStateReadSnapshot(execute)
         : execute;
     completion = context?.runInCapturedSchemaScope
       ? context.runInCapturedSchemaScope(read)
@@ -507,8 +544,7 @@ export function executeExistingOpenClawStateRead<Command extends OpenClawStateRe
   } catch (error) {
     throw mapError ? mapError(error, receipt.phase) : error;
   }
-  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
-  return result.then((reply) => {
+  return completion.then((reply) => {
     if (!reply || isStateReadReply(reply, type)) {
       return reply;
     }
@@ -553,7 +589,13 @@ function startRetainedOpenClawStateRead(
   }
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
   const controller = new AbortController();
-  const readSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  // Inspection inherits its deadline; ordinary background reads own explicit cancellation.
+  const callerSignal =
+    signal ??
+    (isArtifactPreservingStateRead() ? resolveStateReadCallerSignal() : snapshot?.callerSignal);
+  const readSignal = callerSignal
+    ? AbortSignal.any([callerSignal, controller.signal])
+    : controller.signal;
   const run = () => {
     const inheritedSource = currentRead
       ? undefined
@@ -570,6 +612,7 @@ function startRetainedOpenClawStateRead(
       onChunkAsync,
       controller,
       signal: readSignal,
+      callerSignal,
       receipt,
       mapError,
     });
@@ -580,9 +623,7 @@ function startRetainedOpenClawStateRead(
     (operation, scope) => () =>
       scope.work.run(() => {
         const completion = operation();
-        const result =
-          completion.kind === "retained" ? completion.operation.result : completion.result;
-        void scope.work.track(() => result).catch(() => undefined);
+        void scope.work.track(() => completion).catch(() => undefined);
         return completion;
       }),
     run,
@@ -594,7 +635,7 @@ function startRetainedOpenClawStateRead(
     void maintenance.run(() => {
       const accepted = tracked();
       completion = accepted;
-      return accepted.kind === "retained" ? accepted.operation.result : accepted.result;
+      return accepted;
     });
   } else {
     completion = tracked();
@@ -602,8 +643,7 @@ function startRetainedOpenClawStateRead(
   if (!completion) {
     throw new Error("Shared-state read maintenance scope did not start its operation");
   }
-  const result = completion.kind === "retained" ? completion.operation.result : completion.result;
-  void retainSnapshotWork(result, () =>
+  void retainSnapshotWork(completion, () =>
     controller.abort(new Error("Shared-state read admission closed")),
   );
   return completion;
@@ -615,7 +655,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
-  assertStateFileSnapshotAllowed();
   if (openStateSchemaReadAdmission) {
     return withExistingOpenClawStateDatabaseCurrentReadOnly(
       operation,
@@ -638,7 +677,7 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
-  return stateSnapshotReads.exit(() => {
+  return exitStateReadSnapshot(() => {
     // Maintenance admission belongs to a fresh private reader, never a cached writer.
     if (!openStateSchemaReadAdmission) {
       const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname, true);
@@ -674,7 +713,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T | undefined> {
-  assertStateFileSnapshotAllowed();
   return withArtifactPreservingStateReads(async () => {
     const pathname = resolveReadOnlyPath(options);
     const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
@@ -708,7 +746,7 @@ export function readCurrentOpenClawStateDatabaseContentVersion(
 ): string | undefined {
   const pathname = resolveReadOnlyPath(options);
   const env = options.env ?? process.env;
-  return stateSnapshotReads.exit(() => readAdmittedStateContentVersion(pathname, env));
+  return exitStateReadSnapshot(() => readAdmittedStateContentVersion(pathname, env));
 }
 
 /** Current guards leave discovery snapshots after validating their inherited read admission. */
@@ -717,5 +755,5 @@ export function withCurrentOpenClawStateReadScope<T>(
   operation: (pathname: string) => T,
 ): T {
   const pathname = resolveReadOnlyPath(options);
-  return stateSnapshotReads.exit(() => operation(pathname));
+  return exitStateReadSnapshot(() => operation(pathname));
 }

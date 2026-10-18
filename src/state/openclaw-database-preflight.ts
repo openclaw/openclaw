@@ -7,15 +7,11 @@ import {
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
-import {
-  adoptSqliteSchemaContracts,
-  getCanonicalSqliteTableNames,
-} from "../infra/sqlite-schema-contract.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -35,7 +31,6 @@ import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import { cleanupOpenClawStatePreflight } from "./openclaw-database-preflight-cleanup.js";
 import {
@@ -54,7 +49,6 @@ import type {
   OpenClawDatabaseSchemaPreflight,
   OpenClawDatabasePreflightOptions,
 } from "./openclaw-database-preflight.types.js";
-import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -66,7 +60,6 @@ import {
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
-  captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
@@ -90,6 +83,7 @@ export async function assertOpenClawDatabasesReady(
   options: {
     env: NodeJS.ProcessEnv;
     onAgentInspection?: (stats: AgentDatabasePreflightStats) => void;
+    onRegisteredAgentDatabases?: OpenClawDatabasePreflightOptions["onRegisteredAgentDatabases"];
   } & (
     | {
         operation: "doctor";
@@ -106,6 +100,7 @@ export async function assertOpenClawDatabasesReady(
     {
       env: options.env,
       onAgentInspection: options.onAgentInspection,
+      onRegisteredAgentDatabases: options.onRegisteredAgentDatabases,
       verifyCurrentSchemaShape: true,
       ...(options.config
         ? {
@@ -123,7 +118,13 @@ export async function assertOpenClawDatabasesReady(
         ? { requireStartupMigrationReadiness: true }
         : {}),
       ...(options.operation === "doctor"
-        ? { configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets }
+        ? {
+            configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets,
+            inspectHeldAgentDatabaseTargets: options.configuredAgentDatabaseTargets.filter(
+              (target) =>
+                !options.config || !canIsolateAgentDatabase(options.config, target.agentId),
+            ),
+          }
         : {}),
     },
     options.operation === "doctor" ? "maintenance" : "runtime",
@@ -244,7 +245,7 @@ export async function preflightOpenClawDatabaseSchemas(
   }
   try {
     if (statePresence.status === "present") {
-      if (getDatabaseEngineSelection()?.input) {
+      if (getDatabaseEngineInput("state")) {
         const read = await executeExistingOpenClawStateRead(
           { env: options.env },
           {
@@ -292,9 +293,6 @@ export async function preflightOpenClawDatabaseSchemas(
           !options.openStateSchemaReadAdmission
             ? createAgentSchemaInspectionWorker()
             : undefined;
-        if (reader) {
-          input.schemaContracts = captureStateSchemaInspectionContracts();
-        }
         // Online inspection needs one native read transaction, not a payload-sized copy.
         // Keep it in the child: closing a source here could release this process's writer locks.
         let inspection =
@@ -336,7 +334,6 @@ export async function preflightOpenClawDatabaseSchemas(
         if (!inspection) {
           throw new Error("Missing state schema inspection result");
         }
-        adoptSqliteSchemaContracts(inspection.schemaContracts ?? []);
         Object.assign(result, inspection.schemas);
         stateInspectionErrors.push(...inspection.inspectionErrors);
         if (
@@ -455,10 +452,6 @@ export async function preflightOpenClawDatabaseSchemas(
     })
     .map((row) => Object.assign({}, row, { presence: inspectDatabaseCandidatePresence(row.path) }))
     .filter((row) => row.presence.status !== "absent");
-  if (options.requireStartupMigrationReadiness && inspectionTargets.length === 0) {
-    // Empty installations share one template before agent creation workers start.
-    getCanonicalSqliteTableNames(OPENCLAW_AGENT_SCHEMA_SQL);
-  }
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
@@ -519,7 +512,7 @@ export async function preflightOpenClawDatabaseSchemas(
         // artifact preservation must use the WAL-aware private snapshot below.
         if (
           !schemaInspection &&
-          (getDatabaseEngineSelection()?.input ||
+          (getDatabaseEngineInput("agent") ||
             options.preserveSourceArtifacts !== true ||
             (purpose === "runtime" && readSqliteDatabaseCleanClose(realAgentPath)))
         ) {
@@ -616,16 +609,6 @@ export async function preflightOpenClawDatabaseSchemas(
             inspection.incompatible.push(incompatible);
           }
         }
-        if (
-          schemaInspection.integrityGateOutcome === "cached" &&
-          !readSqliteDatabaseCleanClose(agentPath)
-        ) {
-          requestOpenClawAgentDatabaseIntegrityCheck({
-            check: "quick",
-            path: agentPath,
-            env: options.env ?? process.env,
-          });
-        }
         recordPreparedSchemaHeader?.(schemaInspection);
         return schemaInspection.preparationPending ? "defer" : undefined;
       } catch (error) {
@@ -689,5 +672,6 @@ export async function preflightOpenClawDatabaseSchemas(
     options.onAgentDatabaseDiscovery?.(preparedDiscovery);
   }
   options.onAgentInspection?.(stats);
+  options.onRegisteredAgentDatabases?.(registeredDatabases);
   return result;
 }

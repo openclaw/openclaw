@@ -1,4 +1,4 @@
-import { createMemo, createRenderEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type {
   McpAppSettings,
   McpAppSettingsParams,
@@ -10,7 +10,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { McpAppOpenDetail } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
@@ -21,15 +21,15 @@ registerMcpAppEnglish();
 type McpAppPanelProps = { launch?: McpAppOpenDetail };
 export type McpAppPanelElement = SolidBridgeElement<McpAppPanelProps>;
 
-export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
+function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement }) {
   const context = useApplication();
   const host = untrack(() => props.host);
   const gateway = projectGateway(context.gateway);
-  const [viewId, setViewId] = createSignal("", { ownedWrite: true });
-  const [busy, setBusy] = createSignal(false, { ownedWrite: true });
-  const [error, setError] = createSignal<string | null>(null, { ownedWrite: true });
-  const [notice, setNotice] = createSignal("", { ownedWrite: true });
-  const [settings, setSettings] = createSignal<McpAppSettings | null>(null, { ownedWrite: true });
+  const [viewId, setViewId] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  const [notice, setNotice] = createSignal("");
+  const [settings, setSettings] = createSignal<McpAppSettings | null>(null);
   let View: (typeof import("../mcp-app-view.tsx"))["McpAppView"] | undefined;
   let generation = 0;
   let mounted = true;
@@ -105,17 +105,15 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
       }
     }
   }
-  function params(
+  const params = (
     launch: McpAppOpenDetail,
     action: McpAppSettingsParams["action"],
-  ): McpAppSettingsParams {
-    return {
-      sessionKey: launch.sessionKey,
-      agentId: launch.agentId,
-      serverName: launch.serverName,
-      action,
-    };
-  }
+  ): McpAppSettingsParams => ({
+    sessionKey: launch.sessionKey,
+    agentId: launch.agentId,
+    serverName: launch.serverName,
+    action,
+  });
   async function readSettings() {
     await operation(
       (client, launch) =>
@@ -200,7 +198,8 @@ export function McpAppPanelContent(props: McpAppPanelProps & { host: HTMLElement
     gateway.read();
     return JSON.stringify([launchIdentity(), gatewayPresentationScope(context.gateway).key]);
   });
-  createRenderEffect(openIdentity, () =>
+  createEffect(openIdentity, () =>
+    // The memo schedules work; each operation samples its live admission target.
     untrack(() => {
       generation++;
       setViewId("");

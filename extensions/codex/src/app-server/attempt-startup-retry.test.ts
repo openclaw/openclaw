@@ -391,7 +391,7 @@ describe("Codex app-server startup retry", () => {
   });
 
   it("preserves the shared client and binding on an overloaded resume with a sibling lease", async () => {
-    const fixture = await createStartupFailureFixture("overload");
+    const fixture = { ...(await createStartupFailureFixture("overload")), disableTools: false };
     const sibling = await startFixtureAttempt(fixture);
     sibling.turnRoute.release();
     const identity = {

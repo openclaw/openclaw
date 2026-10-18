@@ -113,7 +113,7 @@ async function resolveProviderModel(params: {
     createProviderConfig(params.baseUrl ?? "http://127.0.0.1:8123/v1", params.timeoutSeconds),
     {
       authStorage: { mocked: true } as never,
-      modelRegistry: { find: () => null } as never,
+      modelRegistry: { find: () => null, getProviderMetadataOwners: () => undefined } as never,
       runtimeHooks: params.runtimeHooks ?? createProviderRuntimeTestMock(),
       skipAgentDiscovery: true,
       workspaceDir: state.workspaceDir,

@@ -357,7 +357,7 @@ export type CodexThread = {
   turns?: CodexTurn[];
 };
 
-export type CodexThreadStatus =
+type CodexThreadStatus =
   | { type: "notLoaded" }
   | { type: "idle" }
   | { type: "systemError" }

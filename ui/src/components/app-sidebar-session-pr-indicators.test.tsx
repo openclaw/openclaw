@@ -1,3 +1,4 @@
+import { createMemo, For } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -5,68 +6,83 @@ import {
 } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import {
-  useSolidControllerHost,
-  type SolidController,
-  type SolidControllerHost,
-} from "../lit/solid-controller-host.ts";
+import { createTestSessionCapability } from "../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
-import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
+import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
-const testHosts = new Set<TestHost>();
-
-class TestHost implements SolidControllerHost {
-  readonly controllers: SolidController[] = [];
-  readonly requestUpdate = vi.fn();
-  readonly updateComplete = Promise.resolve(true);
-
-  constructor() {
-    testHosts.add(this);
-  }
-
-  addController(controller: SolidController): void {
-    this.controllers.push(controller);
-  }
-
-  removeController(controller: SolidController): void {
-    this.controllers.splice(this.controllers.indexOf(controller), 1);
-  }
-}
-
-type IndicatorOptions = ConstructorParameters<typeof SessionPullRequestIndicatorsController>[1];
+type IndicatorOptions = Parameters<typeof createSessionPullRequestIndicators>[0];
 const LIFECYCLE_HOST_TAG = "test-session-pr-indicators";
 
-class LifecycleTestHost extends HTMLElement implements SolidControllerHost {
-  rows: readonly SidebarRecentSession[] = [];
+class LifecycleTestHost extends HTMLElement {
   readRows: IndicatorOptions["getRows"] = () => [];
-  gateway!: ApplicationGateway;
-  getSessions: IndicatorOptions["getSessions"] = () => undefined;
-  controller!: SessionPullRequestIndicatorsController;
-  controllerHost?: SolidControllerHost;
+  private gatewayValue!: ApplicationGateway;
+  private readSessions: IndicatorOptions["getSessions"] = () => undefined;
+  private rowOwner: SessionCapability | undefined;
+  private agentId = "main";
+  private visible = true;
+  private readonly listeners = new Set<() => void>();
+  indicators!: ReturnType<typeof createSessionPullRequestIndicators>;
   private view?: ReturnType<typeof mountSolid>;
 
+  get gateway() {
+    return this.gatewayValue;
+  }
+  set gateway(value: ApplicationGateway) {
+    this.gatewayValue = value;
+    this.publishInputs();
+  }
+  get getSessions() {
+    return this.readSessions;
+  }
+  set getSessions(read: IndicatorOptions["getSessions"]) {
+    this.readSessions = read;
+    this.publishInputs();
+  }
+  get rowsSource() {
+    return this.rowOwner;
+  }
+  set rowsSource(value: SessionCapability | undefined) {
+    this.rowOwner = value;
+    this.publishInputs();
+  }
+  get selectedAgentId() {
+    return this.agentId;
+  }
+  set selectedAgentId(value: string) {
+    this.agentId = value;
+    this.publishInputs();
+  }
+  get presented() {
+    return this.visible;
+  }
+  set presented(value: boolean) {
+    this.visible = value;
+    this.publishInputs();
+  }
+  subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  private publishInputs() {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
   connectedCallback(): void {
-    this.view = mountSolid(() => LifecycleView(this), { container: this });
+    this.view = mountSolid(() => createIndicatorView(this), { container: this });
   }
   disconnectedCallback(): void {
     this.view?.unmount();
     this.view = undefined;
-  }
-  addController(controller: SolidController): void {
-    this.controllerHost!.addController(controller);
-  }
-  removeController(controller: SolidController): void {
-    this.controllerHost!.removeController(controller);
-  }
-  requestUpdate(): void {
-    this.controllerHost?.requestUpdate();
   }
   get updateComplete(): Promise<boolean> {
     return Promise.resolve().then(() => {
@@ -76,30 +92,33 @@ class LifecycleTestHost extends HTMLElement implements SolidControllerHost {
   }
 }
 
-function LifecycleView(host: LifecycleTestHost) {
-  const lifecycle = useSolidControllerHost(() => {
-    host.rows = host.readRows();
+function createIndicatorView(host: LifecycleTestHost) {
+  const inputs = projectOwner(host, (owner) => owner);
+  const sessionRows = createMemo(() => {
+    const sessions = inputs.read().rowsSource;
+    return sessions ? projectOwner(sessions, () => host.readRows()) : null;
   });
-  host.controllerHost = lifecycle.host;
-  const controller = new SessionPullRequestIndicatorsController(host, {
-    getConnected: () => true,
-    getRows: () => host.rows,
-    getSelectedAgentId: () => "main",
-    getGateway: () => host.gateway,
-    getSessions: () => host.getSessions(),
+  const rows = createMemo(() => {
+    const current = inputs.read();
+    return sessionRows()?.read() ?? current.readRows();
   });
-  host.controller = controller;
+  const indicators = createSessionPullRequestIndicators({
+    getConnected: () => host.isConnected,
+    getPresented: () => inputs.read().presented,
+    getRows: rows,
+    getSelectedAgentId: () => inputs.read().selectedAgentId,
+    getGateway: () => inputs.read().gateway,
+    getSessions: () => inputs.read().getSessions(),
+  });
+  host.indicators = indicators;
   return (
-    <>
-      {
-        (lifecycle.revision(),
-        host.rows.map((row) => (
-          <span data-session-key={row.key}>
-            {controller.summary(row.key, row.worktreeId ?? "", row.pullRequest)?.numbers.join(",")}
-          </span>
-        )))
-      }
-    </>
+    <For each={rows()}>
+      {(row) => (
+        <span data-session-key={row.key}>
+          {indicators.summary(row.key, row.worktreeId ?? "", row.pullRequest)?.numbers.join(",")}
+        </span>
+      )}
+    </For>
   );
 }
 
@@ -169,17 +188,11 @@ function createGatewayHarness(scopes = ["operator.read"]) {
 }
 
 afterEach(() => {
-  for (const host of testHosts) {
-    for (const controller of host.controllers) {
-      controller.hostDisconnected?.();
-    }
-  }
-  testHosts.clear();
   document.querySelectorAll(LIFECYCLE_HOST_TAG).forEach((host) => host.remove());
   vi.useRealTimers();
 });
 
-describe("SessionPullRequestIndicatorsController", () => {
+describe("Passive sidebar PR indicators", () => {
   it("does not subscribe to PR status for session-only sidebar viewers", async () => {
     vi.useFakeTimers();
     const harness = createGatewayHarness(["operator.sessions.read", "operator.sessions.write"]);
@@ -192,32 +205,29 @@ describe("SessionPullRequestIndicatorsController", () => {
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(harness.request).not.toHaveBeenCalled();
-    expect(host.controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
   });
-  it("does not invalidate the host when no rows are eligible", async () => {
+  it("keeps empty rows idle across sidebar updates", async () => {
     vi.useFakeTimers();
     const harness = createGatewayHarness();
     const getRows = vi.fn(() => []);
     const host = mountLifecycleHost(harness.gateway, getRows);
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
-    getRows.mockClear();
-    const requestUpdate = vi.spyOn(host, "requestUpdate");
 
-    host.requestUpdate();
-    host.requestUpdate();
+    host.selectedAgentId = "work";
+    host.selectedAgentId = "main";
     expect(await host.updateComplete).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(getRows).toHaveBeenCalledOnce();
-    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toBe("");
+    expect(harness.request).not.toHaveBeenCalled();
   });
 
   it.each(["merged"] as const)(
     "observes visible rows and keeps the pushed %s summary through backoff",
     async (state) => {
       vi.useFakeTimers();
-      const host = new TestHost();
       const harness = createGatewayHarness();
       const row = {
         key: "agent:main:demo",
@@ -225,20 +235,10 @@ describe("SessionPullRequestIndicatorsController", () => {
         worktreeId: "wt-demo",
       } as SidebarRecentSession;
       const getRows = vi.fn(() => [row]);
-      const controller = new SessionPullRequestIndicatorsController(host, {
-        getConnected: () => true,
-        getRows,
-        getSelectedAgentId: () => "main",
-        getGateway: () => harness.gateway,
-        getSessions: () => undefined,
-      });
-
-      controller.hostConnected();
-      controller.hostUpdated();
+      const host = mountLifecycleHost(harness.gateway, getRows);
+      await host.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
-      await Promise.resolve();
       expect(harness.request).not.toHaveBeenCalled();
-      expect(getRows).toHaveBeenCalledOnce();
 
       harness.emit({
         sessions: {
@@ -260,8 +260,8 @@ describe("SessionPullRequestIndicatorsController", () => {
           },
         },
       });
-      expect(getRows).toHaveBeenCalledTimes(2);
-      expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+      await host.updateComplete;
+      expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
         numbers: [1, 2],
         state,
       });
@@ -275,7 +275,8 @@ describe("SessionPullRequestIndicatorsController", () => {
           },
         },
       });
-      expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+      await host.updateComplete;
+      expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
         numbers: [1, 2],
         state,
       });
@@ -285,28 +286,20 @@ describe("SessionPullRequestIndicatorsController", () => {
           [row.key]: { pullRequests: [], rateLimited: false, status: "ready" },
         },
       });
+      await host.updateComplete;
       expect(
-        controller.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
+        host.indicators.summary(row.key, row.worktreeId ?? "", { numbers: [99], state }),
       ).toBeUndefined();
-      controller.hostDisconnected();
+      host.remove();
     },
   );
 
   it("clears alias indicators when the selected agent changes", async () => {
     vi.useFakeTimers();
-    const host = new TestHost();
     const harness = createGatewayHarness();
     const row = { key: "global", isChild: false, worktreeId: "wt-global" } as SidebarRecentSession;
-    let selectedAgentId = "main";
-    const controller = new SessionPullRequestIndicatorsController(host, {
-      getConnected: () => true,
-      getRows: () => [row],
-      getSelectedAgentId: () => selectedAgentId,
-      getGateway: () => harness.gateway,
-      getSessions: () => undefined,
-    });
-    controller.hostConnected();
-    controller.hostUpdated();
+    const host = mountLifecycleHost(harness.gateway, () => [row]);
+    await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     harness.emit({
       sessions: {
@@ -327,21 +320,22 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+    await host.updateComplete;
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
       numbers: [1],
       state: "open",
     });
 
-    selectedAgentId = "work";
-    controller.hostUpdated();
+    host.selectedAgentId = "work";
+    await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+    await host.updateComplete;
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
   });
 
   it("clears a structural session's indicator while replacement data is pending", async () => {
     vi.useFakeTimers();
-    const host = new TestHost();
     const harness = createGatewayHarness();
     const row = {
       key: "agent:main:demo",
@@ -350,19 +344,17 @@ describe("SessionPullRequestIndicatorsController", () => {
     } as SidebarRecentSession;
     const epoch = {};
     const setPullRequestSummary = vi.fn();
-    const controller = new SessionPullRequestIndicatorsController(host, {
-      getConnected: () => true,
-      getRows: () => [row],
-      getSelectedAgentId: () => "main",
-      getGateway: () => harness.gateway,
-      getSessions: () =>
+    const host = mountLifecycleHost(
+      harness.gateway,
+      () => [row],
+      () =>
         ({
+          subscribe: () => () => {},
           capturePullRequestEpoch: vi.fn(() => epoch),
           setPullRequestSummary,
         }) as unknown as SessionCapability,
-    });
-    controller.hostConnected();
-    controller.hostUpdated();
+    );
+    await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     harness.emit({
       sessions: {
@@ -373,19 +365,86 @@ describe("SessionPullRequestIndicatorsController", () => {
         },
       },
     });
-    expect(controller.summary(row.key, row.worktreeId ?? "")).toEqual({
+    await host.updateComplete;
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toEqual({
       numbers: [1],
       state: "open",
     });
 
     harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
 
-    expect(controller.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
+    await host.updateComplete;
+    expect(host.indicators.summary(row.key, row.worktreeId ?? "")).toBeUndefined();
     expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(row.key, undefined, epoch);
   });
 });
 
-describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
+describe("Passive sidebar PR indicator lifecycle", () => {
+  it.each(["agent", "client", "permissions", "sessions"] as const)(
+    "retires %s scope while summaries are parked",
+    async (change) => {
+      const harness = createGatewayHarness();
+      const sessions = createTestSessionCapability(harness.gateway);
+      const row = {
+        key: "global",
+        isChild: false,
+        worktreeId: "wt-global",
+      } as SidebarRecentSession;
+      const host = mountLifecycleHost(
+        harness.gateway,
+        () => [row],
+        () => sessions,
+      );
+      await host.updateComplete;
+      harness.emit({
+        sessions: {
+          "agent:main:global": {
+            pullRequests: [{ number: 7, state: "open" }],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      await host.updateComplete;
+      expect(host.textContent).toBe("7");
+      host.presented = false;
+      await host.updateComplete;
+
+      const currentSessions =
+        change === "sessions" ? createTestSessionCapability(harness.gateway) : sessions;
+      const clearSummary = vi.spyOn(currentSessions, "setPullRequestSummary");
+      if (change === "sessions") {
+        host.getSessions = () => currentSessions;
+      }
+      if (change === "agent") {
+        host.selectedAgentId = "work";
+      }
+      if (change === "client") {
+        harness.gateway.snapshot.client = {
+          request: harness.request,
+        } as unknown as GatewayBrowserClient;
+      }
+      if (change === "permissions") {
+        harness.gateway.snapshot.hello = {
+          ...harness.gateway.snapshot.hello!,
+          auth: { role: "operator", scopes: ["operator.sessions.read"] },
+        };
+      }
+      host.gateway = harness.gateway;
+      await host.updateComplete;
+      const store = sessionPullRequestsForGateway(harness.gateway);
+      expect(store.get("agent:main:global")).toBeUndefined();
+      harness.emit({ sessionKey: "global", agentId: "main", reason: "rewind" }, "sessions.changed");
+      await host.updateComplete;
+      expect(clearSummary).not.toHaveBeenCalled();
+      expect(host.textContent).toBe("7");
+      expect(harness.request).not.toHaveBeenCalled();
+
+      host.presented = true;
+      await host.updateComplete;
+      expect(host.textContent).toBe("");
+    },
+  );
   it("hides the row's saved PR summary after a same-client read-scope revocation", async () => {
     const harness = createGatewayHarness();
     const row = {
@@ -403,16 +462,16 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
       ...snapshot.hello!,
       auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
     };
-    host.requestUpdate();
+    host.gateway = harness.gateway;
     await host.updateComplete;
     expect(host.textContent).not.toContain("42");
-    expect(host.controller.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
+    expect(host.indicators.summary(row.key, row.worktreeId!, row.pullRequest)).toBeUndefined();
 
     snapshot.hello = {
       ...snapshot.hello,
       auth: { role: "operator", scopes: ["operator.read"] },
     };
-    host.requestUpdate();
+    host.gateway = harness.gateway;
     await host.updateComplete;
     expect(host.textContent).toContain("42");
   });
@@ -473,13 +532,10 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const harness = createGatewayHarness();
     const key = "agent:main:demo";
-    let fallback: SidebarRecentSession["pullRequest"] = { numbers: [7], state: "open" };
-    const epoch = {};
-    const setPullRequestSummary = vi.fn(
-      (_key: string, summary: SidebarRecentSession["pullRequest"]) => {
-        fallback = summary;
-      },
-    );
+    const sessions = createTestSessionCapability(harness.gateway);
+    sessions.setPullRequestSummary(key, { numbers: [7], state: "open" });
+    const captureEpoch = vi.spyOn(sessions, "capturePullRequestEpoch");
+    const setPullRequestSummary = vi.spyOn(sessions, "setPullRequestSummary");
     const host = mountLifecycleHost(
       harness.gateway,
       () => [
@@ -487,15 +543,12 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
           key,
           isChild: false,
           worktreeId: "wt-demo",
-          pullRequest: fallback,
+          pullRequest: sessions.pullRequestSummary(key),
         } as SidebarRecentSession,
       ],
-      () =>
-        ({
-          capturePullRequestEpoch: () => epoch,
-          setPullRequestSummary,
-        }) as unknown as SessionCapability,
+      () => sessions,
     );
+    host.rowsSource = sessions;
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
     harness.emit({
@@ -522,13 +575,17 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
         { foreground: true },
       );
       expect(store.get(key)).toBeUndefined();
-      host.requestUpdate();
       await host.updateComplete;
       await vi.advanceTimersByTimeAsync(0);
       await host.updateComplete;
 
-      expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(key, undefined, epoch);
-      expect(fallback).toBeUndefined();
+      expect(captureEpoch).toHaveBeenCalledExactlyOnceWith(key);
+      expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(
+        key,
+        undefined,
+        captureEpoch.mock.results[0]?.value,
+      );
+      expect(sessions.pullRequestSummary(key)).toBeUndefined();
       expect(host.textContent?.trim()).toBe("");
     } finally {
       store.unwatch(foregroundOwner);
@@ -548,7 +605,6 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(harness.request).not.toHaveBeenCalled();
 
-    host.requestUpdate();
     host.remove();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
@@ -556,7 +612,6 @@ describe("SessionPullRequestIndicatorsController Solid lifecycle", () => {
     expect(harness.request).not.toHaveBeenCalled();
 
     document.body.append(host);
-    host.requestUpdate();
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(0);
 

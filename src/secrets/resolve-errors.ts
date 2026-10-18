@@ -15,7 +15,7 @@ type SecretProviderResolutionCode =
   | "SECRET_PROVIDER_NOT_CONFIGURED"
   | "SECRET_PROVIDER_UNAVAILABLE";
 
-export type SecretResolutionFailureReason =
+type SecretResolutionFailureReason =
   | "secret provider failed"
   | "secret provider policy denied resolution"
   | "secret provider response violated its contract"

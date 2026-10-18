@@ -23,6 +23,7 @@ import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
   replacePluginModelCatalogEntriesInDatabase,
+  type PluginModelCatalogReplacement,
 } from "./plugin-model-catalog.kernel.js";
 
 export type PluginModelCatalogCredentialOperations = {
@@ -37,7 +38,7 @@ export type PluginModelCatalogCredentialOperations = {
       authSnapshot?: PluginModelCatalogAuthSnapshot;
       env: NodeJS.ProcessEnv;
     };
-    output: boolean;
+    output: PluginModelCatalogReplacement;
   };
 };
 

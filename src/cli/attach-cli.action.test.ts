@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,7 +86,10 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
               openclaw: {
                 type: "http",
                 url: "http://127.0.0.1:9999/mcp",
-                headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+                headers: {
+                  Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+                  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+                },
               },
             },
           },
@@ -327,6 +330,18 @@ describe("openclaw attach (action)", () => {
         throw new Error("missing spawned MCP config path");
       }
       expect(existsSync(configPath)).toBe(true);
+      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:9999/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+            },
+          },
+        },
+      });
       const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
       const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
       expect(onSigint).toBeTypeOf("function");

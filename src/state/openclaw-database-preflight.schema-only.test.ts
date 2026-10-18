@@ -85,10 +85,12 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
   fs.renameSync(pathname, `${pathname}.v24`);
   fs.copyFileSync(`${pathname}.v24`, pathname);
   const { db } = openOpenClawStateDatabase({ env });
-  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({
+    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
-  ).toEqual({ schema_version: 25 });
+  ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   expect(
     db.prepare("SELECT payload_json FROM subagent_runs WHERE run_id = 'interrupted-child'").get(),
   ).toEqual({ payload_json: payload });
@@ -101,7 +103,14 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
       supportedVersions: { state: 24, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
     }),
   ).toMatchObject({
-    incompatible: [{ kind: "state", path: pathname, foundVersion: 25, supportedVersion: 24 }],
+    incompatible: [
+      {
+        kind: "state",
+        path: pathname,
+        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+        supportedVersion: 24,
+      },
+    ],
     indeterminate: [],
   });
 });

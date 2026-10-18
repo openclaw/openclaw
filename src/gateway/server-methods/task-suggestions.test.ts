@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -34,7 +34,7 @@ import {
   requirePayload,
   SOURCE_SESSION_KEY,
 } from "./task-suggestions.test-support.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = vi.hoisted(() => ({ handleChatSend: vi.fn() }));
 type TaskOperatorRole = "none" | "view" | "suggest" | "restricted";
@@ -66,16 +66,78 @@ function taskRoleClient(profileId: string, admin = false): GatewayClient {
   return client;
 }
 
-async function createRoleSuggestion(sessionKey: string): Promise<string> {
-  const created = await call("taskSuggestions.create", {
-    title: "Follow up on this session",
-    prompt: "Complete the session's suggested task.",
-    tldr: "The session needs a follow-up task.",
-    cwd: GIT_CWD,
-    sessionKey,
-    agentId: "main",
-  });
-  return (requirePayload(created) as { taskId: string }).taskId;
+function createSuggestion(
+  params: Record<string, unknown> = {},
+  overrides?: Parameters<typeof call>[3],
+) {
+  return call(
+    "taskSuggestions.create",
+    {
+      title: "Add coverage",
+      prompt: "Add the missing regression test.",
+      tldr: "The edge case is untested.",
+      cwd: GIT_CWD,
+      sessionKey: "agent:main:main",
+      ...params,
+    },
+    vi.fn(),
+    overrides,
+  );
+}
+
+async function expectPending(taskId: string) {
+  expect(await listedSuggestions()).toMatchObject([{ id: taskId }]);
+}
+
+async function listedSuggestions() {
+  return (
+    requirePayload(await call("taskSuggestions.list", {})) as { suggestions: { id: string }[] }
+  ).suggestions;
+}
+
+async function createTask(params: Record<string, unknown> = {}) {
+  return (requirePayload(await createSuggestion(params)) as { taskId: string }).taskId;
+}
+
+function accept(
+  taskId: string,
+  params: Record<string, unknown> = {},
+  overrides?: Parameters<typeof call>[3],
+) {
+  return call("taskSuggestions.accept", { taskId, ...params }, vi.fn(), overrides);
+}
+
+function expectFailure(result: Awaited<ReturnType<typeof call>>, error: Record<string, unknown>) {
+  expect(result.response?.[0]).toBe(false);
+  expect(result.response?.[2]).toMatchObject(error);
+}
+
+type InspectParams = (params: GatewayRequestHandlerOptions["params"]) => void;
+function mockCreatedSession(
+  payload: Record<string, unknown> = { runStarted: true },
+  inspect?: InspectParams,
+) {
+  const session = { key: "" };
+  const spy = vi
+    .spyOn(sessionCreateHandlers, "sessions.create")
+    .mockImplementation(async ({ params, respond }) => {
+      session.key = (params as { key: string }).key;
+      inspect?.(params);
+      respond(true, { key: session.key, ...payload }, undefined);
+    });
+  return Object.assign(session, { spy });
+}
+
+function mockDeletedSession(
+  inspect?: InspectParams,
+  payload: { deleted: boolean; ok?: boolean } = { deleted: true },
+) {
+  return vi
+    .spyOn(sessionDeleteHandlers, "sessions.delete")
+    .mockImplementation(async ({ params, respond }) => {
+      inspect?.(params);
+      respond(true, payload, undefined);
+    });
 }
 
 async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false) {
@@ -91,10 +153,10 @@ async function createTaskRoleScenario(role: TaskOperatorRole, ownsSource = false
       createdActor: { type: "human", source: "profile", id: owner.id },
     },
   );
-  const taskId = await createRoleSuggestion(SOURCE_SESSION_KEY);
+  const taskId = await createTask({ sessionKey: SOURCE_SESSION_KEY, agentId: "main" });
   const client = taskRoleClient(profile.id);
-  const request = (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
-    call(method, params, vi.fn(), { client, config: taskRoleConfig(role) });
+  const request = (method: "list" | "accept" | "dismiss", params: Record<string, unknown> = {}) =>
+    call(`taskSuggestions.${method}`, params, vi.fn(), { client, config: taskRoleConfig(role) });
   return { owner, profile, taskId, request };
 }
 
@@ -114,669 +176,479 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("task suggestion gateway methods", () => {
-  it.each(["none", "suggest", "restricted"] as const)(
-    "enforces %s role ownership, session access, and agent-creation boundaries",
-    async (roleName) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const { owner, profile, taskId, request } = await createTaskRoleScenario(
-          roleName,
-          roleName === "restricted",
-        );
-        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-        if (roleName === "none") {
-          const ownSessionKey = "agent:main:dashboard:own-task-source";
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: ownSessionKey },
-            {
-              sessionId: "own-task-source",
-              updatedAt: 1,
-              createdActor: { type: "human", source: "profile", id: profile.id },
-            },
-          );
-          const ownTaskId = await createRoleSuggestion(ownSessionKey);
-          expect((await request("taskSuggestions.list")).response?.[1]).toMatchObject({
-            suggestions: [{ id: ownTaskId }],
-          });
-          expect(
-            (await request("taskSuggestions.list", { sessionKey: SOURCE_SESSION_KEY }))
-              .response?.[1],
-          ).toEqual({ suggestions: [] });
-          expect(
-            (await request("taskSuggestions.accept", { taskId, mode: "session" })).response?.[2],
-          ).toMatchObject({
-            code: "INVALID_REQUEST",
-            message: expect.stringContaining("was not found"),
-          });
-          const dismissed = await request("taskSuggestions.dismiss", { taskId });
-          expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
-          expect(dismissed.broadcast).not.toHaveBeenCalled();
-          expect(mocks.handleChatSend).not.toHaveBeenCalled();
-          const admin = await call("taskSuggestions.list", {}, vi.fn(), {
-            client: taskRoleClient(profile.id, true),
-            config: taskRoleConfig("none"),
-          });
-          expect(admin.response?.[1]).toMatchObject({
-            suggestions: [{ id: ownTaskId }, { id: taskId }],
-          });
-          return;
-        }
-        if (roleName === "restricted") {
-          const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
-          for (const mode of ["worktree", "local", "cloud", "session"] as const) {
-            const accepted = await request("taskSuggestions.accept", { taskId, mode });
-            expect(accepted.response?.[2], mode).toMatchObject({
-              code: "FORBIDDEN",
-              message: expect.stringContaining('agent "main"'),
-            });
-          }
-          expect(createSession).not.toHaveBeenCalled();
-          expect(mocks.handleChatSend).not.toHaveBeenCalled();
-          expect((await request("taskSuggestions.list")).response?.[1]).toMatchObject({
-            suggestions: [{ id: taskId }],
-          });
-          return;
-        }
-        const rejected = await request("taskSuggestions.accept", { taskId, mode: "session" });
-        const dismissed = await request("taskSuggestions.dismiss", { taskId });
-        expect(rejected.response?.[2]).toMatchObject({
-          details: { code: "SESSION_PARTICIPATION_REQUIRED", visibility: "shared" },
-        });
-        expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-        addSessionMember(
-          { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+it.each(["none", "suggest", "restricted"] as const)(
+  "enforces %s role ownership, session access, and agent-creation boundaries",
+  async (roleName) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { owner, profile, taskId, request } = await createTaskRoleScenario(
+        roleName,
+        roleName === "restricted",
+      );
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      if (roleName === "none") {
+        const ownSessionKey = "agent:main:dashboard:own-task-source";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: ownSessionKey },
           {
-            identityId: profile.id,
-            addedBy: owner.id,
-            expectedSessionId: "shared-task-source",
+            sessionId: "own-task-source",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: profile.id },
           },
         );
-        const accepted = await request("taskSuggestions.accept", { taskId, mode: "session" });
-        const replay = await request("taskSuggestions.accept", { taskId, mode: "session" });
-        expect(accepted.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
-        expect(replay.response?.[1]).toEqual({ taskId, key: SOURCE_SESSION_KEY });
-        expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+        const ownTaskId = await createTask({ sessionKey: ownSessionKey, agentId: "main" });
+        expect((await request("list")).response?.[1]).toMatchObject({
+          suggestions: [{ id: ownTaskId }],
+        });
+        expect((await request("list", { sessionKey: SOURCE_SESSION_KEY })).response?.[1]).toEqual({
+          suggestions: [],
+        });
+        expect((await request("accept", { taskId, mode: "session" })).response?.[2]).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("was not found"),
+        });
+        const dismissed = await request("dismiss", { taskId });
+        expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
+        expect(dismissed.broadcast).not.toHaveBeenCalled();
+        expect(mocks.handleChatSend).not.toHaveBeenCalled();
+        const admin = await call("taskSuggestions.list", {}, vi.fn(), {
+          client: taskRoleClient(profile.id, true),
+          config: taskRoleConfig("none"),
+        });
+        expect(admin.response?.[1]).toMatchObject({
+          suggestions: [{ id: ownTaskId }, { id: taskId }],
+        });
+        return;
+      }
+      if (roleName === "restricted") {
+        const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
+        for (const mode of ["worktree", "local", "cloud", "session"] as const) {
+          const accepted = await request("accept", { taskId, mode });
+          expect(accepted.response?.[2], mode).toMatchObject({
+            code: "FORBIDDEN",
+            message: expect.stringContaining('agent "main"'),
+          });
+        }
+        expect(createSession).not.toHaveBeenCalled();
+        expect(mocks.handleChatSend).not.toHaveBeenCalled();
+        expect((await request("list")).response?.[1]).toMatchObject({
+          suggestions: [{ id: taskId }],
+        });
+        return;
+      }
+      const rejected = await request("accept", { taskId, mode: "session" });
+      const dismissed = await request("dismiss", { taskId });
+      expect(rejected.response?.[2]).toMatchObject({
+        details: { code: "SESSION_PARTICIPATION_REQUIRED", visibility: "shared" },
       });
+      expect(dismissed.response?.[1]).toEqual({ taskId, dismissed: false });
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+      addSessionMember(
+        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+        {
+          identityId: profile.id,
+          addedBy: owner.id,
+          expectedSessionId: "shared-task-source",
+        },
+      );
+      const accepted = await request("accept", { taskId, mode: "session" });
+      const replay = await request("accept", { taskId, mode: "session" });
+      expect([accepted.response?.[1], replay.response?.[1]]).toEqual([
+        { taskId, key: SOURCE_SESSION_KEY },
+        { taskId, key: SOURCE_SESSION_KEY },
+      ]);
+      expect(mocks.handleChatSend).toHaveBeenCalledTimes(1);
+    });
+  },
+);
+
+it("attributes a bare source session to the persisted fixed-store owner", async () => {
+  const config = {
+    session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+    agents: {
+      ownership: "explicit",
+      entries: { ops: {}, research: {} },
+      defaults: { sessionStore: { agentId: "ops" } },
     },
+  };
+  const created = await createSuggestion({ sessionKey: "global" }, config);
+
+  expect(created.response?.[0]).toBe(true);
+  expect(created.response?.[1]).toMatchObject({ suggestion: { agentId: "ops" } });
+  const listed = await call("taskSuggestions.list", { sessionKey: "global" }, vi.fn(), config);
+  expect(listed.response?.[1]).toMatchObject({
+    suggestions: [expect.objectContaining({ agentId: "ops", sessionKey: "global" })],
+  });
+});
+
+it("evicts accepted-session replay before an unseen pending suggestion", async () => {
+  const taskId = await createTask({
+    title: "Remove stale adapter",
+    prompt: "Delete src/example.ts and update its tests.",
+    agentId: "main",
+  });
+  const session = mockCreatedSession({ runStarted: true }, (params) => {
+    expect(params).toMatchObject({
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+      label: "Remove stale adapter",
+      task: "Delete src/example.ts and update its tests.",
+      worktree: true,
+      cwd: GIT_CWD,
+    });
+    expect(session.key).toMatch(/^agent:main:dashboard:/);
+  });
+
+  const first = await accept(taskId);
+  for (let index = 0; index < 99; index += 1) {
+    await createTask({ title: `Pending follow up ${index}` });
+  }
+
+  const oldestPending = (await listedSuggestions()).at(-1);
+  expect(oldestPending).toBeDefined();
+  const admitted = await createSuggestion({ title: "Latest follow up" });
+  expect(admitted.response?.[0]).toBe(true);
+  expect(admitted.broadcast).toHaveBeenCalledTimes(1);
+  expect(admitted.broadcast).toHaveBeenCalledWith(
+    "task.suggestion",
+    expect.objectContaining({ action: "created" }),
+    { dropIfSlow: true },
   );
 
-  it("attributes a bare source session to the persisted fixed-store owner", async () => {
-    const config = {
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-        defaults: { sessionStore: { agentId: "ops" } },
-      },
-    };
-    const created = await call(
-      "taskSuggestions.create",
-      {
-        title: "Inspect the deployment",
-        prompt: "Check the deployment logs.",
-        tldr: "Deployment needs inspection.",
-        cwd: GIT_CWD,
-        sessionKey: "global",
-      },
-      vi.fn(),
-      config,
-    );
+  const retry = await accept(taskId);
 
-    expect(created.response?.[0]).toBe(true);
-    expect(created.response?.[1]).toMatchObject({ suggestion: { agentId: "ops" } });
-    const listed = await call("taskSuggestions.list", { sessionKey: "global" }, vi.fn(), config);
-    expect(listed.response?.[1]).toMatchObject({
-      suggestions: [expect.objectContaining({ agentId: "ops", sessionKey: "global" })],
+  expect(first.response?.[1]).toEqual({ taskId, key: session.key });
+  expectFailure(retry, { code: "INVALID_REQUEST" });
+  expect(await listedSuggestions()).toContainEqual(
+    expect.objectContaining({ id: oldestPending?.id }),
+  );
+  expect(session.spy).toHaveBeenCalledTimes(1);
+  expect(first.broadcast).toHaveBeenCalledWith(
+    "task.suggestion",
+    { action: "resolved", taskId, resolution: "accepted" },
+    { dropIfSlow: true, sessionKeys: ["agent:main:main"], agentId: "main" },
+  );
+});
+
+it("coalesces concurrent acceptance requests", async ({ signal }) => {
+  const taskId = await createTask();
+  const { promise: gate, resolve: release } = createDeferred();
+  const entered = createDeferred();
+  const createSession = vi
+    .spyOn(sessionCreateHandlers, "sessions.create")
+    .mockImplementation(async ({ params, respond }) => {
+      entered.resolve();
+      await gate;
+      respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
     });
+
+  const first = accept(taskId).then((result) => {
+    expect(result.response?.[2]).toBeUndefined();
+    requirePayload(result);
+    return result;
   });
-
-  it("evicts accepted-session replay before an unseen pending suggestion", async () => {
-    const created = await call("taskSuggestions.create", {
-      title: "Remove stale adapter",
-      prompt: "Delete src/example.ts and update its tests.",
-      tldr: "The adapter is unreachable and adds maintenance cost.",
-      cwd: GIT_CWD,
-      sessionKey: "agent:main:main",
-      agentId: "main",
-    });
-    const taskId = (requirePayload(created) as { taskId: string }).taskId;
-    let sessionKey = "";
-    const createSession = vi
-      .spyOn(sessionCreateHandlers, "sessions.create")
-      .mockImplementation(async ({ params, respond }) => {
-        expect(params).toMatchObject({
-          agentId: "main",
-          parentSessionKey: "agent:main:main",
-          label: "Remove stale adapter",
-          task: "Delete src/example.ts and update its tests.",
-          worktree: true,
-          cwd: GIT_CWD,
-        });
-        sessionKey = (params as { key: string }).key;
-        expect(sessionKey).toMatch(/^agent:main:dashboard:/);
-        respond(true, { key: sessionKey, runStarted: true }, undefined);
-      });
-
-    const first = await call("taskSuggestions.accept", { taskId });
-    for (let index = 0; index < 99; index += 1) {
-      requirePayload(
-        await call("taskSuggestions.create", {
-          title: `Pending follow up ${index}`,
-          prompt: `Complete pending follow-up task ${index}.`,
-          tldr: "The operator has not accepted this follow-up.",
-          cwd: GIT_CWD,
-          sessionKey: "agent:main:main",
-        }),
-      );
-    }
-
-    const previous = await call("taskSuggestions.list", {});
-    const pending = (requirePayload(previous) as { suggestions: Array<{ id: string }> })
-      .suggestions;
-    const oldestPending = pending.at(-1);
-    expect(oldestPending).toBeDefined();
-    const admitted = await call("taskSuggestions.create", {
-      title: "Latest follow up",
-      prompt: "Prefer unseen pending work over accepted replay state.",
-      tldr: "Evict only the completed task replay.",
-      cwd: GIT_CWD,
-      sessionKey: "agent:main:main",
-    });
-    expect(admitted.response?.[0]).toBe(true);
-    expect(admitted.broadcast).toHaveBeenCalledTimes(1);
-    expect(admitted.broadcast).toHaveBeenCalledWith(
-      "task.suggestion",
-      expect.objectContaining({ action: "created" }),
-      { dropIfSlow: true },
+  let second: ReturnType<typeof call> | undefined;
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        first,
+        "acceptance settled before entering sessions.create",
+      ),
+      signal,
     );
-
-    const retry = await call("taskSuggestions.accept", { taskId });
-    const listed = await call("taskSuggestions.list", {});
-
-    expect(first.response?.[1]).toEqual({ taskId, key: sessionKey });
-    expect(retry.response?.[0]).toBe(false);
-    expect(retry.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
-    expect(
-      (requirePayload(listed) as { suggestions: Array<{ id: string }> }).suggestions,
-    ).toContainEqual(expect.objectContaining({ id: oldestPending?.id }));
     expect(createSession).toHaveBeenCalledTimes(1);
-    expect(first.broadcast).toHaveBeenCalledWith(
-      "task.suggestion",
-      { action: "resolved", taskId, resolution: "accepted" },
-      { dropIfSlow: true, sessionKeys: ["agent:main:main"], agentId: "main" },
-    );
-  });
+    second = accept(taskId);
+    release();
+    const [firstResult, secondResult] = await withinTest(Promise.all([first, second]), signal);
 
-  it("coalesces concurrent acceptance requests", async ({ signal }) => {
-    const created = await call("taskSuggestions.create", {
-      title: "Add coverage",
-      prompt: "Add the missing regression test.",
-      tldr: "The edge case is untested.",
-      cwd: GIT_CWD,
-      sessionKey: "agent:main:main",
-    });
-    const taskId = (requirePayload(created) as { taskId: string }).taskId;
-    const { promise: gate, resolve: release } = createDeferred();
-    const entered = createDeferred();
-    const createSession = vi
-      .spyOn(sessionCreateHandlers, "sessions.create")
-      .mockImplementation(async ({ params, respond }) => {
-        entered.resolve();
-        await gate;
-        respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
-      });
+    expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
+    expect(createSession).toHaveBeenCalledTimes(1);
+  } finally {
+    release();
+    await Promise.allSettled([first, second]);
+  }
+});
 
-    const first = call("taskSuggestions.accept", { taskId }).then((result) => {
-      expect(result.response?.[2]).toBeUndefined();
-      requirePayload(result);
-      return result;
-    });
-    let second: ReturnType<typeof call> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          entered.promise,
-          first,
-          "acceptance settled before entering sessions.create",
-        ),
-        signal,
-      );
-      expect(createSession).toHaveBeenCalledTimes(1);
-      second = call("taskSuggestions.accept", { taskId });
-      release();
-      const [firstResult, secondResult] = await withinTest(Promise.all([first, second]), signal);
-
-      expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
-      expect(createSession).toHaveBeenCalledTimes(1);
-    } finally {
-      release();
-      await Promise.allSettled([first, second]);
-    }
-  });
-
-  it("rolls back a local session when its initial task does not start", async () => {
-    const taskId = await createSourceSuggestion();
-    let sessionKey = "";
-    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
-      async ({ params, respond }) => {
-        sessionKey = (params as { key: string }).key;
-        expect(params).not.toHaveProperty("worktree");
-        expect(params).toMatchObject({ cwd: GIT_CWD });
-        respond(true, { key: sessionKey, runStarted: false }, undefined);
+it.each(["local", "failed seed"] as const)(
+  "rolls back a %s session whose task does not start",
+  async (mode) => {
+    const local = mode === "local";
+    const taskId = await (local ? createSourceSuggestion() : createLocalTaskSuggestion());
+    const session = mockCreatedSession(
+      {
+        runStarted: false,
+        ...(local ? {} : { runError: { message: "provider unavailable" } }),
+      },
+      (params) => {
+        if (local) {
+          expect(params).not.toHaveProperty("worktree");
+          expect(params).toMatchObject({ cwd: GIT_CWD });
+        }
       },
     );
-    const deleteSession = vi
-      .spyOn(sessionDeleteHandlers, "sessions.delete")
-      .mockImplementation(async ({ respond }) => {
-        respond(true, { deleted: true }, undefined);
-      });
-
-    const accepted = await call("taskSuggestions.accept", { taskId, mode: "local" });
-    const listed = await call("taskSuggestions.list", {});
-
+    const deleteSession = mockDeletedSession(
+      (params) => {
+        if (!local) {
+          expect(params).toEqual({
+            key: session.key,
+            agentId: "main",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          });
+        }
+      },
+      local ? { deleted: true } : { ok: true, deleted: true },
+    );
+    const accepted = await accept(taskId, local ? { mode: "local" } : {});
     expect(accepted.response?.[0]).toBe(false);
     expect(deleteSession).toHaveBeenCalledTimes(1);
-    expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-  });
+    if (!local) {
+      expect(accepted.response?.[2]).toMatchObject({ message: "provider unavailable" });
+      expect(accepted.broadcast).toHaveBeenCalledWith(
+        "task.suggestion",
+        expect.objectContaining({
+          action: "created",
+          suggestion: expect.objectContaining({ id: taskId }),
+        }),
+        { dropIfSlow: true },
+      );
+    }
+    await expectPending(taskId);
+  },
+);
 
-  it("creates, dispatches, then sends a cloud acceptance", async () => {
-    const taskId = await createSourceSuggestion();
-    const sequence: string[] = [];
-    let sessionKey = "";
-    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
-      async ({ params, respond }) => {
-        sequence.push("create");
-        sessionKey = (params as { key: string }).key;
-        expect(params).toEqual({
-          key: sessionKey,
-          agentId: "main",
-          parentSessionKey: SOURCE_SESSION_KEY,
-          label: "Fix the source session",
-          worktree: true,
-          cwd: GIT_CWD,
-        });
-        respond(true, { key: sessionKey, runStarted: false }, undefined);
-      },
-    );
-    vi.spyOn(sessionDispatchHandlers, "sessions.dispatch").mockImplementation(
-      async ({ params, respond }) => {
-        sequence.push("dispatch");
-        expect(params).toEqual({ key: sessionKey, agentId: "main", profileId: "primary" });
-        respond(true, { ok: true, key: sessionKey }, undefined);
-      },
-    );
-    mocks.handleChatSend.mockImplementationOnce(async ({ params, respond }) => {
-      sequence.push("send");
-      expect(params).toEqual({
-        sessionKey,
-        agentId: "main",
-        message: "Apply the focused fix in this session.",
-        queueMode: "steer",
-        idempotencyKey: `task-suggestion:${taskId}`,
-      });
-      respond(true, { runId: "cloud-run", status: "started" }, undefined);
+it("creates, dispatches, then sends a cloud acceptance", async () => {
+  const taskId = await createSourceSuggestion();
+  const sequence: string[] = [];
+  const session = mockCreatedSession({ runStarted: false }, (params) => {
+    sequence.push("create");
+    expect(params).toEqual({
+      key: session.key,
+      agentId: "main",
+      parentSessionKey: SOURCE_SESSION_KEY,
+      label: "Fix the source session",
+      worktree: true,
+      cwd: GIT_CWD,
     });
-
-    const accepted = await call(
-      "taskSuggestions.accept",
-      { taskId, mode: "cloud", cloudProfileId: "primary" },
-      vi.fn(),
-      { client: operatorClient(), context: configuredCloudContext() },
-    );
-
-    expect(accepted.response?.[1]).toEqual({ taskId, key: sessionKey });
-    expect(sequence).toEqual(["create", "dispatch", "send"]);
+  });
+  vi.spyOn(sessionDispatchHandlers, "sessions.dispatch").mockImplementation(
+    async ({ params, respond }) => {
+      sequence.push("dispatch");
+      expect(params).toEqual({ key: session.key, agentId: "main", profileId: "primary" });
+      respond(true, { ok: true, key: session.key }, undefined);
+    },
+  );
+  mocks.handleChatSend.mockImplementationOnce(async ({ params, respond }) => {
+    sequence.push("send");
+    expect(params).toEqual({
+      sessionKey: session.key,
+      agentId: "main",
+      message: "Apply the focused fix in this session.",
+      queueMode: "steer",
+      idempotencyKey: `task-suggestion:${taskId}`,
+    });
+    respond(true, { runId: "cloud-run", status: "started" }, undefined);
   });
 
-  it.each([
-    {
-      label: "no configured profiles",
-      context: configuredCloudContext({}),
-      cloudProfileId: "primary",
-      message: "no cloud worker profiles configured",
-    },
-    {
-      label: "an unknown profile",
-      context: configuredCloudContext(),
-      cloudProfileId: "missing",
-      message: "unknown cloud worker profile: missing",
-    },
-    {
-      label: "a missing profile id",
-      context: configuredCloudContext(),
-      cloudProfileId: undefined,
-      message: "cloudProfileId is required for cloud mode",
-    },
-  ])("rejects cloud acceptance with $label before handler calls", async (testCase) => {
+  const accepted = await accept(
+    taskId,
+    { mode: "cloud", cloudProfileId: "primary" },
+    { client: operatorClient(), context: configuredCloudContext() },
+  );
+
+  expect(accepted.response?.[1]).toEqual({ taskId, key: session.key });
+  expect(sequence).toEqual(["create", "dispatch", "send"]);
+});
+
+it.each([
+  ["primary", "no cloud worker profiles configured", configuredCloudContext({})],
+  ["missing", "unknown cloud worker profile: missing", configuredCloudContext()],
+  [undefined, "cloudProfileId is required for cloud mode", configuredCloudContext()],
+] as const)(
+  "rejects cloud profile %s before handler calls",
+  async (cloudProfileId, message, context) => {
     const taskId = await createSourceSuggestion();
     const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
     const dispatchSession = vi.spyOn(sessionDispatchHandlers, "sessions.dispatch");
 
-    const accepted = await call(
-      "taskSuggestions.accept",
-      {
-        taskId,
-        mode: "cloud",
-        ...(testCase.cloudProfileId ? { cloudProfileId: testCase.cloudProfileId } : {}),
-      },
-      vi.fn(),
-      { context: testCase.context },
+    const accepted = await accept(
+      taskId,
+      { mode: "cloud", ...(cloudProfileId ? { cloudProfileId } : {}) },
+      { context },
     );
-
-    expect(accepted.response?.[0]).toBe(false);
-    expect(accepted.response?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: testCase.message,
-    });
+    expectFailure(accepted, { code: "INVALID_REQUEST", message });
     expect(createSession).not.toHaveBeenCalled();
     expect(dispatchSession).not.toHaveBeenCalled();
     expect(mocks.handleChatSend).not.toHaveBeenCalled();
+  },
+);
+
+it("fully rolls back a cloud draft when dispatch fails", async () => {
+  const taskId = await createSourceSuggestion();
+  const session = mockCreatedSession({});
+  vi.spyOn(sessionDispatchHandlers, "sessions.dispatch").mockImplementation(async ({ respond }) => {
+    respond(false, undefined, { code: "UNAVAILABLE", message: "dispatch unavailable" });
+  });
+  const deleteSession = mockDeletedSession((params) => {
+    expect(params).toMatchObject({ key: session.key, agentId: "main" });
   });
 
-  it("fully rolls back a cloud draft when dispatch fails", async () => {
-    const taskId = await createSourceSuggestion();
-    let sessionKey = "";
-    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
-      async ({ params, respond }) => {
-        sessionKey = (params as { key: string }).key;
-        respond(true, { key: sessionKey }, undefined);
-      },
-    );
-    vi.spyOn(sessionDispatchHandlers, "sessions.dispatch").mockImplementation(
-      async ({ respond }) => {
-        respond(false, undefined, { code: "UNAVAILABLE", message: "dispatch unavailable" });
-      },
-    );
-    const deleteSession = vi
-      .spyOn(sessionDeleteHandlers, "sessions.delete")
-      .mockImplementation(async ({ params, respond }) => {
-        expect(params).toMatchObject({ key: sessionKey, agentId: "main" });
-        respond(true, { deleted: true }, undefined);
-      });
+  const accepted = await accept(
+    taskId,
+    { mode: "cloud", cloudProfileId: "primary" },
+    { context: configuredCloudContext() },
+  );
 
-    const accepted = await call(
-      "taskSuggestions.accept",
-      { taskId, mode: "cloud", cloudProfileId: "primary" },
-      vi.fn(),
-      { context: configuredCloudContext() },
-    );
-    const listed = await call("taskSuggestions.list", {});
+  expectFailure(accepted, { message: "dispatch unavailable" });
+  expect(deleteSession).toHaveBeenCalledTimes(1);
+  expect(mocks.handleChatSend).not.toHaveBeenCalled();
+  await expectPending(taskId);
+});
 
-    expect(accepted.response?.[0]).toBe(false);
-    expect(accepted.response?.[2]).toMatchObject({ message: "dispatch unavailable" });
-    expect(deleteSession).toHaveBeenCalledTimes(1);
-    expect(mocks.handleChatSend).not.toHaveBeenCalled();
-    expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-  });
-
-  it("rejects a missing source session and restores the suggestion", async () => {
+it.each([false, true])(
+  "restores a source suggestion after failure (source exists: %s)",
+  async (exists) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const taskId = await createSourceSuggestion();
-      const deleteSession = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
-
-      const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
-        client: operatorClient(),
-        context: { chatAbortControllers: new Map() },
-      });
-      const listed = await call("taskSuggestions.list", {});
-
-      expect(accepted.response?.[0]).toBe(false);
-      expect(accepted.response?.[2]).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: "source session no longer exists; start it in a new session instead",
-      });
-      expect(deleteSession).not.toHaveBeenCalled();
-      expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-    });
-  });
-
-  it("restores a session-mode suggestion after delivery failure without deleting its source", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
-        { sessionId: "source-session", updatedAt: 1 },
-      );
-      const taskId = await createSourceSuggestion();
-      const deleteSession = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
-      mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
-        respond(false, undefined, { code: "UNAVAILABLE", message: "delivery unavailable" });
-      });
-
-      const accepted = await call("taskSuggestions.accept", { taskId, mode: "session" }, vi.fn(), {
-        client: operatorClient(),
-        context: { chatAbortControllers: new Map() },
-      });
-      const listed = await call("taskSuggestions.list", {});
-
-      expect(accepted.response?.[0]).toBe(false);
-      expect(accepted.response?.[2]).toMatchObject({ message: "delivery unavailable" });
-      expect(deleteSession).not.toHaveBeenCalled();
-      expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-    });
-  });
-
-  it("rejects an invalid acceptance mode before claiming the suggestion", async () => {
-    const taskId = await createSourceSuggestion();
-    const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
-
-    const accepted = await call("taskSuggestions.accept", { taskId, mode: "remote" });
-    const listed = await call("taskSuggestions.list", {});
-
-    expect(accepted.response?.[0]).toBe(false);
-    expect(accepted.response?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
-    expect(accepted.response?.[2]?.message).toContain("mode");
-    expect(createSession).not.toHaveBeenCalled();
-    expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-  });
-
-  it("rolls back an empty session and keeps a failed seed suggestion pending", async () => {
-    const taskId = await createLocalTaskSuggestion();
-    let sessionKey = "";
-    vi.spyOn(sessionCreateHandlers, "sessions.create").mockImplementation(
-      async ({ params, respond }) => {
-        sessionKey = (params as { key: string }).key;
-        respond(
-          true,
-          {
-            key: sessionKey,
-            runStarted: false,
-            runError: { message: "provider unavailable" },
-          },
-          undefined,
+      if (exists) {
+        setRuntimeConfigSnapshot({});
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: SOURCE_SESSION_KEY },
+          { sessionId: "source-session", updatedAt: 1 },
         );
-      },
-    );
-    const deleteSession = vi
-      .spyOn(sessionDeleteHandlers, "sessions.delete")
-      .mockImplementation(async ({ params, respond }) => {
-        expect(params).toEqual({
-          key: sessionKey,
-          agentId: "main",
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
+        mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
+          respond(false, undefined, { code: "UNAVAILABLE", message: "delivery unavailable" });
         });
-        respond(true, { ok: true, deleted: true }, undefined);
-      });
-
-    const accepted = await call("taskSuggestions.accept", { taskId });
-    const listed = await call("taskSuggestions.list", {});
-
-    expect(accepted.response?.[0]).toBe(false);
-    expect(accepted.response?.[2]).toMatchObject({ message: "provider unavailable" });
-    expect(deleteSession).toHaveBeenCalledTimes(1);
-    expect(accepted.broadcast).toHaveBeenCalledWith(
-      "task.suggestion",
-      expect.objectContaining({
-        action: "created",
-        suggestion: expect.objectContaining({ id: taskId }),
-      }),
-      { dropIfSlow: true },
-    );
-    expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
-  });
-
-  it("expires a suggestion when rollback preserves the worktree", async () => {
-    const taskId = await createLocalTaskSuggestion();
-    vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
-      new Error("initial dispatch failed"),
-    );
-    vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
-      respond(
-        true,
+      }
+      const taskId = await createSourceSuggestion();
+      const deleteSession = vi.spyOn(sessionDeleteHandlers, "sessions.delete");
+      const accepted = await accept(
+        taskId,
+        { mode: "session" },
         {
-          ok: true,
-          deleted: true,
-          worktreePreserved: {
-            id: "preserved-worktree",
-            path: "/preserved-worktree",
-            branch: "openclaw/preserved-worktree",
-            reason: "cleanup-failed",
-          },
+          client: operatorClient(),
+          context: { chatAbortControllers: new Map() },
         },
-        undefined,
       );
+      expectFailure(
+        accepted,
+        exists
+          ? { message: "delivery unavailable" }
+          : {
+              code: "INVALID_REQUEST",
+              message: "source session no longer exists; start it in a new session instead",
+            },
+      );
+      expect(deleteSession).not.toHaveBeenCalled();
+      await expectPending(taskId);
     });
+  },
+);
 
-    const accepted = await call("taskSuggestions.accept", { taskId });
-    const listed = await call("taskSuggestions.list", {});
+it("rejects an invalid acceptance mode before claiming the suggestion", async () => {
+  const taskId = await createSourceSuggestion();
+  const createSession = vi.spyOn(sessionCreateHandlers, "sessions.create");
 
-    expect(accepted.response?.[0]).toBe(false);
-    expect(accepted.response?.[2]?.message).toContain("failed to roll back");
-    expect(accepted.broadcast).toHaveBeenCalledWith(
-      "task.suggestion",
-      { action: "resolved", taskId, resolution: "expired" },
-      { dropIfSlow: true, sessionKeys: ["agent:main:main"], agentId: "main" },
-    );
-    expect(listed.response?.[1]).toEqual({ suggestions: [] });
-  });
+  const accepted = await accept(taskId, { mode: "remote" });
+  expectFailure(accepted, { code: "INVALID_REQUEST", message: expect.stringContaining("mode") });
+  expect(createSession).not.toHaveBeenCalled();
+  await expectPending(taskId);
+});
 
-  it("rejects a relative cwd before recording or broadcasting", async () => {
-    const result = await call("taskSuggestions.create", {
-      title: "Add coverage",
-      prompt: "Add the missing regression test.",
-      tldr: "The edge case is untested.",
-      cwd: "relative/folder",
-      sessionKey: "agent:main:main",
-    });
-    expect(result.response?.[0]).toBe(false);
-    expect(result.response?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "task suggestion cwd must be absolute",
-    });
-    expect(result.broadcast).not.toHaveBeenCalled();
-  });
-
-  it("rejects an agent that conflicts with the source session", async () => {
-    const result = await call(
-      "taskSuggestions.create",
+it("expires a suggestion when rollback preserves the worktree", async () => {
+  const taskId = await createLocalTaskSuggestion();
+  vi.spyOn(sessionCreateHandlers, "sessions.create").mockRejectedValue(
+    new Error("initial dispatch failed"),
+  );
+  vi.spyOn(sessionDeleteHandlers, "sessions.delete").mockImplementation(async ({ respond }) => {
+    respond(
+      true,
       {
-        title: "Add coverage",
-        prompt: "Add the missing regression test.",
-        tldr: "The edge case is untested.",
-        cwd: GIT_CWD,
-        sessionKey: "agent:main:main",
-        agentId: "work",
+        ok: true,
+        deleted: true,
+        worktreePreserved: {
+          id: "preserved-worktree",
+          path: "/preserved-worktree",
+          branch: "openclaw/preserved-worktree",
+          reason: "cleanup-failed",
+        },
       },
-      vi.fn(),
-      { agents: { entries: { main: {}, work: {} } } },
+      undefined,
     );
+  });
 
-    expect(result.response?.[0]).toBe(false);
-    expect(result.response?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: 'agent "work" does not match session key agent "main"',
+  const accepted = await accept(taskId);
+  expect(accepted.response?.[0]).toBe(false);
+  expect(accepted.response?.[2]?.message).toContain("failed to roll back");
+  expect(accepted.broadcast).toHaveBeenCalledWith(
+    "task.suggestion",
+    { action: "resolved", taskId, resolution: "expired" },
+    { dropIfSlow: true, sessionKeys: ["agent:main:main"], agentId: "main" },
+  );
+  expect(await listedSuggestions()).toEqual([]);
+});
+
+it.each([
+  [{ cwd: "relative/folder" }, {}, "task suggestion cwd must be absolute"],
+  [
+    { agentId: "work" },
+    { agents: { entries: { main: {}, work: {} } } },
+    'agent "work" does not match session key agent "main"',
+  ],
+] as const)("rejects invalid creation %j before broadcasting", async (params, config, message) => {
+  const result = await createSuggestion(params, config);
+  expectFailure(result, { code: "INVALID_REQUEST", message });
+  expect(result.broadcast).not.toHaveBeenCalled();
+});
+
+it("keeps the complete list below the retained payload budget", async () => {
+  const taskIds: string[] = [];
+  for (let index = 0; index < 70; index += 1) {
+    taskIds.push(
+      await createTask({ title: `Follow up ${index}`, prompt: `${index}: ${"x".repeat(32_760)}` }),
+    );
+  }
+
+  const suggestions = await listedSuggestions();
+  expect(Buffer.byteLength(JSON.stringify(suggestions))).toBeLessThanOrEqual(2 * 1024 * 1024);
+  expect(suggestions.length).toBeLessThan(70);
+  expect(suggestions.some((suggestion) => suggestion.id === taskIds[0])).toBe(false);
+});
+
+it("rejects impossible byte admission without evicting accepted or pending suggestions", async () => {
+  const acceptingTaskIds: string[] = [];
+  const largePrompt = "🦀".repeat(16_000);
+
+  try {
+    for (let index = 0; index < 32; index += 1) {
+      const taskId = await createTask({ title: `Running follow up ${index}`, prompt: largePrompt });
+      expect(beginTaskSuggestionAcceptance(taskId).status).toBe("claimed");
+      acceptingTaskIds.push(taskId);
+    }
+
+    const acceptedTaskId = await createTask({ title: "Preserve accepted task" });
+    expect(beginTaskSuggestionAcceptance(acceptedTaskId).status).toBe("claimed");
+    completeTaskSuggestionAcceptance(acceptedTaskId, "agent:main:dashboard:accepted");
+
+    const pendingTaskId = await createTask({ title: "Keep this follow up" });
+    const rejected = await createSuggestion({
+      title: "One oversized follow up",
+      prompt: largePrompt,
     });
-    expect(result.broadcast).not.toHaveBeenCalled();
-  });
 
-  it("keeps the complete list below the retained payload budget", async () => {
-    const taskIds: string[] = [];
-    for (let index = 0; index < 70; index += 1) {
-      const created = await call("taskSuggestions.create", {
-        title: `Follow up ${index}`,
-        prompt: `${index}: ${"x".repeat(32_760)}`,
-        tldr: "The follow-up remains useful.",
-        cwd: GIT_CWD,
-        sessionKey: "agent:main:main",
-      });
-      taskIds.push((requirePayload(created) as { taskId: string }).taskId);
+    expectFailure(rejected, {
+      code: "UNAVAILABLE",
+      message: "task suggestion registry is busy",
+      retryable: true,
+    });
+    expect(rejected.broadcast).not.toHaveBeenCalled();
+    expect(beginTaskSuggestionAcceptance(acceptedTaskId)).toEqual({
+      status: "accepted",
+      sessionKey: "agent:main:dashboard:accepted",
+    });
+    expect(await listedSuggestions()).toEqual([expect.objectContaining({ id: pendingTaskId })]);
+  } finally {
+    for (const taskId of acceptingTaskIds) {
+      expect(abandonTaskSuggestionAcceptance(taskId)).toBe(true);
     }
-
-    const listed = await call("taskSuggestions.list", {});
-    const payload = requirePayload(listed) as { suggestions: Array<{ id: string }> };
-    expect(Buffer.byteLength(JSON.stringify(payload.suggestions))).toBeLessThanOrEqual(
-      2 * 1024 * 1024,
-    );
-    expect(payload.suggestions.length).toBeLessThan(70);
-    expect(payload.suggestions.some((suggestion) => suggestion.id === taskIds[0])).toBe(false);
-  });
-
-  it("rejects impossible byte admission without evicting accepted or pending suggestions", async () => {
-    const acceptingTaskIds: string[] = [];
-    const largePrompt = "🦀".repeat(16_000);
-
-    try {
-      for (let index = 0; index < 32; index += 1) {
-        const created = await call("taskSuggestions.create", {
-          title: `Running follow up ${index}`,
-          prompt: largePrompt,
-          tldr: "This accepted task is still starting.",
-          cwd: GIT_CWD,
-          sessionKey: "agent:main:main",
-        });
-        const taskId = (requirePayload(created) as { taskId: string }).taskId;
-        expect(beginTaskSuggestionAcceptance(taskId).status).toBe("claimed");
-        acceptingTaskIds.push(taskId);
-      }
-
-      const accepted = await call("taskSuggestions.create", {
-        title: "Preserve accepted task",
-        prompt: "Keep its accepted result available for retries.",
-        tldr: "A rejected admission must not discard completed results.",
-        cwd: GIT_CWD,
-        sessionKey: "agent:main:main",
-      });
-      const acceptedTaskId = (requirePayload(accepted) as { taskId: string }).taskId;
-      expect(beginTaskSuggestionAcceptance(acceptedTaskId).status).toBe("claimed");
-      completeTaskSuggestionAcceptance(acceptedTaskId, "agent:main:dashboard:accepted");
-
-      const pending = await call("taskSuggestions.create", {
-        title: "Keep this follow up",
-        prompt: "Do not discard this pending task.",
-        tldr: "The operator has not accepted it yet.",
-        cwd: GIT_CWD,
-        sessionKey: "agent:main:main",
-      });
-      const pendingTaskId = (requirePayload(pending) as { taskId: string }).taskId;
-      const rejected = await call("taskSuggestions.create", {
-        title: "One oversized follow up",
-        prompt: largePrompt,
-        tldr: "This valid task cannot fit beside protected tasks.",
-        cwd: GIT_CWD,
-        sessionKey: "agent:main:main",
-      });
-
-      expect(rejected.response?.[0]).toBe(false);
-      expect(rejected.response?.[2]).toMatchObject({
-        code: "UNAVAILABLE",
-        message: "task suggestion registry is busy",
-        retryable: true,
-      });
-      expect(rejected.broadcast).not.toHaveBeenCalled();
-      expect(beginTaskSuggestionAcceptance(acceptedTaskId)).toEqual({
-        status: "accepted",
-        sessionKey: "agent:main:dashboard:accepted",
-      });
-      const listed = await call("taskSuggestions.list", {});
-      expect(
-        (requirePayload(listed) as { suggestions: Array<{ id: string }> }).suggestions,
-      ).toEqual([expect.objectContaining({ id: pendingTaskId })]);
-    } finally {
-      for (const taskId of acceptingTaskIds) {
-        expect(abandonTaskSuggestionAcceptance(taskId)).toBe(true);
-      }
-    }
-  });
+  }
 });

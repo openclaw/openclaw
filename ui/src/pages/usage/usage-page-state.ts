@@ -10,6 +10,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
@@ -18,7 +19,6 @@ import { createUsageExportRequest } from "./export.ts";
 import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import { createUsageRequest } from "./request.ts";
 import type { UsageProps, UsageRouteData } from "./types.ts";
 import { createUsageDetails } from "./usage-details.ts";
 
@@ -129,7 +129,7 @@ export function createUsagePage(context: ApplicationContext) {
         return;
       }
       refreshPolicy.interrupt();
-      usageRequest.cancel();
+      usageRequest.reset();
       details.cancel();
     },
     onSnapshot: handleGatewaySnapshot,
@@ -145,7 +145,7 @@ export function createUsagePage(context: ApplicationContext) {
     notify();
   });
 
-  const usageRequest = createUsageRequest(notify, {
+  const usageRequest = createPageRequest(notify, {
     task: async (
       [client, refreshSessionKey]: readonly [GatewayBrowserClient, string | undefined],
       { signal },
@@ -271,7 +271,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function resetForClientChange() {
     clearDebounce("dateDebounceTimer");
-    usageRequest.cancel();
+    usageRequest.reset();
     if (routeDataInitialized) {
       routeDataEnabled = false;
     }
@@ -425,7 +425,7 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function clearSelectionsAndDetails() {
-    usageExportRequest.cancel();
+    usageExportRequest.reset();
     setFilters({ selectedDays: [], selectedHours: [] });
     usageSelectedSessions = [];
     selectedSession = null;
@@ -443,7 +443,7 @@ export function createUsagePage(context: ApplicationContext) {
   function scheduleUsageLoad() {
     clearSelectionsAndDetails();
     clearDebounce("dateDebounceTimer");
-    usageRequest.cancel();
+    usageRequest.reset();
     usageError = null;
     // Cancel the old query's poll before it can consume this debounce and retry budget.
     refreshPolicy.resetPayload();
@@ -524,7 +524,7 @@ export function createUsagePage(context: ApplicationContext) {
       data: {
         loading: usageLoading(),
         exporting: usageExportRequest.pending,
-        error: usageError,
+        error: usageError ?? usageResult()?.partial?.message ?? null,
         sessions: usageRosterResult()?.sessions ?? [],
         sessionPage: usageRosterResult()?.overview,
         creatorOptions: usageCreatorOptions(),
@@ -725,9 +725,9 @@ export function createUsagePage(context: ApplicationContext) {
     clearDebounce("dateDebounceTimer");
     clearDebounce("queryDebounceTimer");
     refreshPolicy.dispose();
-    usageRequest.cancel();
+    usageRequest.reset();
     details.cancel();
-    usageExportRequest.cancel();
+    usageExportRequest.reset();
     gateway.dispose();
   });
 

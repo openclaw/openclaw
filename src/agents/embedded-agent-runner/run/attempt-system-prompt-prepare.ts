@@ -20,10 +20,7 @@ import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
-import {
-  buildProjectMemoryWriteInstruction,
-  prepareProjectMemoryBootstrap,
-} from "../../project-memory-bootstrap.js";
+import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
@@ -37,6 +34,7 @@ import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepar
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-system-prompt.js";
+import { resolveSessionPromptDelivery } from "./turn-delivery-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
@@ -74,7 +72,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   toolSchemaDirectoryPrompt?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
-  requireExplicitMessageTarget?: boolean;
   effectiveTools: PromptTools;
   isRawModelRun: boolean;
   modelToolsEnabled: boolean;
@@ -211,12 +208,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const openClawReferences =
     params.referencePaths ??
     (await resolveOpenClawReferencePaths({
+      sandbox: params.setup.sandbox,
       workspaceDir: params.setup.effectiveWorkspace,
       argv1: process.argv[1],
       cwd: params.setup.effectiveCwd,
       moduleUrl: import.meta.url,
     }));
-  const providerPromptContext = Object.freeze({
+  const providerPromptContext = {
     config: attempt.config,
     agentDir: attempt.agentDir,
     workspaceDir: params.setup.effectiveWorkspace,
@@ -226,7 +224,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeChannel,
     runtimeCapabilities,
     agentId: params.setup.sessionAgentId,
-  });
+  };
   const promptContributionContext = { ...providerPromptContext, trigger: attempt.trigger };
   const promptContribution =
     attempt.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
@@ -237,6 +235,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       runtimeHandle: params.setup.getProviderRuntimeHandle(),
       context: promptContributionContext,
     });
+  const projectKey = attempt.preparedModelRuntime?.projectKey ?? undefined;
   const includeMemorySection =
     !params.activeContextEngine || params.activeContextEngine.info.id === "legacy";
   const prepareToolContextSections = async (
@@ -256,6 +255,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         citationsMode: attempt.config?.memory?.citations,
         agentId: runtimePrompt.runtimeInfo.agentId,
         agentSessionKey: runtimePrompt.runtimeInfo.sessionKey,
+        projectKey,
       }),
       preparedWatchedSessions: await prepareWatchedSessionsPromptAsync({
         ...toolContext,
@@ -295,12 +295,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             : undefined,
         })
       : [];
-  const projectMemoryWriteInstruction = buildProjectMemoryWriteInstruction(
-    attempt.preparedModelRuntime?.projectKey,
-  );
   const extraSystemPrompt = joinPresentTextSegments([
     attempt.extraSystemPrompt,
-    projectMemoryWriteInstruction,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
 
@@ -335,8 +331,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ? params.bootstrap.workspaceNotes
         : undefined,
       promptMode: effectivePromptMode,
-      sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
-      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      // The cached prompt uses session delivery facts; a turn that differs gets
+      // its delivery rules in the turn's runtime context instead.
+      ...resolveSessionPromptDelivery({
+        config: attempt.config,
+        sessionKey: attempt.sessionKey,
+        chatType: attempt.chatType,
+        channel: runtimeChannel,
+      }),
       silentReplyPromptMode: attempt.silentReplyPromptMode,
       proactiveSubagentOrchestration: params.setup.proactiveSubagentOrchestration,
       acpEnabled: isAcpRuntimeSpawnAvailable({
@@ -361,6 +363,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       preparedWatchedSessions,
       projectMemoryBootstrap,
       activeProjectKeys,
+      projectKey,
       promptContribution,
     },
   };

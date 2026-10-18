@@ -1,3 +1,5 @@
+import { symlinkSync } from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -32,16 +34,28 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as projectionWork from "./session-projection-work.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
+import { listRows } from "./session-row-projection-read-fixtures.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
+const cfg = { agents: { entries: { main: {} } } };
+
+function seedPublication(sessionId: string, entry: Partial<SessionEntry> = {}) {
+  const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}` };
+  replaceSessionEntrySync(scope, { sessionId, updatedAt: 1, ...entry });
+  return { scope, query: { agentId: scope.agentId, key: scope.sessionKey } };
+}
+
+function cachedEntry(database: ReturnType<typeof openOpenClawAgentDatabase>, key: string) {
+  return readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(key);
+}
 
 it.each(["native", "worker"] as const)(
   "retains assigned owner and participants before observers after a %s metadata write",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { entries: { main: {} } } };
       const creator = ensureProfileForEmail("creator@example.com");
       const owner = ensureProfileForEmail("owner@example.com");
       const participant = ensureProfileForEmail("participant@example.com");
@@ -132,19 +146,21 @@ it.each(["native", "worker"] as const)(
         ).toEqual([]);
         const publishedSource = projection.capture(query)?.publishedSource;
         expect(publishedSource).toBeDefined();
+        const expectPublished = () => {
+          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
+          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+        };
         const sql = observeHostDataSql();
         try {
           sessionChanges.emit({ agentId: scope.agentId, sessionKey: scope.sessionKey });
           expect(projection.dirtyRowCount).toBeGreaterThan(0);
-          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
-          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          expectPublished();
           sessionChanges.emit({
             ...scope,
             storePath: warm!.storeTarget.storePath,
             facts: { kind: "unchanged" },
           });
-          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
-          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          expectPublished();
           // Participant persistence already published its compact facts before this notice.
           emitSessionLifecycleEvent({
             agentId: scope.agentId,
@@ -152,17 +168,13 @@ it.each(["native", "worker"] as const)(
             reason: "participants",
             scope: "session-entry",
           });
-          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
-          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          expectPublished();
           // Unknown storage changes still revoke compact facts until an exact refresh.
           sessionChanges.emit({ ...scope, storePath: warm!.storeTarget.storePath });
           expect(projection.sharingTarget(query)).toBeNull();
           expect(projection.capture(query)?.publishedSource).toBeUndefined();
           expect(() => projection.selectEntries(query)).toThrow(SessionRowFactsPending);
-          const refreshed = await listProjectedSessions({
-            projection,
-            opts: { includePeople: true },
-          });
+          const refreshed = await listRows(projection, { includePeople: true });
           expect(refreshed.sessions.find((row) => row.key === scope.sessionKey)?.label).toBe(
             "Updated label",
           );
@@ -180,9 +192,9 @@ it.each(["native", "worker"] as const)(
   },
 );
 
-it("keeps a captured row when another physical store resets the same key and session ID", async () => {
+it("accepts alias publications while another physical store keeps its own row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = {
+    const globalConfig = {
       agents: { entries: { main: {} } },
       session: { scope: "global" as const },
     };
@@ -197,95 +209,104 @@ it("keeps a captured row when another physical store resets the same key and ses
       replaceSessionEntrySync({ agentId: query.agentId, sessionKey: query.key, storePath }, entry);
       registerOpenClawAgentDatabase({ agentId: query.agentId, path: storePath });
     }
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
-      await projection.ensureMaterialized();
-      const captured = projection.capture(query);
-      expect(captured).toBeDefined();
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key, storePath: otherPath },
-        {
-          ...entry,
-          lifecycleRevision: "other-store-reset",
-          updatedAt: 2,
-        },
-      );
-      expect(projection.isCurrent(captured!)).toBe(true);
-      await projection.ensureMaterialized();
-      expect(projection.describe(query, captured)?.entry.lifecycleRevision).toBe("original");
-      expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
-        "other-store-reset",
-      );
-    } finally {
-      projection.dispose();
-    }
+    const aliasDirectory = state.path("publication-alias");
+    symlinkSync(
+      path.dirname(query.storePath),
+      aliasDirectory,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const alias = path.join(aliasDirectory, path.basename(query.storePath));
+    openOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
+    registerOpenClawAgentDatabase({ agentId: query.agentId, path: alias });
+    using projection = await createTestProjection({ cfg: globalConfig, modelCatalog: [] });
+
+    await projection.ensureMaterialized();
+    const captured = projection.capture(query);
+    expect(captured).toBeDefined();
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: otherPath },
+      {
+        ...entry,
+        lifecycleRevision: "other-store-reset",
+        updatedAt: 2,
+      },
+    );
+    expect(projection.isCurrent(captured!)).toBe(true);
+    await projection.ensureMaterialized();
+    expect(projection.describe(query, captured)?.entry.lifecycleRevision).toBe("original");
+    expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
+      "other-store-reset",
+    );
+
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: alias },
+      { ...entry, updatedAt: 3, label: "Alias publication" },
+    );
+    // Observe the committed postimage before any asynchronous row refill.
+    expect(projection.capture(query)?.entry?.label).toBe("Alias publication");
+    expect(projection.capture(query)?.publishedSource?.canonicalPath).toBe(query.storePath);
+    expect(projection.describe({ ...query, storePath: otherPath })?.entry.lifecycleRevision).toBe(
+      "other-store-reset",
+    );
+    await projection.ensureMaterialized();
   });
 });
 
 it("invalidates a published row after an unprepared reset with the same session ID", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:unprepared-reset",
-      storePath: database.path,
-    };
     const entry = { sessionId: "same-session", lifecycleRevision: "original", updatedAt: 1 };
-    replaceSessionEntrySync(scope, entry);
-    const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
-    const query = { agentId: scope.agentId, key: scope.sessionKey, storePath: scope.storePath };
-    try {
-      await projection.ensureMaterialized();
-      replaceSessionEntrySync(scope, { ...entry, label: "Published metadata", updatedAt: 2 });
-      const captured = projection.capture(query);
-      const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database).identity;
-      expect(captured?.entry?.label).toBe("Published metadata");
-      expect(captured?.publishedSource?.identity).toBe(identity);
-      expect(projection.isCurrent(captured!)).toBe(true);
+    const seeded = seedPublication("unprepared-reset", entry);
+    const scope = { ...seeded.scope, storePath: database.path };
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    const query = { ...seeded.query, storePath: scope.storePath };
 
-      // A raw reset does not prove whether the previously published lifecycle still applies.
-      emitSessionIdentityMutation({
-        kind: "reset",
-        agentId: scope.agentId,
-        databaseIdentity: identity,
-        previous: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
-        current: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
-      });
-      expect(projection.isCurrent(captured!)).toBe(false);
-      const invalidated = projection.capture(query);
-      expect(invalidated).toBeDefined();
-      expect(invalidated?.generation).not.toBe(captured?.generation);
-      expect(invalidated?.entry).toBeUndefined();
+    await projection.ensureMaterialized();
+    replaceSessionEntrySync(scope, { ...entry, label: "Published metadata", updatedAt: 2 });
+    const captured = projection.capture(query);
+    const identity = databaseIdentity.readOpenClawAgentDatabaseIdentity(database).identity;
+    expect(captured?.entry?.label).toBe("Published metadata");
+    expect(captured?.publishedSource?.identity).toBe(identity);
+    expect(projection.isCurrent(captured!)).toBe(true);
 
-      await projection.ensureMaterialized();
-      expect(projection.capture(query)?.entry?.sessionId).toBe(entry.sessionId);
-      expect(projection.isCurrent(captured!)).toBe(false);
-    } finally {
-      projection.dispose();
-    }
+    // A raw reset does not prove whether the previously published lifecycle still applies.
+    emitSessionIdentityMutation({
+      kind: "reset",
+      agentId: scope.agentId,
+      databaseIdentity: identity,
+      previous: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+      current: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
+    });
+    expect(projection.isCurrent(captured!)).toBe(false);
+    const invalidated = projection.capture(query);
+    expect(invalidated).toBeDefined();
+    expect(invalidated?.generation).not.toBe(captured?.generation);
+    expect(invalidated?.entry).toBeUndefined();
+
+    await projection.ensureMaterialized();
+    expect(projection.capture(query)?.entry?.sessionId).toBe(entry.sessionId);
+    expect(projection.isCurrent(captured!)).toBe(false);
   });
 });
 
 it("retains newer cached native metadata through reentrant identity publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:identity-publication-reentry" };
     const updatedAt = Date.now();
-    replaceSessionEntrySync(scope, { sessionId: "original", updatedAt });
+    const { scope, query } = seedPublication("identity-publication-reentry", {
+      sessionId: "original",
+      updatedAt,
+    });
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     readSessionEntryCache(database, { cache: true });
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const list = () => listProjectedSessions({ projection, opts: {} });
+    const list = () => listRows(projection);
     let stopRows = () => {};
     try {
       await list();
       expect(
         Boolean(readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))),
       ).toBe(true);
-      const originalGeneration = projection.capture({
-        agentId: scope.agentId,
-        key: scope.sessionKey,
-      })?.generation;
+      const originalGeneration = projection.capture(query)?.generation;
       expect(originalGeneration).toBeDefined();
       const newer = { sessionId: "replacement", updatedAt: updatedAt + 1, label: "Newer label" };
       let reentered = false;
@@ -305,7 +326,7 @@ it("retains newer cached native metadata through reentrant identity publication"
       expect(reentered).toBe(true);
       expect(callbackErrors).toEqual([]);
       expect(loadSessionEntry(scope)?.label).toBe(newer.label);
-      const current = projection.capture({ agentId: scope.agentId, key: scope.sessionKey });
+      const current = projection.capture(query);
       expect(current).toBeDefined();
       expect(current?.generation).not.toBe(originalGeneration);
       expect(current?.entry).toMatchObject({ sessionId: newer.sessionId, label: newer.label });
@@ -326,14 +347,15 @@ it("retains newer cached native metadata through reentrant identity publication"
 
 it("publishes maintenance removals before row listeners recreate the key", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const scope = { agentId: "main", sessionKey: "agent:main:publication-reentry" };
-    replaceSessionEntrySync(scope, { sessionId: "removed", updatedAt: Date.now() });
+    const { scope } = seedPublication("publication-reentry", {
+      sessionId: "removed",
+      updatedAt: Date.now(),
+    });
     const databaseOptions = { agentId: "main", env: state.env };
     const database = openOpenClawAgentDatabase(databaseOptions);
     readSessionEntryCache(database, { cache: true });
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    await listProjectedSessions({ projection, opts: {} });
+    await listRows(projection);
     const entries = [{ sessionKey: scope.sessionKey, expectedEntry: loadSessionEntry(scope) }];
     const params = { agentId: "main", databaseOptions, entries, materializedPlans: [] };
     const plan = createSessionMaintenanceFinalizationOperation(params);
@@ -345,9 +367,7 @@ it("publishes maintenance removals before row listeners recreate the key", async
         if (event.kind === "delete" && event.previous.sessionKeys.includes(scope.sessionKey)) {
           identities.push(`delete:${event.previous.sessionId}`);
           removalState.push({
-            cachedId: readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
-              scope.sessionKey,
-            )?.sessionId,
+            cachedId: cachedEntry(database, scope.sessionKey)?.sessionId,
             storedId: loadSessionEntry(scope)?.sessionId,
           });
         } else if (
@@ -383,18 +403,14 @@ it("publishes maintenance removals before row listeners recreate the key", async
     });
     const diagnostics = {};
     try {
-      expect(
-        readCommittedSessionEntryCache(requireNativeSqliteDatabase(database.db))?.get(
-          scope.sessionKey,
-        )?.sessionId,
-      ).toBe("removed");
+      expect(cachedEntry(database, scope.sessionKey)?.sessionId).toBe("removed");
       await runSqliteSessionReclamation({ plan, diagnostics });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(callbackErrors).toEqual([]);
       expect(identities).toEqual(["delete:removed", "create:replacement"]);
       expect(removalState).toEqual([{ cachedId: undefined, storedId: undefined }]);
       expect(loadSessionEntry(scope)?.sessionId).toBe("replacement");
-      const result = await listProjectedSessions({ projection, opts: {} });
+      const result = await listRows(projection);
       expect(result.sessions).toEqual([
         expect.objectContaining({
           key: scope.sessionKey,

@@ -4,9 +4,19 @@ import path from "node:path";
 import { normalizeBuildCommit } from "../write-build-info.ts";
 
 export const STANDALONE_USAGE =
-  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot]\n" +
+  "Usage: bun scripts/build-bun-standalone.mjs <fresh-output-directory> [--bytecode|--compile-aot] [--plugins <id,id,...>]\n" +
   "Default: JIT. --compile-aot is EXPERIMENTAL and requires an AOT-capable Bun.";
 
+/**
+ * @param {string[]} args
+ * @returns {{ help: true } | {
+ *   help?: false,
+ *   outputDirectory: string,
+ *   mode: "jit" | "bytecode" | "aot",
+ *   compileFlags: string[],
+ *   pluginIds?: string[]
+ * }}
+ */
 export function parseStandaloneArguments(args) {
   const [outputDirectory, ...flags] = args;
   if (args.length === 1 && ["--help", "-h"].includes(outputDirectory)) {
@@ -15,12 +25,36 @@ export function parseStandaloneArguments(args) {
   if (!outputDirectory || outputDirectory.startsWith("-")) {
     throw new Error(STANDALONE_USAGE);
   }
-  if (flags.length > 1 || flags.some((flag) => !["--bytecode", "--compile-aot"].includes(flag))) {
-    throw new Error(`Choose at most one build mode.\n${STANDALONE_USAGE}`);
+  const compileFlags = [];
+  let pluginIds;
+  for (let index = 0; index < flags.length; index += 1) {
+    const flag = flags[index];
+    if (flag === "--plugins") {
+      if (pluginIds !== undefined) {
+        throw new Error(`Specify --plugins once.\n${STANDALONE_USAGE}`);
+      }
+      const value = flags[++index];
+      if (!value || value.startsWith("-") || value.split(",").some((id) => !id.trim())) {
+        throw new Error(
+          `--plugins requires a comma-separated list of plugin IDs.\n${STANDALONE_USAGE}`,
+        );
+      }
+      pluginIds = [...new Set(value.split(",").map((id) => id.trim()))];
+    } else if (["--bytecode", "--compile-aot"].includes(flag) && compileFlags.length === 0) {
+      compileFlags.push(flag);
+    } else {
+      throw new Error(
+        `Unknown option or repeated build mode: ${flag}. Choose at most one build mode.\n${STANDALONE_USAGE}`,
+      );
+    }
   }
   const mode =
-    flags[0] === "--compile-aot" ? "aot" : flags[0] === "--bytecode" ? "bytecode" : "jit";
-  return { outputDirectory, mode, compileFlags: flags };
+    compileFlags[0] === "--compile-aot"
+      ? "aot"
+      : compileFlags[0] === "--bytecode"
+        ? "bytecode"
+        : "jit";
+  return { outputDirectory, mode, compileFlags, ...(pluginIds ? { pluginIds } : {}) };
 }
 
 export function assertStandaloneCompiler(mode, help) {
@@ -165,8 +199,10 @@ export async function createStandaloneManifest({
   bun,
   openclaw,
   embedded,
+  plugins,
   pruning,
   sqlite,
+  packageManager,
 }) {
   const runtime = await describeStandaloneRuntime(path.join(outputRoot, "runtime"));
   const executable = path.join(outputRoot, "openclaw");
@@ -187,8 +223,13 @@ export async function createStandaloneManifest({
       categories,
       sidecarPlugins,
       sqlite,
+      ...(packageManager ? { packageManager } : {}),
     },
     embedded,
+    plugins: {
+      embedded: plugins.embedded.toSorted(),
+      omitted: plugins.omitted.toSorted(),
+    },
     pruning: pruningSummary,
     ...(process.platform === "darwin"
       ? {

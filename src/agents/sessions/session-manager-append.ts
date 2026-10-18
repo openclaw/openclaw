@@ -514,7 +514,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
   resolveCurrentTurnEntryId(
     isInterruptedTail?: (entry: SessionEntry) => boolean,
     options?: {
-      /** @deprecated Await openAsync and traverse the complete view without this option. Supported through 2026-12-31. */
+      /** @deprecated Await openAsync and traverse the complete view without this option. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
       includeOmittedCustomMessages?: boolean;
     },
   ): string | null {
@@ -567,7 +567,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     );
   }
 
-  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessage(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,
@@ -614,7 +614,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     };
   }
 
-  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. */
+  /** @deprecated Await appendMessageWithTranscriptAnchorAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   appendMessageWithTranscriptAnchor(
     message: Message | CustomMessage | BashExecutionMessage,
     options?: AppendPersistenceOptions,

@@ -28,7 +28,6 @@ type ChatAvatarHost = {
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
   sessionKey: string;
-  requestUpdate?: () => void;
 };
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
@@ -112,15 +111,13 @@ async function loadChatAvatarSnapshot(host: ChatAvatarHost, agentId: string) {
       return null;
     }
     const avatar = identity.avatar?.trim() ?? "";
-    const imageUrl = avatar.startsWith("/")
-      ? resolveAvatarImageUrl(avatar)
-      : isRenderableControlUiAvatarUrl(avatar)
-        ? avatar
-        : null;
+    const managed = avatar.startsWith("/");
+    const hasImage = managed || isRenderableControlUiAvatarUrl(avatar);
+    const imageUrl = managed ? resolveAvatarImageUrl(avatar) : hasImage ? avatar : null;
     release = retainAvatarImageUrl(imageUrl);
     const url = await imageUrl;
     // A failed replacement keeps the displayed image; empty/text identities clear it.
-    if (imageUrl !== null && url === null) {
+    if (hasImage && url === null) {
       release();
       return null;
     }
@@ -220,7 +217,6 @@ export async function refreshSenderAgentAvatars(
     [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
   ) {
     host.senderAgentAvatars = avatars;
-    host.requestUpdate?.();
   }
 }
 

@@ -4,8 +4,7 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
-  type WorkerTaskChannel,
-  type WorkerTaskControl,
+  type WorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -15,10 +14,12 @@ import {
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
+  withSqliteDatabaseAdmissionWait,
 } from "./sqlite-worker-database-admission-relay.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "./worker-idle-gc.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
@@ -26,27 +27,22 @@ import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
-type WorkerTaskHandler<Output> = (
-  input: unknown,
-  channel: WorkerTaskChannel | undefined,
-  control: WorkerTaskControl,
-) => Output | Promise<Output>;
-
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-export function serveWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
     idleGc?: false;
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
 
 /** Every served worker closes its agent database readers by path between tasks; owners may add more. */
-export function serveOwnedWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveOwnedWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -55,11 +51,14 @@ export function serveOwnedWorkerTasks<Output>(
     retireOnError?: boolean;
     /** Guest runtimes own their heap budget and lifetime across task boundaries. */
     idleGc?: false;
+    /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
   let databaseAdmissionPort: MessagePort | undefined;
+  let databaseAdmissionDeadlineAtMs: number | undefined;
   let databaseEngineSelection: WorkerTaskContext["databaseEngineSelection"];
   let closeMemorySamples: (() => void) | undefined;
   const runWithTaskContext = async <T>(operation: () => T | Promise<T>): Promise<T> => {
@@ -85,8 +84,15 @@ export function serveOwnedWorkerTasks<Output>(
       ? withDatabaseEngineSelection(databaseEngineSelection, run)
       : run();
   };
-  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
-    (input, channel, control) => runWithTaskContext(() => handler(input, channel, control)),
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
+    (input, channel, control) =>
+      withSqliteDatabaseAdmissionWait(
+        {
+          deadlineAtMs: databaseAdmissionDeadlineAtMs,
+          assertActive: () => control.throwIfCancelled(),
+        },
+        () => runWithTaskContext(() => handler(input, channel, control)),
+      ),
     {
       ...options,
       closeResource: (key) =>
@@ -124,11 +130,12 @@ export function serveOwnedWorkerTasks<Output>(
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext(context) {
+        databaseAdmissionDeadlineAtMs = context.databaseAdmissionDeadlineAtMs;
         databaseEngineSelection = context.databaseEngineSelection;
         installDeletedAgentDatabaseFences(context.deletedAgentDatabaseFences);
         if (context.databaseAdmissionPort) {

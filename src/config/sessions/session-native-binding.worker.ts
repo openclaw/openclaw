@@ -325,8 +325,8 @@ export function runSessionNativeBindingTransaction(
       }
       const plan = input.participants[index]!.binding!;
       try {
+        admitShared(index, "restore", "transaction");
         const restored = writeShared("register", (shared) => {
-          admitShared(index, "restore", "transaction");
           const applied = restorePluginStateNativeBinding(shared, plan, value);
           const next = [...bindings];
           if (applied) {
@@ -351,6 +351,7 @@ export function runSessionNativeBindingTransaction(
       );
     }
     try {
+      context.admit("transaction");
       writeShared("register", () => ({ value: undefined, bindings }));
     } catch (failure) {
       failures.push(failure);

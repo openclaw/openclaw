@@ -13,7 +13,7 @@ import {
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../infra/sqlite-worker-database-admission-relay.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { openStatePostgresReadConnection } from "./openclaw-state-db-engine.js";
+import { openExistingStatePostgresConnection } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import {
@@ -82,7 +82,7 @@ function startHeartbeat(
       Math.min(deadline, Number(Atomics.load(shared, state.expiresAt))) - Date.now();
     while (remaining() > 0 && Atomics.load(shared, state.status) === state.starting) {
       try {
-        const postgres = openStatePostgresReadConnection(params.path, params.expectedIdentity);
+        const postgres = openExistingStatePostgresConnection(params.path, params.expectedIdentity);
         if (postgres) {
           return {
             database: postgres.database.db,
@@ -114,6 +114,7 @@ function startHeartbeat(
   let processOwner = params.processOwner;
   let heartbeat: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  let fenced = false;
   const scheduledRenewal: StateLeaseRenewal = {
     identity: params.identity,
     leaseMs: params.leaseMs,
@@ -244,6 +245,23 @@ function startHeartbeat(
         return undefined;
       }
       contentionError = error;
+      if (!isPostgresSqlConnection(db) && Atomics.load(shared, state.ownerFence) === 1n) {
+        // The owner holds this file's only writer. Its committed expiry cannot
+        // establish loss until that transaction settles. Keep serving ACKs.
+        clearTimeout(heartbeat);
+        retainedDatabase?.renewals.cancel(scheduledRenewal);
+        if (!fenced) {
+          fenced = true;
+          void Promise.resolve(Atomics.waitAsync(shared, state.ownerFence, 1n).value).then(() => {
+            fenced = false;
+            runAutomatic(renew, "automatic-renewal");
+          });
+        }
+        if (explicit) {
+          throw error;
+        }
+        return Number(Atomics.load(shared, state.expiresAt));
+      }
       expiresAt = readOpenClawStateLeaseExpiry(db, params.identity);
     }
     observeDurableExpiry(expiresAt);
@@ -426,7 +444,9 @@ function startHeartbeat(
     runAutomatic(() => receive(request), "automatic-renewal");
   }
   try {
-    installDatabaseEngineSelection({ input: params.databaseEngineInput });
+    if (params.databaseEngineSelection) {
+      installDatabaseEngineSelection(params.databaseEngineSelection);
+    }
     const existingDatabase = databases.get(databaseKey);
     if (existingDatabase) {
       retainedDatabase = existingDatabase;

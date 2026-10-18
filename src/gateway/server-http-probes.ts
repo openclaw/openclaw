@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveRuntimeServiceVersion } from "../version.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../version.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect } from "./auth.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -48,6 +48,7 @@ function startupProbeBody(result: StartupResult, includeDetails: boolean): strin
     ok: result.ok,
     status: result.status,
     version: resolveRuntimeServiceVersion(process.env),
+    buildId: resolveRuntimeServiceBuildId(),
     uptimeMs: result.uptimeMs,
     ...(result.status === "starting" ? { pendingReason: result.pendingReason } : {}),
   });

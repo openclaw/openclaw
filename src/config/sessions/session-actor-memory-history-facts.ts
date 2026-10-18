@@ -423,6 +423,10 @@ export function readSessionActorMemoryHistoryFacts(
       return maintenance(window, navigation, query.input.request);
     case "session.history.match": {
       const match = query.input.match;
+      if (match.kind === "canvas-widget") {
+        const row = navigation.active.findLast(({ event }) => matchesTranscriptEvent(event, match));
+        return { kind: "transcript-match", result: row ? { event: row.event } : undefined };
+      }
       const matchesVisibleFinal =
         match.kind === "visible-final"
           ? createVisibleAssistantResultEventMatcher(match.runId)

@@ -1,7 +1,7 @@
 import { createServer, ServerResponse } from "node:http";
 import { setImmediate } from "node:timers/promises";
 import { crc32 } from "node:zlib";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -12,6 +12,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   createArtifactDownload,
+  createManagedArtifactDownload,
+  clearArtifactDownloads,
   pruneExpiredArtifactDownloads,
 } from "./artifact-download-grants.js";
 import {
@@ -27,6 +29,8 @@ import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-preparation.js";
+
+afterEach(clearArtifactDownloads);
 
 function createResponse() {
   const res = new ServerResponse(createRequest({ path: "/" }));
@@ -436,41 +440,57 @@ it("releases retained sharing facts on unused expiry, eviction, and disconnect",
       download: { mode: "bytes" },
       data: "aGVsbG8=",
     })!;
-    for (const reason of ["expiry", "eviction", "disconnect"]) {
-      const controller = new AbortController();
-      const client = createClient(controller.signal);
-      const facts = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
-      const release = vi.fn(facts.release);
-      const read = vi.fn(async () => undefined);
-      try {
-        const grant = createArtifactDownload({
-          client,
-          prepared,
-          assertCurrent: () => {
-            facts.readCurrent(cfg);
-          },
-          read,
-          release,
-        });
-        expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
-        if (reason === "expiry") {
-          pruneExpiredArtifactDownloads([client], Date.parse(grant.expiresAt));
-        } else if (reason === "eviction") {
-          for (let index = 0; index < 128; index += 1) {
-            createArtifactDownload({ client, prepared, assertCurrent() {}, read, release() {} });
+    for (const reason of ["expiry", "eviction", "disconnect", "shutdown"]) {
+      for (const kind of ["bytes", "managed"]) {
+        const controller = new AbortController();
+        const client = createClient(controller.signal);
+        const facts = await prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" });
+        const release = vi.fn(facts.release);
+        const read = vi.fn(async () => undefined);
+        try {
+          const authority = {
+            client,
+            assertCurrent: () => {
+              facts.readCurrent(cfg);
+            },
+            release,
+          };
+          const grant =
+            kind === "bytes"
+              ? createArtifactDownload({ ...authority, prepared, read })
+              : createManagedArtifactDownload({
+                  ...authority,
+                  path: "/api/chat/media/outgoing/session/attachment/full",
+                });
+          expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
+          if (reason === "expiry") {
+            pruneExpiredArtifactDownloads(Date.parse(grant.expiresAt), [client]);
+          } else if (reason === "eviction") {
+            for (let index = 0; index < 128; index += 1) {
+              createArtifactDownload({ client, prepared, assertCurrent() {}, read, release() {} });
+            }
+          } else if (reason === "shutdown") {
+            clearArtifactDownloads();
+          } else {
+            controller.abort();
+            if (kind === "managed") {
+              expect(release).not.toHaveBeenCalled();
+              expect(facts.readCurrent(cfg).target.entry.sessionId).toBe("grant-lifetime");
+              pruneExpiredArtifactDownloads(Date.parse(grant.expiresAt));
+            }
           }
-        } else {
+          expect(release, reason).toHaveBeenCalledOnce();
+          expect(() => facts.readCurrent(cfg), reason).toThrow(
+            SessionMutationFactsUnavailableError,
+          );
+          expect(read).not.toHaveBeenCalled();
           controller.abort();
+          pruneExpiredArtifactDownloads(Number.MAX_SAFE_INTEGER, [client]);
+          expect(release, reason).toHaveBeenCalledOnce();
+        } finally {
+          controller.abort();
+          facts.release();
         }
-        expect(release, reason).toHaveBeenCalledOnce();
-        expect(() => facts.readCurrent(cfg), reason).toThrow(SessionMutationFactsUnavailableError);
-        expect(read).not.toHaveBeenCalled();
-        controller.abort();
-        pruneExpiredArtifactDownloads([client], Number.MAX_SAFE_INTEGER);
-        expect(release, reason).toHaveBeenCalledOnce();
-      } finally {
-        controller.abort();
-        facts.release();
       }
     }
   });
@@ -549,7 +569,7 @@ it("backpressures HTTP streams across URL expiry and closes their source on brow
     expect(reads).toBeLessThanOrEqual(2);
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(Date.parse(grant.expiresAt));
-    pruneExpiredArtifactDownloads([client], Date.now());
+    pruneExpiredArtifactDownloads(Date.now(), [client]);
     expect(release).not.toHaveBeenCalled();
     const expired = await fetch("http://127.0.0.1:" + server.claim.port + grant.url);
     expect(expired.status).toBe(404);

@@ -131,6 +131,7 @@ it.each(["create", "status", "destroy"] as const)(
 it("reports private activity recaps unavailable without acquiring a source or scheduling work", async () => {
   const ensure = vi.fn<SessionActivitySummaryService["ensure"]>();
   const service: SessionActivitySummaryService = {
+    beginCompletion: () => undefined,
     ensure,
     handleEvent() {},
     handleTranscript() {},

@@ -61,7 +61,20 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
-  return { projection, context, client, request };
+  const dispatch = (
+    req: Parameters<typeof handleGatewayRequest>[0]["req"],
+    respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+    extraHandlers = sessionByKeyReadHandlers,
+  ) =>
+    handleGatewayRequest({
+      req,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers,
+    });
+  return { projection, context, client, request, dispatch };
 }
 
 async function withPendingStartupInspection(
@@ -130,19 +143,14 @@ it.each([
 ] as const)(
   "holds %s reads until their startup inspection publishes (%j)",
   async (method, params) => {
-    await withPendingStartupInspection(async ({ context, client, complete }) => {
+    await withPendingStartupInspection(async ({ dispatch, complete }) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
         assertAgentDatabaseAdmitted("main");
         respond(true, { read: "committed" });
       });
       const respond = vi.fn();
-      const request = handleGatewayRequest({
-        req: { type: "req", id: "startup-read", method, params },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { [method]: handler },
+      const request = dispatch({ type: "req", id: "startup-read", method, params }, respond, {
+        [method]: handler,
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).not.toHaveBeenCalled();
@@ -157,17 +165,14 @@ it.each([
 );
 
 it("dispatches broad lists while an agent remains in startup preparation", async () => {
-  await withPendingStartupInspection(async ({ context, client }) => {
+  await withPendingStartupInspection(async ({ dispatch }) => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
     const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
-      context,
-      client,
+    const request = dispatch(
+      { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
       respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.list": handler },
-    });
+      { "sessions.list": handler },
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
@@ -371,7 +376,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, context, client, dispatch } = describeFixture();
     const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
@@ -392,19 +397,15 @@ it.each(["dispatch scopes", "private access"] as const)(
     });
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
+      await dispatch(
+        {
           type: "req",
           id: "revoked-description",
           method: "sessions.describe",
           params: { key: query.key },
         },
-        context,
-        client,
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      );
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
@@ -432,7 +433,7 @@ it.each(["dispatch scopes", "private access"] as const)(
 it.each(["operator.admin", "operator.read"])(
   "ends describe preparation after its %s connection closes",
   async (scope) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, client, dispatch } = describeFixture();
     const connection = new AbortController();
     client.connect.scopes = [scope];
     client.connectionSignal = connection.signal;
@@ -446,19 +447,15 @@ it.each(["operator.admin", "operator.read"])(
       });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
+      await dispatch(
+        {
           type: "req",
           id: "cancelled-description",
           method: "sessions.describe",
           params: { key: "agent:main:cancelled-read" },
         },
-        context,
-        client,
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
+      );
       expect(prepare).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {

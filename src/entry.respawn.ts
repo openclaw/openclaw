@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { isStandaloneRuntimeExecutable, resolveOpenClawCliInvocation } from "../cli-invocation.mjs";
+import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -92,11 +92,12 @@ export function buildCliRespawnPlan(
   const normalizedArgv =
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
   const invocation = (runtimeArgs: string[]) =>
-    resolveOpenClawCliInvocation({
+    resolveOpenClawCliRespawn({
       execPath: resolveCliRespawnCommand({ execPath, platform }),
       entryPath: normalizedArgv[1],
       args: normalizedArgv.slice(2),
       execArgv: runtimeArgs,
+      env: childEnv,
     });
 
   if (
@@ -127,7 +128,7 @@ export function buildCliRespawnPlan(
     return {
       command: child.command,
       argv: child.args,
-      env: childEnv,
+      env: child.env,
       detachForProcessTree: false,
     };
   }
@@ -174,7 +175,7 @@ export function buildCliRespawnPlan(
   return {
     command: child.command,
     argv: child.args,
-    env: childEnv,
+    env: child.env,
     detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
   };
 }

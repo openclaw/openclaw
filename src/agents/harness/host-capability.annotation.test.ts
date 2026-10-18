@@ -158,6 +158,11 @@ async function prepareAdmission(
     abortSignal: controller.signal,
   };
   const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const annotate = (annotation = nativeAnnotation()) =>
+    expectDefined(
+      host.hostCapabilities.annotateCurrentUserTurn,
+      "annotation capability",
+    )(annotation);
   return {
     ...host,
     attempt,
@@ -167,11 +172,12 @@ async function prepareAdmission(
     onPersisted,
     controller,
     patchSession,
-    annotate: (annotation = nativeAnnotation()) =>
-      expectDefined(
-        host.hostCapabilities.annotateCurrentUserTurn,
-        "annotation capability",
-      )(annotation),
+    annotate,
+    async expectRefused(annotation = nativeAnnotation(), message?: string) {
+      const before = await loadTranscriptEvents(target);
+      await expect(annotate(annotation)).rejects.toThrow(message);
+      expect(await loadTranscriptEvents(target)).toEqual(before);
+    },
     receipt: () => expectDefined(recorder.getAdmissionReceipt(), "admission"),
   };
 }
@@ -298,7 +304,6 @@ describe("host-owned current admission annotation", () => {
   it("refuses retargeting a refreshed recorder through its returned receipt and message", async () => {
     await withAdmission(async (f) => {
       await f.annotate();
-      const before = await loadTranscriptEvents(f.target);
       const other = expectDefined(
         readActiveTranscriptEntryAnchor({ ...f.target, entryId: f.prior.messageId }),
         "other active row",
@@ -314,8 +319,7 @@ describe("host-owned current admission annotation", () => {
         Reflect.deleteProperty(exposed, key);
       }
       Object.assign(exposed, f.prior.message);
-      await expect(f.annotate(nativeAnnotation("prior"))).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused(nativeAnnotation("prior"));
     });
   });
 
@@ -676,20 +680,14 @@ describe("host-owned current admission annotation", () => {
       const event = expectDefined(asOptionalRecord(events.at(-1)), "transcript event");
       event.message = { ...f.recorder.getPersistedMessage?.(), content: "edited" };
       await replaceTranscriptEvents(f.target, events);
-      const before = await loadTranscriptEvents(f.target);
-      await expect(f.annotate()).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused();
     });
   });
 
   it("refuses conflicting native provenance without rewriting again", async () => {
     await withAdmission(async (f) => {
       await f.annotate();
-      const before = await loadTranscriptEvents(f.target);
-      await expect(
-        f.annotate({ ...nativeAnnotation(), mirrorIdentity: "conflict" }),
-      ).rejects.toThrow();
-      expect(await loadTranscriptEvents(f.target)).toEqual(before);
+      await f.expectRefused({ ...nativeAnnotation(), mirrorIdentity: "conflict" });
     });
   });
 
@@ -699,9 +697,7 @@ describe("host-owned current admission annotation", () => {
     );
     await withAdmission(
       async (f) => {
-        const before = await loadTranscriptEvents(f.target);
-        await expect(f.annotate()).rejects.toThrow("admitted content");
-        expect(await loadTranscriptEvents(f.target)).toEqual(before);
+        await f.expectRefused(undefined, "admitted content");
         expect(hook).toHaveBeenCalledOnce();
       },
       { beforeMessageWrite: hook },

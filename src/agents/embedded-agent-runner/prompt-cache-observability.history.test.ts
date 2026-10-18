@@ -5,8 +5,9 @@ import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
 } from "../../config/sessions/transcript-json.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -17,6 +18,7 @@ import {
 } from "./prompt-cache-observability.js";
 import { beginOpenAIObservation } from "./prompt-cache-observability.test-support.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
+import type { PromptPreparationResult, PromptPreparationTask } from "./provider-prompt-state.js";
 
 let testScope = 0;
 
@@ -151,7 +153,14 @@ describe("prompt cache history fingerprints", () => {
       () => {},
       onRequest,
     );
-    vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation((_input, options) => {
+    // A prior file can own the pool through an earlier module evaluation.
+    const pool = resolveGlobalSingleton<
+      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
+    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
+      throw new Error("Expected the prompt observer to initialize its worker pool");
+    });
+    const hashes = vi.spyOn(cryptoDigest, "sha256Hex");
+    const prepare = vi.spyOn(pool, "run").mockImplementation((_input, options) => {
       expect(options.inputBytes).toBeGreaterThanOrEqual(entry.message.content.length * 2);
       const error = new Error("fixture request canceled");
       controller.abort(error);
@@ -164,6 +173,8 @@ describe("prompt cache history fingerprints", () => {
         controller.signal,
       ),
     ).rejects.toThrow("fixture request canceled");
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(hashes).not.toHaveBeenCalled();
     expect(onRequest).not.toHaveBeenCalled();
   });
 

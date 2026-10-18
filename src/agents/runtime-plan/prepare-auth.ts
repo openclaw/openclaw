@@ -11,6 +11,10 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import {
+  pluginProviderAuthUnavailable,
+  resolveProviderAuthScope,
+} from "../../plugins/provider-auth-scope.js";
 import type { ProviderResolveAuthProfileIdContext } from "../../plugins/provider-runtime.types.js";
 import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import {
@@ -292,6 +296,47 @@ function resolvePreparedProviderEntryApiKeyProfileReference(
 export function prepareAgentRuntimeAuth(
   input: PrepareAgentRuntimeAuthPlanParams,
 ): PreparedAgentRuntimeAuth {
+  if (
+    resolveProviderAuthScope({
+      provider: input.provider,
+      config: input.config,
+      env: input.env,
+      workspaceDir: input.workspaceDir,
+      pluginMetadataSnapshot: input.metadataSnapshot,
+    }) === "plugin"
+  ) {
+    if (input.requiredAuthProfileId !== undefined || input.sessionAuthProfileId !== undefined) {
+      throw pluginProviderAuthUnavailable(
+        input.provider,
+        "agent profile pins cannot select plugin credentials",
+      );
+    }
+    // Static ownership selects direct live auth before agent profiles, bindings or cooldowns.
+    // The credential resolver still validates this generation's live plugin at use time.
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: input.provider,
+      modelId: input.modelId,
+      config: input.config,
+      env: input.env,
+      workspaceDir: input.workspaceDir,
+      metadataSnapshot: input.metadataSnapshot,
+      harnessId: input.harnessId,
+      harnessRuntime: input.harnessRuntime,
+      allowHarnessAuthProfileForwarding: false,
+      credentialSource: { kind: "direct", evidence: "synthetic", authorization: "declared" },
+    });
+    return {
+      plan,
+      attempts: [
+        {
+          kind: "direct",
+          plan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: false,
+        },
+      ],
+    };
+  }
   const params = { ...input, config: resolveModelProviderAuthConfig(input) };
   const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
   const lockedProfileId =

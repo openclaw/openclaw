@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
@@ -104,7 +105,10 @@ export function readSessionRowInputs(params: {
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
+  preparedTitle?: Pick<
+    GatewaySessionRow,
+    "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
+  >;
   childLinks?: SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
@@ -227,6 +231,7 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
       agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
       contextWindowProfile,
@@ -469,6 +474,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     displayName: input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
@@ -524,6 +530,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
+    reasoningDefault:
+      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
+      cfg.agents?.defaults?.reasoningDefault,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
@@ -597,6 +606,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
+      lastAssistantMessage: input.lastAssistantMessage,
       childLinks: projectSessionRowChildLinks(input.childLinks),
     },
   };
@@ -606,38 +616,6 @@ export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
   options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
 ): GatewaySessionRow {
-  return presentPreparedSessionRow(materialized, {
-    ...options,
-    subagentRuns:
-      options.subagentRuns ??
-      buildSubagentRunReadIndexFromRuns({
-        ...materialized.source.subagentRunInputs,
-        now: options.now,
-      }),
-  });
-}
-
-export type PreparedSessionRow = {
-  row: GatewaySessionRow;
-  source: Pick<
-    ReturnType<typeof materializeSessionRow>["source"],
-    | "entry"
-    | "parsedKey"
-    | "freshSessionTotalTokens"
-    | "usageByFallbackModel"
-    | "estimatedCostUsd"
-    | "lightweight"
-    | "childLinks"
-  >;
-};
-
-export function presentPreparedSessionRow(
-  materialized: PreparedSessionRow,
-  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
-    now: number;
-    subagentRuns: SessionListRowContext["subagentRuns"];
-  },
-): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
   const { entry, freshSessionTotalTokens } = source;
@@ -645,7 +623,8 @@ export function presentPreparedSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
-  const { subagentRuns } = options;
+  const subagentRuns =
+    options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
   const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
     key: row.key,
     parsedKey: source.parsedKey,

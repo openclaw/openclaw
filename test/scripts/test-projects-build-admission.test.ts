@@ -633,6 +633,34 @@ describe("packed config continuation", () => {
   });
 });
 
+describe("empty changed selection", () => {
+  it.each([
+    { paths: [], diagnostic: "[test] no changed test targets; skipping Vitest." },
+    {
+      paths: ["unknown/file.txt"],
+      diagnostic: "[test] no precise changed test targets; skipping Vitest.",
+    },
+  ])("keeps one selection and its diagnostics for $paths", async ({ paths, diagnostic }) => {
+    const lanes = await import("../../scripts/changed-lanes.mts");
+    const changedPaths = vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(paths);
+    const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
+    await runTestProjects(async () => {}, ["--changed", "origin/main"], {
+      ...testRunnerFixtureEnv(),
+      OPENCLAW_TEST_CHANGED_BROAD: "0",
+    });
+    expect(changedPaths).toHaveBeenCalledTimes(1);
+    expect(commands.reader).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalledWith(diagnostic);
+    if (paths.length > 0) {
+      expect(console.error).toHaveBeenCalledWith("[test]   unknown/file.txt");
+      expect(console.error).toHaveBeenCalledWith(
+        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+      );
+    }
+    expect(process.exitCode).toBe(0);
+  });
+});
+
 describe("automatic exact-target admission", () => {
   const outputArgs = ["--reporter=dot", "--coverage.enabled=false"];
   const files = [
@@ -702,10 +730,11 @@ describe("automatic exact-target admission", () => {
       vi.mocked(os.availableParallelism).mockReturnValue(cpus ?? 8);
       vi.mocked(os.totalmem).mockReturnValue((gib ?? 24) * 1024 ** 3);
       const planner = await import("../../scripts/test-projects.test-support.mts");
-      if (changed) {
-        const lanes = await import("../../scripts/changed-lanes.mts");
-        vi.spyOn(lanes, "listChangedPathsFromGit").mockReturnValue(files);
-      }
+      const changedPaths = changed
+        ? vi
+            .spyOn(await import("../../scripts/changed-lanes.mts"), "listChangedPathsFromGit")
+            .mockReturnValue(files)
+        : undefined;
       const produced = vi.spyOn(planner, "createVitestRunSpecs");
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const selections: Array<{ config: string; include: string[] | null; workers: string }> = [];
@@ -738,10 +767,12 @@ describe("automatic exact-target admission", () => {
       >;
       expect(specs.length).toBeGreaterThanOrEqual(3);
       if (changed) {
+        expect(changedPaths).toHaveBeenCalledTimes(1);
         expect(specs.some((spec) => spec.pnpmArgs.includes("--passWithNoTests=false"))).toBe(false);
       }
       expect(peak).toBe(expected);
       const actual = selections.map(({ config, include }) => ({ config, include }));
+      expect(actual.flatMap(({ include }) => include ?? []).toSorted()).toEqual(files.toSorted());
       const planned = specs.map((spec) => ({ config: spec.config, include: spec.includePatterns }));
       // Explicit parallelism retains its timing order; automatic admission keeps native plan order.
       expect(

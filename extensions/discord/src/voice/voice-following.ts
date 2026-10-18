@@ -46,14 +46,6 @@ function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
   );
 }
 
-function logFollowUserReconcileVerbose(reason: string, message: string): void {
-  if (reason === "interval") {
-    logger.trace(`discord voice: ${message}`);
-    return;
-  }
-  logVoiceVerbose(message);
-}
-
 export class DiscordVoiceFollowing {
   private readonly followUserIds: Set<string>;
   readonly followedUserChannels = new Map<string, VoiceChannelResidency>();
@@ -299,10 +291,6 @@ export class DiscordVoiceFollowing {
       );
       return;
     }
-    logFollowUserReconcileVerbose(
-      reason,
-      `follow user reconcile reason=${reason}: ${this.followUserIds.size} users across ${guildIds.length} guilds`,
-    );
     const userIds = [...this.followUserIds];
     const slotsPerGuild = userIds.length + (this.params.botUserId() ? 1 : 0);
     const totalSlots = guildIds.length * slotsPerGuild;
@@ -484,12 +472,6 @@ export class DiscordVoiceFollowing {
         );
         return "transient-error" as const;
       }
-      logFollowUserReconcileVerbose(
-        reason,
-        isBot
-          ? `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`
-          : `follow user reconcile reason=${reason}: no voice state guild ${guildId} user ${userId}: ${formatErrorMessage(err)}`,
-      );
       return undefined;
     });
   }

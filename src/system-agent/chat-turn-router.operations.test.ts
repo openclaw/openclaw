@@ -1,15 +1,18 @@
 import "./chat-engine.mocks.test-support.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import * as authStore from "../agents/auth-profiles/store-runtime.js";
+import * as cliRunner from "../agents/cli-runner.js";
 import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
+  operationMocks,
   fakeOverviewLoader,
   sharedVerifiedInference,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
-  runSystemAgentTurnWithDeps,
+  runSystemAgentTurn,
   mocks,
   useTempStateDir,
   configSnapshot,
@@ -28,6 +31,11 @@ import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
 import { installSystemAgentClaudeCliBackendTestFixture } from "./system-agent.test-helpers.js";
+
+vi.mock("../agents/cli-runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/cli-runner.js")>()),
+  runCliAgent: vi.fn(),
+}));
 
 function createRouterHarness(
   options: ConstructorParameters<typeof ChatTurnRouter>[0],
@@ -323,8 +331,16 @@ describe("SystemAgentChatEngine operations", () => {
       expires: 1,
     };
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
-    const runConfigSet = vi.fn(async () => {});
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     let authReads = 0;
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => {
+      authReads += 1;
+      // The fourth read is the persistent-apply guard, after the turn checks.
+      if (authReads === 4) {
+        credential = { ...credential, access: "access-b", refresh: "refresh-b" };
+      }
+      return { version: 1, profiles: { "anthropic:oauth": credential } };
+    });
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn: async () => ({
@@ -336,16 +352,6 @@ describe("SystemAgentChatEngine operations", () => {
       }),
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => {
-          authReads += 1;
-          // Turn start, dispatch, and post-agent checks see the verified grant.
-          // The fourth read is the last-moment guard inside applyPersistentOperation.
-          if (authReads === 4) {
-            credential = { ...credential, access: "access-b", refresh: "refresh-b" };
-          }
-          return { version: 1, profiles: { "anthropic:oauth": credential } };
-        }) as never,
-        runConfigSet,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -371,7 +377,11 @@ describe("SystemAgentChatEngine operations", () => {
       accountId: "account-1",
     };
     const verifiedInference = await createOAuthVerifiedBinding(config, credential);
-    const runConfigSet = vi.fn(async () => {});
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
+    vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockImplementation(async () => ({
+      version: 1,
+      profiles: { "anthropic:oauth": credential },
+    }));
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn: async () => {
@@ -386,11 +396,6 @@ describe("SystemAgentChatEngine operations", () => {
       },
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        loadAuthProfileStoreForRuntimeAsync: vi.fn(async () => ({
-          version: 1,
-          profiles: { "anthropic:oauth": credential },
-        })) as never,
-        runConfigSet,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -410,7 +415,7 @@ describe("SystemAgentChatEngine operations", () => {
         throw new Error("authority closed");
       }
     });
-    const runConfigSet = vi.fn(
+    operationMocks.runConfigSet.mockImplementation(
       async (params: {
         path?: string;
         value?: string;
@@ -428,7 +433,7 @@ describe("SystemAgentChatEngine operations", () => {
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
     const engine = new SystemAgentChatEngine({
       runAgentTurn: async () => null,
-      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
     const approve = async () => {
       engine.propose(operation);
@@ -536,13 +541,13 @@ describe("SystemAgentChatEngine operations", () => {
     const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
       text: "Proposed correction.",
     }));
-    const runConfigSet = vi.fn(async () => {
+    const runConfigUnset = operationMocks.runConfigUnset.mockImplementation(async () => {
       throw new Error("fixture schema error");
     });
     const engine = new SystemAgentChatEngine({
       operatorApprovalOnly: true,
       runAgentTurn,
-      deps: { runConfigSet, runConfigUnset: runConfigSet, loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
     await engine.handle("config unset agents.defaults.fastModeDefault");
     const reply = expectDefined(
@@ -554,7 +559,7 @@ describe("SystemAgentChatEngine operations", () => {
     );
     expect(reply.applied).toBe(false);
     expect(reply.text).toContain("The config write failed");
-    expect(runConfigSet).toHaveBeenCalledOnce();
+    expect(runConfigUnset).toHaveBeenCalledOnce();
     expect(runAgentTurn).toHaveBeenCalledOnce();
     expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("fixture schema error");
     expect(runAgentTurn.mock.calls[0]?.[0]?.approvalArmed).toBe(false);
@@ -593,22 +598,18 @@ describe("SystemAgentChatEngine operations", () => {
       rollbackStatus: "not-restored",
       cause: new Error("fixture refresh failed"),
     });
-    const runConfigSet = vi.fn(async () => {
+    operationMocks.runConfigSet.mockImplementation(async () => {
       mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
+        ...configSnapshot({ gateway: { port: 18789 } }),
         path: "/tmp/fixture-openclaw.json",
         hash: "published",
-        config: { gateway: { port: 18789 } },
-        sourceConfig: { gateway: { port: 18789 } },
-        issues: [],
       });
       throw writerError;
     });
     const engine = new SystemAgentChatEngine({
       yes: true,
       runAgentTurn,
-      deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
     const reply = await engine.handle("config set gateway.port 18789");
     expect(reply.applied).toBe(false);
@@ -638,12 +639,12 @@ describe("SystemAgentChatEngine operations", () => {
       };
     });
     const validationError = "gateway.port: Expected number, received string";
-    const runInvalidConfigSet = vi.fn(async () => {
+    operationMocks.runConfigSet.mockImplementation(async () => {
       throw new Error(validationError);
     });
     const engine = new SystemAgentChatEngine({
       runAgentTurn,
-      deps: { runConfigSet: runInvalidConfigSet, loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
 
@@ -761,20 +762,25 @@ describe("SystemAgentChatEngine CLI loop backends", () => {
     const snapshot = configSnapshot(config);
     const inference = await createCliVerifiedBinding(config);
     const inferenceDeps = {
-      ...inference.deps,
       readConfigFileSnapshot: (async () => snapshot) as never,
     };
     const runCliAgent = vi.fn(async (_params: Record<string, unknown>) => ({
       payloads: [{ text: "*click* CLI loop checked your shell." }],
-      meta: { agentMeta: { cliSessionBinding: { sessionId: "native-1" } } },
+      meta: {
+        durationMs: 0,
+        agentMeta: {
+          sessionId: "native-1",
+          provider: "claude-cli",
+          model: "claude-opus-4-8",
+          cliSessionBinding: { sessionId: "native-1" },
+        },
+      },
     }));
+    vi.spyOn(cliRunner, "runCliAgent").mockImplementation(runCliAgent);
+    mocks.readConfigFileSnapshot.mockImplementation(inferenceDeps.readConfigFileSnapshot);
     const engine = new SystemAgentChatEngine({
       verifiedInference: inference.binding,
-      runAgentTurn: (params) =>
-        runSystemAgentTurnWithDeps(params, {
-          ...inferenceDeps,
-          runCliAgent: runCliAgent as never,
-        }),
+      runAgentTurn: runSystemAgentTurn,
       deps: {
         ...inferenceDeps,
         loadOverview: fakeOverviewLoader({ defaultModel: "claude-cli/claude-opus-4-8" }),
@@ -867,12 +873,12 @@ describe("SystemAgentChatEngine handoff", () => {
 
   it("hatches into the agent after a fresh setup applies", async () => {
     useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
+    operationMocks.verifyInferenceConfig.mockImplementation(async () => ({
       ok: true as const,
       modelRef: "openai/gpt-5.5",
       latencyMs: 100,
     }));
-    const applySetup = vi.fn(async () => ({
+    const applySetup = operationMocks.applySetup.mockImplementation(async () => ({
       configPath: "/tmp/openclaw.json",
       configHashBefore: "before",
       configHashAfter: "after",
@@ -886,8 +892,6 @@ describe("SystemAgentChatEngine handoff", () => {
       runAgentTurn: async () => null,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
-        applySetup,
-        verifyInferenceConfig,
         loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });

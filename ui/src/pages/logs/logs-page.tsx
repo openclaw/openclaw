@@ -1,5 +1,6 @@
 import "../../styles/logs.css";
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import type { LogsTailResult } from "@openclaw/gateway-protocol";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -16,6 +17,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
   parseLogLine,
@@ -35,16 +37,7 @@ declare module "@solidjs/web" {
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-type LogsPayload = {
-  file?: string;
-  cursor?: number;
-  lines?: unknown;
-  truncated?: boolean;
-  reset?: boolean;
-};
-
 export function LogsPage() {
-  let host!: HTMLElement;
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
@@ -62,7 +55,6 @@ export function LogsPage() {
   let cursor: number | null = null;
   let cursorBootId: string | undefined;
   let request: AbortController | null = null;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   let atBottom = true;
   let stream: HTMLElement | undefined;
@@ -73,18 +65,7 @@ export function LogsPage() {
     request = null;
     setRequestState("idle");
   };
-  const updatePolling = () => {
-    const shouldPoll =
-      gateway.connected && gateway.client !== null && document.visibilityState !== "hidden";
-    if (!shouldPoll && pollTimer !== undefined) {
-      clearInterval(pollTimer);
-      pollTimer = undefined;
-    } else if (shouldPoll && pollTimer === undefined) {
-      pollTimer = setInterval(() => void loadLogs({ quiet: true }), LOGS_POLL_INTERVAL_MS);
-      return true;
-    }
-    return false;
-  };
+  const polling = useVisiblePoll(LOGS_POLL_INTERVAL_MS, () => void loadLogs({ quiet: true }));
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: () => {
@@ -97,9 +78,15 @@ export function LogsPage() {
       atBottom = true;
     },
     invalidateRequests: cancelRequest,
-    onSnapshot: updatePolling,
+    onSnapshot: () => {
+      if (gateway.connected && gateway.client !== null) {
+        polling.start();
+      } else {
+        polling.stop();
+      }
+    },
     ensureInitialData: (change) => {
-      const quiet = !change.identityChanged && untrack(status).hasLoaded;
+      const quiet = !change.identityChanged && status().hasLoaded;
       // A same-Gateway reconnect resumes the cursor; a full window costs a busy Gateway one
       // file read and redaction pass per reconnect.
       void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
@@ -124,12 +111,12 @@ export function LogsPage() {
     const bootId = gateway.snapshot?.hello?.server?.bootId;
     const resetCursor = options.reset || bootId !== cursorBootId;
     const previousCursor = resetCursor ? null : cursor;
-    const previousFile = untrack(file);
+    const previousFile = file();
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
     try {
       const tail = (nextCursor?: number) =>
-        scope.client.request<LogsPayload>(
+        scope.client.request<LogsTailResult>(
           "logs.tail",
           { cursor: nextCursor, limit: 500, maxBytes: 250_000 },
           { signal: current.signal },
@@ -139,31 +126,21 @@ export function LogsPage() {
         return false;
       }
       // Cursors belong to one server boot and file. Finish the reset before publishing a new source.
-      const sourceChanged =
-        !resetCursor &&
-        previousFile !== null &&
-        payload.file !== undefined &&
-        payload.file !== previousFile;
+      const sourceChanged = !resetCursor && previousFile !== null && payload.file !== previousFile;
       if (sourceChanged) {
         payload = await tail();
         if (!isCurrent()) {
           return false;
         }
       }
-      const nextEntries = Array.isArray(payload.lines)
-        ? payload.lines.filter((line): line is string => typeof line === "string").map(parseLogLine)
-        : [];
+      const nextEntries = payload.lines.map(parseLogLine);
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
       setEntries((previous) =>
         reset ? nextEntries : [...previous, ...nextEntries].slice(-LOG_BUFFER_LIMIT),
       );
-      if (typeof payload.cursor === "number") {
-        cursor = payload.cursor;
-        cursorBootId = bootId;
-      }
-      if (typeof payload.file === "string") {
-        setFile(payload.file);
-      }
+      cursor = payload.cursor;
+      cursorBootId = bootId;
+      setFile(payload.file);
       setTruncated(Boolean(payload.truncated));
       setStatus(completePanelRefresh());
       return true;
@@ -206,49 +183,34 @@ export function LogsPage() {
         return;
       }
       const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-      if (!force && (!untrack(autoFollow) || (!atBottom && distance >= 120))) {
+      if (!force && (!autoFollow() || (!atBottom && distance >= 120))) {
         return;
       }
       stream.scrollTop = stream.scrollHeight;
       atBottom = true;
     });
   };
-  createEffect(entries, () => {
-    if (untrack(autoFollow) && atBottom) {
-      scheduleFollow();
-    }
-  });
-  createEffect(autoFollow, (enabled) => {
-    if (enabled) {
-      scheduleFollow(true);
-    }
-  });
-  createEffect(forceFollow, (revision) => {
-    if (revision > 0) {
-      scheduleFollow(true);
-    }
-  });
-  const visibilityChanged = () => {
-    if (updatePolling()) {
-      void loadLogs({ quiet: true });
-    }
-  };
-  document.addEventListener("visibilitychange", visibilityChanged);
+  // One DOM follow operation owns appends, operator opt-in, and explicit refreshes.
+  createEffect(
+    () => ({ entries: entries(), enabled: autoFollow(), revision: forceFollow() }),
+    ({ enabled, revision }, previous) => {
+      const force =
+        (revision > 0 && revision !== previous?.revision) || (enabled && !previous?.enabled);
+      if (force || (enabled && atBottom)) {
+        scheduleFollow(force);
+      }
+    },
+  );
   onCleanup(() => {
     disposed = true;
     cancelRequest();
-    if (pollTimer !== undefined) {
-      clearInterval(pollTimer);
-    }
     if (followFrame !== undefined) {
       cancelAnimationFrame(followFrame);
     }
-    document.removeEventListener("visibilitychange", visibilityChanged);
   });
   onSettled(() => {
-    stream = host.querySelector<HTMLElement>(".log-stream") ?? undefined;
     const resetContentScroll = () => {
-      const content = host.closest<HTMLElement>(".content");
+      const content = stream?.closest<HTMLElement>(".content");
       if (content) {
         content.scrollTop = 0;
         content.scrollLeft = 0;
@@ -260,7 +222,7 @@ export function LogsPage() {
   });
 
   return (
-    <openclaw-logs-page ref={(element) => (host = element)}>
+    <openclaw-logs-page>
       <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -278,6 +240,7 @@ export function LogsPage() {
             levelFilters={levelFilters()}
             autoFollow={autoFollow()}
             truncated={truncated()}
+            onStreamRef={(element) => (stream = element)}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
               setLevelFilters((previous) => ({ ...previous, [level]: enabled }))

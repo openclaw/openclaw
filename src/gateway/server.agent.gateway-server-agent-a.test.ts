@@ -247,6 +247,8 @@ describe("gateway server agent", () => {
   });
 
   test("discards sessionless offloaded media without a transcript owner", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
     vi.mocked(agentCommandMock).mockResolvedValueOnce(undefined);
     const inboundBefore = await listInboundMedia();
     const runId = "sessionless-media-success";
@@ -263,6 +265,8 @@ describe("gateway server agent", () => {
       idempotencyKey: runId,
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
+    const outcome = await rpcReq(gatewaySuite.ws, "agent.wait", { runId, timeoutMs: 2_000 });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, payload: { status: "ok" } });
     const call = await waitForAgentCommandCall(runId);
     expect(call.sessionKey).toBeUndefined();
     expect(call.media).toHaveLength(2);

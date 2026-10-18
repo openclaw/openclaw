@@ -36,6 +36,7 @@ describe("web-search install catalog", () => {
   it("resolves credential-backed plugins for env-only auto-detection", () => {
     expect(
       resolveWebSearchInstallCatalogEntriesForEnv({
+        DEEPSEEK_API_KEY: "synthetic-deepseek-key",
         EXA_API_KEY: "exa-key",
         FIRECRAWL_API_KEY: "firecrawl-key",
         KIMI_API_KEY: "kimi-key",
@@ -44,6 +45,15 @@ describe("web-search install catalog", () => {
         SEARXNG_BASE_URL: "http://search.local",
         TAVILY_API_KEY: "tavily-key",
       }).map((entry) => entry.pluginId),
-    ).toEqual(["exa", "firecrawl", "moonshot", "parallel", "perplexity", "searxng", "tavily"]);
+    ).toEqual([
+      "deepseek",
+      "exa",
+      "firecrawl",
+      "moonshot",
+      "parallel",
+      "perplexity",
+      "searxng",
+      "tavily",
+    ]);
   });
 });

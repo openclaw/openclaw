@@ -1,3 +1,4 @@
+import type { ControlUiSettingsPlacement } from "../../packages/gateway-protocol/src/plugin-control-ui-settings.js";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { err, ok, type Result } from "../../packages/normalization-core/src/result.js";
 import type { PluginManifestControlUi } from "./manifest-types.js";
@@ -22,8 +23,41 @@ export function normalizeManifestControlUi(
   if (value === undefined) {
     return ok(undefined);
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => key !== "entry" && key !== "styles")) {
-    return err("controlUi must contain only entry and optional styles");
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some(
+      (key) => !["entry", "styles", "activation", "settingsViews"].includes(key),
+    )
+  ) {
+    return err("controlUi contains an unknown field");
+  }
+  if (value.activation !== undefined && value.activation !== "settings-only") {
+    return err("controlUi.activation must be settings-only when specified");
+  }
+  const settingsViews: ControlUiSettingsPlacement[] = [];
+  if (value.settingsViews !== undefined) {
+    if (
+      !Array.isArray(value.settingsViews) ||
+      value.settingsViews.length === 0 ||
+      value.settingsViews.length > 2
+    ) {
+      return err("controlUi.settingsViews must declare unique Memory Settings placements");
+    }
+    for (const placement of value.settingsViews) {
+      if (
+        !isRecord(placement) ||
+        Object.keys(placement).length !== 2 ||
+        placement.section !== "memory" ||
+        (placement.panel !== "overview" && placement.panel !== "memories") ||
+        settingsViews.some((previous) => previous.panel === placement.panel)
+      ) {
+        return err("controlUi.settingsViews must declare unique Memory Settings placements");
+      }
+      settingsViews.push({ section: "memory", panel: placement.panel });
+    }
+  }
+  if (value.activation === "settings-only" && !value.settingsViews) {
+    return err("settings-only Control UI requires a Settings placement");
   }
   const entry = typeof value.entry === "string" ? value.entry.replace(/^\.\//u, "") : "";
   // A dedicated built directory prevents a declaration from publishing package sources.
@@ -49,5 +83,10 @@ export function normalizeManifestControlUi(
       styles.push(style);
     }
   }
-  return ok({ entry, ...(styles.length > 0 ? { styles } : {}) });
+  return ok({
+    entry,
+    ...(styles.length > 0 ? { styles } : {}),
+    ...(value.activation === "settings-only" ? { activation: value.activation } : {}),
+    ...(settingsViews.length > 0 ? { settingsViews } : {}),
+  });
 }

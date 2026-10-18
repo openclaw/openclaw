@@ -49,6 +49,7 @@ export function renderNostrProfileForm(params: {
   state: NostrProfileFormState;
   callbacks: NostrProfileFormCallbacks;
   accountId: string;
+  connected: boolean;
 }): JSX.Element {
   const isDirty = createMemo(() =>
     [...BASIC_FIELDS, ...ADVANCED_FIELDS].some(
@@ -183,7 +184,7 @@ export function renderNostrProfileForm(params: {
           <button
             class="btn primary"
             onClick={() => params.callbacks.onSave()}
-            disabled={params.state.saving || !isDirty()}
+            disabled={!params.connected || params.state.saving || !isDirty()}
           >
             {params.state.saving ? t("common.saving") : t("common.saveAndPublish")}
           </button>
@@ -191,7 +192,7 @@ export function renderNostrProfileForm(params: {
           <button
             class="btn"
             onClick={() => params.callbacks.onImport()}
-            disabled={params.state.importing || params.state.saving}
+            disabled={!params.connected || params.state.importing || params.state.saving}
           >
             {params.state.importing ? t("common.importing") : t("common.importFromRelays")}
           </button>

@@ -870,10 +870,10 @@ describe("worker turn launcher terminal results", () => {
       terminalReply: { disposition: "visible", text: "Usage reply" },
     },
     {
-      name: "explicit silence",
-      content: [{ type: "text", text: "NO_REPLY" }],
+      name: "mixed-case explicit silence",
+      content: [{ type: "text", text: "No_Reply" }],
       visibleText: "",
-      rawText: "NO_REPLY",
+      rawText: "No_Reply",
       terminalReply: { disposition: "silent" },
     },
     ...(
@@ -882,7 +882,7 @@ describe("worker turn launcher terminal results", () => {
         ["NO_REPLY.", "NO_REPLY."],
         ['"NO_REPLY"', '"NO_REPLY"'],
         ['{"reply":"NO_REPLY"}', '{"reply":"NO_REPLY"}'],
-        ["no_reply", "no_reply"],
+
         ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
         ["NO_REPLY\n<final></final>", ""],
         ["[[reply_to_current]]", "", false],

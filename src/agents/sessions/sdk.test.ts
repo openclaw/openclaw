@@ -7,7 +7,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "opencl
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
-import { readRuntimePromptImageOrder } from "../../media/media-facts.js";
+import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
@@ -436,7 +436,7 @@ describe("AgentSession queued user turns", () => {
     expect((runtimeMessage as unknown as Record<PropertyKey, unknown>)[mediaSymbol]).toEqual([
       expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
     ]);
-    expect(readRuntimePromptImageOrder(runtimeMessage)).toEqual(imageOrder);
+    expect(readRuntimePromptMediaFacts(runtimeMessage)).toHaveProperty("imageOrder", imageOrder);
     expect((runtimeMessage as unknown as Record<string, unknown>)["__openclaw"]).toEqual({
       mediaImageBlockFactIndexes: [0],
     });

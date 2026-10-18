@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCurrentSourceMessagingToolPartial } from "./embedded-agent-helpers/messaging-dedupe.js";
 import {
   createMessageUpdateContext,
@@ -14,6 +14,8 @@ import {
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 
 describe("handleMessageUpdate text signatures", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("emits the full incrementally extracted reasoning value on every delta", async () => {
     const emitReasoningStream = vi.fn();
     const context = createMessageUpdateContext({ emitReasoningStream });
@@ -97,6 +99,28 @@ describe("handleMessageUpdate text signatures", () => {
     });
   });
 
+  it.each([
+    { chunks: ["NO_", "REPLY", "\nHello ", "world"], text: "Hello world" },
+    {
+      chunks: ["NO_", "REPLY", " is literal ", "text"],
+      text: "NO_REPLY is literal text",
+    },
+  ])("preserves visible text after a split protocol prefix: $text", async ({ chunks, text }) => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+    for (const delta of chunks) {
+      await updateMessage(context, {
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: { type: "text_delta", delta },
+      });
+    }
+
+    const replies = onAgentEvent.mock.calls.map(([event]) => event.data);
+    expect(replies.map((reply) => reply.delta).join("")).toBe(text);
+    expect(replies.at(-1)?.text).toBe(text);
+    expect(context.getPartialReplySourceText()).toBe(text);
+  });
+
   it("uses full partial text for suffix deltas after a suppressed commentary item", async () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
@@ -144,23 +168,26 @@ describe("handleMessageUpdate text signatures", () => {
     ]);
   });
 
-  it.each(["openai-responses"])(
-    "streams %s commentary with one complete-preamble boundary",
-    async (api) => {
+  it.each([
+    { delayMs: 0, updates: ["Work"] },
+    { delayMs: 100, updates: ["Work", "Working..."] },
+  ])(
+    "streams commentary with one complete-preamble boundary (delta delay=$delayMs ms)",
+    async ({ delayMs, updates }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(1_000);
       const onAgentEvent = vi.fn();
       const context = createMessageUpdateContext({ onAgentEvent });
       // Exercise the real projection/deduplication owner. A raw callback mock
       // mistakes completion metadata for another assistant text message.
       context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
-      const createPartial = (text: string) => ({
-        ...createOpenAiResponsesPartial({
+      const createPartial = (text: string) =>
+        createOpenAiResponsesPartial({
           text,
           id: "item-commentary",
           signaturePhase: "commentary",
           partialPhase: "commentary",
-        }),
-        api,
-      });
+        });
       const startPartial = createPartial("Work");
       const finalPartial = createPartial("Working...");
 
@@ -174,26 +201,25 @@ describe("handleMessageUpdate text signatures", () => {
           message: event.partial,
           assistantMessageEvent: { ...event, contentIndex: 0 },
         });
+        vi.setSystemTime(Date.now() + delayMs);
       }
       await endMessage(context, {
         message: finalPartial,
       });
 
       expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
-        [
-          ["Work", "update"],
-          ["Working...", "update"],
-          ["Working...", "end"],
-        ].map(([progressText, phase]) => ({
-          stream: "item",
-          data: {
-            kind: "preamble",
-            title: "Preamble",
-            progressText,
-            phase,
-            itemId: "item-commentary",
-          },
-        })),
+        [...updates.map((text) => [text, "update"]), ["Working...", "end"]].map(
+          ([progressText, phase]) => ({
+            stream: "item",
+            data: {
+              kind: "preamble",
+              title: "Preamble",
+              progressText,
+              phase,
+              itemId: "item-commentary",
+            },
+          }),
+        ),
       );
 
       expect(context.state.deltaBuffer).toBe("Working...");

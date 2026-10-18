@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import "../components/sidebar-attention.tsx";
 import "../components/sidebar-update-card.tsx";
 import type { SidebarUpdateCardProps } from "../components/sidebar-update-card.tsx";
-import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 import { navigationSurfaceIsHidden } from "./navigation-surface.ts";

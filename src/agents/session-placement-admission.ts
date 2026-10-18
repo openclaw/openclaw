@@ -118,12 +118,7 @@ export function installSessionPlacementAdmissionProvider(
 export async function resolveSessionPlacementRuntimeOverride(
   identity: Omit<LocalTurnPlacementClaim, "runId">,
 ): Promise<string | undefined> {
-  const provider = state.provider;
-  const runtime = await provider?.resolveRuntimeOverride?.(identity);
-  if (state.provider !== provider) {
-    throw createAbortError("session placement owner changed during runtime selection");
-  }
-  return runtime;
+  return state.provider?.resolveRuntimeOverride?.(identity);
 }
 
 const requiredPlacementScope = resolveGlobalSingleton(

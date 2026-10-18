@@ -2,7 +2,7 @@ import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit
 import {
   assertTransactionUsable,
   runSqliteWorkerTransactionSync,
-  runSqliteDeferredTransactionSync,
+  runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
@@ -45,7 +45,7 @@ export function bindSqliteWorkerBackend(
         return true;
       }
       if (command.type === "authProfiles.inlineSnapshot") {
-        return runSqliteDeferredTransactionSync(context.database, () => ({
+        return runSqliteReadSnapshotSync(context.database, () => ({
           store: inspectAuthProfileJsonCell(context.database, "store", "agent"),
           state: inspectAuthProfileJsonCell(context.database, "state", "agent"),
           cacheable: false,

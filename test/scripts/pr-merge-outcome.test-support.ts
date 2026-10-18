@@ -266,7 +266,7 @@ export function createMergeOutcomeFixtureHarness() {
         advanceMain?: boolean;
         advanceAfterRead?: boolean;
         reportedMain?: string;
-        tamperProviderCapture?: boolean;
+        tamperProviderCapture?: boolean | string;
       }>,
       mainAdvances: [] as string[],
       calls: [] as string[][],
@@ -792,7 +792,8 @@ else if(args[0]==="pr"&&args[1]==="view") {
     out({data:{repository}});
     if(step?.tamperProviderCapture) {
       const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
-      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name))) fs.appendFileSync(local+name,"changed\\n");
+      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name)&&
+        (step.tamperProviderCapture===true||step.tamperProviderCapture===name))) fs.appendFileSync(local+name,"changed\\n");
       s.providerCaptureTampered=true;
     }
     if(step?.advanceAfterRead) advanceMain();

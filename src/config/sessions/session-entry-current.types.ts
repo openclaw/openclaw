@@ -4,6 +4,7 @@ import type { SessionEntry } from "./types.js";
 export type SessionEntryCurrentFacts = {
   sessionId: string;
   createdVia?: unknown;
+  createdActor?: SessionEntry["createdActor"];
   incognito?: SessionEntry["incognito"];
   modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
   pluginOwnerId?: SessionEntry["pluginOwnerId"];

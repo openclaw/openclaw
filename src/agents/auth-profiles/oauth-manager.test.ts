@@ -10,11 +10,11 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -38,7 +38,6 @@ import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import { removeAuthProfilesAcrossOwnerStores } from "./profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import * as authProfileStoreRuntime from "./store-runtime.js";
 import {
   ensureAuthProfileStore,
@@ -509,7 +508,16 @@ describe("createOAuthManager", () => {
     });
   });
 
-  it("keeps invalid_grant primary when owner cleanup and recovery reload both fail", async () => {
+  it.each([
+    {
+      name: "keeps invalid_grant primary when owner cleanup and recovery reload both fail",
+      cleanupCode: "unavailable" as const,
+    },
+    {
+      name: "does not recover an invalid_grant refresh after uncertain owner cleanup",
+      cleanupCode: "outcome-unknown" as const,
+    },
+  ])("$name", async ({ cleanupCode }) => {
     await withOAuthTempRoot("oauth-manager-cleanup-errors-", async (tempRoot) => {
       const agentDir = path.join(tempRoot, "agents", "main", "agent");
       await fs.mkdir(agentDir, { recursive: true });
@@ -531,30 +539,57 @@ describe("createOAuthManager", () => {
           summary: "provider rejected invalid_grant",
         },
       });
+      const ownerReadError = new Error("Owner credential read failed before dispatch");
+      const recoveryReadError = new Error("Recovery credential reload failed before dispatch");
+      const ownerCleanupError = new SqliteWorkerError(
+        cleanupCode === "unavailable"
+          ? "Owner cleanup failed before dispatch"
+          : "Owner cleanup acknowledgment was lost",
+        cleanupCode,
+      );
+      const readStore = vi.spyOn(
+        authProfileStoreRuntime,
+        "loadAuthProfileStoreWithoutExternalProfilesAsync",
+      );
+      const updateStore = vi.spyOn(authProfileStoreRuntime, "updateAuthProfileStoreWithLock");
+      let readsBeforeRefreshFailure = 0;
       const manager = createTestManager({
         refreshCredential: vi.fn(async () => {
-          clearRuntimeAuthProfileStoreSnapshots();
-          await closeOpenClawAgentDatabasesAsync(tempRoot);
-          closeOpenClawAgentDatabasesForTest(tempRoot);
-          await fs.writeFile(resolveAuthProfileDatabasePath(agentDir), "not a sqlite database");
+          readsBeforeRefreshFailure = readStore.mock.calls.length;
+          // Arm faults after the real owner has persisted its pending refresh fence.
+          readStore.mockRejectedValueOnce(ownerReadError).mockRejectedValue(recoveryReadError);
+          updateStore.mockRejectedValue(ownerCleanupError);
           throw initiatingError;
         }),
       });
 
       try {
-        await manager.resolveOAuthAccess({
-          store: { version: 1, profiles: { [profileId]: expired } },
-          profileId,
-          credential: expired,
-          agentDir,
-        });
-        throw new Error("Expected refresh failure");
-      } catch (caught) {
+        const caught: unknown = await manager
+          .resolveOAuthAccess({
+            store: { version: 1, profiles: { [profileId]: expired } },
+            profileId,
+            credential: expired,
+            agentDir,
+          })
+          .catch((error: unknown) => error);
+        if (cleanupCode === "outcome-unknown") {
+          expect(caught).toBeInstanceOf(AggregateError);
+          expect(caught).not.toBeInstanceOf(OAuthManagerRefreshError);
+          expect(hasSqliteWorkerOutcomeUnknown(caught)).toBe(true);
+          expect(isSettledOAuthRefreshFailure(caught)).toBe(false);
+          if (!(caught instanceof AggregateError)) {
+            throw caught;
+          }
+          expect(caught.errors).toEqual([initiatingError, ownerReadError, ownerCleanupError]);
+          expect(caught.cause).toBe(initiatingError);
+          expect(readStore).toHaveBeenCalledTimes(readsBeforeRefreshFailure + 1);
+          return;
+        }
         if (!(caught instanceof OAuthManagerRefreshError)) {
           throw caught;
         }
         expect(caught.message).toContain("provider rejected invalid_grant");
-        expect(caught.message).not.toContain("unreadable");
+        expect(caught.message).not.toContain("Owner credential read failed");
         expect(caught.errorType).toBe("invalid_grant_error");
         expect(caught.reason).toBe("invalid_grant");
         expect(caught.status).toBe(401);
@@ -564,12 +599,18 @@ describe("createOAuthManager", () => {
         const aggregate = caught.cause as AggregateError;
         expect(aggregate.errors).toHaveLength(4);
         expect(aggregate.cause).toBe(aggregate.errors[0]);
-        expect(formatErrorMessage(aggregate.errors[0])).toContain(
-          "provider rejected invalid_grant",
-        );
-        expect(formatErrorMessage(aggregate.errors[1])).toContain("is unreadable");
-        expect(formatErrorMessage(aggregate.errors[2])).toContain("file is not a database");
-        expect(formatErrorMessage(aggregate.errors[3])).toContain("is unreadable");
+        for (const [index, error] of [
+          initiatingError,
+          ownerReadError,
+          ownerCleanupError,
+          recoveryReadError,
+        ].entries()) {
+          expect(formatErrorMessage(aggregate.errors[index])).toContain(error.message);
+        }
+        expect(readStore).toHaveBeenCalledTimes(readsBeforeRefreshFailure + 2);
+      } finally {
+        readStore.mockRestore();
+        updateStore.mockRestore();
       }
     });
   });
@@ -610,7 +651,7 @@ describe("createOAuthManager", () => {
         const pending = authority.readCurrentCredential();
         expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
         refreshRejected = true;
-        // oxlint-disable-next-line prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
+        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- providers can reject with unknown non-Error values.
         return Promise.reject(undefined);
       });
       const manager = createTestManager({

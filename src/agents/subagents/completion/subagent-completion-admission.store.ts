@@ -207,20 +207,23 @@ export async function admitSubagentCompletionDelivery(params: {
         }
       },
       async commit(planned, authority) {
-        const input = structuredClone({
+        const input = {
           writeId: randomUUID(),
           expected: planned.expected,
           subagent: planned.subagent,
           queueEntry: planned.queueEntry,
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(params.context, () => ({
-          kind: "completion",
-          writeId: input.writeId,
-          assertCurrent: authority.assertCurrent,
-          execute: (scope) =>
-            scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
-          decode: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
-        }));
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<AdmissionReceipt>(
+          params.context,
+          () => ({
+            kind: "completion",
+            writeId: input.writeId,
+            assertCurrent: authority.assertCurrent,
+            execute: (scope) =>
+              scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
+            decodeCommitted: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
+          }),
+        );
         const subagent = {
           ...receipt.record.subagent,
           cleanupHandled: planned.expected.cleanupHandled,
@@ -328,17 +331,17 @@ async function mutateCompletion(
         options.onPublished?.();
       },
       async commit(planned, authority) {
-        const input = structuredClone({
+        const input = {
           writeId: randomUUID(),
           mutation: planned.mutation,
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(context, () => ({
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<MutationReceipt>(context, () => ({
           kind: "completion",
           writeId: input.writeId,
           assertCurrent: authority.assertCurrent,
           execute: (scope) =>
             scope.execute({ type: "sessionDelivery.mutateSubagentCompletion", input }),
-          decode: (value) => parseMutationReceipt(value, input.writeId, runIds),
+          decodeCommitted: (value) => parseMutationReceipt(value, input.writeId, runIds),
         }));
         const postimages = new Map<string, SubagentRunRecord | null>();
         for (const runId of receipt.retiredRunIds) {

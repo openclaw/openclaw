@@ -359,6 +359,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** The stream owner removed repetitive content before persistence and replay. */
+export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -823,6 +825,8 @@ export interface Model<TApi extends Api = Api> {
    * smaller practical window.
    */
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count, including inactive experts. */
+  parameterCount?: number;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;

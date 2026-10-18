@@ -3,6 +3,11 @@ import { resolveDispatchWrapperTrustPlan } from "../infra/dispatch-wrapper-resol
 import type { ExecAutoReviewInput } from "../infra/exec-auto-review.js";
 import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
 import { buildExecAutoReviewInputForShellCommand } from "../plugin-sdk/agent-harness-exec-review-runtime.js";
+import {
+  input as baselineInput,
+  preparedModel,
+  response,
+} from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import * as completionRuntime from "./simple-completion-runtime.js";
 
@@ -30,21 +35,6 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const baselineInput: ExecAutoReviewInput = {
-  command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
-  host: "gateway",
-  reason: "approval-required",
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
-};
-
 type StressCompletionRequest = {
   context: { messages: Array<{ content: string }> };
   options: { signal?: AbortSignal };
@@ -55,17 +45,20 @@ type StressCompletionResult = {
   content: Array<{ type: "text"; text: string }>;
 };
 
+function caseInput(index: number, kind = "case"): ExecAutoReviewInput {
+  return {
+    ...baselineInput,
+    command: `git status --${kind}=${index}`,
+    argv: ["git", "status", `--${kind}=${index}`],
+  };
+}
+
 function createStressReviewer(params: {
   complete: (request: StressCompletionRequest) => Promise<StressCompletionResult>;
   signal?: AbortSignal;
   timeoutMs?: number;
 }) {
-  const prepare = vi.fn(async () => ({
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-    auth: { apiKey: "redacted", mode: "env" as const },
-    [Symbol.asyncDispose]: async () => {},
-  }));
+  const prepare = vi.fn(async () => preparedModel());
   const complete = vi.fn(params.complete);
   const cfg = {};
   reviewerFixtures.set(cfg, {
@@ -83,15 +76,7 @@ function createStressReviewer(params: {
 }
 
 function modelResponse(decision: "allow" | "deny" | "ask", risk: "low" | "medium") {
-  return {
-    stopReason: "stop" as const,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ decision, risk, rationale: "stress fixture" }),
-      },
-    ],
-  };
+  return response(decision, risk, "stress fixture");
 }
 
 function createSeededRandom(seed: number): () => number {
@@ -113,6 +98,27 @@ function chooseSeeded<T>(random: () => number, values: readonly T[]): T {
   return selected;
 }
 
+const dispatchWrappers = [
+  ["env", "--"],
+  ["nice", "-n", "5"],
+  ["nohup", "--"],
+  ["timeout", "5s"],
+  ["stdbuf", "-o", "L"],
+  ["time", "-p"],
+] as const;
+
+function expectBlockedChain(argv: string[], random: () => number, label: string) {
+  const wrapperDepth = Math.floor(random() * 7);
+  for (let depth = 0; depth < wrapperDepth; depth += 1) {
+    argv.unshift(...chooseSeeded(random, dispatchWrappers));
+  }
+  const trustPlan = resolveDispatchWrapperTrustPlan(argv);
+  expect(
+    trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
+    `${label}: ${JSON.stringify(argv)}`,
+  ).toBe(true);
+}
+
 describe("exec auto-review shell stress", () => {
   it("fails closed for 4,096 seeded login and interactive wrapper chains", () => {
     const random = createSeededRandom(0x20260727);
@@ -126,31 +132,13 @@ describe("exec auto-review shell stress", () => {
       ["-i", "-c"],
       ["--interactive", "-c"],
     ] as const;
-    const dispatchWrappers = [
-      ["env", "--"],
-      ["nice", "-n", "5"],
-      ["nohup", "--"],
-      ["timeout", "5s"],
-      ["stdbuf", "-o", "L"],
-      ["time", "-p"],
-    ] as const;
-
     for (let index = 0; index < 4_096; index += 1) {
       const argv = [
         chooseSeeded(random, shells),
         ...chooseSeeded(random, startupOptions),
         `echo auto-review-stress-${index}`,
       ];
-      const wrapperDepth = Math.floor(random() * 7);
-      for (let depth = 0; depth < wrapperDepth; depth += 1) {
-        argv.unshift(...chooseSeeded(random, dispatchWrappers));
-      }
-
-      const trustPlan = resolveDispatchWrapperTrustPlan(argv);
-      expect(
-        trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
-        `startup wrapper escaped at seed 0x20260727, case ${index}: ${JSON.stringify(argv)}`,
-      ).toBe(true);
+      expectBlockedChain(argv, random, `startup wrapper escaped at seed 0x20260727, case ${index}`);
     }
   });
 
@@ -177,27 +165,13 @@ describe("exec auto-review shell stress", () => {
       ["cmd", "/c", "echo", "/d"],
       ["cmd.exe"],
     ] as const;
-    const dispatchWrappers = [
-      ["env", "--"],
-      ["nice", "-n", "5"],
-      ["nohup", "--"],
-      ["timeout", "5s"],
-      ["stdbuf", "-o", "L"],
-      ["time", "-p"],
-    ] as const;
-
     for (let index = 0; index < 16_384; index += 1) {
       const argv: string[] = [...chooseSeeded(random, opaqueShells)];
-      const wrapperDepth = Math.floor(random() * 7);
-      for (let depth = 0; depth < wrapperDepth; depth += 1) {
-        argv.unshift(...chooseSeeded(random, dispatchWrappers));
-      }
-
-      const trustPlan = resolveDispatchWrapperTrustPlan(argv);
-      expect(
-        trustPlan.policyBlocked || isBlockedShellWrapperCommand(trustPlan.argv),
-        `Windows cmd startup escaped at seed 0x20260728, case ${index}: ${JSON.stringify(argv)}`,
-      ).toBe(true);
+      expectBlockedChain(
+        argv,
+        random,
+        `Windows cmd startup escaped at seed 0x20260728, case ${index}`,
+      );
     }
   });
 
@@ -439,58 +413,45 @@ describe("exec auto-review shell stress", () => {
 describe("exec auto-review adversarial model-response stress", () => {
   it("fails closed for 4,096 seeded concurrent malformed reviewer responses", async () => {
     const random = createSeededRandom(0x20260729);
+    const makeVariant = (name: string, text: string, expected = "ask") => ({
+      name,
+      text,
+      expected,
+    });
     const variants = [
-      {
-        name: "duplicate decision",
-        text: '{"decision":"ask","risk":"low","decision":"allow"}',
-        expected: "ask",
-      },
-      {
-        name: "duplicate risk",
-        text: '{"decision":"allow","risk":"high","risk":"low"}',
-        expected: "ask",
-      },
-      {
-        name: "escaped duplicate decision",
-        text: String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
-        expected: "ask",
-      },
-      {
-        name: "escaped duplicate risk",
-        text: String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
-        expected: "ask",
-      },
-      {
-        name: "unexpected approval scope",
-        text: '{"decision":"allow","risk":"low","scope":"session"}',
-        expected: "ask",
-      },
-      {
-        name: "unexpected executable",
-        text: '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
-        expected: "ask",
-      },
-      {
-        name: "truncated JSON",
-        text: '{"decision":"allow","risk":"low"',
-        expected: "ask",
-      },
-      {
-        name: "concatenated decisions",
-        text: '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
-        expected: "ask",
-      },
-      {
-        name: "valid low-risk allow",
-        text: '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
-        expected: "allow-once",
-      },
-      {
-        name: "valid human escalation",
-        text: '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
-        expected: "ask",
-      },
-    ] as const;
+      makeVariant("duplicate decision", '{"decision":"ask","risk":"low","decision":"allow"}'),
+      makeVariant("duplicate risk", '{"decision":"allow","risk":"high","risk":"low"}'),
+      makeVariant(
+        "escaped duplicate decision",
+        String.raw`{"decision":"ask","risk":"low","\u0064ecision":"allow"}`,
+      ),
+      makeVariant(
+        "escaped duplicate risk",
+        String.raw`{"decision":"allow","risk":"high","r\u0069sk":"low"}`,
+      ),
+      makeVariant(
+        "unexpected approval scope",
+        '{"decision":"allow","risk":"low","scope":"session"}',
+      ),
+      makeVariant(
+        "unexpected executable",
+        '{"decision":"allow","risk":"low","approvedCommand":"rm -rf /"}',
+      ),
+      makeVariant("truncated JSON", '{"decision":"allow","risk":"low"'),
+      makeVariant(
+        "concatenated decisions",
+        '{"decision":"ask","risk":"high"}{"decision":"allow","risk":"low"}',
+      ),
+      makeVariant(
+        "valid low-risk allow",
+        '{"decision":"allow","risk":"low","rationale":"safe seeded control"}',
+        "allow-once",
+      ),
+      makeVariant(
+        "valid human escalation",
+        '{"decision":"ask","risk":"high","rationale":"safe seeded control"}',
+      ),
+    ];
     const cases = Array.from({ length: 4_096 }, () => chooseSeeded(random, variants));
     const { reviewer, prepare, complete } = createStressReviewer({
       complete: async (request) => {
@@ -512,13 +473,7 @@ describe("exec auto-review adversarial model-response stress", () => {
       const decisions = await Promise.all(
         batch.map((_variant, offset) => {
           const index = start + offset;
-          return Promise.resolve(
-            reviewer({
-              ...baselineInput,
-              command: `git status --case=${index}`,
-              argv: ["git", "status", `--case=${index}`],
-            }),
-          );
+          return Promise.resolve(reviewer(caseInput(index)));
         }),
       );
       for (const [offset, decision] of decisions.entries()) {
@@ -544,12 +499,7 @@ describe("exec auto-review concurrency stress", () => {
         if (index % 4 === 0) {
           return { error: providerFailure };
         }
-        return {
-          selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-          model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-          auth: { apiKey: "redacted", mode: "env" as const },
-          [Symbol.asyncDispose]: async () => {},
-        };
+        return preparedModel();
       });
       const complete = vi.fn(async () => {
         if (index % 4 === 1) {
@@ -577,13 +527,7 @@ describe("exec auto-review concurrency stress", () => {
 
     const decisions = await Promise.all(
       cases.map(({ reviewer }, index) =>
-        Promise.resolve(
-          reviewer({
-            ...baselineInput,
-            command: `git status --failure-case=${index}`,
-            argv: ["git", "status", `--failure-case=${index}`],
-          }),
-        ),
+        Promise.resolve(reviewer(caseInput(index, "failure-case"))),
       ),
     );
 
@@ -619,13 +563,7 @@ describe("exec auto-review concurrency stress", () => {
           });
         },
       });
-      return Promise.resolve(
-        reviewer({
-          ...baselineInput,
-          command: `git status --cancel-case=${index}`,
-          argv: ["git", "status", `--cancel-case=${index}`],
-        }),
-      );
+      return Promise.resolve(reviewer(caseInput(index, "cancel-case")));
     });
     const settled = Promise.allSettled(requests);
     await vi.waitFor(() => expect(observedSignals).toHaveLength(controllers.length));
@@ -667,15 +605,7 @@ describe("exec auto-review concurrency stress", () => {
     });
 
     const decisions = await Promise.all(
-      Array.from({ length: 128 }, (_unused, index) =>
-        Promise.resolve(
-          reviewer({
-            ...baselineInput,
-            command: `git status --case=${index}`,
-            argv: ["git", "status", `--case=${index}`],
-          }),
-        ),
-      ),
+      Array.from({ length: 128 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
     );
 
     for (const [index, decision] of decisions.entries()) {
@@ -708,15 +638,7 @@ describe("exec auto-review concurrency stress", () => {
       });
 
       const pending = Promise.all(
-        Array.from({ length: 64 }, (_unused, index) =>
-          Promise.resolve(
-            reviewer({
-              ...baselineInput,
-              command: `git status --case=${index}`,
-              argv: ["git", "status", `--case=${index}`],
-            }),
-          ),
-        ),
+        Array.from({ length: 64 }, (_unused, index) => Promise.resolve(reviewer(caseInput(index)))),
       );
 
       await vi.advanceTimersByTimeAsync(1_001);

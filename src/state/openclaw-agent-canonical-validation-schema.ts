@@ -12,6 +12,8 @@ import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db
 import { classifyOpenClawAgentDatabaseReadError } from "./openclaw-agent-db-read-error.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 
+export { canonicalSessionValidationSchemaSql } from "./openclaw-agent-schema-history.js";
+
 const validationTables = new Set([
   "session_nodes",
   "session_windows",
@@ -111,20 +113,4 @@ export function adoptCanonicalSessionValidationSchema(database: EngineConnection
     throw new Error("Canonical schema handoff requires admitted schema facts");
   }
   validatedSchemas.set(database, { cookie: schema.schemaVersion, schema });
-}
-
-/** The schema owner installs the pending queue before seeding imported keys. */
-export function canonicalSessionValidationSchemaSql(schema = OPENCLAW_AGENT_SCHEMA_SQL): string {
-  return extractSqliteTableSchema(schema, "session_canonical_validation_pending", {
-    endMarker: "CREATE TABLE IF NOT EXISTS conversations (",
-    includeEndMarker: false,
-  });
-}
-
-/** Historical migration preflights cannot require the schema-21 validation projection. */
-export function withoutCanonicalSessionValidationSchema(schema: string): string {
-  if (!schema.includes("CREATE TABLE IF NOT EXISTS session_canonical_validation_pending (")) {
-    return schema;
-  }
-  return schema.replace(canonicalSessionValidationSchemaSql(schema), "");
 }

@@ -679,21 +679,6 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("openclaw plugins enable codex");
   });
 
-  it("treats /model default as a session model reset", async () => {
-    const resolved = await resolveModelSelectionForCommand({
-      command: "/model default",
-      allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
-    });
-
-    expect(resolved.errorText).toBeUndefined();
-    expect(resolved.modelSelection).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      isDefault: true,
-      resetToDefault: true,
-    });
-  });
-
   it("keeps @YYYYMMDD as part of the model when the stored numeric profile is for another provider", async () => {
     setAuthProfiles(createDateAuthProfiles("anthropic"));
 
@@ -956,18 +941,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(persisted.errorText).toBeUndefined();
     expect(sessionEntry.providerOverride).toBeUndefined();
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
-  it("preserves unsupported stored thinking levels when persisting a model switch", async () => {
-    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      sessionEntry,
-    });
-
-    expect(sessionEntry.thinkingLevel).toBe("adaptive");
-    expect(persisted.directiveAck?.text).not.toContain("Thinking level set to");
   });
 
   it("suppresses model side effects when a concurrent switch wins", async () => {

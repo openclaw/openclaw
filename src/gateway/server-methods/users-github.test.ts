@@ -325,10 +325,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           expect(disconnected?.selection).toEqual({ kind: "disconnected" });
         },
       );
-      expect(warning).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("personal.cancelAuthorizationAsync"),
-        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-      );
+      const warningOptions = { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" };
+      expect(warning.mock.calls).toEqual([
+        [expect.stringContaining("personal.cancelAuthorizationAsync"), warningOptions],
+        [expect.stringContaining("personal.disconnectAsync"), warningOptions],
+      ]);
     } finally {
       unobserve();
       warning.mockRestore();

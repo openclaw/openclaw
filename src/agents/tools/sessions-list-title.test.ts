@@ -18,8 +18,8 @@ import {
   requestContext,
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import * as transcriptTitles from "../../gateway/session-transcript-title-reader.js";
-import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -131,6 +131,17 @@ async function withInventory(
         ),
       );
     const overrides = new Map(rows.map((row, index) => [row.key, definitions[index]!.row]));
+    const projection = expectDefined(getSessionRowProjection(context), "inventory projection");
+    const presentRow = projection.present.bind(projection);
+    const presentation = vi.spyOn(projection, "present").mockImplementation((...args) => {
+      const row = presentRow(...args);
+      // Inject wire-field edge cases before publication freezes and binds the recipient row.
+      Object.assign(row, overrides.get(row.key));
+      // Keep title admission below the separately tested response byte budget.
+      delete row.createdActor;
+      delete row.owner;
+      return row;
+    });
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ): Promise<T> => {
@@ -140,17 +151,7 @@ async function withInventory(
           includeLastMessage: false,
         });
       }
-      const result = await callAgentToolGatewayRequest<T>(request);
-      if (request.method === "sessions.list") {
-        // Exercise tool intake with wire-field edge cases after real Gateway authorization.
-        for (const row of (result as SessionsListResult).sessions) {
-          Object.assign(row, overrides.get(row.key));
-          // Keep title admission below the separately tested response byte budget.
-          delete row.createdActor;
-          delete row.owner;
-        }
-      }
-      return result;
+      return await callAgentToolGatewayRequest<T>(request);
     };
     const tool = createSessionsListTool({
       config: cfg,
@@ -178,6 +179,7 @@ async function withInventory(
       expect(persisted()).toEqual(before);
     } finally {
       reads.mockRestore();
+      presentation.mockRestore();
       await disposeSessionReadContexts();
     }
   });

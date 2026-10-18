@@ -156,6 +156,28 @@ describe("node runner auto-update handoff", () => {
     vi.unstubAllEnvs();
   });
 
+  it.each([true, false])(
+    "warns about a legacy entrypoint only when updates are enabled (%s)",
+    async (enabled) => {
+      Object.defineProperty(process, "connected", { configurable: true, value: false });
+      const argv = process.argv;
+      process.argv = [process.execPath, "/installed/openclaw/dist/index.js", "node", "run"];
+      mocks.getRuntimeConfig.mockReturnValue({ nodeHost: { autoUpdate: { enabled } } });
+      const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await withRunningNodeHost({}, async () => {
+          const warned = stderr.mock.calls.some(([line]) =>
+            String(line).includes("bypasses the node launcher"),
+          );
+          expect(warned).toBe(enabled);
+        });
+      } finally {
+        process.argv = argv;
+        stderr.mockRestore();
+      }
+    },
+  );
+
   it.each([
     {
       label: "TLS, a context path, and process-local worker hosting",

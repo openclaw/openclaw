@@ -52,14 +52,14 @@ function trimIdentityAvatarCache(): void {
   }
 }
 
-function loadIdentityAvatar(url: string): string | Promise<string | null> {
+function loadIdentityAvatar(url: string): string | Promise<string | null> | null {
   const cached = identityAvatarCache.get(url);
   // Map order is the LRU order; concurrent roster, profile, and chat views
   // share the authenticated request and its result, including a cached miss.
   identityAvatarCache.delete(url);
   if (cached && (cached.retryAt === undefined || Date.now() < cached.retryAt)) {
     identityAvatarCache.set(url, cached);
-    return cached.blobUrl ?? cached.promise;
+    return cached.blobUrl ?? (cached.retryAt === undefined ? cached.promise : null);
   }
 
   const entry: CachedIdentityAvatar = {
@@ -105,12 +105,15 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
   return entry.promise;
 }
 
-/** Fetch connected-gateway profile images once and render CSP-safe blobs. */
-export function resolveAvatarImageUrl(value: string): string | Promise<string | null> | null {
+/** Cache managed images and misses; caller-owned sources bypass the loader. */
+export function resolveAvatarImageUrl(
+  value: string,
+  unmanagedUrl: string | null = null,
+): string | Promise<string | null> | null {
   const { authTokens, origin, resourceBasePath } = readAvatarGatewayContext();
   const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
   if (!trusted) {
-    return null;
+    return unmanagedUrl;
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.

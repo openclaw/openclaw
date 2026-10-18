@@ -329,7 +329,7 @@ export function acquireBuildArtifactLockAsync(
 
 export type BuildCache = {
   env?: string[];
-  inputs: BuildCacheEntry[];
+  inputs: BuildCacheEntry[] | ((rootDir: string) => BuildCacheEntry[]);
   outputs: BuildCacheEntry[];
   requiredOutputs?: string[] | ((env: NodeJS.ProcessEnv) => string[]);
   restore?: "always";
@@ -436,7 +436,9 @@ export function resolveBuildStepCacheState(
   const rootDir = params.rootDir ?? process.cwd();
   const artifactRoot = params.artifactRoot ?? rootDir;
   const fsImpl = params.fs ?? fs;
-  const inputFiles = listCacheFiles(rootDir, step.cache.inputs, fsImpl);
+  const inputs =
+    typeof step.cache.inputs === "function" ? step.cache.inputs(rootDir) : step.cache.inputs;
+  const inputFiles = listCacheFiles(rootDir, inputs, fsImpl);
   if (inputFiles.length === 0) {
     return { cacheable: true, fresh: false, reason: "missing-inputs" };
   }
@@ -474,12 +476,9 @@ export function resolveBuildStepCacheState(
     const actualOutputsAcceptable =
       step.cache.restore !== "always" &&
       artifactRecordMismatch(artifactRoot, stamp, signature, requiredOutputs) === undefined;
-    const cachedOutputMismatch = artifactRecordMismatch(
-      outputRoot,
-      stamp,
-      signature,
-      requiredOutputs,
-    );
+    const cachedOutputMismatch = actualOutputsAcceptable
+      ? undefined
+      : artifactRecordMismatch(outputRoot, stamp, signature, requiredOutputs);
     const cachedOutputsPresent = cachedOutputMismatch === undefined;
     const stampMatches =
       (!params.inputSignature || consumedInputs !== undefined) && stamp?.signature === signature;

@@ -7,12 +7,12 @@ import {
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { classifyFailoverReason } from "../../agents/failover/classify.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
@@ -109,7 +109,6 @@ async function executeAgentTurnInternalLoop(
   compaction: AgentTurnCompaction,
 ): Promise<AgentTurnInternalResult> {
   let params = inputParams;
-  const heartbeatState = { didLogStrip: false };
   // Direct delivery receipts retain settlement facts across fallback candidates.
   const directBlockDeliveries: DirectBlockDelivery[] = [];
   // Queued turns reconciled their probe at admission. Rechecking it against
@@ -386,7 +385,6 @@ async function executeAgentTurnInternalLoop(
         turn: params,
         replyMediaContext,
         directBlockDeliveries,
-        heartbeatState,
       });
       const cycleParams: AgentFallbackCycleParams = {
         preparedRunAdmission,
@@ -536,7 +534,6 @@ async function executeAgentTurnInternalLoop(
     result: runResult,
     resolved: { provider: fallbackProvider, model: fallbackModel },
     fallback: { exhausted: fallbackExhausted, attempts: fallbackAttempts },
-    didLogHeartbeatStrip: heartbeatState.didLogStrip,
     autoCompactionCount: compaction.count,
     hasDirectlySentBlockReply:
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||

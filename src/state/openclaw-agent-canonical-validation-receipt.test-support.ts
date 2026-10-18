@@ -5,6 +5,7 @@ import { isMainThread } from "node:worker_threads";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
@@ -13,7 +14,7 @@ import {
   recordOpenClawAgentCanonicalValidation,
 } from "./openclaw-agent-canonical-validation-receipt.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
-import { assertOpenClawAgentSchemaContains } from "./openclaw-agent-db-schema-helpers.js";
+import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -69,10 +70,11 @@ for (const legacy of ["legacy-birthtime", "missing-column"] as const) {
       assert.equal(column?.pk, 0);
       const previousSchema = OPENCLAW_AGENT_SCHEMA_SQL.replace(/^\s*canonical_ready TEXT,\n/mu, "");
       assert.doesNotThrow(() =>
-        assertOpenClawAgentSchemaContains(
+        assertSqliteSchemaContains(
           sqlPublicationAnchor(database.db),
           database.path,
           previousSchema,
+          AGENT_SCHEMA_COMPATIBILITY,
         ),
       );
       const completeSchema = database.db.prepare("PRAGMA schema_version").get();

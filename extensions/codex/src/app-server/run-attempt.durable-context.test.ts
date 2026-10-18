@@ -22,6 +22,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as settledTurnContext from "./settled-turn-context.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
@@ -219,6 +220,9 @@ it("does not replay covered history on the same thread after local message-tool 
     params.runId = "run-2";
     params.prompt = "Send the inventory summary.";
     closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const capture = vi.spyOn(settledTurnContext, "captureCodexSettledTurnFinalizationContext");
+    const onSettledTurn = vi.fn(async () => {});
+    params.onSettledTurn = onSettledTurn;
     const terminal = runCodexAppServerAttempt(params);
     await terminal.waitForTurnAccepted();
     expect(turnNumber).toBe(2);
@@ -249,6 +253,8 @@ it("does not replay covered history on the same thread after local message-tool 
       params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
     });
     expect((await terminal).terminal).toEqual({ kind: "ok" });
+    expect(capture).not.toHaveBeenCalled();
+    expect(onSettledTurn).toHaveBeenCalledOnce();
     await nativeHookRelayUnregisterQueue.flush();
     const binding = await readCodexAppServerBinding(sessionFile);
     const coveredThrough = Date.parse(binding?.historyCoveredThrough ?? "");

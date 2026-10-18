@@ -86,13 +86,16 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
   const currentGateway = createMemo(() => props.context.gateway);
   const sessionKey = createMemo(() => props.sessionKey ?? "");
   const source = () => ({ gateway: currentGateway(), key: sessionKey() });
+  // Seed the projections once; the effect below owns later source replacements.
   const initial = untrack(source);
   const gatewayProjection = projectGateway(initial.gateway);
   const projection = projectSource(initial, {
     read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
+    // The projection owns snapshot observation; the effect below owns the session's remote watch.
     subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
     equality: "revision",
   });
+  // Acquire the Gateway pull-request watch for the currently presented session.
   createEffect(source, ({ gateway, key }) => {
     gatewayProjection.replaceSource(gateway);
     projection.replaceSource({ gateway, key });
@@ -115,9 +118,10 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
     <openclaw-activity-session-git>
       <Show when={visible()}>
         <openclaw-link-reader-hovercard-provider
-          prop:client={connection().phase === "connected" ? connection().client : null}
+          prop:client={connection().client}
           prop:readers={availableLinkPreviewReaders(connection())}
           prop:agentId={props.agentId ?? ""}
+          prop:sessionKey={props.sessionKey}
           prop:previewSeeds={pullRequests().map(pullRequestPreview)}
         >
           <div class="activity-feed__git">

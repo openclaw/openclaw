@@ -23,13 +23,13 @@ function controls(overrides: Partial<Props>) {
   const onModelSelect = vi.fn(async () => true);
   const onThinkingSelect = vi.fn(async () => true);
   const onFastModeSelect = vi.fn(async () => true);
-  const container = document.createElement("div");
   const props: Props = {
     activeRunId: null,
     connected: true,
     gatewayAvailable: true,
     loading: false,
     modelSwitching: false,
+    modelPickerOpen: true,
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     sending: false,
     stream: null,
@@ -49,7 +49,11 @@ function controls(overrides: Partial<Props>) {
     ...overrides,
   };
   const [current, setCurrent] = createSignal(props);
-  mountSolid(() => <ChatModelControls {...current()} />, { container });
+  const { container } = mountSolid(() => <ChatModelControls {...current()} />);
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  picker.open = true;
+  picker.dispatchEvent(new Event("toggle"));
+  flush();
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();

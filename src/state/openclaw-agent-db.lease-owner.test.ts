@@ -11,6 +11,7 @@ import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   readActiveOpenClawAgentDatabaseLeasesReadOnly,
 } from "./openclaw-agent-db-lease.js";
+import { recordOpenClawAgentDatabaseOpenFailure } from "./openclaw-agent-db-lifecycle.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
@@ -20,7 +21,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
-  recordOpenClawAgentDatabaseOpenFailure,
   settleOpenClawAgentDatabaseWorkerClose,
   withOpenClawAgentDatabaseAdmission,
   withOpenClawAgentDatabaseAsync,
@@ -506,7 +506,7 @@ describe("openclaw agent database handle cache", () => {
     const database = openOpenClawAgentDatabase(options);
     const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
     const error = new Error("synthetic quarantine");
-    expect(recordOpenClawAgentDatabaseOpenFailure(database.path, error)).toBe(true);
+    recordOpenClawAgentDatabaseOpenFailure(database.path, error);
     expect(database.db.isOpen).toBe(false);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(error);
     clearOpenClawAgentDatabaseOpenFailure(database.path, { env });

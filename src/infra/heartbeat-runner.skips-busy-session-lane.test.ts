@@ -284,16 +284,25 @@ describe("heartbeat runner busy ownership", () => {
         enqueueSystemEvent(text, { sessionKey, contextKey: "exec:ci-watch" });
         replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
         const activeCron = busy === "active-cron" ? markCronJobActive("unrelated-job") : undefined;
+        const replyOperation =
+          busy === "session-reply"
+            ? createReplyOperation({
+                sessionKey,
+                sessionId: "targeted-busy-reply",
+                resetTriggered: false,
+              })
+            : undefined;
+        replyOperation?.setPhase("running");
+        const embeddedHandle = busy === "session-embedded" ? createEmbeddedRunHandle() : undefined;
+        if (embeddedHandle) {
+          setActiveEmbeddedRun("targeted-busy-embedded", embeddedHandle, sessionKey);
+        }
         try {
           const result = await run(
             { source: "exec-event", intent: "event", reason: "exec-event", sessionKey },
             {
               getQueueSize: (lane) =>
                 Number(busy === "session" && lane === `session:${sessionKey}`),
-              listActiveReplyRunSessionKeys: () => (busy === "session-reply" ? [sessionKey] : []),
-              isReplyRunActive: (key) => busy === "session-reply" && key === sessionKey,
-              listActiveEmbeddedRunSessionKeys: () =>
-                busy === "session-embedded" ? [sessionKey] : [],
             },
           );
           if (busy.startsWith("session")) {
@@ -306,6 +315,10 @@ describe("heartbeat runner busy ownership", () => {
             expect(peekSystemEvents(sessionKey)).toEqual([]);
           }
         } finally {
+          replyOperation?.complete();
+          if (embeddedHandle) {
+            clearActiveEmbeddedRun("targeted-busy-embedded", embeddedHandle, sessionKey);
+          }
           if (activeCron) {
             clearCronJobActive(activeCron.jobId, activeCron);
           }

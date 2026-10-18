@@ -36,7 +36,7 @@ export type AgentIdentity = {
 export function resolveAgentIdentityAvatarView(agent: AgentIdentity) {
   const imageUrl =
     !isReservedSystemAgentId(agent.id) && agent.avatar && !agent.pending
-      ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar)
+      ? resolveAvatarImageUrl(agent.avatar, agent.avatar)
       : null;
   return {
     imageUrl,

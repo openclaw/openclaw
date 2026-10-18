@@ -1,8 +1,6 @@
-// Run Tsgo tests cover run tsgo script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -18,84 +16,91 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-import { overrideNativeFixtureExecutable } from "./native-boundary-fixture.js";
+import {
+  overrideNativeFixtureExecutable,
+  writeNativeFixtureFile as write,
+} from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-it.each([true])(
-  "refuses a shared install without creating dependency links (linked=%s)",
-  (linked) => {
-    const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
-    const root = path.join(primary, ".claude/worktrees/validation");
-    fs.mkdirSync(root, { recursive: true });
-    expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
-    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
-    fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
-    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-    const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
-    const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
-    const resolverExecuted = path.join(primary, "resolver-executed");
-    fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
-    fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
-    fs.writeFileSync(
-      path.join(nativeRoot, "lib/getExePath.js"),
-      `import fs from "node:fs";
+function sparseGuard(
+  options: Parameters<typeof getSparseTsgoGuardError>[1] = {},
+  args = ["-p", "test/tsconfig/tsconfig.core.test.json"],
+) {
+  return getSparseTsgoGuardError(args, {
+    cwd: options?.cwd ?? createTempDir("openclaw-run-tsgo-"),
+    isSparseCheckoutEnabled: () => true,
+    ...options,
+  });
+}
+
+it("refuses a shared install without creating dependency links", () => {
+  const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
+  const root = path.join(primary, ".claude/worktrees/validation");
+  expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
+  write(root, ".git", `gitdir: ${path.join(primary, ".git")}\n`);
+  write(root, "package.json", '{"private":true}\n');
+  write(root, "pnpm-workspace.yaml", "packages: []\n");
+  const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
+  const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
+  const resolverExecuted = path.join(primary, "resolver-executed");
+  write(nativeRoot, "package.json", '{"type":"module"}\n');
+  write(
+    nativeRoot,
+    "lib/getExePath.js",
+    `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(resolverExecuted)}, "executed");
 export default () => process.execPath;\n`,
-    );
-    fs.symlinkSync(
-      path.join(sharedInstall, "node_modules"),
-      path.join(primary, "node_modules"),
-      "junction",
-    );
-    const localModules = path.join(root, "node_modules");
-    if (linked) {
-      fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
-    }
-    const result = spawnSync(
-      process.execPath,
-      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 20_000,
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Declaration input escapes checkout");
-    expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
-    expect(fs.existsSync(localModules)).toBe(linked);
-    expect(fs.existsSync(resolverExecuted)).toBe(false);
-  },
-);
+  );
+  fs.symlinkSync(
+    path.join(sharedInstall, "node_modules"),
+    path.join(primary, "node_modules"),
+    "junction",
+  );
+  const localModules = path.join(root, "node_modules");
+  fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
+  const result = spawnSync(process.execPath, [path.resolve("scripts/run-tsgo.mjs"), "--version"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(1);
+  expect(result.stderr).toContain("Declaration input escapes checkout");
+  expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
+  expect(fs.existsSync(localModules)).toBe(true);
+  expect(fs.existsSync(resolverExecuted)).toBe(false);
+});
 
 describe("run-tsgo sparse guard", () => {
-  it("ignores full worktrees", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
+  const requiredPaths = [
+    "packages/plugin-package-contract/src/index.ts",
+    "ui/config/control-ui-chunking.ts",
+    "ui/src/api/gateway.ts",
+    "ui/src/app/settings.ts",
+    "ui/src/i18n/lib/registry.ts",
+    "ui/src/i18n/lib/types.ts",
+  ];
+  const missingInputsError = (paths: string[]) =>
+    [
+      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:",
+      ...paths.map((file) => `- ${file}`),
+      "Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree.",
+    ].join("\n");
 
-    expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
-        cwd,
-        isSparseCheckoutEnabled: () => false,
-      }),
-    ).toBeNull();
+  it("ignores full worktrees", () => {
+    expect(sparseGuard({ isSparseCheckoutEnabled: () => false })).toBeNull();
   });
 
   it("ignores metadata-only commands", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"], {
-        cwd,
-        isSparseCheckoutEnabled: () => true,
-      }),
+      sparseGuard({}, ["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"]),
     ).toBeNull();
   });
 
@@ -119,73 +124,32 @@ describe("run-tsgo sparse guard", () => {
 
   it("rejects sparse core worktrees that include only selected ui and package files", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
-    const requiredPaths = [
-      "packages/plugin-package-contract/src/index.ts",
-      "ui/config/control-ui-chunking.ts",
-      "ui/src/i18n/lib/registry.ts",
-      "ui/src/i18n/lib/types.ts",
-      "ui/src/app/settings.ts",
-      "ui/src/api/gateway.ts",
-    ];
-
     for (const relativePath of requiredPaths) {
-      const absolutePath = path.join(cwd, relativePath);
-      fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-      fs.writeFileSync(absolutePath, "", "utf8");
+      write(cwd, relativePath, "");
     }
 
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
+      sparseGuard({
         cwd,
-        isSparseCheckoutEnabled: () => true,
-        sparseCheckoutPatterns: [
-          "/packages/plugin-package-contract/src/index.ts",
-          "/ui/config/control-ui-chunking.ts",
-          "/ui/src/i18n/lib/registry.ts",
-          "/ui/src/i18n/lib/types.ts",
-          "/ui/src/app/settings.ts",
-          "/ui/src/api/gateway.ts",
-        ],
+        sparseCheckoutPatterns: requiredPaths.map((file) => `/${file}`),
       }),
-    ).toMatchInlineSnapshot(`
-      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
-      - packages
-      - ui/config
-      - ui/src
-      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
-    `);
+    ).toBe(missingInputsError(["packages", "ui/config", "ui/src"]));
   });
 
-  it.each(["tsconfig.ui.json"])("does not require plugin browser sources for %s", (project) => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-    const options = {
-      cwd,
-      fileExists: () => true,
-      isSparseCheckoutEnabled: () => true,
-      sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
-    };
-
-    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
+  it("does not require plugin browser sources for tsconfig.ui.json", () => {
+    expect(
+      sparseGuard(
+        {
+          fileExists: () => true,
+          sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
+        },
+        ["-p", "tsconfig.ui.json"],
+      ),
+    ).toBeNull();
   });
 
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-
-    expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
-        cwd,
-        isSparseCheckoutEnabled: () => true,
-      }),
-    ).toMatchInlineSnapshot(`
-      "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
-      - packages/plugin-package-contract/src/index.ts
-      - ui/config/control-ui-chunking.ts
-      - ui/src/api/gateway.ts
-      - ui/src/app/settings.ts
-      - ui/src/i18n/lib/registry.ts
-      - ui/src/i18n/lib/types.ts
-      Expand this worktree's sparse checkout to include those paths, or rerun in a full worktree."
-    `);
+    expect(sparseGuard()).toBe(missingInputsError(requiredPaths));
   });
 
   it("recognizes the check:changed sparse-skip env", () => {
@@ -208,44 +172,25 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     await receipts?.close();
   });
 
-  // Rescue observes foreign descendants after their owner exited; no ChildProcess
-  // handle survives here. Only test cancellation bounds this final extinction check.
-  async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
-    while (isProcessAlive(pid)) {
-      try {
-        await delay(5, undefined, { signal });
-      } catch (cause) {
-        throw new Error(`process still alive: ${pid}`, { cause });
-      }
-    }
-  }
-
   it("keeps the watchdog opt-in", () => {
     expect(resolveTsgoTimeoutMs({})).toBeUndefined();
     expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "  " })).toBeUndefined();
     expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "30000" })).toBe(30_000);
   });
 
-  function writeFakeTsgo(cwd: string, body: string) {
-    const binDir = path.join(cwd, "node_modules", ".bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const fakeTsgo = path.join(binDir, "tsgo");
-    fs.writeFileSync(fakeTsgo, body, "utf8");
+  function writeFakeTsgo(body: string, cwd = createTempDir("openclaw-run-tsgo-watchdog-")) {
+    const fakeTsgo = write(cwd, "node_modules/.bin/tsgo", body);
     fs.chmodSync(fakeTsgo, 0o755);
     overrideNativeFixtureExecutable(cwd, fakeTsgo);
+    return cwd;
   }
 
-  // The fake compiler is a grandchild in its own process group, so spawnSync's
-  // killSignal never reaches it. Its recorded pid is the only handle the harness
-  // has to tear the tree down when the outer timeout fires on a pre-fix run.
-  function readFakeTsgoPid(cwd: string) {
-    const pidFile = path.join(cwd, "fake-tsgo.pid");
-    if (!fs.existsSync(pidFile)) {
-      return undefined;
-    }
-    const pid = Number.parseInt(fs.readFileSync(pidFile, "utf8").trim(), 10);
-    return Number.isInteger(pid) && pid > 1 ? pid : undefined;
+  // A detached compiler requires PID-based rescue after the outer timeout.
+  function readPid(file: string) {
+    const pid = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : Number.NaN;
+    return Number.isSafeInteger(pid) && pid > 1 ? pid : undefined;
   }
+  const readFakeTsgoPid = (cwd: string) => readPid(path.join(cwd, "fake-tsgo.pid"));
 
   function reapFakeTsgo(cwd: string) {
     const pid = readFakeTsgoPid(cwd);
@@ -261,16 +206,12 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     }
   }
 
-  function withSupervisorClock(
-    cwd: string,
-    env: NodeJS.ProcessEnv,
-    preloads: string[] = [],
-  ): NodeJS.ProcessEnv {
-    const preloadPath = path.join(cwd, "supervisor-clock.mjs");
+  function withSupervisorClock(cwd: string, env: NodeJS.ProcessEnv, preloads: string[] = []) {
     // Scale both cleanup owners so an outer cutoff that races inner reaping still fails.
     // Compiler/watchdog timers, readiness checks, and OS signals retain real time.
-    fs.writeFileSync(
-      preloadPath,
+    const preloadPath = write(
+      cwd,
+      "supervisor-clock.mjs",
       `if (process.argv[1] === ${JSON.stringify(path.resolve("scripts/run-tsgo.mts"))}) {
   const realNow = Date.now.bind(Date);
   const startedAt = realNow();
@@ -284,7 +225,6 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     const imports = [...preloads, preloadPath]
       .map((preload) => `--import=${pathToFileURL(preload).href}`)
       .join(" ");
-    // Both supervisor processes need the fixtures through their runtime's inherited options.
     return {
       ...env,
       NODE_OPTIONS: [env.NODE_OPTIONS, imports].filter(Boolean).join(" "),
@@ -297,9 +237,9 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     timeoutMs: string | undefined,
     onBeforeReap?: (pid: number | undefined) => void,
   ) {
-    const { OPENCLAW_TSGO_TIMEOUT_MS: _unset, ...inheritedEnv } = process.env;
-    const baseEnv = {
-      ...inheritedEnv,
+    const env = {
+      ...process.env,
+      OPENCLAW_TSGO_TIMEOUT_MS: timeoutMs,
       OPENCLAW_CI_STATIC_EVIDENCE: "1",
       OPENCLAW_TSGO_METRICS_DIR: undefined,
     };
@@ -310,12 +250,8 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
         {
           cwd,
           encoding: "utf8",
-          env: withSupervisorClock(
-            cwd,
-            timeoutMs === undefined ? baseEnv : { ...baseEnv, OPENCLAW_TSGO_TIMEOUT_MS: timeoutMs },
-          ),
-          // spawnSync blocks this thread, so vitest's own per-test budget can never
-          // fire; a regression here would hang the worker instead of failing.
+          env: withSupervisorClock(cwd, env),
+          // spawnSync blocks Vitest's timeout; bound a regressed wrapper separately.
           timeout: 25_000,
           killSignal: "SIGKILL",
         },
@@ -332,7 +268,6 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     const cwd = createTempDir("openclaw-run-tsgo-lingering-");
     const descendantPidPath = path.join(cwd, "descendant.pid");
     writeFakeTsgo(
-      cwd,
       `#!/usr/bin/env node
 const fs = require("node:fs");
 const { spawn } = require("node:child_process");
@@ -346,17 +281,13 @@ process.disconnect();
 `)}, ${JSON.stringify(descendantPidPath)}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
 child.once("message", () => process.exit(0));
 `,
+      cwd,
     );
     let observedPids: Array<number | undefined> = [];
     let liveBeforeTeardown: number[] = [];
     try {
       const result = runFakeTsgo(cwd, undefined, (pid) => {
-        observedPids = [
-          pid,
-          fs.existsSync(descendantPidPath)
-            ? Number(fs.readFileSync(descendantPidPath, "utf8"))
-            : undefined,
-        ];
+        observedPids = [pid, readPid(descendantPidPath)];
         liveBeforeTeardown = observedPids.filter(
           (owned): owned is number => owned !== undefined && isProcessAlive(owned),
         );
@@ -373,11 +304,8 @@ child.once("message", () => process.exit(0));
         .toEqual([]);
     } finally {
       for (const pidFile of [descendantPidPath, path.join(cwd, "fake-tsgo.pid")]) {
-        if (!fs.existsSync(pidFile)) {
-          continue;
-        }
-        const pid = Number(fs.readFileSync(pidFile, "utf8"));
-        if (!Number.isSafeInteger(pid) || pid <= 1) {
+        const pid = readPid(pidFile);
+        if (pid === undefined) {
           continue;
         }
         if (isProcessAlive(pid)) {
@@ -388,30 +316,20 @@ child.once("message", () => process.exit(0));
     }
   }, 30_000);
 
-  it.each([{ bound: "0" }])(
-    "explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of $bound instead of crashing",
-    ({ bound }) => {
-      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
-      writeFakeTsgo(cwd, "#!/bin/sh\nexit 0\n");
+  it("explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of 0 instead of crashing", () => {
+    const cwd = writeFakeTsgo("#!/bin/sh\nexit 0\n");
+    const result = runFakeTsgo(cwd, "0");
 
-      const result = runFakeTsgo(cwd, bound);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("must be plain decimal digits");
-      expect(result.stderr).toContain("Unset it to disable the watchdog");
-      expect(result.stderr).not.toContain("at readPositiveEnvInt");
-      expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
-    },
-    30_000,
-  );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must be plain decimal digits");
+    expect(result.stderr).toContain("Unset it to disable the watchdog");
+    expect(result.stderr).not.toContain("at readPositiveEnvInt");
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+  }, 30_000);
 
   it("kills a wedged tsgo that ignores SIGTERM instead of blocking its caller forever", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
-    // Mirrors the observed wedge: the checker refuses SIGTERM and never reports,
-    // so only a process-group SIGKILL frees the caller. It records its pid so the
-    // harness can reap the tree, and self-exits as a last-resort backstop.
-    writeFakeTsgo(
-      cwd,
+    // Only group SIGKILL frees this observed wedge; self-exit is the rescue backstop.
+    const cwd = writeFakeTsgo(
       '#!/bin/sh\necho $$ > "$(dirname "$0")/../../fake-tsgo.pid"\ntrap \'\' TERM\ni=0\nwhile [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done\n',
     );
 
@@ -434,7 +352,6 @@ child.once("message", () => process.exit(0));
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("killed the tsgo process tree");
     expect(result.stdout).not.toContain("[ci-static:tsgo:");
-    // Printing the message is not the contract; the tree actually being gone is.
     expect(observedBeforeReap.pid).toBeDefined();
     expect(observedBeforeReap.error).toMatchObject({ code: "ESRCH" });
     expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
@@ -446,24 +363,22 @@ child.once("message", () => process.exit(0));
     (phase, { signal }) =>
       fixture.run(async () => {
         const fixtureDirs = createTempDirTracker();
-        // Detached compilers can outlive Vitest's temporary namespace. Retain their
-        // diagnostics outside it until both the wrapper and compiler are joined.
+        // Retain detached-compiler diagnostics until wrapper and compiler join.
         const artifacts = path.resolve(".artifacts/tsgo-signal");
         fs.mkdirSync(artifacts, { recursive: true });
         const cwd = fixtureDirs.make("fixture-", fs.realpathSync(artifacts));
         let retainFixture = false;
         try {
           const pidFile = path.join(cwd, "fake-tsgo.pid");
-          // Give this fixture its own artifact lock rather than the enclosing checkout's.
-          fs.writeFileSync(path.join(cwd, "package.json"), '{"private":true,"type":"module"}\n');
-          fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
-          fs.writeFileSync(path.join(cwd, "tsconfig.extensions.json"), "{}\n");
+          // Own the artifact lock rather than borrowing the enclosing checkout's.
+          write(cwd, "package.json", '{"private":true,"type":"module"}\n');
+          write(cwd, "pnpm-workspace.yaml", "packages: []\n");
+          write(cwd, "tsconfig.extensions.json", "{}\n");
           const readyPipe = path.join(cwd, "compiler-ready.pipe");
           if (phase === "spawn") {
             expect(spawnSync("mkfifo", [readyPipe]).status).toBe(0);
           }
           writeFakeTsgo(
-            cwd,
             `#!/usr/bin/env node
 import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
@@ -473,12 +388,13 @@ sendReceipt(${JSON.stringify(pidFile)}, "ready");
 ${phase === "spawn" ? 'fs.writeSync(Number(process.env.OPENCLAW_TEST_TSGO_READY_FD), "R");' : ""}
 setInterval(() => {}, 1000);
 `,
+            cwd,
           );
           const preloadPath = path.join(cwd, "signal-during-spawn.mjs");
-          // An inherited blocking pipe holds spawn before the supervisor registers
-          // its child. Async IPC cannot wake this deliberately synchronous boundary.
-          fs.writeFileSync(
-            preloadPath,
+          // Block spawn before child registration; async IPC cannot wake this boundary.
+          write(
+            cwd,
+            "signal-during-spawn.mjs",
             `
 import childProcess from "node:child_process";
 import fs from "node:fs";
@@ -522,7 +438,7 @@ syncBuiltinESMExports();
           wrapper.once("error", (error) =>
             stderr.append(`wrapper spawn error: ${error.message}\n`),
           );
-          // Keep the actual completion available after test cancellation starts teardown.
+          // Keep completion available after cancellation starts teardown.
           const wrapperClose = new Promise<{
             code: number | null;
             signal: NodeJS.Signals | null;
@@ -531,8 +447,7 @@ syncBuiltinESMExports();
           });
           const errors: unknown[] = [];
           try {
-            // The PID is durable before the receipt; wrapper exit and receipt delivery
-            // use separate pipes, so an early close must consult the recorded fact.
+            // PID precedes the receipt; separate pipes can deliver wrapper exit first.
             await withinTest(
               Promise.race([
                 receipts.waitFor(pidFile, "ready"),
@@ -554,8 +469,7 @@ syncBuiltinESMExports();
               { code: 143, signal: null },
               { code: null, signal: "SIGTERM" },
             ]).toContainEqual(wrapperResult);
-            // runPreparedTsgoCommand requires and joins compiler-tree exit before
-            // the implementation-owned CLI shim reports its completion.
+            // CLI completion must follow compiler-tree exit.
             expect(isProcessAlive(compilerPid)).toBe(false);
           } catch (error) {
             errors.push(error);
@@ -564,8 +478,7 @@ syncBuiltinESMExports();
               if (wrapper.exitCode === null && wrapper.signalCode === null) {
                 wrapper.kill("SIGTERM");
                 if (phase === "spawn") {
-                  // Cancellation releases the synchronous boundary so the product
-                  // can register its child and process the forwarded stop signal.
+                  // Release spawn so the product can register its child and stop it.
                   const ready = fs.openSync(readyPipe, "r+");
                   try {
                     fs.writeSync(ready, "C");
@@ -602,23 +515,11 @@ syncBuiltinESMExports();
   );
 
   // Without saturation Node collapses the delay to 1ms and kills the sleeping child.
-  it.each([
-    {
-      bound: "2147483648",
-      name: "an override past Node's timer ceiling",
-      body: "#!/bin/sh\nsleep 0.25\nexit 0\n",
-    },
-  ])(
-    "leaves a completing tsgo alone under $name",
-    ({ bound, body }) => {
-      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
-      writeFakeTsgo(cwd, body);
+  it("leaves a completing tsgo alone under an override past Node's timer ceiling", () => {
+    const cwd = writeFakeTsgo("#!/bin/sh\nsleep 0.25\nexit 0\n");
+    const result = runFakeTsgo(cwd, "2147483648");
 
-      const result = runFakeTsgo(cwd, bound);
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).not.toContain("killed the tsgo process tree");
-    },
-    30_000,
-  );
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("killed the tsgo process tree");
+  }, 30_000);
 });

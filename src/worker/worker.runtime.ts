@@ -357,11 +357,7 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
-          transcript: {
-            commit: async (messages) => {
-              await transcript.commit(messages);
-            },
-          },
+          transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
             emitTerminal: async (event) => {

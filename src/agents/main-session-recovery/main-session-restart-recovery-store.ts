@@ -49,7 +49,10 @@ import {
   type MainSessionRecoverySkipReason,
 } from "./main-session-restart-recovery-diagnostics.js";
 import { loadExpectedRestartRecoveryTarget } from "./main-session-restart-recovery-exact-target.js";
-import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
+import {
+  prepareRequesterRestartRecovery,
+  tombstoneMainRestartRecoveryWithNotice,
+} from "./main-session-restart-recovery-failure.js";
 import {
   hasReplaySafeCodeModeCheckpointInCurrentTurn,
   requiresDelegatedRecoverySource,
@@ -469,6 +472,49 @@ export async function recoverStore(params: {
         continue;
       }
 
+      // An admitted parent owns its input and operator source independently of
+      // the child wake, whose membership and retry state may already have changed.
+      // Gateway dispatch restores that exact source under current policy. Only
+      // historical inputs without it still need the cohort failure settlement.
+      if (
+        !harnessCompletion &&
+        !entry.restartRecoveryOperatorSource &&
+        entry.restartRecoverySourceIngress === "internal" &&
+        expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
+      ) {
+        const recovered = await prepareRequesterRestartRecovery({
+          ...target,
+          entry,
+          observation: recoveryView.observation,
+          sourceRunId: expectedRecoverySourceRunId,
+          requesterSessionKey: dispatchSessionKey,
+          gatewayRuntime: params.gatewayRuntime,
+          assertCurrent: () => {
+            if (params.shouldContinue?.() === false) {
+              throw new Error("Requester restart recovery stopped before settlement");
+            }
+          },
+        });
+        if (recovered.outcome !== "ready") {
+          if (recovered.outcome === "settled") {
+            params.handledSessionKeys.add(resumeDedupeKey);
+            decision = {
+              decision: "settled",
+              reason: "operator_authority_unavailable",
+              nextOwner: "none",
+            };
+            result.settled++;
+          } else if (recovered.outcome === "changed") {
+            skip("state_changed");
+          } else {
+            result.failed++;
+          }
+          continue;
+        }
+        completionSource = recovered.source;
+        completionSource();
+      }
+
       const execPolicy = await resolveExecDefaultsAsync({
         cfg: params.cfg,
         agentId,
@@ -510,37 +556,6 @@ export async function recoverStore(params: {
 
       if (stopped()) {
         return result;
-      }
-      if (
-        !harnessCompletion &&
-        entry.restartRecoverySourceIngress === "internal" &&
-        expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
-      ) {
-        try {
-          const { prepareRequesterSettleWakeRecoverySource } =
-            await import("../subagents/registry/subagent-registry.js");
-          completionSource = await prepareRequesterSettleWakeRecoverySource({
-            runId: expectedRecoverySourceRunId,
-            requesterSessionKey: dispatchSessionKey,
-            requesterAgentId: agentId,
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            storePath: params.storePath,
-            gatewayRuntime: params.gatewayRuntime,
-          });
-          if (!completionSource || !entry.restartRecoveryOperatorSource) {
-            throw new Error(
-              "Requester settle recovery lacks its original cohort or operator authority",
-            );
-          }
-          completionSource();
-        } catch (error) {
-          mainSessionRecoveryLog.warn(
-            `requester settle recovery source unavailable for ${sessionKey}: ${String(error)}`,
-          );
-          result.failed++;
-          continue;
-        }
       }
       if (
         !recoverableHarnessCompletion &&

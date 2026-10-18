@@ -7,6 +7,7 @@ import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -107,7 +108,7 @@ it.each(["answer", "reasoning"] as const)(
         expect(reads, stream).toBe(0);
       }
     } finally {
-      transcript.hostDisconnected();
+      transcript.dispose();
     }
   },
 );
@@ -134,13 +135,13 @@ function drawThread(props: ReturnType<typeof threadProps>) {
     draw: () => {
       render(renderChatThread(props, transcript), container);
       flush();
-      transcript.hostConnected();
-      transcript.hostUpdated();
+      transcript.start();
+      transcript.update();
       flush();
     },
     dispose: () => {
       render(null, container);
-      transcript.hostDisconnected();
+      transcript.dispose();
     },
   };
 }
@@ -177,6 +178,10 @@ it("renders browser previews in their own row outside the work summary", () => {
     ],
   );
   props.showToolCalls = true;
+  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+    scrollTop: 0,
+    anchorToEnd: false,
+  });
   const view = drawThread(props);
   try {
     view.draw();
@@ -329,7 +334,8 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     streamStartedAt: 3,
   };
   const state = getTranscriptState(props.paneId);
-  Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+  state.search.toggle();
+  state.search.setQuery("needle");
   const transcript = createTestTranscript(props.paneId);
   const build = vi.spyOn(chatThreadBuild, "buildChatItems");
   const project = () => {
@@ -362,7 +368,7 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     props.messages = [replacement, hit];
     expect(project()).toEqual([replacement, hit, liveMessage()]);
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 });
 
@@ -380,18 +386,19 @@ it("opens the visible forwarded disclosure when replying across search after a p
   const props = threadProps("projection-reply-owner", "agent:main:main", [later, answer]);
   const state = getTranscriptState(props.paneId);
   const view = drawThread(props);
-  props.onRequestUpdate = view.draw;
   try {
     view.draw();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];
     view.draw();
-    Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+    state.search.toggle();
+    state.search.setQuery("needle");
     view.draw();
     expect(view.container.textContent).not.toContain("Hidden original");
 
     state.transcriptRenderContext.onOpenReply?.("earlier");
+    flush();
 
-    expect(state.searchOpen).toBe(false);
+    expect(state.search.snapshot.open).toBe(false);
     expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
       true,
     );

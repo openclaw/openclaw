@@ -30,7 +30,7 @@ const gatewayConfigMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
   inspectGatewayTlsCertificate: vi.fn(),
   resolveConfigPath: vi.fn(
-    (env: NodeJS.ProcessEnv, stateDir: string) =>
+    (env: NodeJS.ProcessEnv, stateDir = env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw") =>
       env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
   ),
   resolveGatewayPort: vi.fn(),

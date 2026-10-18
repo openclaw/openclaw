@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { resolvePluginOwnedProviderAuth } from "../plugins/provider-runtime.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
@@ -40,7 +42,19 @@ const log = createSubsystemLogger("model-auth");
 
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. */
+function resolvePluginOwnedAuthMode(
+  provider: string,
+  cfg?: OpenClawConfig,
+  workspaceDir?: string,
+): ModelAuthMode {
+  try {
+    return resolvePluginOwnedProviderAuth({ provider, config: cfg, workspaceDir }).mode;
+  } catch {
+    return "unknown";
+  }
+}
+
+/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -50,6 +64,15 @@ export function resolveModelAuthMode(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+  if (
+    resolveProviderAuthScope({
+      provider: resolved,
+      config: cfg,
+      workspaceDir: options?.workspaceDir,
+    }) === "plugin"
+  ) {
+    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
   }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, resolved);
@@ -82,6 +105,15 @@ export async function resolveModelAuthModeAsync(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+  if (
+    resolveProviderAuthScope({
+      provider: resolved,
+      config: cfg,
+      workspaceDir: options?.workspaceDir,
+    }) === "plugin"
+  ) {
+    return resolvePluginOwnedAuthMode(resolved, cfg, options?.workspaceDir);
   }
   if (authConfig.resolveProviderAuthOverride(cfg, resolved) === "aws-sdk") {
     return "aws-sdk";
@@ -142,6 +174,16 @@ export async function hasAvailableAuthForProvider(params: {
   modelBaseUrl?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
+  if (
+    resolveProviderAuthScope({ provider, config: cfg, workspaceDir: params.workspaceDir }) ===
+    "plugin"
+  ) {
+    try {
+      return Boolean((await resolveApiKeyForProviderCore(params)).apiKey);
+    } catch {
+      return false;
+    }
+  }
 
   const authOverride = authConfig.resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
@@ -278,7 +320,7 @@ export async function getApiKeyForModelCore(params: {
 
 export { applyLocalNoAuthHeaderOverride } from "./model-auth-markers.js";
 
-export function applySecretRefHeaderSentinels<T extends Model>(
+export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   cfg: OpenClawConfig | undefined,
 ): T {

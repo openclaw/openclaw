@@ -6,6 +6,7 @@ import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
+  resolveEffectiveEnableState,
   resolveEffectivePluginActivationState,
   type PluginActivationConfigSource,
 } from "./config-state.js";
@@ -16,7 +17,10 @@ import {
   resolveCompatRegistryVersion,
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import {
+  buildInstalledPluginIndexRecords,
+  type InstalledPluginIndexInventoryRecord,
+} from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
@@ -99,20 +103,17 @@ function buildInstalledPluginIndex(
   });
   const diagnostics = [...(registry.diagnostics ?? [])];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const activationConfig = withBundledPluginEnablementCompat({
+  const plugins = projectInstalledPluginIndexPolicy({
+    plugins: buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      env,
+      diagnostics,
+      installRecords,
+    }),
     config: params.config,
     env,
-    pluginIds: registry.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
-    activation: "defaults",
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
-  });
-  const plugins = buildInstalledPluginIndexRecords({
-    candidates: discovery.candidates,
-    registry,
-    config: activationConfig,
-    env,
-    diagnostics,
-    installRecords,
   });
 
   return {
@@ -135,6 +136,37 @@ function buildInstalledPluginIndex(
     discovery: params.candidates ? undefined : discovery,
     manifestRegistry: registry,
   };
+}
+
+/**
+ * Activation is the only config-owned index fact. A policy change re-projects the
+ * same disk inventory in memory; only install, uninstall or source changes rescan.
+ */
+export function projectInstalledPluginIndexPolicy(params: {
+  plugins: readonly InstalledPluginIndexInventoryRecord[];
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  artifactPreservingReadOnly?: boolean;
+}): InstalledPluginIndexRecord[] {
+  const activationConfig = withBundledPluginEnablementCompat({
+    config: params.config,
+    env: params.env,
+    pluginIds: params.plugins.filter(isInstalledBundledProvider).map((plugin) => plugin.pluginId),
+    activation: "defaults",
+    artifactPreservingReadOnly: params.artifactPreservingReadOnly,
+  });
+  const normalizedConfig = normalizePluginsConfig(activationConfig?.plugins);
+  return params.plugins.map((plugin) => ({
+    ...plugin,
+    enabled: resolveEffectiveEnableState({
+      id: plugin.pluginId,
+      origin: plugin.origin,
+      channelIds: plugin.contributions?.channels,
+      config: normalizedConfig,
+      rootConfig: activationConfig,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+    }).enabled,
+  }));
 }
 
 export function loadInstalledPluginIndex(
@@ -186,7 +218,7 @@ export function isInstalledPluginEnabled(
   return createInstalledPluginEnabledPredicate([record], config, env)(pluginId);
 }
 
-function isInstalledBundledProvider(record: InstalledPluginIndexRecord): boolean {
+function isInstalledBundledProvider(record: InstalledPluginIndexInventoryRecord): boolean {
   return isBundledProviderCompatPlugin({
     origin: record.origin,
     providers: record.contributions?.providers,

@@ -17,6 +17,7 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
@@ -136,12 +137,18 @@ const WIDGET_FRAME_MAX_HEIGHT = 8000;
 // Frames register on load so messages can be matched to their owning preview.
 const widgetFrameRegistry = new Set<HTMLIFrameElement>();
 const widgetFrameResize = new WeakMap<HTMLIFrameElement, (height: number) => void>();
+const widgetFramePromptActive = new WeakMap<HTMLIFrameElement, () => boolean>();
+const loadedWidgetFrames = new WeakSet<HTMLIFrameElement>();
 // Keyed by window, not a module boolean: non-isolated test workers swap the
 // global window between files while module state persists.
 const widgetSizeListenerWindows = new WeakSet<Window>();
 
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
-  if (!isRecord(data) || data.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
+  if (
+    !isRecord(data) ||
+    data.type !== WIDGET_PROMPT_MESSAGE_TYPE ||
+    !widgetFramePromptActive.get(frame)?.()
+  ) {
     return;
   }
   void dispatchWidgetPrompt(frame, data.prompt, frame.getAttribute("src") ?? "");
@@ -188,6 +195,7 @@ function installWidgetPromptOfferListener() {
     return;
   }
   widgetPromptOfferListenerWindows.add(window);
+  // Window-lifetime transport: offers can arrive before any preview frame mounts.
   window.addEventListener("message", (event: MessageEvent) => {
     const data: unknown = event.data;
     if (!isRecord(data) || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
@@ -225,6 +233,7 @@ function installWidgetSizeListener() {
     return;
   }
   widgetSizeListenerWindows.add(window);
+  // Window-lifetime transport shared by the registered iframe islands.
   window.addEventListener("message", (event: MessageEvent) => {
     const data: unknown = event.data;
     if (
@@ -260,14 +269,17 @@ type PreviewFrameParams = {
   title: string;
   src?: string;
   frameKey?: string;
-  connectionGeneration?: number;
   height?: number;
   onHeightChange?: (height: number) => void;
   sandbox?: string;
   promptCapable?: boolean;
 };
 
-function WidgetFrame(props: { params: PreviewFrameParams }) {
+function WidgetFrame(props: {
+  params: PreviewFrameParams;
+  promptAllowed: () => boolean;
+  onFrame: (frame: HTMLIFrameElement) => void;
+}) {
   let frame: HTMLIFrameElement | undefined;
   const [reportedHeight, setReportedHeight] = createSignal<number>();
   // Prompt policy is fixed by the outer URL/sandbox identity.
@@ -284,19 +296,27 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
   const height = () => reportedHeight() ?? props.params.height;
   const Frame = () => {
     let element!: HTMLIFrameElement;
+    createEffect(
+      () => [props.promptAllowed, props.params.onHeightChange] as const,
+      ([promptAllowed, onHeightChange]) => {
+        widgetFramePromptActive.set(element, promptAllowed);
+        widgetFrameResize.set(element, (nextHeight) => {
+          setReportedHeight(nextHeight);
+          onHeightChange?.(nextHeight);
+        });
+      },
+    );
     onCleanup(() => {
       widgetFrameRegistry.delete(element);
       widgetFrameResize.delete(element);
+      widgetFramePromptActive.delete(element);
     });
     return (
       <iframe
         ref={(next) => {
           element = next;
           frame = next;
-          widgetFrameResize.set(next, (nextHeight) => {
-            setReportedHeight(nextHeight);
-            props.params.onHeightChange?.(nextHeight);
-          });
+          props.onFrame(next);
         }}
         src={src() || undefined}
         class="chat-tool-card__preview-frame"
@@ -304,6 +324,7 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
         sandbox={props.params.sandbox ?? ""}
         style={height() ? `height:${height()}px;min-height:${height()}px` : ""}
         onLoad={() => {
+          loadedWidgetFrames.add(element);
           widgetFrameRegistry.add(element);
           if (promptCapable) {
             promptEligibleFrames.add(element);
@@ -328,13 +349,29 @@ function WidgetFrame(props: { params: PreviewFrameParams }) {
 }
 
 function PreviewFrame(props: { params: PreviewFrameParams }) {
-  const identity = createMemo(
+  let frame: HTMLIFrameElement | undefined;
+  const presentation = createCanvasFramePresentation(
     () =>
-      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}\0${props.params.connectionGeneration ?? 0}`,
+      `${props.params.sandbox ?? ""}\0${props.params.frameKey ?? ""}\0${props.params.src ? 1 : 0}`,
+    () => props.params.src,
+    () =>
+      Boolean(
+        frame &&
+        (adoptedWidgetPromptFrames.has(frame) ||
+          (!props.params.sandbox?.includes("allow-scripts") && loadedWidgetFrames.has(frame))),
+      ),
   );
   return (
-    <Show when={identity()} keyed>
-      {(_key) => <WidgetFrame params={props.params} />}
+    <Show when={presentation.identity()} keyed>
+      {(_key) => (
+        <WidgetFrame
+          params={{ ...props.params, src: presentation.src() }}
+          promptAllowed={presentation.active}
+          onFrame={(next) => {
+            frame = next;
+          }}
+        />
+      )}
     </Show>
   );
 }
@@ -343,7 +380,7 @@ const loadMcpAppView = async () => {
   await import("../../../components/mcp-app-view-registration.ts");
 };
 
-const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
+const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.tsx");
 const loadYouTubeVideo = () => import("./youtube-video-card.tsx");
 
 function WidgetContent(props: {
@@ -370,9 +407,6 @@ function WidgetContent(props: {
                   props.options?.allowExternalEmbedUrls ?? false,
                 ),
                 frameKey: props.preview.url?.trim() || props.preview.viewId?.trim(),
-                connectionGeneration: isInternalCanvasEntryUrl(props.preview.url)
-                  ? getCanvasWidgetFrameConnectionGeneration()
-                  : undefined,
                 height:
                   props.options?.widgetLayout?.read(
                     `frame:${props.preview.url?.trim() || props.preview.viewId?.trim()}`,
@@ -448,15 +482,16 @@ function handleWidgetExportAction(
   dropdown: HTMLElement,
   title: string | undefined,
 ): WidgetRawDetailsLabel | void {
+  // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
   if (value === "raw-details") {
     const host = dropdown.closest(".chat-tool-card__widget-host");
     const toggle = host?.querySelector<HTMLButtonElement>(
       ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
     );
+    // Solid commits the toggle after this handler; derive its next label before clicking.
+    const willExpand = toggle?.getAttribute("aria-expanded") !== "true";
     toggle?.click();
-    return toggle && toggle.getAttribute("aria-expanded") === "true"
-      ? "chat.toolCards.hideRawDetails"
-      : "chat.toolCards.showRawDetails";
+    return toggle && willExpand ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
     .closest(".chat-tool-card__preview")
@@ -488,6 +523,7 @@ function widgetActionsPlacementRef(
   const presented = useContext(ContentPresentation);
   const active = createMemo(() => presented() && enabled());
   let element: HTMLElement | undefined;
+  // Synchronize action placement with the transcript's DOM clipping geometry.
   createEffect(
     () => [active(), options()] as const,
     ([isActive]) => {
@@ -581,12 +617,11 @@ function CanvasPreview(props: {
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
   const hasActions = () => Boolean(canPin() || hasMenu());
-  const placementRef = widgetActionsPlacementRef(hasActions, () => props.options);
   const pinLabel = () =>
     t(pinned() ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard");
   return (
     <div
-      ref={placementRef}
+      ref={widgetActionsPlacementRef(hasActions, () => props.options)}
       class="chat-tool-card__preview"
       data-content-kind={props.preview.mcpApp ? "mcp-app" : "canvas-html"}
       data-has-widget-actions={hasActions() ? "" : undefined}

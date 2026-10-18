@@ -149,7 +149,7 @@ describe("native Talk action ownership through public plugin registration", () =
       const rowProjection = await createSessionRowProjection({
         cfg: { agents: { entries: { [AGENT_ID]: {} } } },
       });
-      const publications: Promise<void>[] = [];
+      const publications: ReturnType<typeof publish>[] = [];
       const published = vi.fn();
       const publish = createTranscriptUpdateBroadcastHandler({
         getSessionRowProjection: () => rowProjection,
@@ -273,7 +273,7 @@ describe("native Talk action ownership through public plugin registration", () =
         await vi.waitFor(() =>
           expect(spokenMessages(socket.sent)).toContain("Both labels are preserved."),
         );
-        // A returned readback is a distinct voice record, not a deduplication signal.
+        // Speech stays a distinct raw record; the UI discloses it without claiming replacement.
         const readback = "Both labels are preserved.";
         const dialogue = "OpenClaw is waiting on the model.";
         for (const text of [readback, dialogue]) {
@@ -304,6 +304,15 @@ describe("native Talk action ownership through public plugin registration", () =
             : [],
         );
         expect(assistantRecords).toHaveLength(3);
+        expect(assistantRecords[0]).not.toHaveProperty("__openclaw.voiceTranscript");
+        expect(assistantRecords.slice(1)).toEqual([
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ voiceTranscript: "provider-owned" }),
+          }),
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({ voiceTranscript: "provider-owned" }),
+          }),
+        ]);
         expect(assistantRecords.slice(1)).toEqual([
           expect.objectContaining({ api: "realtime", content: [{ type: "text", text: readback }] }),
           expect.objectContaining({ api: "realtime", content: [{ type: "text", text: dialogue }] }),

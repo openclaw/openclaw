@@ -5,7 +5,7 @@ import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
@@ -187,6 +187,36 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(149);
     await expectOpenCount(0);
     vi.advanceTimersByTime(1);
+    await expectOpenCount(1);
+  });
+
+  it("retires listeners when an external anchor is replaced or the tooltip disconnects", async () => {
+    const { tooltip, trigger } = createTooltip("Anchor details");
+    const next = document.createElement("button");
+    tooltip.anchor = trigger;
+    document.body.append(trigger, next, tooltip);
+    await commitTooltip(tooltip);
+    focusTrigger(trigger);
+    await expectOpenCount(1);
+
+    tooltip.anchor = next;
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(trigger);
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    await expectOpenCount(0);
+    focusTrigger(next);
+    await expectOpenCount(1);
+
+    tooltip.remove();
+    focusTrigger(next);
+    hoverTrigger(next);
+    vi.advanceTimersByTime(150);
+    document.body.append(tooltip);
+    await settleTooltip(tooltip);
+    await expectOpenCount(0);
+    focusTrigger(next);
     await expectOpenCount(1);
   });
 
@@ -632,7 +662,7 @@ describe("title tooltips", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
 
-    const hovercard = new PortaledHovercardController(() => hovercard.reset());
+    const hovercard = createPortaledHovercardOwner(() => hovercard.reset());
     hovercard.markTrigger(trigger);
     await Promise.resolve();
     await commitTooltip(tooltip);

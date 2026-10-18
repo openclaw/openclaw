@@ -11,7 +11,7 @@ const engine = vi.hoisted(() => ({
 
 // mock-isolation: Reject unadmitted transport writes without launching a worker.
 vi.mock("openclaw/plugin-sdk/database-engine-runtime", () => ({
-  resolveDatabaseEngineInput: async () => engine.input,
+  getDatabaseEngineInput: () => engine.input,
   openEngineWorkerStore: async () => ({ execute: engine.execute, close: engine.close }),
   runEngineStoreOperation: engine.run,
 }));
@@ -37,7 +37,6 @@ it("admits retention pruning through the selected PostgreSQL engine", async () =
   const store = await LogbookStore.open(
     tempDirs.make("logbook-engine-admission-"),
     new URL("file:///unused-logbook-worker.js"),
-    { database: { engine: "postgres", postgres: { connection: engine.input.connection } } },
   );
   try {
     expect(await store.pruneFrames(123)).toBe(7);

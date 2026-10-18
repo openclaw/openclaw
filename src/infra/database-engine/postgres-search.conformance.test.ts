@@ -355,6 +355,23 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
     });
   });
 
+  it("projects fresh and replacement vectors without deleting their projection first", async () => {
+    await fixture(({ db }) => {
+      const { add } = searchFixture(db, "one-note");
+      db.exec(`CREATE FUNCTION reject_projection_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'unnecessary projection DELETE'; END $$;
+CREATE TRIGGER reject_projection_delete BEFORE DELETE ON notes_vec
+FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
+      db.runTransaction(() => {
+        add("kept", 1, "firstword", [1, 0, 0]);
+        db.prepare("UPDATE notes SET embedding = ? WHERE id = ?").run(embedding([0, 1, 0]), "kept");
+      });
+      expect(db.prepare("SELECT id, embedding::text AS embedding FROM notes_vec").all()).toEqual([
+        { id: "kept", embedding: "[0,1,0]" },
+      ]);
+    });
+  });
+
   it("synchronizes source writes and deletes transactionally and rebuilds only derived projections", async () => {
     await fixture(async ({ db }) => {
       const { add, text, nearest, search } = searchFixture(db, "one-note");
@@ -385,10 +402,14 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
         );
         add("deleted", 3, "deletedword", [1, 0, 0]);
         db.prepare("DELETE FROM notes WHERE id = ?").run("deleted");
+        add("text-only", 4, "keywordonly", []);
       });
       expect(text({ kind: "term", text: "firstword" })).toEqual([]);
       expect(text({ kind: "term", text: "secondword" }).map((row) => row.id)).toEqual(["kept"]);
       expect(db.prepare("SELECT id FROM notes_vec ORDER BY id").all()).toEqual([{ id: "kept" }]);
+      expect(text({ kind: "term", text: "keywordonly" }).map((row) => row.id)).toEqual([
+        "text-only",
+      ]);
       expect(
         db.prepare("SELECT embedding FROM notes WHERE id = 'kept'").get()!.embedding,
       ).not.toEqual(before);
@@ -402,6 +423,13 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
       );
       const result = await nearest([0, 1, 0]);
       expect(result.rows).toEqual([{ id: "kept", distance: 0 }]);
+      withEngineStoreAdmission(() => {
+        db.runTransaction(() => {
+          db.prepare("UPDATE notes SET embedding = ? WHERE id = ?").run(embedding([]), "kept");
+        });
+        expect(db.prepare("SELECT id FROM notes_vec").all()).toEqual([]);
+        expect(text({ kind: "term", text: "secondword" }).map((row) => row.id)).toEqual(["kept"]);
+      });
     });
   });
 

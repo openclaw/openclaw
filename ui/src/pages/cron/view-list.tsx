@@ -256,7 +256,7 @@ function JobRow(
   const description = () => props.job.description?.trim();
   const systemOwned = () => isSystemMonitorDeclaration(props.job.declarationKey);
   const nextRunAtMs = () => props.job.state?.nextRunAtMs;
-  const hasNextRun = () => typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs());
+  const hasNextRun = () => nextRunAtMs() !== undefined;
   return (
     <div
       class={["cron-table__row", { "cron-table__row--paused": !props.job.enabled }]}
@@ -337,7 +337,7 @@ function JobRow(
 }
 function JobCell(props: { class: string; label: string; value: JSX.Element }) {
   return (
-    <span class={`cron-table__cell ${props.class}`}>
+    <span class={["cron-table__cell", props.class]}>
       <span class="cron-table__cell-label">{props.label}</span>
       <span class="cron-table__cell-value">{props.value}</span>
     </span>

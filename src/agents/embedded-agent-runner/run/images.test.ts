@@ -12,7 +12,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.
 import * as mediaLocalRoots from "../../../media/local-roots.js";
 import {
   attachRuntimePromptMediaFacts,
-  readRuntimePromptImageOrder,
+  readRuntimePromptMediaFacts,
 } from "../../../media/media-facts.js";
 import {
   buildPersistedUserTurnMessage,
@@ -21,6 +21,7 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
+import { log } from "../logger.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
@@ -512,16 +513,21 @@ describe("detectAndLoadPromptImages", () => {
     await fs.mkdir(sandboxRoot, { recursive: true });
     await fs.mkdir(agentRoot, { recursive: true });
     const pngB64 = TINY_PNG_BASE64;
-    await fs.writeFile(path.join(agentRoot, "secret.png"), Buffer.from(pngB64, "base64"));
+    const imageRef = "/agent/synthetic-private-image.png";
+    await fs.writeFile(
+      path.join(agentRoot, "synthetic-private-image.png"),
+      Buffer.from(pngB64, "base64"),
+    );
     const sandbox = createUnsafeMountedSandbox({ sandboxRoot, agentRoot });
     const bridge = sandbox.fsBridge;
     if (!bridge) {
       throw new Error("sandbox fs bridge missing");
     }
 
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       const result = await detectAndLoadPromptImages({
-        prompt: "Inspect /agent/secret.png",
+        prompt: `Inspect ${imageRef}`,
         workspaceDir: sandboxRoot,
         model: { input: ["text", "image"] },
         workspaceOnly: true,
@@ -532,7 +538,10 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.loadedCount).toBe(0);
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
+      expect(warn.mock.calls).toEqual([["Native image: sandbox validation failed"]]);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-image");
     } finally {
+      warn.mockRestore();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -569,9 +578,10 @@ describe("detectAndLoadPromptImages", () => {
 
   it("keeps the fact hydration size limit", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-size-"));
-    const imagePath = path.join(workspaceDir, "too-large.png");
+    const imagePath = path.join(workspaceDir, "synthetic-private-attachment.png");
     await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       const result = await detectAndLoadPromptImages({
         prompt: "describe it",
@@ -585,7 +595,10 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.failedMediaCount).toBe(1);
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
+      expect(warn.mock.calls).toEqual([["Native image: failed to load"]]);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-private-attachment");
     } finally {
+      warn.mockRestore();
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -719,7 +732,7 @@ describe("hydratePromptMediaMessages", () => {
       const restored = JSON.parse(serialized) as AgentMessage;
 
       try {
-        expect(readRuntimePromptImageOrder(restored)).toBeUndefined();
+        expect(readRuntimePromptMediaFacts(restored)).toBeUndefined();
         const result = await hydratePromptMediaMessages([restored], {
           workspaceDir,
           model: { input: ["text", "image"] },

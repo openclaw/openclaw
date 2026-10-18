@@ -70,6 +70,7 @@ class SkillWorkshopPageState {
     const selection = projectAgentSelection(context.agentSelection);
     const agents = projectAgents(context.agents);
     const config = projectRuntimeConfig(context.runtimeConfig);
+    // Connection and agent changes retire the workshop scope before issuing Gateway reads.
     createEffect(
       () =>
         [gateway.revision(), selection.revision(), agents.revision(), config.revision()] as const,
@@ -145,10 +146,14 @@ class SkillWorkshopPageState {
         this.selectFirst();
       }
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.scope === scope) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      this.loading = false;
-      this.changed();
+      if (this.scope === scope) {
+        this.loading = false;
+        this.changed();
+      }
     }
   }
 

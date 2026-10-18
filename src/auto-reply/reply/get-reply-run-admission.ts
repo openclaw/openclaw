@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearAutoFallbackPrimaryProbeSelection } from "../../agents/agent-scope.js";
 import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -13,7 +12,6 @@ import {
 } from "../../config/sessions/paths.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { logVerbose } from "../../globals.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
@@ -381,25 +379,17 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
   ) {
     assertPreparationActive();
     // Keyless runs use an incarnation-unique sessionId lane; session-key lanes can be shared.
-    const cleared = sessionKey
-      ? (await import("./queue/cleanup.js")).clearSessionLifecycleLanes({
-          keys: [sessionKey],
-          agentId,
-          sessionKey,
-          assertCurrent: assertPreparationActive,
-        })
-      : clearCommandLane(sessionLaneKey);
-    logVerbose(`Cleared ${cleared} queued command(s) before interrupting ${sessionLaneKey}`);
-  }
-  const agentHarnessPolicy = useFastReplyRuntime
-    ? undefined
-    : resolveAgentHarnessPolicy({
-        provider,
-        modelId: model,
-        config: cfg,
+    if (sessionKey) {
+      (await import("./queue/cleanup.js")).clearSessionLifecycleLanes({
+        keys: [sessionKey],
         agentId,
-        sessionKey: context.runtimePolicySessionKey,
+        sessionKey,
+        assertCurrent: assertPreparationActive,
       });
+    } else {
+      clearCommandLane(sessionLaneKey);
+    }
+  }
   const resolveRuntimeAuthProfile = async () => {
     if (useFastReplyRuntime && !params.configuredProfileId && !modelState.operatorModelOverride) {
       return {
@@ -433,7 +423,6 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       modelId: model,
       agentId,
       configuredProfileId: params.configuredProfileId,
-      ...(agentHarnessPolicy ? { harnessRuntime: agentHarnessPolicy.runtime } : {}),
       agentDir,
       reader:
         providedReplyOperation?.key === authSessionKey

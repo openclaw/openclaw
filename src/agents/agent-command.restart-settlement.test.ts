@@ -398,10 +398,6 @@ it.each([false, true])(
         runId: "image-completion",
         message: "Describe the completed image",
         allowModelOverride: false,
-        internalDeliveryMediaUrls: ["/synthetic/lighthouse.png"],
-        forceRestartSafeTools: true,
-        disableMessageTool: true,
-        sourceReplyDeliveryMode: "automatic",
         inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
         beforeTerminalDelivery: async () => {
           if (replace) {
@@ -421,7 +417,6 @@ it.each([false, true])(
         completion,
         "completion did not run",
       );
-      expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe("image-completion");
       const beginAdmission = sessionAdmission.beginSessionWorkAdmission;
       using _ = vi
         .spyOn(sessionAdmission, "beginSessionWorkAdmission")

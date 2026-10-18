@@ -8,7 +8,7 @@ import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx"
 import {
   SubagentActivity,
   type SubagentActivityProps,
-} from "./components/chat-subagent-activity.ts";
+} from "./components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 
 type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];

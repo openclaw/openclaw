@@ -245,6 +245,59 @@ describe("EmbeddedBlockChunker", () => {
     expect(drainChunks(chunker, true)).toEqual([]);
   });
 
+  it("balances forced open-fence checkpoints and preserves continuation source", () => {
+    for (const { opener, body, renderedOpener } of [
+      { opener: "```txt\n", body: "abc", renderedOpener: "```txt\n" },
+      { opener: "```txt\n", body: "abcdefghijklmnop", renderedOpener: "```txt\n" },
+      { opener: "```abcdefghijkl\n", body: "a", renderedOpener: "```\n" },
+    ]) {
+      const chunker = new EmbeddedBlockChunker({ minChars: 1, maxChars: 20 });
+      const chunks: string[] = [];
+      const sources: BlockChunkMetadata[] = [];
+      const emit = (chunk: string, metadata?: BlockChunkMetadata) => {
+        chunks.push(chunk);
+        if (metadata) {
+          sources.push(metadata);
+        }
+      };
+      const checkpoint = opener + body;
+      chunker.append(checkpoint);
+      chunker.drain({ force: false, emit });
+      chunker.replace(checkpoint, 0, true);
+      chunker.drain({ force: true, emit });
+      expect(chunks.every((chunk) => chunk.startsWith(renderedOpener))).toBe(true);
+      expect(chunks.every((chunk) => chunk.endsWith("\n```"))).toBe(true);
+      expect(chunker.consumedLength).toBe(checkpoint.length);
+      expect(chunker.hasBuffered()).toBe(false);
+
+      const continuation = `\n${"abcdefghijklmnopqrstuvwxyz".slice(body.length)}\n\`\`\``;
+      const source = checkpoint + continuation;
+      chunker.append(continuation);
+      chunker.drain({ force: true, emit });
+      expect(chunks.every((chunk) => chunk.startsWith(renderedOpener))).toBe(true);
+      expect(chunks.every((chunk) => chunk.endsWith("\n```"))).toBe(true);
+      expect(
+        chunks.map((chunk) => chunk.slice(renderedOpener.length, -4).replaceAll("\n", "")).join(""),
+      ).toBe("abcdefghijklmnopqrstuvwxyz");
+      expectChunksWithinLength(chunks, 20);
+      expect(sources).toHaveLength(chunks.length);
+      expect(sources.map((metadata) => metadata.sourceText).join("")).toBe(source);
+      expect(sources.map((metadata) => metadata.sourceStart)).toEqual([
+        0,
+        ...sources.slice(0, -1).map((metadata) => metadata.sourceEnd),
+      ]);
+      expect(
+        sources.every(
+          (metadata) =>
+            source.slice(metadata.sourceStart, metadata.sourceEnd) === metadata.sourceText,
+        ),
+      ).toBe(true);
+      expect(chunker.consumedLength).toBe(source.length);
+      expect(chunker.sourceLength).toBe(source.length);
+      expect(drainChunks(chunker, true)).toEqual([]);
+    }
+  });
+
   type FenceDrainScenario = {
     name: string;
     steps: Array<{ append?: string; force?: boolean; expected: string[]; buffered?: string }>;

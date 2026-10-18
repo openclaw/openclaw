@@ -41,14 +41,20 @@ describe("immutable plain data", () => {
   );
 
   it.each([freezeJsonSnapshot, freezeTrustedJsonSnapshot])(
-    "%s freezes deeply nested snapshots without using the call stack",
+    "%s freezes oversized cyclic snapshots without using the call stack",
     (freeze) => {
-      let snapshot: { child?: object } = {};
-      for (let depth = 0; depth < 12_000; depth++) {
+      const leaf: { child?: object } = {};
+      let snapshot = leaf;
+      // Exceed the memo's working set in one operation; eviction must not
+      // discard cycle detection while this graph is still being traversed.
+      for (let depth = 0; depth < 300_000; depth++) {
         snapshot = { child: snapshot };
       }
+      leaf.child = snapshot;
       freeze(snapshot);
       expect(isDeeplyFrozenPlainData(snapshot)).toBe(true);
+      expect(Object.isFrozen(leaf)).toBe(true);
+      expect(isDeeplyFrozenPlainData(leaf)).toBe(true);
     },
   );
 

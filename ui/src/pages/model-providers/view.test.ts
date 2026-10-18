@@ -80,6 +80,38 @@ it("retains a saved unavailable model without offering it for another default se
   expect(onUtilityChange).toHaveBeenCalledExactlyOnceWith(null);
 });
 
+it("shows utility chain selections and edits their fallback independently", async () => {
+  const onUtilityFallbackChange = vi.fn();
+  const container = document.createElement("div");
+  mount(
+    props({
+      configuredModels: [
+        { provider: "fixture", id: "utility", name: "Utility" },
+        { provider: "fixture", id: "backup", name: "Backup" },
+        { provider: "fixture", id: "last", name: "Last" },
+      ],
+      defaultModels: {
+        primary: "fixture/chat",
+        fallbacks: [],
+        utilityModel: { primary: "fixture/utility", fallbacks: ["fixture/backup", "fixture/last"] },
+      },
+      onUtilityFallbackChange,
+    }),
+    container,
+  );
+  await updatePickers(container);
+  expect(container.querySelector("#model-providers-utility-model")?.textContent).toContain(
+    "Utility",
+  );
+  const row = settingsRow(container, "Utility Fallback Model");
+  expect(row.textContent).toContain("1 more fallback after this one");
+  const picker = row.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+  expect(picker.textContent).toContain("Backup");
+  expect(row.querySelector('[role="option"][data-value="fixture/utility"]')).toBeNull();
+  await choosePickerValue(picker, "fixture/last");
+  expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
+});
+
 function button(container: Element, label: string): HTMLButtonElement | undefined {
   return [...container.querySelectorAll<HTMLButtonElement>("button")].find((entry) =>
     text(entry).includes(label),

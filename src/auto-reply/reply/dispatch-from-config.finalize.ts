@@ -1,4 +1,3 @@
-import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import {
   createMissingReplyNotice,
   resolveReplyCompletion,
@@ -24,7 +23,6 @@ import { isDispatchReplyOperationAbortedError } from "./dispatch-from-config.abo
 import type { executeDispatch } from "./dispatch-from-config.execute.js";
 import {
   createFinalDispatchPayloadDedupeKey,
-  formatSuppressedReplyPayloadForLog,
   QUEUE_CAP_REJECTION_TEXT,
   shouldDeliverDespiteSourceReplySuppression,
 } from "./dispatch-from-config.payloads.js";
@@ -44,7 +42,6 @@ export const needsTtsFallback = (clean: boolean, visible: string, fallback?: str
 export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState) {
   const {
     cfg,
-    chatType,
     ctx,
     deferFinalTtsText,
     deliveryChannel,
@@ -133,20 +130,6 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         !laneSuppressed &&
         suppressDelivery &&
         !shouldDeliverDespiteSourceReplySuppression(reply, state);
-      if (sourceSuppressed && hasOutboundReplyContent(reply, { trimText: true })) {
-        logVerbose(
-          [
-            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
-            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
-            `provider=${ctx.Provider ?? "unknown"}`,
-            `surface=${ctx.Surface ?? "unknown"}`,
-            `chatType=${chatType ?? "unknown"}`,
-            `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
-            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
-            `${formatSuppressedReplyPayloadForLog(reply)})`,
-          ].join(" "),
-        );
-      }
       const finalPayloadDedupeKey =
         laneSuppressed || sourceSuppressed ? undefined : createFinalDispatchPayloadDedupeKey(reply);
       if (

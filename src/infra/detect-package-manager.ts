@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readPackageManagerSpec } from "./package-json.js";
+import { canAccess } from "./path-existence.js";
 
 type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
@@ -10,15 +11,6 @@ export type BunGlobalInstallOwner = {
   globalProjectRoot: string;
   bunInstall?: string;
 };
-
-async function exists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** Resolves Bun's global project from its installed owner rather than unrelated caller settings. */
 export function resolveBunGlobalInstallOwner(
@@ -89,7 +81,7 @@ function resolvePnpmNodeModulesRoot(root: string): string | null {
 
 async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   const nodeModulesRoot = resolvePnpmNodeModulesRoot(root);
-  return nodeModulesRoot !== null && (await exists(path.join(nodeModulesRoot, ".modules.yaml")));
+  return nodeModulesRoot !== null && (await canAccess(path.join(nodeModulesRoot, ".modules.yaml")));
 }
 
 /** Detects the package manager that owns a package root from manifests, locks, and install layout. */

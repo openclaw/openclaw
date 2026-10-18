@@ -95,10 +95,11 @@ export function DeviceEntryMenu(props: {
           .map((action): MenuItem => ({
             id: action.value,
             label: t(action.labelKey),
-            disabled: action.pairing && !props.devices.canManagePairing,
+            disabled:
+              action.pairing && (!props.devices.connected || !props.devices.canManagePairing),
             attributes: {
               title:
-                action.pairing && !props.devices.canManagePairing
+                action.pairing && props.devices.connected && !props.devices.canManagePairing
                   ? t("devices.readOnly.pairingRequired")
                   : undefined,
             },
@@ -106,7 +107,10 @@ export function DeviceEntryMenu(props: {
           }))}
         onSelect={(item) => {
           const action = actions().find((entry) => entry.value === item.id);
-          if (action && (!action.pairing || props.devices.canManagePairing)) {
+          if (
+            action &&
+            (!action.pairing || (props.devices.connected && props.devices.canManagePairing))
+          ) {
             action.run();
           }
         }}

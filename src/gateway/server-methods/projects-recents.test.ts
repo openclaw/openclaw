@@ -12,6 +12,7 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as repositoryWorkspaces from "../../state/session-repository-workspaces.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -367,7 +368,14 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     }
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
-    const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
+    const databasePath = openOpenClawStateDatabase().path;
+    projection.dispose();
+    projection = undefined;
+    releaseCatalog();
+    releaseCatalog = undefined;
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    // External repairs require offline custody; live writes use the profile owner.
+    const external = new (requireNodeSqlite().DatabaseSync)(databasePath);
     try {
       external
         .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
@@ -375,6 +383,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     } finally {
       external.close();
     }
+    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const afterAliasChange = await invokeProjectMethod(
       "projects.list",
       {},

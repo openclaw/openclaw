@@ -753,6 +753,7 @@ async function runSyntheticOverflowSummary(params: {
   await params.runFollowup({
     prompt: params.prompt,
     sourceTurnId: runtimeMetadata.sourceTurnId,
+    createChannelCronAuthority: runtimeMetadata.createChannelCronAuthority,
     queueAbortSignal: params.source.queueAbortSignal,
     transcriptPrompt: params.prompt,
     messageId: params.source.messageId,

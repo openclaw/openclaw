@@ -145,7 +145,12 @@ export function resolveExistingKey(
 }
 
 export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
-  return hasConfiguredSecretInput(rawKeyValue(config, provider));
+  const entry = resolveSearchProviderEntry(config, provider);
+  // Fallback credentials stay at their owner; setup must not copy them into search config.
+  return (
+    hasConfiguredSecretInput(entry?.getConfiguredCredentialValue?.(config)) ||
+    hasConfiguredSecretInput(entry?.getConfiguredCredentialFallback?.(config)?.value)
+  );
 }
 
 function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {

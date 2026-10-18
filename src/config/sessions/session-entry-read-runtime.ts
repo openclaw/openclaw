@@ -191,10 +191,9 @@ export async function readSessionEntryByIdReadOnlyInWorker(
     orderBy?: "updatedAt";
   },
 ): Promise<SessionEntrySummary | undefined> {
-  const sessionId = input.sessionId;
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
-    return memory.readById(sessionId, input.projection, input.orderBy);
+    return memory.readById(input.sessionId, input.projection, input.orderBy);
   }
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   const storePath =
@@ -206,7 +205,7 @@ export async function readSessionEntryByIdReadOnlyInWorker(
     { ...scope, agentId, storePath },
     async ({ reader, database, continuation, assertCurrent }) => {
       const read = await reader.readExactEntries({
-        selection: { kind: "session-id", sessionId, orderBy: input.orderBy },
+        selection: { kind: "session-id", sessionId: input.sessionId, orderBy: input.orderBy },
         projection: "full",
         env: database.env,
         continuation,
@@ -286,15 +285,18 @@ export function createSessionEntryListReader(
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(
   input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession" | "readConsistency">,
+    Pick<
+      SessionEntryListWorkerInput["scope"],
+      "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
+    >,
 ) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
-    return memory
-      .entries("list")
-      .filter(({ sessionKey, entry }) =>
-        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
-      );
+    // Incognito sessions have no durable restart work.
+    const entries = input.mainSessionRecovery ? [] : memory.entries("list");
+    return entries.filter(({ sessionKey, entry }) =>
+      matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+    );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
   return withSessionStoreReaderInWorker(
@@ -308,6 +310,7 @@ export async function readSessionEntrySummariesInWorker(
           env: database.env,
           projection: "list",
           cleanupSession: input.cleanupSession,
+          mainSessionRecovery: input.mainSessionRecovery,
           hydrateSkillPromptRefs: false,
           readConsistency: input.readConsistency,
         },

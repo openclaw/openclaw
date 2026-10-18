@@ -1,4 +1,4 @@
-import type { FilePreviewModalFile } from "../../components/file-preview-modal.ts";
+import type { FilePreviewModalFile } from "../../components/file-preview-modal.tsx";
 
 type OpenClawFilePreviewModal = HTMLElementTagNameMap["openclaw-file-preview-modal"];
 

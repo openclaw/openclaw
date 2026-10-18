@@ -270,6 +270,7 @@ describe("persistent restricted Codex continuation", () => {
 
   it.each([
     { restriction: "disabled tools", patch: { disableTools: true } },
+    { restriction: "host-only delegation", patch: { delegationCapability: "host_only" } },
     { restriction: "workspace-only work", patch: { requireWorkspaceOnly: true } },
     { restriction: "turn policy", patch: { pluginHarnessToolPolicyScope: "turn" } },
     {

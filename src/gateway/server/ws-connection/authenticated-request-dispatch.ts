@@ -142,7 +142,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       req.method,
       getMethodRegistry,
       extraHandlers,
-      req.method === "models.list" || req.method === "sessions.list" || req.method === "cron.list"
+      req.method === "models.list" ||
+        req.method === "sessions.list" ||
+        req.method === "cron.list" ||
+        req.method === "chat.history"
         ? {
             clientKind: client.connect.client.id,
             source: sendResponse === send ? "wire" : "internal",
@@ -222,6 +225,8 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
             subscribe: (onRevoked) => {
+              // Retained source grants must remain reachable by profile/origin revocation after the RPC returns.
+              const releaseSourceClient = clients.retainRequest(client);
               remoteIngress?.signal.addEventListener("abort", onRevoked, { once: true });
               if (remoteIngress?.signal.aborted) {
                 onRevoked();
@@ -248,6 +253,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 releaseClient();
                 releasePolicy();
                 releaseGeneration?.();
+                releaseSourceClient();
               };
             },
           }
@@ -312,6 +318,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           diagnostics?.response(
             sendResult.kind === "sent" ? (responseOk ? "ok" : "error") : "unavailable",
             sendResult.kind === "sent" ? sendResult.bytes : undefined,
+            { payload, params: req.params },
           );
           let logMeta = meta;
           if (
@@ -486,6 +493,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                   req,
                   respond: respondWithAuthority,
                   acceptsSerializedJson: true,
+                  acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,

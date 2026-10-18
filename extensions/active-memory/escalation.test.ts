@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { hasRecallIntent, resolveRecallEscalationDecision } from "./escalation.js";
 
 describe("active-memory escalation", () => {
+  const decide = (
+    mode: Parameters<typeof resolveRecallEscalationDecision>[0]["mode"],
+    message: string,
+    hasStrongLaneOneHit = false,
+  ) => resolveRecallEscalationDecision({ mode, message, hasStrongLaneOneHit });
+
   it.each([
     "Do you remember what we decided to deploy tomorrow?",
     "What did we discuss last time?",
@@ -173,43 +179,14 @@ describe("active-memory escalation", () => {
   });
 
   it("requires recall intent and a weak deterministic lane in escalate mode", () => {
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "What did we decide last time?",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("recall");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "What did we decide last time?",
-        hasStrongLaneOneHit: true,
-      }),
-    ).toBe("strong-lane-one-hit");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "escalate",
-        message: "Explain the current configuration",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("no-recall-intent");
+    const message = "What did we decide last time?";
+    expect(decide("escalate", message)).toBe("recall");
+    expect(decide("escalate", message, true)).toBe("strong-lane-one-hit");
+    expect(decide("escalate", "Explain the current configuration")).toBe("no-recall-intent");
   });
 
   it("preserves always mode and disables escalation in off mode", () => {
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "always",
-        message: "No recall phrasing here",
-        hasStrongLaneOneHit: true,
-      }),
-    ).toBe("recall");
-    expect(
-      resolveRecallEscalationDecision({
-        mode: "off",
-        message: "Do you remember this?",
-        hasStrongLaneOneHit: false,
-      }),
-    ).toBe("mode-off");
+    expect(decide("always", "No recall phrasing here", true)).toBe("recall");
+    expect(decide("off", "Do you remember this?")).toBe("mode-off");
   });
 });

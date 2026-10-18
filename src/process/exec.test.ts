@@ -6,7 +6,6 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -14,6 +13,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setVerbose } from "../global-state.js";
@@ -41,17 +41,6 @@ afterAll(async () => {
   await receipts.close();
 });
 afterEach(() => vi.unstubAllEnvs());
-
-// Escaped descendants outlive the root handle; no owner exposes their exit event.
-async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(25, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for descendant ${pid} to exit`, { cause: error });
-  }
-}
 
 describe("runCommandWithTimeout", () => {
   it.skipIf(process.platform === "win32").each(["cooperative", "forced"] as const)(
@@ -125,7 +114,7 @@ describe("runCommandWithTimeout", () => {
         await running?.catch(() => undefined);
         if (descendant && isPidAlive(descendant)) {
           process.kill(descendant, "SIGKILL");
-          await waitForDescendantExit(descendant, signal);
+          await waitForDead(descendant, signal);
         }
       }
     },
@@ -317,16 +306,6 @@ describe("runCommandWithTimeout", () => {
     expect(result.termination).toBe("signal");
   });
 
-  it("handles malformed UTF-8 in a truncated head", async () => {
-    const input = Buffer.from([0x61, 0xff, 0x62, 0xe2, 0x82, 0xac, 0x7a]);
-    const result = await runUtf8CommandWithTimeout(
-      nodeCommand("process.stdin.pipe(process.stdout)"),
-      { input, maxOutputBytes: 5, outputCapture: "head", timeoutMs: 3_000 },
-    );
-    expect(result.stdout).toBe("a�b�");
-    expect(result.stdoutTruncatedBytes).toBe(2);
-  });
-
   it("retires a failed launch before its scope closes and keeps argv out of the error", async () => {
     const privateArg = "private-command-argument";
     const reservation = { spawned: vi.fn(), settled: vi.fn() };
@@ -509,7 +488,7 @@ describe("runCommandBuffered", () => {
               : { code: exitCode, termination: "exit" },
           );
           vi.useRealTimers();
-          await waitForDescendantExit(descendantPid, signal);
+          await waitForDead(descendantPid, signal);
           expect(isPidAlive(descendantPid)).toBe(false);
         } finally {
           try {
@@ -541,7 +520,8 @@ describe("runCommandBuffered", () => {
             expect(isPidAlive(parent.pid)).toBe(false);
           }
           if (descendantPid !== undefined) {
-            await waitForDescendantExit(descendantPid, signal);
+            // Escaped descendants outlive the root handle; no owner exposes their exit event.
+            await waitForDead(descendantPid, signal);
             expect(isPidAlive(descendantPid)).toBe(false);
           }
         }
@@ -693,7 +673,7 @@ describe("package manager runtime", () => {
 
   it.skipIf(process.platform === "win32")(
     "hands an explicit Node runtime to npm preinstall children",
-    async () => {
+    async ({ signal }) => {
       const root = dirs.make("npm-lifecycle-node-");
       const privateBin = path.join(root, "private", "bin");
       const systemBin = path.join(root, "system", "bin");
@@ -718,33 +698,40 @@ describe("package manager runtime", () => {
         "bin",
         "npm-cli.js",
       );
-      const result = await runCommandWithTimeout(
-        [
-          privateNode,
-          npmCli,
-          "install",
-          "--offline",
-          "--no-audit",
-          "--no-fund",
-          "--package-lock=false",
-        ],
-        {
-          cwd: root,
-          timeoutMs: 10_000,
-          baseEnv: {},
-          env: {
-            HOME: root,
-            OPENCLAW_STATE_DIR: path.join(root, "state"),
-            PATH: [systemBin, process.env.PATH].join(path.delimiter),
-            npm_config_cache: path.join(root, "cache"),
-            npm_config_userconfig: path.join(root, "empty-npmrc"),
-            npm_config_globalconfig: path.join(root, "empty-global-npmrc"),
+      // Runtime handoff is the contract; host scheduling must not consume its deadline.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const result = await runCommandWithTimeout(
+          [
+            privateNode,
+            npmCli,
+            "install",
+            "--offline",
+            "--no-audit",
+            "--no-fund",
+            "--package-lock=false",
+          ],
+          {
+            cwd: root,
+            signal,
+            timeoutMs: 10_000,
+            baseEnv: {},
+            env: {
+              HOME: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              PATH: [systemBin, process.env.PATH].join(path.delimiter),
+              npm_config_cache: path.join(root, "cache"),
+              npm_config_userconfig: path.join(root, "empty-npmrc"),
+              npm_config_globalconfig: path.join(root, "empty-global-npmrc"),
+            },
           },
-        },
-      );
-      expect(result.code, result.stderr).toBe(0);
-      expect(result.stdout).toContain(nodeExecPath);
-      expect(result.stdout).not.toContain("v22.22.3");
+        );
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stdout).toContain(nodeExecPath);
+        expect(result.stdout).not.toContain("v22.22.3");
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 

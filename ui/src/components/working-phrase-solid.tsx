@@ -3,7 +3,7 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { useVisiblePoll } from "../lib/reactive/visible-poll.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 
 const PHRASE_KEYS = [
   "shelling",

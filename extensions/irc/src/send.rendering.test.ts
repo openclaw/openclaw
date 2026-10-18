@@ -1,9 +1,11 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ircPlugin } from "./channel.js";
 import { onIrcTestLine, startIrcTestServer } from "./irc-server.test-support.js";
-import { sendFormattedIrcText } from "./message-adapter.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
+
+const sendFormattedIrcText = ircPlugin.outbound!.sendFormattedText!;
 
 describe("IRC formatted text on the wire", () => {
   let server: Awaited<ReturnType<typeof startIrcTestServer>>;

@@ -180,8 +180,13 @@ Uploaded images also stay visible while a new session's workspace or worktree de
 Generated images under `/api/chat/media/outgoing/...` use the same capability
 principle through `artifacts.download`. The authenticated WebSocket request
 authorizes the transcript artifact and returns a short-lived URL. The HTTP media
-route rechecks that the artifact still belongs to the transcript before serving
-bytes. The previous shared-owner bearer path remains available for older Control
+route rechecks that the artifact still belongs to the transcript and that the
+issuing reader can still read the session before serving bytes. Full images,
+thumbnails, and media playback share this authority. These URLs expire after five
+minutes and survive an ordinary WebSocket disconnect. Device, role, source, or
+session-access revocation stops reads through an existing URL. Responses use private,
+no-store caching; an already admitted stream retains its read authority until
+completion and stops if that authority is revoked. The previous shared-owner bearer path remains available for older Control
 UI clients during the compatibility window.
 
 ## Approval links

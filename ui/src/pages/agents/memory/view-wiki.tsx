@@ -264,7 +264,9 @@ function WikiInsightCard(props: { owner: DreamingProps; card: WikiInsightCard })
     >
       <div class="dreams-diary__insight-topline">
         <div class="dreams-diary__insight-title">{item().title}</div>
-        <span class={`dreams-diary__insight-badge dreams-diary__insight-badge--${badgeClass()}`}>
+        <span
+          class={["dreams-diary__insight-badge", `dreams-diary__insight-badge--${badgeClass()}`]}
+        >
           {badgeLabel()}
         </span>
       </div>

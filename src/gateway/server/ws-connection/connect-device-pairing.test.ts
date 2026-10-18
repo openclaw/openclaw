@@ -595,7 +595,7 @@ describe("gateway connect pairing exemptions", () => {
     }
   });
 
-  test.each(["automatic approval", "browser origin", "proxy policy"])(
+  test.each(["automatic approval", "browser origin", "proxy policy", "role policy"])(
     "keeps local pairing pending when %s is revoked before commit",
     async (revokedPolicy) => {
       const auth = { mode: "token", token: "local-pairing-policy-token" } as const;
@@ -634,7 +634,22 @@ describe("gateway connect pairing exemptions", () => {
                 ? { controlUi: { allowedOrigins: ["https://other.example.test"] } }
                 : revokedPolicy === "proxy policy"
                   ? { trustedProxies: ["192.0.2.10"] }
-                  : { nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } } }),
+                  : revokedPolicy === "role policy"
+                    ? {
+                        roles: {
+                          default: "reader",
+                          definitions: {
+                            reader: {
+                              scopes: ["operator.read"],
+                              agents: [],
+                              sessions: { others: "none" },
+                            },
+                          },
+                        },
+                      }
+                    : {
+                        nodes: { ...current.gateway?.nodes, pairing: { autoApproveLocal: false } },
+                      }),
             },
           });
           return approve(requestId, options, baseDir);

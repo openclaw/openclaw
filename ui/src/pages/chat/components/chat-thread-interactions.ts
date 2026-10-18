@@ -35,9 +35,9 @@ import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import type { ChatTranscriptMetadata } from "../session-message-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -47,7 +47,7 @@ import {
   dismissConfirmedActionPopovers,
   isConfirmedActionPopoverFocused,
   openChatRewindConfirmation,
-} from "./chat-message-confirmation.ts";
+} from "./chat-message-confirmation-view.tsx";
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
@@ -58,6 +58,7 @@ import {
   removeChatSelectionPopup,
 } from "./chat-selection-popup.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -72,14 +73,9 @@ export type ChatThreadState = {
   asyncQuestionGeneration?: number;
   asyncQuestionPresentation?: AsyncQuestionPresentation;
   turnRecapWatch: TurnRecapWatch | null;
-  searchOpen: boolean;
-  searchQuery: string;
-  searchFocusPending: boolean;
-  searchReturnFocusTarget: HTMLElement | null;
-  searchReturnFocusOwner: HTMLElement | null;
+  search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    onRequestUpdate?: () => void;
     turnVideoMessages?: ReadonlyMap<
       string,
       readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
@@ -198,7 +194,7 @@ export type ChatThreadProps = ChatSendStatusActions &
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
     onAssistantAttachmentLoaded?: () => void;
-    onRequestUpdate?: () => void;
+    mediaOwner?: object;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onDraftChange: (next: string) => void;
@@ -236,13 +232,6 @@ type TranscriptInteractionProps = Pick<
 >;
 
 const transcriptStates = new Map<string, ChatThreadState>();
-const transcriptSearchDefaults = {
-  searchOpen: false,
-  searchQuery: "",
-  searchFocusPending: false,
-  searchReturnFocusTarget: null,
-  searchReturnFocusOwner: null,
-};
 
 export function getTranscriptState(paneId: string): ChatThreadState {
   const existing = transcriptStates.get(paneId);
@@ -253,7 +242,7 @@ export function getTranscriptState(paneId: string): ChatThreadState {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
-    ...transcriptSearchDefaults,
+    search: new TranscriptSearchState(),
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
@@ -293,7 +282,7 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
     // Parked rows must commit fresh bindings on return even when visible props match.
     state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
-    Object.assign(state, transcriptSearchDefaults);
+    state.search.reset();
   }
 }
 
@@ -316,42 +305,9 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
   resetChatThreadState(paneId);
 }
 
-export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () => void): void {
-  const returnFocusTarget = state.searchReturnFocusTarget;
-  const returnFocusOwner = state.searchReturnFocusOwner;
-  Object.assign(state, transcriptSearchDefaults);
-  requestUpdate();
-  queueMicrotask(() => {
-    const target = returnFocusTarget?.isConnected
-      ? returnFocusTarget
-      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-    target?.focus({ preventScroll: true });
-  });
-}
-
 /** Toggles transcript search and retains the shortcut origin for focus restoration. */
-export function toggleTranscriptSearch(
-  paneId: string,
-  requestUpdate: () => void,
-  triggerEvent?: Event,
-): void {
-  const state = getTranscriptState(paneId);
-  if (state.searchOpen) {
-    closeTranscriptSearch(state, requestUpdate);
-    return;
-  }
-
-  state.searchOpen = true;
-  state.searchFocusPending = true;
-  const returnFocusTarget = triggerEvent?.target;
-  const returnFocusOwner = triggerEvent?.currentTarget;
-  const connectedElement = (target: EventTarget | null | undefined) =>
-    target instanceof HTMLElement && target.isConnected ? target : null;
-  state.searchReturnFocusTarget = connectedElement(returnFocusTarget);
-  state.searchReturnFocusOwner = connectedElement(returnFocusOwner);
-  requestUpdate();
+export function toggleTranscriptSearch(paneId: string, triggerEvent?: Event): void {
+  getTranscriptState(paneId).search.toggle(triggerEvent);
 }
 
 let activeReplyContextMenu: {

@@ -28,6 +28,7 @@ const GITHUB_CREDENTIAL_KIND = {
   native: "agentTools.githubKindNative",
   "managed-pat": "agentTools.githubKindPat",
   "managed-oauth": "agentTools.githubKindOAuth",
+  "app-installation": "agentTools.githubKindAppInstallation",
 } as const;
 const GITHUB_REFRESH_STATE = {
   available: "agentTools.githubRefreshAvailable",
@@ -364,7 +365,8 @@ export function GitHubConnectionError(props: { error: string | null; control?: J
 
 export function GitHubConnectionSetup(props: IdentityProps) {
   const view = () => props.identity.read();
-  const disabled = () => view().busy || !view().configurable || view().authorizationActive;
+  const disabled = () =>
+    !view().connectionReady || view().busy || !view().configurable || view().authorizationActive;
   const authorRow = (field: "name" | "email", label: string) => (
     <SettingsRow
       title={label}

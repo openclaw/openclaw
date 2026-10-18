@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OpenClawNativeState
 import OpenClawProtocol
 import OSLog
 import Synchronization
@@ -1516,6 +1517,7 @@ extension GatewayChannelActor {
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
+            error is OpenClawNativeStateError ||
             error is GatewayConnectAuthError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||

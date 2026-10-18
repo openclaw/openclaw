@@ -4,6 +4,7 @@ import {
   createChannelIngressError,
   createChannelIngressMonitor,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -29,7 +30,7 @@ import { getXRuntime } from "./runtime.js";
 import { sendXDelivery } from "./send.js";
 import { XBudgetExceededError } from "./spend.js";
 import { assembleXThread } from "./thread.js";
-import { openXWorkOrigins } from "./work-origin.js";
+import { buildXWorkSessionContext, openXWorkOrigins } from "./work-origin.js";
 
 const InvalidXEvent = createChannelIngressError("InvalidXEvent");
 type IngressPayload = { version: number; rawEvent: string };
@@ -325,6 +326,15 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
       if (guest && !(await admitGuest(authorization, cfg))) {
         return;
       }
+      const workSessionContext = guest
+        ? ""
+        : await buildXWorkSessionContext({
+            runtime: core,
+            cfg,
+            accountId: account.accountId,
+            conversationId: post.conversation_id,
+            requesterSessionKey: sessionKey,
+          });
       const author = thread.users.find((user) => user.id === post.author_id);
       const handle = author?.username ?? post.author_id;
       const ctxPayload = core.channel.inbound.buildContext({
@@ -361,7 +371,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
             post.author_id,
             thread.users.find((user) => user.id === post.author_id),
             authorization.github,
-          )}\n${thread.bodyForAgent}`,
+          )}\n${thread.bodyForAgent}${workSessionContext ? `\n\n${workSessionContext}` : ""}`,
         },
       });
       const sessions: XVisibleWorkSession[] = [];
@@ -459,6 +469,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
               text: payload.text ?? "",
               mediaUrl: payload.mediaUrl,
               mediaUrls: payload.mediaUrls,
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, route.agentId),
               mention: post,
               visibleWorkSessions: guest ? undefined : sessions,
               senderTier: authorization.tier,

@@ -51,6 +51,81 @@ type TerminalPreparationBase = Omit<
   | "terminalState"
 >;
 
+type SettledTurnFinalizationOptions = {
+  harness: AgentHarness;
+  modelApi: string | undefined;
+  executionContract: string | undefined;
+  hasTerminalToolPresentation: boolean;
+};
+
+async function prepareSettledTurnFinalization(
+  input: TerminalPreparationInput,
+  options: SettledTurnFinalizationOptions,
+) {
+  const { attempt } = input;
+  const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
+  const observeSourceDelivery = async () => {
+    let sourceReplyDeliveryState: TerminalPreparationInput["sourceReplyDeliveryState"];
+    const resolveFacts = input.runParams.resolveReplyDeliveryFacts;
+    const replyDeliveryState = await observeReplyDelivery(
+      resolveFacts
+        ? async (minimum) => {
+            const facts = await resolveFacts(minimum);
+            sourceReplyDeliveryState = facts.source;
+            return facts.terminal;
+          }
+        : input.runParams.resolveReplyDelivery,
+      minimumAssistantMessageIndex,
+      (error) =>
+        log.warn(
+          `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+        ),
+    );
+    return {
+      replyDeliveryState,
+      sourceReplyDeliveryState: sourceReplyDeliveryState ?? replyDeliveryState,
+    };
+  };
+  const delivery = await observeSourceDelivery();
+  const prepared = prepareEmbeddedRunTerminal({
+    ...input,
+    ...delivery,
+  });
+  const prompt = resolveSettledTurnFinalizationRequest({
+    runParams: input.runParams,
+    attempt,
+    activeErrorContext: input.activeErrorContext,
+    modelApi: options.modelApi,
+    executionContract: options.executionContract,
+    payloadsWithToolMedia: prepared.payloadsWithToolMedia,
+    recoveredFinalAssistantPayloadsAfterPromptTimeout:
+      prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
+    hasTerminalToolPresentation: options.hasTerminalToolPresentation,
+    terminalState: input.terminalState,
+    // Terminal preparation reconciles committed tool delivery with the observer.
+    // An absent observer must not generate another answer after a confirmed send.
+    replyDeliveryState: prepared.replyDeliveryState,
+    settledTurnFinalizationAvailable:
+      !input.runParams.providerReviewAcknowledgment &&
+      typeof options.harness.finalizeSettledTurn === "function",
+  });
+  return { prepared, prompt, observeSourceDelivery };
+}
+
+/** Requests projection only after the canonical delivery and finalization decision. */
+export async function requestSettledTurnFinalizationContext(
+  input: TerminalPreparationInput,
+  options: SettledTurnFinalizationOptions,
+  captureContext: () => Promise<
+    EmbeddedRunAttemptWithReceiptEvidence["settledTurnFinalizationContext"]
+  >,
+): Promise<void> {
+  const { prompt } = await prepareSettledTurnFinalization(input, options);
+  if (prompt) {
+    input.attempt.settledTurnFinalizationContext = await captureContext();
+  }
+}
+
 export async function prepareTerminalWithSettledTurnFinalization(input: {
   initial: {
     attempt: EmbeddedRunAttemptWithReceiptEvidence;
@@ -88,59 +163,17 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   });
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
-  const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
-  const observeSourceDelivery = async () => {
-    let sourceReplyDeliveryState: TerminalPreparationInput["sourceReplyDeliveryState"];
-    const resolveFacts = input.terminalBase.runParams.resolveReplyDeliveryFacts;
-    const replyDeliveryState = await observeReplyDelivery(
-      resolveFacts
-        ? async (minimum) => {
-            const facts = await resolveFacts(minimum);
-            sourceReplyDeliveryState = facts.source;
-            return facts.terminal;
-          }
-        : input.terminalBase.runParams.resolveReplyDelivery,
-      minimumAssistantMessageIndex,
-      (error) =>
-        log.warn(
-          `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
-        ),
-    );
-    return {
-      replyDeliveryState,
-      sourceReplyDeliveryState: sourceReplyDeliveryState ?? replyDeliveryState,
-    };
-  };
-  const delivery = await observeSourceDelivery();
-  const { replyDeliveryState } = delivery;
-  let prepared = prepareEmbeddedRunTerminal({
-    ...input.terminalBase,
-    ...initial,
-    ...delivery,
-    attempt,
-    lastRunPromptUsage,
-  });
+  const preparation = await prepareSettledTurnFinalization(
+    { ...input.terminalBase, ...initial, attempt, lastRunPromptUsage },
+    input.finalization,
+  );
+  let { prepared } = preparation;
+  const { prompt, observeSourceDelivery } = preparation;
   const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
     ...initial,
     prepared,
     lastRunPromptUsage,
     finalizationOutcome,
-  });
-  const prompt = resolveSettledTurnFinalizationRequest({
-    runParams: input.terminalBase.runParams,
-    attempt,
-    activeErrorContext: input.terminalBase.activeErrorContext,
-    modelApi: input.finalization.modelApi,
-    executionContract: input.finalization.executionContract,
-    payloadsWithToolMedia: prepared.payloadsWithToolMedia,
-    recoveredFinalAssistantPayloadsAfterPromptTimeout:
-      prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
-    hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
-    terminalState: initial.terminalState,
-    replyDeliveryState,
-    settledTurnFinalizationAvailable:
-      !input.terminalBase.runParams.providerReviewAcknowledgment &&
-      typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
   if (!prompt) {
     return preserveInitial("not-attempted");
@@ -165,6 +198,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     `settled post-tool turn lacked a final answer: ${describeRun()} — running isolated finalization`,
   );
   let finalizationOutcome: "answered" | "empty" | "failed" = "failed";
+  let finalizerAnswered = false;
   try {
     let finalization: Awaited<ReturnType<typeof runPreparedSettledTurnFinalization>>;
     let finalizationAttempt = 0;
@@ -187,6 +221,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         abortSignal: input.finalization.abortSignal,
       });
       assertFinalizationActive();
+      finalizerAnswered = finalization.outcome === "answered";
       attempt = finalization.attempt;
       mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
       mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);
@@ -283,10 +318,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // Tool-free finalization cannot resolve failures from the settled tools.
   prepared = {
     ...finalizedPrepared,
-    // Recovery can itself commit the source reply (notably WebChat history).
-    // Preserve supplements, but never hand an already-owned final to a second sender.
+    // A visible recovery answer still needs its final artifacts. Suppress only
+    // source-owned or pending delivery, not transcript completion alone.
     payloadsWithToolMedia:
-      finalizedPrepared.replyDeliveryState === "missing"
+      finalizedPrepared.sourceReplyDeliveryState === "missing"
         ? finalizedPrepared.payloadsWithToolMedia
         : finalizedPrepared.payloadsWithToolMedia?.filter(
             (payload) => !isReplyPayloadTerminalContent(payload),
@@ -304,6 +339,12 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     failureSignal: prepared.failureSignal,
     terminalToolFailure: prepared.terminalToolFailure,
   };
+  if (finalizerAnswered && finalizationOutcome === "answered") {
+    // Recovery owns the selected terminal only after delivery observation and
+    // authority checks; failed or cancelled summaries retain the original facts.
+    assertFinalizationActive();
+    runParams.onAttemptTerminalReplaced?.();
+  }
   return {
     ...completion,
     prepared,

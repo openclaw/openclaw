@@ -4,6 +4,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
 const AUTH_CHALLENGE_TIMEOUT_MS = 20_000;
 const AUTH_CHALLENGE_POLL_MS = 25;
@@ -34,22 +35,6 @@ export function parseBuzzAuthTag(raw: string): string[] | undefined {
     throw new Error('Buzz authTag must be ["auth","<pubkey>","<conditions>","<signature>"]');
   }
   return parsed;
-}
-
-async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      const reason = signal.reason;
-      reject(
-        reason instanceof Error
-          ? reason
-          : new Error("Buzz relay authentication aborted", { cause: reason }),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
 }
 
 function isLoopbackRelayUrl(relayUrl: string): boolean {
@@ -185,7 +170,11 @@ async function authenticateBuzzRelay(params: {
         throw new Error("Buzz relay closed before NIP-42 authentication completed");
       }
       try {
-        await waitWithSignal(params.relay.auth(params.signAuth), signal);
+        await racePromiseWithAbortSignal(
+          params.relay.auth(params.signAuth),
+          signal,
+          (abortedSignal) => abortedSignal.reason,
+        );
         return;
       } catch (error) {
         const awaitingChallenge =
@@ -194,11 +183,12 @@ async function authenticateBuzzRelay(params: {
         if (!awaitingChallenge) {
           throw error;
         }
-        await waitWithSignal(
+        await racePromiseWithAbortSignal(
           new Promise<void>((resolve) => {
             setTimeout(resolve, AUTH_CHALLENGE_POLL_MS);
           }),
           signal,
+          (abortedSignal) => abortedSignal.reason,
         );
       }
     }

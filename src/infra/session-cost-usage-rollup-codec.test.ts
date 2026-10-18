@@ -16,7 +16,6 @@ import {
   createSessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
-import { resolveZstdCodec } from "./zstd-codec.js";
 
 function entry(records: number): UsageCostRollupEntry {
   const rollup = createSessionUsageRollupData();
@@ -71,7 +70,7 @@ describe("usage rollup storage codec", () => {
     expect(
       decodeUsageCostRollup(encoded.valueJson, original.pricingFingerprint, encoded.blob),
     ).toEqual(original);
-    if (records > 0 && resolveZstdCodec()) {
+    if (records > 0) {
       expect(metadata?.body.encoding).toBe("zstd");
       expect(encoded.blob.byteLength).toBeLessThan(metadata!.body.bytes / 4);
     } else {

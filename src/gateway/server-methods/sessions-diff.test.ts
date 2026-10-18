@@ -1,10 +1,12 @@
 // Session diff RPC tests run against real throwaway git repos so the parsing
 // stays honest about git's -z output and --no-index untracked handling.
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -12,6 +14,15 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
+import {
+  localWorkspaceProjectionFixture,
+  observeLocalWorkspaceStoreSql,
+} from "../worker-environments/local-workspace-store.test-support.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -419,6 +430,138 @@ describe("loadSessionDiff", () => {
       expect(unknown.files).toEqual([]);
     },
   );
+
+  it("uses the accepted managed base for working, committed, and archived reads", async () => {
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-review-base-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+    const id = randomUUID();
+    const sessionKey = "agent:main:s1";
+    try {
+      openOpenClawStateDatabase();
+      initRepo(repoRoot);
+      fs.writeFileSync(path.join(repoRoot, "base.txt"), "base\n");
+      git(repoRoot, "add", ".");
+      git(repoRoot, "commit", "-qm", "original base");
+      const staleBase = git(repoRoot, "rev-parse", "HEAD").trim();
+      git(repoRoot, "update-ref", "refs/remotes/origin/main", staleBase);
+      git(repoRoot, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      fs.writeFileSync(path.join(repoRoot, "upstream.txt"), "upstream only\n");
+      git(repoRoot, "add", ".");
+      git(repoRoot, "commit", "-qm", "accepted upstream");
+      const acceptedBase = git(repoRoot, "rev-parse", "HEAD").trim();
+      git(repoRoot, "checkout", "-qb", "task");
+      const worktree = { id, repoRoot, branch: "task" };
+      await insertRegistryWorktree(process.env, {
+        ...worktree,
+        name: "review",
+        repoFingerprint: "review-fixture",
+        path: repoRoot,
+        baseRef: "main",
+        ownerKind: "session",
+        ownerId: sessionKey,
+        createdAt: 0,
+        lastActiveAt: 0,
+      });
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+        store.create({
+          ...localWorkspaceProjectionFixture(id, stateRoot),
+          session_key: sessionKey,
+          session_id: "s1",
+          base_commit: acceptedBase,
+        }),
+      );
+      mockSession(repoRoot, { worktree });
+      fs.writeFileSync(path.join(repoRoot, "task.txt"), "authored change\n");
+      using cleanup = new DisposableStack();
+      const sql = observeLocalWorkspaceStoreSql();
+      cleanup.defer(sql.restore);
+      sql.calibrate();
+      const beforePublication = await loadSessionDiff({ sessionKey });
+      sql.expectIdle();
+      expect(beforePublication.files.map((file) => file.path)).toEqual(["task.txt"]);
+      expect(beforePublication).toMatchObject({
+        additions: 1,
+        deletions: 0,
+        baseRef: acceptedBase,
+      });
+      expect(
+        (await loadSessionDiff({ sessionKey, scope: "uncommitted" })).files.map(
+          (file) => file.path,
+        ),
+      ).toEqual(["task.txt"]);
+      git(repoRoot, "add", "task.txt");
+      git(repoRoot, "commit", "-qm", "publish task");
+      const taskCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+      const afterPublication = await loadSessionDiff({ sessionKey });
+      expect(afterPublication.files).toEqual(
+        beforePublication.files.map(({ untracked: _untracked, ...file }) => file),
+      );
+      expect(afterPublication).toMatchObject({ additions: 1, deletions: 0, aheadCount: 1 });
+      expect(afterPublication.commits?.map((commit) => commit.subject)).toEqual(["publish task"]);
+      expect(afterPublication.mergeBase?.subject).toBe("accepted upstream");
+      const uncommitted = await loadSessionDiff({ sessionKey, scope: "uncommitted" });
+      expect(uncommitted.files).toEqual([]);
+      expect(uncommitted).toMatchObject({ baseRef: acceptedBase, aheadCount: 1 });
+      expect(uncommitted.commits).toEqual(afterPublication.commits);
+      expect(
+        (await loadSessionDiff({ sessionKey, scope: "commit", commit: acceptedBase }))
+          .unavailableReason,
+      ).toBe("unknown_commit");
+      fs.appendFileSync(path.join(repoRoot, "task.txt"), "follow-up change\n");
+      git(repoRoot, "add", "task.txt");
+      git(repoRoot, "commit", "-qm", "follow-up task");
+      const followUpCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+      const committed = await loadSessionDiff({
+        sessionKey,
+        scope: "commit",
+        commit: followUpCommit,
+      });
+      expect(committed.files.map((file) => file.path)).toEqual(["task.txt"]);
+      expect(committed).toMatchObject({ additions: 1, deletions: 0, aheadCount: 2 });
+      expect(committed.commits?.map((commit) => commit.subject)).toEqual([
+        "follow-up task",
+        "publish task",
+      ]);
+      expect(committed.files[0]?.patch).toContain("+follow-up change");
+      expect(committed.files[0]?.patch).not.toContain("+authored change");
+      expect(git(repoRoot, "rev-parse", `${followUpCommit}^`).trim()).toBe(taskCommit);
+      mockSession(repoRoot, { worktree, archivedAt: 1 });
+      const archived = await loadSessionDiff({ sessionKey });
+      expect(archived.files.map((file) => file.path)).toEqual(["task.txt"]);
+      expect(archived).toMatchObject({ additions: 2, deletions: 0, aheadCount: 2 });
+      for (const patch of [
+        { agent_id: "other" },
+        { session_key: "agent:main:other" },
+        { session_id: "replaced" },
+      ]) {
+        await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+          store.update(store.get()!, patch),
+        );
+        await expect(loadSessionDiff({ sessionKey })).rejects.toThrow(/workspace.*incarnation/i);
+        await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+          store.update(store.get()!, {
+            agent_id: "main",
+            session_key: sessionKey,
+            session_id: "s1",
+          }),
+        );
+      }
+      mockSession(path.dirname(repoRoot), { worktree, archivedAt: 1 });
+      await expect(loadSessionDiff({ sessionKey })).rejects.toThrow(
+        "Local workspace review owner changed",
+      );
+      mockSession(repoRoot, { worktree, archivedAt: 1 });
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) => store.delete(store.get()!));
+      expect((await loadSessionDiff({ sessionKey })).files.map((file) => file.path)).toEqual([
+        "task.txt",
+        "upstream.txt",
+      ]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      vi.unstubAllEnvs();
+      fs.rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
 
   it("never executes configured textconv drivers from the read RPC", async () => {
     initRepo(repoRoot);

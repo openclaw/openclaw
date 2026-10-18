@@ -290,20 +290,25 @@ describe("Google image-generation provider", () => {
     ]);
   });
 
-  it("still rejects oversized Google image JSON responses", async () => {
+  it("keeps generated image JSON above the configured media cap", async () => {
     mockGoogleApiKeyAuth();
+    const image = Buffer.alloc(4 * 1024 * 1024, 1);
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
         .mockResolvedValue(
-          jsonResponse(googleImagePayload([{ text: "x".repeat(35 * 1024 * 1024) }])),
+          jsonResponse(
+            googleImagePayload([
+              { inlineData: { mimeType: "image/png", data: image.toString("base64") } },
+            ]),
+          ),
         ),
     );
 
-    await expect(generateImage({})).rejects.toThrow(
-      "google.image-generation: JSON response exceeds",
-    );
+    // The old store-cap bound for 0.5 MB was about 3.7 MB of JSON for four images.
+    const result = await generateImage({ cfg: { agents: { defaults: { mediaMaxMb: 0.5 } } } });
+    expect(result.images[0]?.buffer.byteLength).toBe(image.byteLength);
   });
 
   it("sends reference images and explicit resolution for edit flows", async () => {

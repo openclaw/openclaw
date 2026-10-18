@@ -164,7 +164,7 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? undefined;
+    return err.description;
   }
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }
@@ -184,7 +184,6 @@ function hasTimeoutHint(err: unknown): boolean {
   return Boolean(message && isTimeoutErrorMessage(message));
 }
 
-/** Return true when an unknown error shape represents a timeout. */
 export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;

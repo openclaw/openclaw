@@ -8,6 +8,7 @@ import {
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { hasSameSecretReloadContract } from "../secrets/runtime-source-contract.js";
 import {
   getActiveSecretsRuntimeSnapshotState,
@@ -382,7 +383,6 @@ export function createManagedReloadSecretHandlers(options: {
       try {
         const publication: GatewayHotReloadPublication = {
           isCurrent: transactionOwnership.isCurrent,
-          hasNewerConfig: transactionOwnership.hasNewerConfig,
           checkpoint: transactionOwnership.checkpoint,
           assertInvokerOwned: transactionOwnership.assertInvokerOwned,
           ...(transactionOwnership.runtimeEnv
@@ -424,8 +424,11 @@ export function createManagedReloadSecretHandlers(options: {
                     runtimeCommitted = true;
                     transactionOwnership.markRuntimeCommitted(prepared.config, plan);
                     if (!runtimePolicyReconciled) {
-                      params.commitRuntimePolicy(prepared.config);
-                      await params.reconcileRuntimePolicy(prepared.config, "committed");
+                      // Committed policy owners read the published plugin generation.
+                      await runAfterPluginLifecycleCommit(async () => {
+                        params.commitRuntimePolicy(prepared.config);
+                        await params.reconcileRuntimePolicy(prepared.config, "committed");
+                      });
                       runtimePolicyReconciled = true;
                     }
                     if (sharedGatewaySessionGenerationChanged) {

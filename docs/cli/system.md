@@ -42,7 +42,12 @@ trigger the heartbeat immediately; `next-heartbeat` (default) waits for the
 next scheduled tick.
 
 Pass `--session-key` to target a specific session, for example to relay an
-async-task completion back to the channel that started it.
+async-task completion back to the channel that started it. Prefer an
+agent-qualified key. For example, if the `ops` agent is configured:
+
+```bash
+openclaw system event --text "Deploy finished" --session-key agent:ops:main --mode now
+```
 
 <Note>
 **Timing exception with `--session-key`:** when `--session-key` is supplied,
@@ -59,8 +64,10 @@ Flags:
 - `--text <text>`: required system event text.
 - `--mode <mode>`: `now` or `next-heartbeat` (default).
 - `--session-key <sessionKey>`: optional; target a specific agent session
-  instead of the agent's main session. Keys that do not belong to the
-  resolved agent fall back to the agent's main session.
+  instead of the agent's main session. The Gateway rejects malformed
+  agent-qualified keys, keys for unknown agents, targets that conflict with the
+  caller's agent scope, and subagent sessions. Rejected targets do not fall back
+  to the main session.
 
 ## `system heartbeat last|enable|disable`
 

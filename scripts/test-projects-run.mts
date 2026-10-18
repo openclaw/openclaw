@@ -65,7 +65,6 @@ import {
   parseTestProjectsArgs,
   resolveParallelFullSuiteConcurrency,
   resolveChangedTestTargetPlanForArgs,
-  resolveChangedTargetArgs,
   type FailedVitestShard,
   type VitestRunSpec as BaseVitestRunSpec,
   type VitestCacheAssignment,
@@ -250,9 +249,7 @@ function isFullExtensionsProjectRun(specs: VitestRunSpec[]) {
   );
 }
 
-function printNoChangedTestTargets(args: string[], cwd: string, baseEnv: NodeJS.ProcessEnv) {
-  const plan = resolveChangedTestTargetPlanForArgs(args, cwd, undefined, { env: baseEnv });
-  const skippedBroadFallbackPaths = plan?.skippedBroadFallbackPaths ?? [];
+function printNoChangedTestTargets(skippedBroadFallbackPaths: string[]) {
   for (const line of formatNoChangedTestTargetLines(skippedBroadFallbackPaths)) {
     console.error(line);
   }
@@ -357,10 +354,14 @@ export async function runTestProjects(
     process.exitCode = 1;
     return;
   }
-  const changedTargetArgs =
+  // Selection belongs to this invocation; specs and empty-run diagnostics must
+  // reuse it instead of rescanning Git and rebuilding the dependency plan.
+  const changedTargetPlan =
     targetArgs.length === 0
-      ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })
+      ? resolveChangedTestTargetPlanForArgs(args, process.cwd(), undefined, { env: baseEnv })
       : null;
+  const changedTargetArgs =
+    changedTargetPlan && changedTargetPlan.mode !== "broad" ? changedTargetPlan.targets : null;
   const rawRunSpecs: VitestRunSpec[] =
     targetArgs.length === 0 && changedTargetArgs === null
       ? buildFullSuiteVitestRunPlans(args, process.cwd()).map((plan) => ({
@@ -386,6 +387,7 @@ export async function runTestProjects(
       : createVitestRunSpecs(args, {
           baseEnv,
           cwd: process.cwd(),
+          changedTargetArgs,
         });
   const inheritedIncludePatterns = rawRunSpecs.some((spec) => !spec.includeFilePath)
     ? loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", baseEnv)
@@ -408,7 +410,7 @@ export async function runTestProjects(
   );
 
   if (runSpecs.length === 0) {
-    printNoChangedTestTargets(args, process.cwd(), baseEnv);
+    printNoChangedTestTargets(changedTargetPlan?.skippedBroadFallbackPaths ?? []);
     printTestSummary("skipped", 0, performance.now() - suiteStartedAt);
     return;
   }

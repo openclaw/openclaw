@@ -656,7 +656,7 @@ suite.define(() => {
             await selectAllSidebarSessions(page);
             await row.hover();
             await row.click({ button: "right" });
-            await page.getByRole("menuitem", { name: "Assign to…", exact: true }).hover();
+            await openSessionMenuSubmenu(page, "Assign to…");
           }
           await chooseMe(page);
           await expectAssignmentRequest(gateway);

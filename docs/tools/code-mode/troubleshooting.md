@@ -155,10 +155,10 @@ openclaw gateway
 ```
 
 For payload-shape debugging, use `OPENCLAW_DEBUG_MODEL_PAYLOAD=full-redacted`.
-This logs a capped, redacted JSON snapshot of the model request; use it only
-while debugging, since prompts and message text can still appear.
+This logs request shape and the complete tool-name list, without prompt,
+message, or tool content.
 
-For stream debugging, use `OPENCLAW_DEBUG_SSE=peek` to log the first five
-redacted SSE events. Code mode also rejects the final provider
+For stream debugging, use `OPENCLAW_DEBUG_SSE=events` or `peek` for timing
+diagnostics without SSE event bodies. Code mode also rejects the final provider
 payload if it does not contain exactly one `exec`, one `wait`, and only approved
 direct-only tools after the code-mode surface has activated.

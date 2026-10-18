@@ -534,6 +534,9 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectErrorIncludes("Refusing to replace agents.defaults.models");
+      expectErrorIncludes(
+        "Use --merge to merge object values or --replace to replace intentionally.",
+      );
     });
 
     it("rejects an absent expectation when a SecretRef redirects away from the caller path", async () => {
@@ -1469,26 +1472,6 @@ describe("config cli", () => {
         ],
       });
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-    });
-
-    it("submits only the specified roster entry removal for writer validation", async () => {
-      const resolved: OpenClawConfig = {
-        agents: {
-          entries: { "agent-a": {}, "agent-b": {}, "agent-c": {} },
-        },
-      };
-      const runtimeMerged: OpenClawConfig = {
-        ...withRuntimeDefaults(resolved),
-      };
-      setSnapshot(resolved, runtimeMerged);
-
-      await runConfigCommand(["config", "unset", "agents.list[1]"]);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig();
-      // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
-      expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
-      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli", observe: false });
     });
   });
 

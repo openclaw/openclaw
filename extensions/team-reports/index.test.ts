@@ -140,7 +140,6 @@ describe("Team Reports registration", () => {
         expect.objectContaining({ message: stopBeforeOpening.message }),
       );
       expect(createTeamReportsStore).toHaveBeenCalledWith({
-        config,
         stateDir: "/unused",
         workerModuleUrl: pathToFileURL(path.resolve(worker)),
       });

@@ -85,7 +85,7 @@ export class ShellLayoutOwner {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
     this.reporters.clear();
     this.apply();
   }

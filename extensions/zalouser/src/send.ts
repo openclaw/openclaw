@@ -2,16 +2,16 @@ import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelMessageSendResult } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
-import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sliceTextStyles } from "./text-styles-ranges.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
-import type { ZaloSendOptions, ZaloSendResult } from "./types.js";
-import { sendZaloReaction, sendZaloTextMessage } from "./zalo-js.js";
+import type { ZaloSendOptions } from "./types.js";
+import { sendZaloTextMessage } from "./zalo-js.js";
 
 type ZalouserSendOptions = ZaloSendOptions & {
   /** Persist each concrete platform send before the next internal chunk starts. */
-  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void;
+  onDeliveryResult?: (result: ChannelMessageSendResult) => Promise<void> | void;
 };
 
 const ZALO_TEXT_LIMIT = 2000;
@@ -25,7 +25,7 @@ export async function sendMessageZalouser(
   threadId: string,
   text: string,
   options: ZalouserSendOptions = {},
-): Promise<ZaloSendResult> {
+): Promise<ChannelMessageSendResult> {
   const { onDeliveryResult, ...transportOptions } = options;
   const prepared =
     transportOptions.textMode === "markdown"
@@ -39,8 +39,8 @@ export async function sendMessageZalouser(
     transportOptions.textChunkMode,
   );
 
-  let lastResult: ZaloSendResult | null = null;
-  const accepted: ZaloSendResult[] = [];
+  let lastResult: ChannelMessageSendResult | null = null;
+  const accepted: ChannelMessageSendResult[] = [];
   try {
     for (const [index, chunk] of chunks.entries()) {
       const chunkOptions =
@@ -63,13 +63,8 @@ export async function sendMessageZalouser(
           await onDeliveryResult?.(progress);
         },
       );
-      if (result.ok || result.receipt.platformMessageIds.length > 0) {
-        // The final chunk receipt includes any nested audio progress already reported.
-        accepted.splice(chunkStart, accepted.length - chunkStart, result);
-      }
-      if (!result.ok) {
-        throw new Error(result.error || "Failed to send Zalouser message");
-      }
+      // The final chunk receipt includes any nested audio progress already reported.
+      accepted.splice(chunkStart, accepted.length - chunkStart, result);
       await onDeliveryResult?.(result);
       lastResult = result;
     }
@@ -83,36 +78,22 @@ export async function sendMessageZalouser(
     throw error;
   }
 
-  return (
-    lastResult ?? {
-      ok: false,
-      error: "No message content provided",
-      receipt: createZalouserSendReceipt({ threadId, kind: "text" }),
-    }
-  );
+  if (!lastResult) {
+    throw new Error("No message content provided");
+  }
+  return lastResult;
 }
 
 export async function sendImageZalouser(
   threadId: string,
   imageUrl: string,
   options: ZalouserSendOptions = {},
-): Promise<ZaloSendResult> {
+): Promise<ChannelMessageSendResult> {
   return await sendMessageZalouser(threadId, options.caption ?? "", {
     ...options,
     caption: undefined,
     mediaUrl: imageUrl,
   });
-}
-
-export async function sendReactionZalouser(
-  params: Parameters<typeof sendZaloReaction>[0],
-): Promise<ZaloSendResult> {
-  const result = await sendZaloReaction(params);
-  return {
-    ok: result.ok,
-    error: result.error,
-    receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
-  };
 }
 
 function splitStyledText(

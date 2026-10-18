@@ -1,4 +1,4 @@
-import { createRoot } from "solid-js";
+import { createMemo, createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
@@ -17,14 +17,15 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
-import { solidContent } from "../../lit/solid-content.tsx";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -56,7 +57,7 @@ function fixture() {
   root.append(region);
   const state = createPageState(
     createInitializationContext(),
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     root,
   );
   state.connected = true;
@@ -68,10 +69,9 @@ function fixture() {
     state,
     linkReaders: [reader],
     pluginPanels: ["review/document"] as const,
-    updateComplete: Promise.resolve(),
+    awaitDomCommit: () => Promise.resolve(),
   };
-  const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
-  const requestUpdate = vi.fn();
+  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const updateSidebarLayout = vi.fn((layout: ChatPageHost["sidebarLayout"]) => {
     state.sidebarLayout = layout;
   });
@@ -80,7 +80,6 @@ function fixture() {
     flush = createChatPaneSessionPanelToggles({
       current: () => owner,
       pending,
-      requestUpdate,
       updateSidebarLayout,
     });
     return stop;
@@ -140,7 +139,7 @@ describe("plugin panel intent delivery", () => {
           window.dispatchEvent(event);
         }
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-        expect(f.pending.size).toBe(0);
+        expect(f.pending.requests.size).toBe(0);
         expect(f.deliverPanelEvent).not.toHaveBeenCalled();
         window.dispatchEvent(send("document", false));
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
@@ -176,7 +175,7 @@ describe("session link-reader intent delivery", () => {
       }
       recipientCommit.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
-      expect(f.pending.size).toBe(0);
+      expect(f.pending.requests.size).toBe(0);
       if (outcome === "ready") {
         expect(f.deliverPanelEvent).toHaveBeenCalledExactlyOnceWith("link-reader", event);
       } else {
@@ -207,7 +206,7 @@ describe("session link-reader intent delivery", () => {
       ["link-reader", first],
       ["link-reader", second],
     ]);
-    expect(f.pending.size).toBe(0);
+    expect(f.pending.requests.size).toBe(0);
   });
 
   it("does not append a new session intent to a retired pending batch", async () => {
@@ -221,7 +220,7 @@ describe("session link-reader intent delivery", () => {
     f.commit.resolve(true);
     await vi.waitFor(() => expect(f.deliverPanelEvent).toHaveBeenCalledTimes(1));
     expect(f.deliverPanelEvent).toHaveBeenCalledWith("link-reader", current);
-    expect(f.pending.size).toBe(0);
+    expect(f.pending.requests.size).toBe(0);
   });
 
   it.each([
@@ -244,7 +243,7 @@ describe("session link-reader intent delivery", () => {
         window.dispatchEvent(
           new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
         );
-        expect(f.pending.size).toBe(0);
+        expect(f.pending.requests.size).toBe(0);
       } else if (change === "session") {
         f.state.sessionKey = "session-b";
       } else {
@@ -296,12 +295,12 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   let pendingUpdate: Promise<void> | undefined;
   const state = createPageState(
     createInitializationContext(),
-    { invalidate: requestUpdate, afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     pane,
   );
   state.sidebarLayout = { columns: [] };
   state.sessionKey = "agent:main:local-preview";
-  const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
+  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const dispose = createRoot((stop) => {
     createChatPaneSessionPanelToggles({
       current: () => ({
@@ -309,13 +308,12 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         state,
         linkReaders: [],
         pluginPanels: [],
-        updateComplete: pendingUpdate ?? Promise.resolve(),
+        awaitDomCommit: () => pendingUpdate ?? Promise.resolve(),
       }),
       pending,
-      requestUpdate,
       updateSidebarLayout: (layout) => {
         state.sidebarLayout = layout;
-        requestUpdate();
+        scheduleCommit();
       },
     });
     return stop;
@@ -337,42 +335,61 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   }
   const conversation = document.createElement("main");
   conversation.textContent = "Conversation";
+  const [snapshot, setSnapshot] = createSignal({
+    layout: state.sidebarLayout,
+    sessionKey: state.sessionKey,
+    refresh: !pending.requests.has("browser"),
+  });
+  let view: ReturnType<typeof mountSolid> | undefined;
   function draw() {
-    renderPaneLegacyContent(
-      renderSidebarRegion({
-        presentationId: "delayed-browser-card",
-        availableWidth: 1400,
-        callbacks: {
-          activatePanel: () => undefined,
-          togglePanelExpanded: () => undefined,
-          closeSlot: () => undefined,
-          openSlot: () => undefined,
-          reorderPanel: () => undefined,
-          resizePanel: () => undefined,
-          setOpen: () => undefined,
-        },
-        layout: state.sidebarLayout,
-        narrow: false,
-        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+    setSnapshot({
+      layout: state.sidebarLayout,
+      sessionKey: state.sessionKey,
+      refresh: !pending.requests.has("browser"),
+    });
+    view ??= mountSolid(
+      () => {
+        const definitions = sidebarPanelDefinitions().map((definition) =>
           Object.assign(definition, {
             available: definition.slot === "browser",
             content:
               definition.slot === "browser"
-                ? solidContent(BrowserCard, {
-                    sessionKey: state.sessionKey,
-                    presented: isSidebarSlotVisible(state.sidebarLayout, "browser"),
-                    refresh: !pending.has("browser"),
-                  })
+                ? () => (
+                    <BrowserCard
+                      sessionKey={snapshot().sessionKey}
+                      presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                      refresh={snapshot().refresh}
+                    />
+                  )
                 : null,
           }),
-        ),
-        primary: conversation,
-        requestUpdate,
-      }),
-      pane,
+        );
+        const region = createMemo(() =>
+          renderSidebarRegion({
+            presentationId: "delayed-browser-card",
+            availableWidth: 1400,
+            callbacks: {
+              activatePanel: () => undefined,
+              togglePanelExpanded: () => undefined,
+              closeSlot: () => undefined,
+              openSlot: () => undefined,
+              reorderPanel: () => undefined,
+              resizePanel: () => undefined,
+              setOpen: () => undefined,
+            },
+            layout: snapshot().layout,
+            narrow: false,
+            panelDefinitions: definitions,
+            primary: conversation,
+          }),
+        );
+        return <SidebarRegionView {...region()} />;
+      },
+      { container: pane },
     );
+    flushSolid();
   }
-  function requestUpdate() {
+  function scheduleCommit() {
     // Expose the new commit promise before the browser card can mount.
     pendingUpdate ??= commit.promise.then(() => {
       draw();
@@ -405,13 +422,11 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
       }),
     );
     expect(
-      pane
-        .querySelector("openclaw-browser-panel")
-        ?.renderRoot?.querySelector(".bp-shot")
-        ?.getAttribute("alt"),
+      pane.querySelector("openclaw-browser-panel")?.querySelector(".bp-shot")?.getAttribute("alt"),
     ).toBe("Local preview");
   } finally {
     commit.resolve();
+    view?.unmount();
     pane.remove();
     vi.unstubAllGlobals();
     vi.useRealTimers();

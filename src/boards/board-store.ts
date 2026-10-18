@@ -115,7 +115,7 @@ export type BoardWidgetNameIdentityMarker =
   | BoardWidgetGeneratedIdentityMarker
   | { kind: "invalid" };
 
-export function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
+function cloneBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
   return structuredClone(snapshot);
 }
 
@@ -333,7 +333,7 @@ export function createBoardWidgetPutSnapshot(
         ? {
             pluginKind: params.content.pluginKind,
             ...(params.content.kind === "plugin" && params.content.props !== undefined
-              ? { props: structuredClone(params.content.props) }
+              ? { props: params.content.props }
               : {}),
           }
         : {}),

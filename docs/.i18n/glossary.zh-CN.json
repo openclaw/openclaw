@@ -1,5 +1,9 @@
 [
   {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
+  },
+  {
     "source": "MCP Events",
     "target": "MCP Events"
   },
@@ -5090,5 +5094,9 @@
   {
     "source": "Standalone builds",
     "target": "独立可执行文件构建"
+  },
+  {
+    "source": "PostgreSQL operator guide",
+    "target": "PostgreSQL 运维指南"
   }
 ]

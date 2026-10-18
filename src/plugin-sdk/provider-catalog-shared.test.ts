@@ -6,6 +6,7 @@ import {
   recordLiveCatalogExpiry,
   withProviderCatalogExpiry,
 } from "../plugins/provider-catalog-expiry.js";
+import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
@@ -32,6 +33,78 @@ function buildModel(id: string, supportsUsageInStreaming?: boolean): ModelDefini
 describe("provider-catalog-shared live catalog cache", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+  });
+
+  it("reports only cache sizes across pending, shared-value, and cleared states", async () => {
+    const completion = createDeferred<string[]>();
+    const load = vi.fn(() => completion.promise);
+    const first = getCachedLiveCatalogValue({ keyParts: ["PRIVATE_CACHE_KEY"], load });
+    const joined = getCachedLiveCatalogValue({ keyParts: ["PRIVATE_CACHE_KEY"], load });
+    expect(getLiveCatalogRetainedData()).toEqual([
+      {
+        structure: "catalog-source",
+        entries: 0,
+        approximateBytes: 0,
+        stringBytes: 0,
+        objects: 0,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 1, approximateBytes: 0 },
+    ]);
+
+    const payload = ["PRIVATE_MODEL"];
+    completion.resolve(payload);
+    expect(await first).toBe(payload);
+    expect(await joined).toBe(payload);
+    expect(load).toHaveBeenCalledOnce();
+    await getCachedLiveCatalogValue({
+      keyParts: ["ANOTHER_PRIVATE_KEY"],
+      load: async () => payload,
+    });
+    expect(getLiveCatalogRetainedData()).toEqual([
+      // Both cache entries retain the same array, counted once: array + slot + UTF-16 string.
+      {
+        structure: "catalog-source",
+        entries: 2,
+        approximateBytes: 50,
+        stringBytes: 26,
+        objects: 1,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 0, approximateBytes: 0 },
+    ]);
+    clearLiveCatalogCacheForTests();
+    expect(getLiveCatalogRetainedData()).toEqual([
+      {
+        structure: "catalog-source",
+        entries: 0,
+        approximateBytes: 0,
+        stringBytes: 0,
+        objects: 0,
+        truncated: false,
+      },
+      { structure: "catalog-request", entries: 0, approximateBytes: 0 },
+    ]);
+  });
+
+  it("samples cached plugin data without invoking proxy traps or custom iterators", async () => {
+    const executePlugin = vi.fn(() => {
+      throw new Error("diagnostics invoked plugin behavior");
+    });
+    const opaque = new Proxy({}, { ownKeys: executePlugin });
+    const collections = [new Map<string, string>(), new Set<string>(), ["model"]].map((value) =>
+      Object.defineProperty(value, Symbol.iterator, { value: executePlugin }),
+    );
+    const payload = { opaque, collections };
+    await expect(
+      getCachedLiveCatalogValue({ keyParts: ["opaque-plugin-data"], load: async () => payload }),
+    ).resolves.toBe(payload);
+    expect(getLiveCatalogRetainedData()[0]).toMatchObject({
+      structure: "catalog-source",
+      entries: 1,
+      truncated: true,
+    });
+    expect(executePlugin).not.toHaveBeenCalled();
   });
 
   it("does not admit a cancelled catalog consumer", async () => {

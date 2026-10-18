@@ -1,4 +1,5 @@
 // Optional utility preprocessing keeps its runtime loaders lazy and cancellation explicit.
+import type { ActiveMediaModel } from "../../../packages/media-understanding-common/src/active-model.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readConversationBindingRouteFacts } from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -30,7 +31,7 @@ export async function applyMediaUnderstandingIfNeeded(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  activeModel: { provider: string; model: string };
+  activeModel: ActiveMediaModel;
   processingMode?: "audio-only" | "files-only" | "audio-and-files";
   selfServeLocalPaths?: boolean;
 }): Promise<ApplyMediaUnderstandingResult | undefined> {

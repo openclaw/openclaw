@@ -6,23 +6,18 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  Show,
-  createEffect,
-  createMemo,
-  createRenderEffect,
-  createSignal,
-  onCleanup,
-  onSettled,
-} from "solid-js";
+import { Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import {
   WidgetSandboxHost,
@@ -30,7 +25,6 @@ import {
   WIDGET_LOAD_NOTICE_MS,
 } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
@@ -45,6 +39,7 @@ type ViewBinding = {
   gatewayUrl: string;
   profileId: string | null;
   recoveryScope: string | undefined;
+  operatorRead: boolean;
 };
 // One wake attempt per session/document per page load, including remounts.
 const reportedRuntimeErrors = new Set<string>();
@@ -58,27 +53,51 @@ const pendingViews = new WeakMap<
   }
 >();
 
+function canvasViewRequestKey(binding: ViewBinding): string {
+  return `${binding.sessionKey}\0${binding.docId}\0${binding.operatorRead}`;
+}
+
+function forgetPendingCanvasView(binding: ViewBinding | undefined): void {
+  if (!binding) {
+    return;
+  }
+  const pending = pendingViews.get(binding.client);
+  if (pending?.generation === binding.generation) {
+    pending.requests.delete(canvasViewRequestKey(binding));
+  }
+}
+
 function loadCanvasView(binding: ViewBinding): Promise<CanvasDocumentViewResult> {
   let pending = pendingViews.get(binding.client);
   if (!pending || pending.generation !== binding.generation) {
     pending = { generation: binding.generation, requests: new Map() };
     pendingViews.set(binding.client, pending);
   }
-  const existing = pending.requests.get(binding.docId);
+  const requestKey = canvasViewRequestKey(binding);
+  const existing = pending.requests.get(requestKey);
   if (existing) {
     return existing;
   }
   const request = binding.client.request<CanvasDocumentViewResult>(
     "canvas.document.view",
-    { docId: binding.docId },
+    {
+      docId: binding.docId,
+      ...(!binding.operatorRead && binding.sessionKey ? { sessionKey: binding.sessionKey } : {}),
+    },
     { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
   );
   // Canvas also supports replacing a named document. Share concurrent reads,
   // but only the mounted view retains bytes; a remount revalidates the source.
   if (pending.requests.size < 32) {
     const requests = pending.requests;
-    requests.set(binding.docId, request);
-    void request.finally(() => requests.delete(binding.docId)).catch(() => {});
+    requests.set(requestKey, request);
+    void request
+      .finally(() => {
+        if (requests.get(requestKey) === request) {
+          requests.delete(requestKey);
+        }
+      })
+      .catch(() => {});
   }
   return request;
 }
@@ -99,112 +118,116 @@ export type OpenClawCanvasWidgetView = SolidBridgeElement<CanvasWidgetViewProps>
   readonly documentHtml: string | undefined;
 };
 
-class CanvasWidgetController {
-  view?: CanvasDocumentViewResult;
-  error = "";
-  runtimeError = "";
-  resourceError = false;
-  contentHeight?: number;
-  sandboxGeneration = 0;
-  pending = false;
-  private binding?: ViewBinding;
-  private sandboxHost?: WidgetSandboxHost;
-  private promptPort?: MessagePort;
-  private sandboxOrigin = "";
-  private scrollNonce = "";
-  private releaseTheme?: () => void;
-  private validated?: ViewBinding;
-  private viewOwner?: ViewBinding;
-  private retryTimer?: number;
-  private slowTimer?: number;
-  private retryDelayMs = 1_000;
-
-  constructor(
-    private readonly props: CanvasWidgetViewProps,
-    private readonly host: HTMLElement,
-    private readonly context: ApplicationContext | undefined,
-    readonly notify: () => void,
-  ) {}
-
-  private clearRetry(): void {
-    window.clearTimeout(this.slowTimer);
-    this.slowTimer = undefined;
-    window.clearTimeout(this.retryTimer);
-    this.retryTimer = undefined;
+function createCanvasWidget(
+  props: CanvasWidgetViewProps,
+  element: HTMLElement,
+  context: ApplicationContext,
+) {
+  // Document identity and private-port authority stay synchronous; the view reads a projection.
+  const state: {
+    view?: CanvasDocumentViewResult;
+    error: string;
+    accessDenied: boolean;
+    awaitingResult: boolean;
+    runtimeError: string;
+    resourceError: boolean;
+    contentHeight?: number;
+    sandboxGeneration: number;
+    pending: boolean;
+  } = {
+    error: "",
+    accessDenied: false,
+    awaitingResult: false,
+    runtimeError: "",
+    resourceError: false,
+    sandboxGeneration: 0,
+    pending: false,
+  };
+  let activeBinding: ViewBinding | undefined;
+  let sandboxHost: WidgetSandboxHost | undefined;
+  let promptPort: MessagePort | undefined;
+  let releasePromptPort: (() => void) | undefined;
+  let frameElement: HTMLIFrameElement | undefined;
+  let sandboxOrigin = "";
+  let scrollNonce = "";
+  let releaseTheme: (() => void) | undefined;
+  let validatedBinding: ViewBinding | undefined;
+  let ownerBinding: ViewBinding | undefined;
+  let retryTimer: number | undefined;
+  let slowTimer: number | undefined;
+  let retryDelayMs = 1_000;
+  const listeners = new Set<() => void>();
+  const notify = () => listeners.forEach((listener) => listener());
+  function clearRetry(): void {
+    window.clearTimeout(slowTimer);
+    slowTimer = undefined;
+    window.clearTimeout(retryTimer);
+    retryTimer = undefined;
   }
 
-  private scheduleRetry(binding: ViewBinding, retryAfterMs = 0): void {
-    if (this.retryTimer !== undefined) {
+  function scheduleRetry(binding: ViewBinding, retryAfterMs = 0): void {
+    if (retryTimer !== undefined) {
       return;
     }
-    this.pending = true;
-    this.retryTimer = window.setTimeout(
+    state.pending = true;
+    retryTimer = window.setTimeout(
       () => {
-        this.retryTimer = undefined;
-        if (this.isCurrent(binding)) {
-          this.binding = undefined;
-          this.reconcile();
-          this.notify();
+        retryTimer = undefined;
+        if (isCurrent(binding)) {
+          activeBinding = undefined;
+          reconcile();
+          notify();
         }
       },
-      resolveSafeTimeoutDelayMs(Math.max(this.retryDelayMs, retryAfterMs)),
+      resolveSafeTimeoutDelayMs(Math.max(retryDelayMs, retryAfterMs)),
     );
-    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 30_000);
+    retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
   }
 
-  retireScriptPolicy(): void {
-    this.clearSandbox();
-    this.sandboxGeneration += 1;
-    if (this.view) {
-      this.error = "";
+  function retireScriptPolicy(): void {
+    clearSandbox();
+    state.sandboxGeneration += 1;
+    if (state.view) {
+      state.error = "";
     }
   }
 
-  get documentHtml(): string | undefined {
-    return this.sameOwner(this.viewOwner) ? this.view?.html : undefined;
+  function clearView(): void {
+    forgetPendingCanvasView(activeBinding);
+    clearRetry();
+    state.awaitingResult = false;
+    validatedBinding = undefined;
+    ownerBinding = undefined;
+    state.sandboxGeneration += 1;
+    state.runtimeError = "";
+    state.resourceError = false;
+    activeBinding = undefined;
+    state.view = undefined;
+    clearSandbox();
   }
 
-  dispose(): void {
-    window.removeEventListener("message", this.handleMessage);
-    this.clearView();
+  function clearSandbox(): void {
+    scrollNonce = "";
+    sandboxHost?.dispose();
+    sandboxHost = undefined;
+    releasePromptPort?.();
+    releasePromptPort = undefined;
+    promptPort?.close();
+    promptPort = undefined;
+    releaseTheme?.();
+    releaseTheme = undefined;
+    state.contentHeight = undefined;
   }
 
-  connect(): void {
-    window.addEventListener("message", this.handleMessage);
-  }
-
-  clearView(): void {
-    this.clearRetry();
-    this.validated = undefined;
-    this.viewOwner = undefined;
-    this.sandboxGeneration += 1;
-    this.runtimeError = "";
-    this.resourceError = false;
-    this.binding = undefined;
-    this.view = undefined;
-    this.clearSandbox();
-  }
-
-  private clearSandbox(): void {
-    this.scrollNonce = "";
-    this.sandboxHost?.dispose();
-    this.sandboxHost = undefined;
-    this.promptPort?.close();
-    this.promptPort = undefined;
-    this.releaseTheme?.();
-    this.releaseTheme = undefined;
-    this.contentHeight = undefined;
-  }
-
-  private sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
-    const gateway = this.context?.gateway;
+  function sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
+    const gateway = context.gateway;
     const snapshot = gateway?.snapshot;
     return Boolean(
       binding &&
       gateway &&
       snapshot &&
-      binding.docId === this.props.docId &&
-      binding.sessionKey === this.props.sessionKey &&
+      binding.docId === props.docId &&
+      binding.sessionKey === props.sessionKey &&
       binding.connectionRevision === gateway.connectionRevision &&
       binding.gatewayUrl === gateway.connection.gatewayUrl &&
       !snapshot.lastErrorAuthReason &&
@@ -214,91 +237,96 @@ class CanvasWidgetController {
           !snapshot.selfUser?.id ||
           binding.profileId === snapshot.selfUser.id) &&
           binding.recoveryScope === snapshot.hello?.auth?.recoveryScope &&
-          hasOperatorReadAccess(snapshot.hello?.auth ?? null))),
+          binding.operatorRead === hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
+          hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null))),
     );
   }
 
-  private isCurrent(binding: ViewBinding | undefined): binding is ViewBinding {
+  function isCurrent(binding: ViewBinding | undefined): binding is ViewBinding {
     return (
-      this.sameOwner(binding) &&
-      this.host.isConnected &&
-      this.binding === binding &&
-      binding.client === this.context!.gateway.snapshot.client &&
-      isGatewayAvailable(this.context!.gateway.snapshot) &&
+      sameOwner(binding) &&
+      element.isConnected &&
+      activeBinding === binding &&
+      binding.client === context.gateway.snapshot.client &&
+      isGatewayAvailable(context.gateway.snapshot) &&
       binding.generation === getCanvasWidgetFrameConnectionGeneration()
     );
   }
 
-  reconcile(): void {
-    const gateway = this.context?.gateway;
+  function reconcile(): void {
+    const gateway = context.gateway;
     const client = gateway?.snapshot.client;
     if (
-      (this.binding && !this.sameOwner(this.binding)) ||
-      (this.viewOwner && !this.sameOwner(this.viewOwner))
+      (activeBinding && !sameOwner(activeBinding)) ||
+      (ownerBinding && !sameOwner(ownerBinding))
     ) {
-      this.clearView();
+      clearView();
     }
-    if (!gateway || !client || !this.props.docId) {
-      this.clearView();
+    if (!gateway || !client || !props.docId) {
+      clearView();
       return;
     }
     // Content can outlive its socket, but prompts require a successful read in
     // the current generation. Keep the private port inert rather than remounting.
     if (!isGatewayAvailable(gateway.snapshot)) {
-      this.binding = undefined;
-      this.clearRetry();
-      this.validated = undefined;
-      this.sandboxHost?.setActive(false);
-      this.pending = true;
+      activeBinding = undefined;
+      clearRetry();
+      validatedBinding = undefined;
+      sandboxHost?.setActive(false);
+      state.awaitingResult = false;
+      state.pending = true;
       return;
     }
-    if (!hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null)) {
-      this.error = t("board.widget.sandboxUnavailable");
+    if (!hasOperatorSelfReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+      state.accessDenied = true;
+      state.error = t("board.widget.accessDenied");
       return;
     }
     const profileId = gateway.snapshot.selfUser?.id;
     if (profileId) {
-      if (this.binding && !this.binding.profileId) {
-        this.binding.profileId = profileId;
+      if (activeBinding && !activeBinding.profileId) {
+        activeBinding.profileId = profileId;
       }
-      if (this.viewOwner && !this.viewOwner.profileId) {
-        this.viewOwner.profileId = profileId;
+      if (ownerBinding && !ownerBinding.profileId) {
+        ownerBinding.profileId = profileId;
       }
     }
     const generation = getCanvasWidgetFrameConnectionGeneration();
-    if (this.binding?.client === client && this.binding.generation === generation) {
+    if (activeBinding?.client === client && activeBinding.generation === generation) {
       return;
     }
-    this.clearRetry();
-    this.validated = undefined;
-    this.error = "";
+    clearRetry();
+    validatedBinding = undefined;
+    state.error = "";
+    state.accessDenied = false;
     const binding: ViewBinding = {
       client,
-      docId: this.props.docId,
-      sessionKey: this.props.sessionKey,
+      docId: props.docId,
+      sessionKey: props.sessionKey,
       generation,
       connectionRevision: gateway.connectionRevision,
       gatewayUrl: gateway.connection.gatewayUrl,
       // Hello can omit presence until users.self settles; recoveryScope already
       // binds verified principals. Preserve known attribution until it resolves.
-      profileId: gateway.snapshot.selfUser?.id ?? this.viewOwner?.profileId ?? null,
+      profileId: gateway.snapshot.selfUser?.id ?? ownerBinding?.profileId ?? null,
       recoveryScope: gateway.snapshot.hello?.auth?.recoveryScope,
+      operatorRead: hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null),
     };
-    this.binding = binding;
-    this.pending = Boolean(this.view);
-    this.slowTimer = window.setTimeout(() => {
-      if (this.isCurrent(binding)) {
-        this.pending = true;
-        this.notify();
+    activeBinding = binding;
+    state.pending = Boolean(state.view) || state.awaitingResult;
+    slowTimer = window.setTimeout(() => {
+      if (isCurrent(binding)) {
+        state.pending = true;
+        notify();
       }
     }, WIDGET_LOAD_NOTICE_MS);
     void loadCanvasView(binding)
       .then((view) => {
-        if (!this.isCurrent(binding)) {
+        if (!isCurrent(binding)) {
           return;
         }
-        this.clearRetry();
-        const previous = this.view;
+        clearRetry();
+        const previous = state.view;
         if (
           previous &&
           (previous.html !== view.html ||
@@ -306,23 +334,27 @@ class CanvasWidgetController {
             previous.sandboxPort !== view.sandboxPort ||
             previous.sandboxOrigin !== view.sandboxOrigin)
         ) {
-          this.clearSandbox();
-          this.runtimeError = "";
-          this.resourceError = false;
-          this.sandboxGeneration += 1;
+          clearSandbox();
+          state.runtimeError = "";
+          state.resourceError = false;
+          state.sandboxGeneration += 1;
         }
-        this.view = view;
-        this.viewOwner = binding;
-        this.validated = binding;
-        this.pending = false;
-        this.retryDelayMs = 1_000;
-        this.sandboxHost?.setActive(this.props.presentationActive);
+        state.view = view;
+        ownerBinding = binding;
+        validatedBinding = binding;
+        state.pending = false;
+        state.awaitingResult = false;
+        retryDelayMs = 1_000;
+        sandboxHost?.setActive(props.presentationActive);
       })
       .catch((error: unknown) => {
-        if (!this.isCurrent(binding)) {
+        if (!isCurrent(binding)) {
           return;
         }
-        this.clearRetry();
+        clearRetry();
+        state.awaitingResult =
+          error instanceof GatewayProtocolRequestError &&
+          asOptionalRecord(error.details)?.type === "canvas_widget_pending";
         if (
           isAwaitingGatewayFailure(error, gateway.snapshot) ||
           error instanceof GatewayProtocolRequestTimeoutError ||
@@ -330,95 +362,122 @@ class CanvasWidgetController {
             error.gatewayCode === "UNAVAILABLE" &&
             error.retryable)
         ) {
-          this.scheduleRetry(
+          scheduleRetry(
             binding,
             error instanceof GatewayProtocolRequestError ? error.retryAfterMs : undefined,
           );
           return;
         }
         // A definitive denial or missing document retires cached content and its ports.
-        this.view = undefined;
-        this.clearSandbox();
-        this.pending = false;
-        this.error = formatUiError(error);
+        state.view = undefined;
+        clearSandbox();
+        state.pending = false;
+        state.accessDenied =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        state.error = formatUiError(error);
       })
-      .finally(this.notify);
+      .finally(notify);
   }
 
-  syncSandbox(): void {
-    const active = this.props.presentationActive && this.isCurrent(this.validated);
-    this.sandboxHost?.setActive(active);
-    const frame = this.host.querySelector<HTMLIFrameElement>("iframe");
-    const view = this.view;
-    const binding = this.binding;
-    if (
-      !this.props.allowScripts ||
-      !frame ||
-      !view ||
-      !this.isCurrent(binding) ||
-      this.sandboxHost
-    ) {
+  onSettled(() =>
+    context.gateway.subscribeEvents((event) => {
+      const binding = activeBinding;
+      const payload = asOptionalRecord(event.payload);
+      if (
+        !isCurrent(binding) ||
+        binding.operatorRead ||
+        state.view ||
+        payload?.sessionKey !== binding.sessionKey
+      ) {
+        return;
+      }
+      const message = asOptionalRecord(payload.message);
+      const committed =
+        event.event === "session.message" &&
+        message?.role === "toolResult" &&
+        message.toolName === "show_widget";
+      const terminal =
+        event.event === "chat" &&
+        (payload.state === "final" || payload.state === "aborted" || payload.state === "error");
+      if (committed || terminal) {
+        // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
+        forgetPendingCanvasView(binding);
+        activeBinding = undefined;
+        reconcile();
+        notify();
+      }
+    }),
+  );
+
+  function syncSandbox(): void {
+    const active = props.presentationActive && isCurrent(validatedBinding);
+    sandboxHost?.setActive(active);
+    const frame = frameElement;
+    const view = state.view;
+    const binding = activeBinding;
+    if (!props.allowScripts || !frame?.isConnected || !view || !isCurrent(binding) || sandboxHost) {
       return;
     }
-    this.sandboxOrigin = new URL(frame.src).origin;
-    this.releaseTheme = registerWidgetThemeFrame(frame, this.sandboxOrigin);
-    this.scrollNonce = generateUUID();
-    this.sandboxHost = new WidgetSandboxHost({
+    sandboxOrigin = new URL(frame.src).origin;
+    releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin);
+    scrollNonce = generateUUID();
+    sandboxHost = new WidgetSandboxHost({
       frame,
-      sandboxOrigin: this.sandboxOrigin,
+      sandboxOrigin,
       sandboxUrl: frame.src,
       documentKey: `${binding.docId}\0${binding.generation}`,
       loadDocument: async () => view.html,
       onLoaded: () => {
-        this.pending = false;
-        this.postHostState();
-        this.notify();
+        state.pending = false;
+        postHostState();
+        notify();
       },
-      onRendered: () => this.postHostState(),
+      onRendered: postHostState,
       onError: (error) => {
-        this.clearSandbox();
-        this.error = formatUiError(error);
-        this.notify();
+        clearSandbox();
+        state.error = formatUiError(error);
+        notify();
       },
       onReadyTimeout: () => {
-        this.pending = true;
-        this.notify();
+        state.pending = true;
+        notify();
       },
       onPending: () => {
-        this.pending = true;
-        this.notify();
+        state.pending = true;
+        notify();
       },
     });
-    this.sandboxHost.setActive(active);
+    sandboxHost.setActive(active);
   }
 
-  syncFrameError(): void {
-    this.sandboxHost?.handleFrameError();
+  function syncFrameError(): void {
+    sandboxHost?.handleFrameError();
   }
 
-  private postHostState(): void {
-    const frame = this.sandboxHost?.frame;
+  function postHostState(): void {
+    const frame = sandboxHost?.frame;
     if (!frame) {
       return;
     }
-    postWidgetTheme(frame, this.sandboxOrigin);
-    frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, this.sandboxOrigin);
+    postWidgetTheme(frame, sandboxOrigin);
+    frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, sandboxOrigin);
     // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
-      { type: "openclaw:widget-board-host", nonce: this.scrollNonce },
-      this.sandboxOrigin,
+      { type: "openclaw:widget-board-host", nonce: scrollNonce },
+      sandboxOrigin,
     );
   }
 
-  private readonly handleMessage = (event: MessageEvent): void => {
-    const host = this.sandboxHost;
-    const binding = this.viewOwner;
+  const handleMessage = (event: Event): void => {
+    const host = sandboxHost;
+    const binding = ownerBinding;
     if (
+      !(event instanceof MessageEvent) ||
       !host ||
-      !this.host.isConnected ||
-      !this.sameOwner(binding) ||
+      !element.isConnected ||
+      !sameOwner(binding) ||
       event.source !== host.frame.contentWindow ||
-      event.origin !== this.sandboxOrigin
+      event.origin !== sandboxOrigin
     ) {
       return;
     }
@@ -426,37 +485,33 @@ class CanvasWidgetController {
     const data = asOptionalRecord(event.data);
     if (
       data?.type === "openclaw:widget-scroll" &&
-      this.scrollNonce &&
-      data.nonce === this.scrollNonce &&
+      scrollNonce &&
+      data.nonce === scrollNonce &&
       typeof data.deltaY === "number" &&
       Number.isFinite(data.deltaY)
     ) {
       forwardChatWheelToTranscript(
         new WheelEvent("wheel", { deltaY: data.deltaY, cancelable: true }),
-        this.host.closest<HTMLElement>(".chat-thread"),
+        element.closest<HTMLElement>(".chat-thread"),
       );
       return;
     }
     if (data?.type === "openclaw:widget-runtime-error") {
-      if (
-        !this.props.presentationActive ||
-        !this.props.sessionKey ||
-        typeof data.message !== "string"
-      ) {
+      if (!props.presentationActive || !props.sessionKey || typeof data.message !== "string") {
         return;
       }
       // Download/rejection failures are not evidence that agent-authored code is
       // broken. Keep a local recovery action, never wake the agent to rewrite it.
-      const validated = this.validated;
+      const validated = validatedBinding;
       if (
-        !this.isCurrent(validated) ||
+        !isCurrent(validated) ||
         !navigator.onLine ||
         /failed to fetch|load failed|networkerror|network request failed|importing a module script failed|failed to load module script/i.test(
           data.message,
         )
       ) {
-        this.resourceError = true;
-        this.notify();
+        state.resourceError = true;
+        notify();
         return;
       }
       const report = {
@@ -467,9 +522,9 @@ class CanvasWidgetController {
             ? data.column
             : undefined,
       };
-      this.runtimeError ||= report.message;
-      this.notify();
-      const messageTimestamp = this.props.messageTimestamp;
+      state.runtimeError ||= report.message;
+      notify();
+      const messageTimestamp = props.messageTimestamp;
       if (
         typeof messageTimestamp !== "number" ||
         !Number.isFinite(messageTimestamp) ||
@@ -477,7 +532,7 @@ class CanvasWidgetController {
       ) {
         return;
       }
-      const key = `error\0${this.props.sessionKey}\0${binding.docId}`;
+      const key = `error\0${props.sessionKey}\0${binding.docId}`;
       // Shared prompt limiter: 10 per key per 60 seconds, at most 100 keys.
       if (reportedRuntimeErrors.has(key) || !allowWidgetPrompt(key, Date.now())) {
         return;
@@ -487,9 +542,9 @@ class CanvasWidgetController {
         report.line === undefined
           ? ""
           : `, line ${report.line}${report.column === undefined ? "" : `, column ${report.column}`}`;
-      const text = `Inline widget "${truncateUtf16Safe(this.props.title, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
+      const text = `Inline widget "${truncateUtf16Safe(props.title, 80)}" (${binding.docId}) threw a script error after rendering: ${report.message}${location}. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`;
       void validated.client
-        .request("wake", { mode: "now", sessionKey: this.props.sessionKey, text })
+        .request("wake", { mode: "now", sessionKey: props.sessionKey, text })
         .catch((error: unknown) => console.warn("Widget runtime error wake failed", error));
       return;
     }
@@ -499,12 +554,12 @@ class CanvasWidgetController {
       Number.isFinite(data.height) &&
       data.height > 0
     ) {
-      this.contentHeight = Math.min(8000, Math.max(48, Math.trunc(data.height)));
-      this.props.onHeightChange?.(this.contentHeight);
-      this.notify();
+      state.contentHeight = Math.min(8000, Math.max(48, Math.trunc(data.height)));
+      props.onHeightChange?.(state.contentHeight);
+      notify();
     }
     if (data?.type === "openclaw:widget-bridge-ready") {
-      this.postHostState();
+      postHostState();
     }
     if (data?.type !== "openclaw:widget-prompt-offer") {
       if (data?.type === "openclaw:widget-bridge-port-offer") {
@@ -513,30 +568,54 @@ class CanvasWidgetController {
       return;
     }
     const port = event.ports[0];
-    if (!port || this.promptPort || !host.loaded) {
+    if (!port || promptPort || !host.loaded) {
       port?.close();
       return;
     }
     // The isolated proxy forwards only the wrapper's first offer. Inline views
     // adopt its prompt channel only; pinning never lends them dashboard grants.
-    this.promptPort = port;
-    port.addEventListener("message", (message: MessageEvent) => {
+    promptPort = port;
+    releasePromptPort = listen(port, "message", (message) => {
       if (
-        this.props.presentationActive &&
-        this.isCurrent(this.validated) &&
-        this.sandboxHost === host &&
-        this.promptPort === port &&
+        message instanceof MessageEvent &&
+        props.presentationActive &&
+        isCurrent(validatedBinding) &&
+        sandboxHost === host &&
+        promptPort === port &&
         message.data?.type === "openclaw:widget-prompt"
       ) {
         void dispatchWidgetPrompt(
           host.frame,
           message.data.prompt,
-          `${this.props.sessionKey}\0${this.props.docId}\0${this.validated!.generation}`,
+          `${props.sessionKey}\0${props.docId}\0${validatedBinding!.generation}`,
         );
       }
     });
     port.start();
     port.postMessage({ type: "openclaw:widget-prompt-host-ready" });
+  };
+  onSettled(() => listen(window, "message", handleMessage));
+  onCleanup(clearView);
+  return {
+    state,
+    notify,
+    reconcile,
+    retireScriptPolicy,
+    clearView,
+    syncSandbox,
+    syncFrameError,
+    setFrame: (frame: HTMLIFrameElement) => {
+      frameElement = frame;
+    },
+    get documentHtml() {
+      return sameOwner(ownerBinding) ? state.view?.html : undefined;
+    },
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
   };
 }
 
@@ -547,31 +626,27 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     host.style.minHeight = "";
     const context = useApplication();
     const gateway = projectGateway(context.gateway);
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const controller = new CanvasWidgetController(host, host, context, () =>
-      setRevision((n) => n + 1),
-    );
+    const widget = createCanvasWidget(host, host, context);
+    const projection = projectOwner(widget, (owner) => owner.state);
     const scriptProperty = Object.getOwnPropertyDescriptor(host, "allowScripts")!;
     // Even a false→true change within one commit must revoke the old private port.
     Object.defineProperty(host, "allowScripts", {
       ...scriptProperty,
       set(value: boolean) {
         if (value !== host.allowScripts) {
-          controller.retireScriptPolicy();
+          widget.retireScriptPolicy();
         }
         scriptProperty.set!.call(host, value);
-        controller.notify();
+        widget.notify();
       },
     });
-    const read = () => {
-      revision();
-      return controller;
-    };
+    const read = projection.read;
     Object.defineProperty(host, "documentHtml", {
       configurable: true,
-      get: () => controller.documentHtml,
+      get: () => widget.documentHtml,
     });
-    createRenderEffect(
+    // Admit authenticated reads and retire stale sandbox authority when external identity changes.
+    createEffect(
       () => [
         props.docId,
         props.sessionKey,
@@ -581,23 +656,21 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         gateway.read(),
       ],
       () => {
-        controller.reconcile();
-        controller.notify();
+        widget.reconcile();
+        widget.notify();
       },
     );
     createEffect(
-      () => [revision(), props.presentationActive],
-      () => controller.syncSandbox(),
+      () => [projection.revision(), props.presentationActive],
+      () => widget.syncSandbox(),
     );
-    onSettled(() => controller.connect());
     onCleanup(() => {
       Object.defineProperty(host, "allowScripts", scriptProperty);
-      controller.dispose();
     });
     const retry = () => {
-      controller.clearView();
-      controller.reconcile();
-      controller.notify();
+      widget.clearView();
+      widget.reconcile();
+      widget.notify();
     };
     const source = createMemo(() => {
       const view = read().view;
@@ -627,9 +700,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         fallback={
           <div class="board-widget__error" role="alert">
             {read().error}
-            <button class="btn btn--small" onClick={retry}>
-              {t("common.retry")}
-            </button>
+            <Show when={!read().accessDenied}>
+              <button class="btn btn--small" onClick={retry}>
+                {t("common.retry")}
+              </button>
+            </Show>
           </div>
         }
       >
@@ -652,7 +727,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
                 role="status"
                 style={{ "min-height": `${height()}px` }}
               >
-                {t("board.widget.waitingForConnection")}
+                {t(
+                  read().awaitingResult
+                    ? "board.widget.waitingForResult"
+                    : "board.widget.waitingForConnection",
+                )}
               </div>
             </Show>
           }
@@ -660,7 +739,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
           <Show when={!source()?.error} fallback={<div role="alert">{source()?.error}</div>}>
             <Show when={read().pending}>
               <div class="board-widget__notice" role="status">
-                {t("board.widget.waitingForConnection")}
+                {t(
+                  read().awaitingResult
+                    ? "board.widget.waitingForResult"
+                    : "board.widget.waitingForConnection",
+                )}
               </div>
             </Show>
             <Show when={read().resourceError}>
@@ -690,7 +773,8 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
                     height: height() ? `${height()}px` : undefined,
                     "min-height": height() ? `${height()}px` : undefined,
                   }}
-                  onError={() => controller.syncFrameError()}
+                  ref={widget.setFrame}
+                  onError={() => widget.syncFrameError()}
                 />
               )}
             </Show>

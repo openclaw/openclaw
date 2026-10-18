@@ -8,16 +8,12 @@ import * as providerAuthChoices from "../plugins/provider-auth-choices.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
 import * as nonInteractiveApiKeys from "./onboard-non-interactive/api-keys.js";
+import {
+  type ConfigSnapshotStub,
+  registerOnboardResetDiscoveryTests,
+} from "./onboard-reset-discovery.test-support.js";
 import { setupWizardCommand } from "./onboard.js";
 import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
-
-type ConfigSnapshotStub = {
-  exists: boolean;
-  valid: boolean;
-  config: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-  readError?: { code: string | null };
-};
 
 type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
   NonNullable<ProviderAuthMethod["validateNonInteractive"]>
@@ -111,6 +107,19 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: () => 18_789,
 }));
 
+vi.mock("./config-preflight-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config-preflight-snapshot.js")>()),
+  readConfigSnapshotBeforeEngineSelection: async () => ({
+    issues: [],
+    ...(await mocks.readConfigFileSnapshot()),
+  }),
+}));
+
+vi.mock("../cli/database-engine-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/database-engine-selection.js")>()),
+  prepareCliDatabaseEngine: async () => false,
+}));
+
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
@@ -178,6 +187,7 @@ function mockLocalResetPreflight(params: {
 describe("setupWizardCommand", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     mocks.hasInteractiveOnboardingTty.mockReturnValue(true);
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
@@ -380,7 +390,7 @@ describe("setupWizardCommand", () => {
     expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
-  it("requires an explicit workspace for a full reset when config is unreadable", async () => {
+  it("refuses a full state reset when config is unreadable", async () => {
     const runtime = makeRuntime();
     // readConfigFileSnapshot always returns a sourceConfig object, so an
     // unreadable config is only recognizable through readError.
@@ -395,7 +405,7 @@ describe("setupWizardCommand", () => {
     await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
+      "Cannot determine the source database from an unreadable config. Repair the config before using onboard --reset. For a file-only reset without onboarding, use openclaw reset --scope config.",
     );
     expect(mocks.handleReset).not.toHaveBeenCalled();
   });
@@ -784,14 +794,7 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it("validates an inferred custom auth choice before reset", async () => {
-    await expectAuthPreflightError({ customBaseUrl: "https://example.com/v1" }, () =>
-      [
-        'Auth choice "custom-api-key" requires a base URL and model ID.',
-        "Use --custom-base-url and --custom-model-id.",
-      ].join("\n"),
-    );
-  });
+  registerOnboardResetDiscoveryTests({ mocks, expectAuthPreflightError });
 
   it("rejects no-auth combined with a custom API key before reset", async () => {
     await expectAuthPreflightError(

@@ -25,16 +25,16 @@ describe("Browser panel input feedback", () => {
     const controller = createBrowserPanelTestController(client, "tab-a");
 
     for (let index = 0; index < 4; index += 1) {
-      controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
+      controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
       await vi.advanceTimersByTimeAsync(100);
     }
 
     expect(captures).toBe(1);
     expect(controller.view?.url).toBe("https://example.test/latest");
-    controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "b" }));
+    controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "b" }));
     await vi.advanceTimersByTimeAsync(350);
     expect(captures).toBe(2);
-    controller.hostDisconnected();
+    controller.suspendView();
   });
 
   it("keeps a slow fallback capture and delivers trailing input feedback", async () => {
@@ -53,12 +53,12 @@ describe("Browser panel input feedback", () => {
       return createBrowserPanelTestMetrics("https://example.test/latest", "Latest");
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
+    controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
     await vi.advanceTimersByTimeAsync(350);
     expect(captures).toBe(1);
 
     for (let index = 0; index < 8; index += 1) {
-      controller.handleViewportKeydown(new KeyboardEvent("keydown", { key: "b" }));
+      controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "b" }));
       await vi.advanceTimersByTimeAsync(100);
     }
     expect(captures).toBe(1);
@@ -69,7 +69,7 @@ describe("Browser panel input feedback", () => {
     await vi.advanceTimersByTimeAsync(350);
     expect(captures).toBe(2);
     expect(controller.view?.url).toBe("https://example.test/latest");
-    controller.hostDisconnected();
+    controller.suspendView();
   });
 
   it.each([true, false])("coalesces wheel bursts at the %s live-stream cadence", async (live) => {
@@ -79,8 +79,12 @@ describe("Browser panel input feedback", () => {
     vi.spyOn(controller.stream, "ownsView").mockReturnValue(live);
     const delay = live ? 50 : 150;
 
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 5, deltaY: 60, cancelable: true }));
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 7, deltaY: 40, cancelable: true }));
+    controller.input.handleWheel(
+      new WheelEvent("wheel", { deltaX: 5, deltaY: 60, cancelable: true }),
+    );
+    controller.input.handleWheel(
+      new WheelEvent("wheel", { deltaX: 7, deltaY: 40, cancelable: true }),
+    );
     await vi.advanceTimersByTimeAsync(delay - 1);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -94,6 +98,6 @@ describe("Browser panel input feedback", () => {
         fn: expect.stringContaining("window.scrollBy(12, 100)"),
       },
     });
-    controller.hostDisconnected();
+    controller.suspendView();
   });
 });

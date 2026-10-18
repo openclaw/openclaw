@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { resolveStateDir } from "../../config/paths.js";
-import { hasMainSessionRecoveryClaim } from "../../config/sessions/restart-recovery-state.js";
 import { readSessionEntrySummariesInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,11 +136,10 @@ export async function recoverRestartAbortedMainSessions(params: {
       const entries = await readSessionEntrySummariesInWorker({
         agentId: target.agentId,
         storePath: target.storePath,
+        mainSessionRecovery: true,
       });
       for (const entry of entries) {
-        if (hasMainSessionRecoveryClaim(entry.entry)) {
-          candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
-        }
+        candidates.push({ ...entry, storePath: target.storePath, storeAgentId: target.agentId });
       }
     } catch (error) {
       mainSessionRecoveryLog.warn(
@@ -423,9 +421,13 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     );
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
-    const outcomes = await Promise.allSettled(
-      [...targets].map((target) =>
-        runWithGatewayIndependentRootWorkAdmission(
+    // Exact target reads precede lane admission, so keep this final pass serial too.
+    for (const target of targets) {
+      if (!shouldContinue()) {
+        break;
+      }
+      try {
+        await runWithGatewayIndependentRootWorkAdmission(
           async () =>
             recoverExpectedRestartRecovery({
               ...target,
@@ -440,21 +442,17 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
             }),
           "main-session:target-recovery",
           abortController.signal,
-        ),
-      ),
-    );
-    for (const outcome of outcomes) {
-      if (
-        outcome.status === "rejected" &&
-        !(
+        );
+      } catch (error) {
+        if (
           abortController.signal.aborted &&
-          (outcome.reason === abortController.signal.reason ||
-            (outcome.reason instanceof Error &&
-              outcome.reason.cause === abortController.signal.reason))
-        )
-      ) {
+          (error === abortController.signal.reason ||
+            (error instanceof Error && error.cause === abortController.signal.reason))
+        ) {
+          return;
+        }
         mainSessionRecoveryLog.warn(
-          `main-session exhaustion reconciliation failed: ${String(outcome.reason)}`,
+          `main-session exhaustion reconciliation failed: ${String(error)}`,
         );
       }
     }

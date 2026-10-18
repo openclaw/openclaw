@@ -111,7 +111,6 @@ export async function persistAgentSessionPhase(params: {
   requestedBestEffortDeliver?: boolean;
   expectedSession: Parameters<typeof assertExpectedExistingSession>[0]["constraint"];
   maintenanceConfig: SessionEntryPatchOptions["maintenanceConfig"];
-  abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   assertGatewayWorkAdmissionAllowed: () => void;
   respondToGatewayAdmissionOutcome: () => boolean;
   setCronContinuationClaim: (claim: CronContinuationClaim) => void;
@@ -129,11 +128,6 @@ export async function persistAgentSessionPhase(params: {
   let mainRestartRecoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
   let skipAgentInitialSessionTouch = false;
   let createdNewEntry = false;
-  const abortForLifecycleRotation = () =>
-    params.abortForLifecycleRotation({
-      sessionKey: params.canonicalSessionKey,
-      agentId: params.agentId,
-    });
   const isDeliveryDenied = (entry: SessionEntry | undefined) =>
     params.request.deliver === true &&
     resolveSendPolicy({
@@ -155,7 +149,7 @@ export async function persistAgentSessionPhase(params: {
     // Creation committed the final metadata. The acquired work lease supplies the
     // current entry and still rejects reset/replacement before launch.
     params.assertGatewayWorkAdmissionAllowed();
-    if (params.respondToGatewayAdmissionOutcome() || abortForLifecycleRotation()) {
+    if (params.respondToGatewayAdmissionOutcome()) {
       return undefined;
     }
     if (sessionEntry) {
@@ -163,9 +157,6 @@ export async function persistAgentSessionPhase(params: {
     }
     skipAgentInitialSessionTouch = true;
   } else if (params.storePath && !params.suppressVisibleSessionEffects) {
-    if (abortForLifecycleRotation()) {
-      return undefined;
-    }
     let deniedSessionEntry: SessionEntry | undefined;
     let persisted: SessionEntry | undefined;
     let mutationError: ReturnType<typeof errorShape> | undefined;
@@ -426,9 +417,6 @@ export async function persistAgentSessionPhase(params: {
         params.respond(false, undefined, creationAuthorizationError);
         return undefined;
       }
-      if (abortForLifecycleRotation()) {
-        return undefined;
-      }
       if (err instanceof ExpectedExistingSessionChangedError) {
         mutationError = errorShape(ErrorCodes.UNAVAILABLE, err.message);
       }
@@ -437,9 +425,6 @@ export async function persistAgentSessionPhase(params: {
         return undefined;
       }
       throw err;
-    }
-    if (abortForLifecycleRotation()) {
-      return undefined;
     }
     if (deniedSessionEntry) {
       sessionEntry = deniedSessionEntry;
@@ -469,7 +454,7 @@ export async function persistAgentSessionPhase(params: {
       params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
       return undefined;
     }
-    if (params.respondToGatewayAdmissionOutcome() || abortForLifecycleRotation()) {
+    if (params.respondToGatewayAdmissionOutcome()) {
       return undefined;
     }
     skipAgentInitialSessionTouch = params.touchInteraction;

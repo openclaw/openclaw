@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import { mergeMissing } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -17,16 +18,6 @@ const LEGACY_TALK_FIELD_KEYS = [
 type JsonRecord = Record<string, unknown>;
 
 export const ELEVENLABS_TALK_PROVIDER_ID = "elevenlabs";
-
-function ensureRecord(root: JsonRecord, key: string): JsonRecord {
-  const existing = asNullableRecord(root[key]);
-  if (existing) {
-    return existing;
-  }
-  const next: JsonRecord = {};
-  root[key] = next;
-  return next;
-}
 
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";

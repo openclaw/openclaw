@@ -46,7 +46,6 @@ import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/o
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
-import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { findModelInCatalog } from "../model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "../model-catalog.types.js";
@@ -59,7 +58,6 @@ import {
   resolveThinkingSelection,
 } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveOperatorModelDefault } from "../operator-model-policy.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
@@ -431,13 +429,6 @@ export async function resolveEmbeddedModelSelection(params: {
       allowKeychainPrompt: false,
     });
     const profile = store.profiles[authProfileId];
-    const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
-      provider: providerForAuthProfileValidation,
-      modelId: model,
-      config: params.cfg,
-      agentId: params.sessionAgentId,
-      sessionKey: params.sessionKey,
-    });
     const authAliasLookupParams = {
       config: authConfig,
       workspaceDir: params.workspaceDir,
@@ -447,25 +438,17 @@ export async function resolveEmbeddedModelSelection(params: {
           : {}
         : { metadataSnapshot: { plugins: [] } }),
     };
-    const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: providerForAuthProfileValidation,
-      harnessRuntime: validationHarnessPolicy.runtime,
-      config: params.cfg,
-    }).map((candidateProvider) =>
-      params.pluginsEnabled
-        ? resolveProviderIdForAuth(candidateProvider, authAliasLookupParams)
-        : candidateProvider,
-    );
+    const authProvider = params.pluginsEnabled
+      ? resolveProviderIdForAuth(providerForAuthProfileValidation, authAliasLookupParams)
+      : providerForAuthProfileValidation;
     const profileMatchesRuntime =
       profile &&
-      acceptedAuthProviders.some((candidateProvider) =>
-        isStoredCredentialCompatibleWithAuthProvider({
-          cfg: authConfig,
-          authAliasLookupParams,
-          provider: candidateProvider,
-          credential: profile,
-        }),
-      );
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: authConfig,
+        authAliasLookupParams,
+        provider: authProvider,
+        credential: profile,
+      });
     const preserveUnavailableSelection = shouldPreserveUnavailableSessionAuthProfileOverride({
       store,
       cfg: authConfig,

@@ -37,7 +37,7 @@ openclaw plugins install @openclaw/typesafe
 To select ClawHub explicitly:
 
 ```sh
-openclaw plugins install clawhub:@openclaw/typesafe
+openclaw plugins install @openclaw/typesafe
 ```
 
 Until a supporting release is available, use a source checkout containing the

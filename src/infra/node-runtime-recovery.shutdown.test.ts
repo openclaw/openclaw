@@ -1,5 +1,7 @@
 import { ChildProcess, type SpawnOptions } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { resolveOpenClawCliRespawn } from "../../cli-invocation.mjs";
+import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { runRespawnedChild } from "../../node-runtime-recovery.mjs";
 
 const spawn = vi.hoisted(() =>
@@ -32,6 +34,7 @@ afterEach(async () => {
   process.exitCode = originalExitCode;
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it.each([
@@ -50,10 +53,18 @@ it.each([
       ...args,
     ]);
     const previous = new Set(process.listeners("SIGTERM"));
-    completion = runRespawnedChild("node", ["child.mjs"], {
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
-      XPC_SERVICE_NAME: "ai.openclaw.fixture",
-    });
+    completion = runRespawnedChild(
+      resolveOpenClawCliRespawn({
+        execPath: "node",
+        entryPath: "child.mjs",
+        execArgv: [],
+        args: [],
+        env: {
+          OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
+          XPC_SERVICE_NAME: "ai.openclaw.fixture",
+        },
+      }),
+    );
     let completed = false;
     void completion.then(() => {
       completed = true;
@@ -62,7 +73,7 @@ it.each([
     // full service budget; legacy parent compatibility stays with the Gateway.
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
       "node",
-      ["child.mjs"],
+      ["--import", CLI_PARENT_BOUND_PRELOAD, "child.mjs"],
       expect.objectContaining({
         env: {
           OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
@@ -114,7 +125,15 @@ it.each([
     vi.spyOn(process, "platform", "get").mockReturnValue(platform);
     vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", "gateway"]);
     const previous = process.listeners("SIGTERM");
-    completion = runRespawnedChild("node", ["child.mjs"], {});
+    completion = runRespawnedChild(
+      resolveOpenClawCliRespawn({
+        execPath: "node",
+        entryPath: "child.mjs",
+        execArgv: [],
+        args: [],
+        env: {},
+      }),
+    );
     const forward = process.listeners("SIGTERM").find((listener) => !previous.includes(listener))!;
     forward("SIGTERM");
     child.emit("exit", null, childSignal);
@@ -137,10 +156,30 @@ it.each([
 
 it("records spawn failure only after its close notification", async () => {
   vi.spyOn(process.stderr, "write").mockReturnValue(true);
-  completion = runRespawnedChild("missing-node", [], {});
+  completion = runRespawnedChild({ command: "missing-node", args: [], env: {} });
   child.emit("error", new Error("spawn ENOENT"));
   expect(process.exitCode).toBeUndefined();
   child.emit("close", -2, null);
   await expect(completion).resolves.toBe(true);
   expect(process.exitCode).toBe(1);
+});
+
+it("passes standalone CLI args and parent binding unchanged to the launcher child", async () => {
+  vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
+  completion = runRespawnedChild(
+    resolveOpenClawCliRespawn({
+      entryPath: "/app/runtime/openclaw.mjs",
+      args: ["doctor", "--fix"],
+      env: {},
+    }),
+  );
+  expect(spawn).toHaveBeenCalledExactlyOnceWith(
+    process.execPath,
+    ["doctor", "--fix"],
+    expect.objectContaining({
+      env: { OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) },
+    }),
+  );
+  child.emit("close", 0, null);
+  await expect(completion).resolves.toBe(true);
 });

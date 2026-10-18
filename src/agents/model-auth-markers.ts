@@ -9,9 +9,11 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import {
+  listKnownProviderAuthEnvVarNamesRuntime as listKnownProviderEnvApiKeyNames,
+  listOpenClawPluginManifestMetadataRuntime as listOpenClawPluginManifestMetadata,
+} from "../plugins/plugin-metadata-snapshot-required.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import { listKnownProviderEnvApiKeyNames } from "./model-auth-env-vars.js";
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 /** @deprecated MiniMax provider-owned marker; do not use from third-party plugins. */
@@ -184,7 +186,7 @@ export function applyLocalNoAuthHeaders(
 /** Clears auth for OpenAI-compatible servers that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
-  auth: ResolvedProviderAuth | null | undefined,
+  auth: Pick<ResolvedProviderAuth, "apiKey"> | null | undefined,
 ): T {
   const headers = applyLocalNoAuthHeaders(model.api, auth?.apiKey, model.headers);
   return headers === model.headers ? model : { ...model, headers };

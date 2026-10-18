@@ -16,6 +16,7 @@ import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantMessageIsInterrupted,
+  isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
@@ -35,6 +36,9 @@ import type { ChatReasoning } from "./tool-stream-contract.ts";
 const TERMINAL_WORK_STATUSES = new Set(["done", "failed", "timeout", "killed"]);
 
 function assistantMessageKind(message: unknown, visibleContent: MessageGroup["visibleContent"]) {
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
   return (
     resolveAssistantReplyPhase(message) ??
     (asRecord(message)?.stopReason === "toolUse"
@@ -456,7 +460,12 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
 }
 
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
-  if (item.kind !== "group" || item.isStreaming || groupHasVisibleReplyContent(item, false)) {
+  if (
+    item.kind !== "group" ||
+    item.isStreaming ||
+    groupHasVisibleReplyContent(item, false) ||
+    item.messages.some(({ message }) => isProviderVoiceTranscript(message))
+  ) {
     return false;
   }
   const role = item.role.toLowerCase();
@@ -490,6 +499,7 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
+    !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
     groupHasVisibleReplyContent(group)
   );
 }

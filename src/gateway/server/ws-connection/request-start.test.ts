@@ -112,17 +112,25 @@ describe("Gateway request start fairness", () => {
       void start("chat.history", "viewer");
       void start("sessions.list", "viewer");
       void start("cron.list", "viewer");
+      void start("push.web.vapidPublicKey", "viewer");
+      void start("sessions.github.options", "viewer");
+      void start("workboard.cards.list", "viewer");
+      void start("github.preview", "viewer");
       void start("sessions.create", "another-viewer");
       await nextTurn();
       expect([...starts]).toEqual([
         "chat.history",
         "sessions.list",
         "cron.list",
+        "push.web.vapidPublicKey",
+        "sessions.github.options",
+        "workboard.cards.list",
+        "github.preview",
         "sessions.create",
       ]);
       held[0]!.resolve();
       await Promise.all([subscription, unsubscribe, mutation]);
-      expect(starts.slice(4)).toEqual([
+      expect(starts.slice(8)).toEqual([
         "sessions.messages.subscribe",
         "sessions.messages.unsubscribe",
         "chat.send",

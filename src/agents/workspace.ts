@@ -83,7 +83,6 @@ export {
 } from "./workspace-bootstrap-policy.js";
 export {
   getWorkspaceFileSourceRelativePath,
-  workspaceFileSourceIdentitiesMatch,
   workspaceFilesShareSourceIdentity,
 } from "./workspace-file-read.js";
 export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";
@@ -487,7 +486,7 @@ export async function isWorkspaceSetupCompleted(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<boolean> {
   const state = (await readCanonicalWorkspaceStateSnapshot(dir, options)).setup;
-  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+  return Boolean(state.setupCompletedAt);
 }
 
 export async function resolveWorkspaceBootstrapStatus(

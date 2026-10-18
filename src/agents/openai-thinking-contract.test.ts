@@ -539,8 +539,6 @@ async function captureProviderPayload<
   // Stop at onPayload so transport serialization can be asserted without HTTP.
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
     let payloadCaptured = false;
-    const abortController = new AbortController();
-    abortController.abort(new Error("payload capture must not reach provider egress"));
     const stream = params.streamFn(
       params.model,
       {
@@ -550,7 +548,6 @@ async function captureProviderPayload<
         apiKey: params.model.api === "openai-chatgpt-responses" ? codexTestToken : "test-api-key",
         cacheRetention: "none",
         ...params.options,
-        signal: abortController.signal,
         onPayload: (payload) => {
           payloadCaptured = true;
           resolve(structuredClone(payload as Record<string, unknown>));

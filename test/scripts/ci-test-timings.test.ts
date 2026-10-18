@@ -10,7 +10,7 @@ import fs, {
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
@@ -22,11 +22,7 @@ import {
   isExclusiveCompactShardName,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { rebalanceRuntimeTestJobs } from "../../scripts/lib/ci-runtime-test-placement.mts";
-import {
-  isCiTimingRuntimeTrial,
-  refitTestTimings,
-  type CiTimingRun,
-} from "../../scripts/lib/ci-test-timings-refit.mts";
+import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import {
   createNativeSoloTimingKey,
   ciTestTimingsSchema,
@@ -98,7 +94,7 @@ function packedReleaseFixture() {
     text: [
       line(0, `OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`),
       line(0, "OPENCLAW_VITEST_MAX_WORKERS: 3"),
-      line(0, "OPENCLAW_CI_TEST_RUNTIME_POLICY: dual"),
+      line(0, "OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all"),
       line(
         0,
         "[shard:resources] logicalCpuCount=4 totalMemoryBytes=7516192768 requested plans=1 admitted plans=1",
@@ -413,89 +409,100 @@ describe("runtime placement observations", () => {
     );
     return vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(costs);
   }
-  it("retains recorded runtime work when its current group gains a file", () => {
-    const corpusFile = "src/config/state-startup-corpus.test.ts";
-    const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
-    selectRuntimeConsumers([corpusFile, handoffFile]);
-    const compactSpy = mockRuntimePlacementCosts();
-    const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
-    const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
-    onTestFinished(() => {
-      compactSpy.mockRestore();
-      runtimeSpy.mockRestore();
-    });
-    const options = {
-      compactMode: "push" as const,
-      runnerBackend: "hybrid",
-      includeReleaseOnlyPluginShards: false,
-    };
-    const before = createNodeTestShardBundles(options);
-    const groups = before.flatMap((job) => job.groups);
-    const corpus = groups.find((group) => group.includePatterns?.includes(corpusFile))!;
-    const handoff = groups.find((group) => group.includePatterns?.includes(handoffFile))!;
-    expect(corpus.includePatterns!.length).toBeGreaterThan(1);
-    expect(corpus.pretestBuildMode).toBe("runtime");
-    expect(handoff.pretestBuildMode).toBe("runtime");
-    expect(before.find((job) => job.groups.includes(corpus))).toBe(
-      before.find((job) => job.groups.includes(handoff)),
-    );
-    runtimeSpy.mockImplementation(readRuntimeTimings);
-    const observations = [
-      { ...corpus, includePatterns: [corpusFile], seconds: 200 },
-      { ...handoff, seconds: 300 },
-    ];
-    const runs = [1, 2].map((id) =>
-      timingRun(
-        id,
-        observations.map(({ seconds, ...group }, index) => {
-          const descriptor = {
-            ...group,
-            shard_name: `recorded-runtime-${index}`,
-            timing_key: undefined,
-          };
-          const [begin, end] = compactLog(seconds, descriptor.shard_name).split("\n");
-          return {
-            kind: "compact" as const,
-            labels: ["blacksmith-4vcpu-ubuntu-2404"],
-            text: [
-              `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
-              begin,
-              `2026-08-27T23:00:01Z [shard:${descriptor.shard_name}] [test] preparing runtime runtime before Vitest workers`,
-              end,
-            ].join("\n"),
-          };
-        }),
-      ),
-    );
-    const data = refitTestTimings(runs).timings;
-    const original = fs.readFileSync;
-    const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
-    const read = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation((file, readOptions) =>
-        (file instanceof URL ? fileURLToPath(file) : file) === timingPath
-          ? JSON.stringify(data)
-          : original(file, readOptions),
+  it.each(["node", "bun-all"])(
+    "retains recorded %s runtime work when its current group gains a file",
+    (runtimePolicy) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      const corpusFile = "src/config/state-startup-corpus.test.ts";
+      const handoffFile = "src/infra/update-managed-service-handoff-lifecycle.test.ts";
+      selectRuntimeConsumers([corpusFile, handoffFile]);
+      const compactSpy = mockRuntimePlacementCosts();
+      const readRuntimeTimings = testTimings.readRuntimePlacementTimings;
+      const runtimeSpy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+      onTestFinished(() => {
+        compactSpy.mockRestore();
+        runtimeSpy.mockRestore();
+      });
+      const options = {
+        compactMode: "push" as const,
+        runnerBackend: "hybrid",
+        includeReleaseOnlyPluginShards: false,
+      };
+      const before = createNodeTestShardBundles(options);
+      const groups = before.flatMap((job) => job.groups);
+      const corpus = groups.find((group) => group.includePatterns?.includes(corpusFile))!;
+      const handoff = groups.find((group) => group.includePatterns?.includes(handoffFile))!;
+      expect(corpus.includePatterns!.length).toBeGreaterThan(1);
+      expect(corpus.pretestBuildMode).toBe("runtime");
+      expect(handoff.pretestBuildMode).toBe("runtime");
+      expect(before.find((job) => job.groups.includes(corpus))).toBe(
+        before.find((job) => job.groups.includes(handoff)),
       );
-    syncBuiltinESMExports();
-    try {
-      const plan = createNodeTestShardBundles(options);
-      const corpusJob = plan.find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(corpusFile)),
+      runtimeSpy.mockImplementation(readRuntimeTimings);
+      const observations = [
+        { ...corpus, includePatterns: [corpusFile], seconds: 200 },
+        { ...handoff, seconds: 300 },
+      ];
+      const runs = [1, 2].map((id) =>
+        timingRun(
+          id,
+          observations.map(({ seconds, ...group }, index) => {
+            const descriptor = {
+              ...group,
+              shard_name: `recorded-runtime-${index}`,
+              timing_key: undefined,
+            };
+            const runtimeShard = `${runtimePolicy === "bun-all" ? "bun:" : ""}${descriptor.shard_name}`;
+            const [begin, end] = compactLog(seconds, runtimeShard).split("\n");
+            return {
+              kind: "compact" as const,
+              labels: ["blacksmith-4vcpu-ubuntu-2404"],
+              text: [
+                `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${runtimePolicy}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+                begin,
+                `2026-08-27T23:00:01Z [shard:${runtimeShard}] [test] preparing runtime runtime before Vitest workers`,
+                end,
+              ].join("\n"),
+            };
+          }),
+        ),
       );
-      const handoffJob = plan.find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(handoffFile)),
+      const data = refitTestTimings(runs).timings;
+      const original = fs.readFileSync;
+      const timingPath = fileURLToPath(
+        new URL("../../config/ci-test-timings.json", import.meta.url),
       );
-      expect(corpusJob).toBeDefined();
-      expect(handoffJob).toBeDefined();
-      // These recorded workloads exceed the shared 360s budget, including
-      // preparation. Added files must not make the known reader appear cheap.
-      expect(corpusJob).not.toBe(handoffJob);
-    } finally {
-      read.mockRestore();
+      const read = vi
+        .spyOn(fs, "readFileSync")
+        .mockImplementation((file, readOptions) =>
+          (file instanceof URL ? fileURLToPath(file) : file) === timingPath
+            ? JSON.stringify(data)
+            : original(file, readOptions),
+        );
       syncBuiltinESMExports();
-    }
-  });
+      try {
+        const plan = createNodeTestShardBundles(options);
+        const corpusJob = plan.find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(corpusFile)),
+        );
+        const handoffJob = plan.find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(handoffFile)),
+        );
+        expect(corpusJob).toBeDefined();
+        expect(handoffJob).toBeDefined();
+        // These recorded workloads exceed the shared 360s budget, including
+        // preparation. Added files must not make the known reader appear cheap.
+        expect(corpusJob).not.toBe(handoffJob);
+      } finally {
+        read.mockRestore();
+        syncBuiltinESMExports();
+      }
+    },
+  );
 
   const reader = {
     configs: ["test/vitest/reader.config.ts"],
@@ -912,6 +919,7 @@ function samplerToolingLog(
 
 type SamplerFixture = {
   changedUiFiles?: string[];
+  gitDirectory?: string;
   observedAt?: string;
   runs: ReturnType<typeof samplerRun>[];
   jobs: ReturnType<typeof samplerJob>[];
@@ -953,7 +961,7 @@ function withSamplerFixture(
       `const childProcess = require("node:child_process");
 const execFileSync = childProcess.execFileSync;
 childProcess.execFileSync = (file, args, options) =>
-  file === "git" && args[0] === "diff"
+  file === "git" && args[0] === "diff" && ${!fixture.gitDirectory}
     ? ${JSON.stringify((fixture.changedUiFiles ?? []).join("\0"))}
     : execFileSync(file, args, options);
 require("node:module").syncBuiltinESMExports();
@@ -1036,7 +1044,7 @@ if (args[1] === "--help") {
             ...(dryRun ? ["--dry-run"] : []),
           ],
           {
-            cwd: fileURLToPath(new URL("../../", import.meta.url)),
+            cwd: fixture.gitDirectory ?? fileURLToPath(new URL("../../", import.meta.url)),
             encoding: "utf8",
             timeout: 30_000,
             env: { ...process.env, OPENCLAW_GH_BIN: fakeGh, GH_TOKEN: "fixture-token" },
@@ -1049,81 +1057,109 @@ if (args[1] === "--help") {
 }
 
 describe("CI test timing refit", () => {
-  it.each(["bun-all", "dual-all"])(
-    "excludes complete %s run fragments from learning and pruning legacy keys",
-    (policy) => {
-      const previous: CiTestTimings = {
-        ...baseline,
-        compactGroupSeconds: { blacksmith: { retained: 90 }, github: {} },
-      };
-      const runs = [1, 2, 3].flatMap((id) => [
-        timingRun(id, [
-          { kind: "compact", labels: ["blacksmith-4vcpu-ubuntu-2404"], text: compactLog(20) },
-        ]),
-        timingRun(id, [
-          {
-            kind: "compact",
-            labels: ["blacksmith-4vcpu-ubuntu-2404"],
-            text: `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${compactLog(30)}`,
-          },
-        ]),
-      ]);
-      const result = refitTestTimings(runs, previous);
-      expect(result.timings).toEqual(previous);
-      expect(result.contributingRunIds.blacksmith).toEqual([]);
-      expect(result.runIds).toEqual([]);
-    },
-  );
-
-  it("recognizes only recorded runtime policy headers, including gh-wrapped ANSI logs", () => {
-    expect(
-      isCiTimingRuntimeTrial(
-        "job\tstep\t2026-08-27T23:00:00Z \u001b[32m  OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all\u001b[0m",
-      ),
-    ).toBe(true);
-    expect(
-      isCiTimingRuntimeTrial(
-        "2026-08-27T23:00:00Z [shard:fixture] OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
-      ),
-    ).toBe(false);
-    expect(
-      isCiTimingRuntimeTrial("2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual"),
-    ).toBe(false);
+  it("learns default Bun spans separately and preserves unobserved Node timing history", () => {
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { retained: 90, "bun:legacy-subset": 5 }, github: {} },
+    };
+    const runs = [1, 2, 3].map((id) =>
+      timingRun(id, [
+        {
+          kind: "compact",
+          labels: ["blacksmith-4vcpu-ubuntu-2404"],
+          text: `2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: bun-all\n${compactLog(30, "bun:core-unit-src-security-2")}`,
+        },
+      ]),
+    );
+    const result = refitTestTimings(runs, previous);
+    expect(result.timings.compactGroupSeconds.blacksmith).toEqual({
+      retained: 90,
+      "bun:legacy-subset": 5,
+      "bun-all:core-unit-src-security-2": 30,
+    });
+    expect(result.contributingRunIds.blacksmith).toEqual([1, 2, 3]);
   });
 
-  it.each(["bun-all", "dual-all"])(
-    "does not sample %s dispatch trials in the refit CLI",
-    (policy) => {
-      const packed = packedReleaseFixture().text.replace(
-        "OPENCLAW_CI_TEST_RUNTIME_POLICY: dual",
-        `OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}`,
-      );
-      withSamplerFixture(
-        {
-          runs: [samplerRun(1), samplerRun(2)],
-          packedReleaseRuns: [samplerRun(3, { event: "workflow_dispatch" })],
-          jobs: [
-            samplerJob(11, 1),
-            samplerJob(21, 2),
-            samplerJob(31, 3, {
+  it("keeps the partial Bun pass in dual validation out of complete Bun timing history", () => {
+    const descriptor = {
+      shard_name: "owner",
+      configs: ["test/vitest/vitest.unit-fast.config.ts"],
+      includePatterns: ["bun.test.ts", "native.test.ts", "node.test.ts"],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    };
+    const text = [
+      `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+      "2026-08-27T23:00:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: dual-all",
+      "2026-08-27T23:00:00Z [shard:owner] begin",
+      "2026-08-27T23:00:01Z [shard:owner] [test] preparing runtime runtime before Vitest workers",
+      "2026-08-27T23:00:20Z [shard:owner] end (exit 0)",
+      "2026-08-27T23:00:22Z [shard:bun:owner] begin",
+      "2026-08-27T23:00:40Z [shard:bun:owner] end (exit 0)",
+      "2026-08-27T23:00:46Z [shard:bun-native:owner] begin",
+      "2026-08-27T23:00:50Z [shard:bun-native:owner] end (exit 0)",
+    ].join("\n");
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { "bun-all:owner": 70 }, github: {} },
+    };
+    const result = refitTestTimings(
+      [1, 2].map((id) =>
+        timingRun(id, [{ kind: "compact", labels: ["blacksmith-4vcpu-ubuntu-2404"], text }]),
+      ),
+      previous,
+    );
+    expect(result.timings.compactGroupSeconds.blacksmith).toEqual({
+      owner: 20,
+      "bun-all:owner": 70,
+      "dual-all:owner": 50,
+    });
+    expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([
+      {
+        configs: descriptor.configs,
+        includePatterns: descriptor.includePatterns,
+        env: { ...descriptor.env, OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
+        pretestBuildMode: "runtime",
+        seconds: 50,
+      },
+      {
+        configs: descriptor.configs,
+        includePatterns: descriptor.includePatterns,
+        env: descriptor.env,
+        pretestBuildMode: "runtime",
+        seconds: 20,
+      },
+    ]);
+  });
+
+  it("includes dual-runtime release runs in the refit CLI under their own keys", () => {
+    withSamplerFixture(
+      {
+        runs: [samplerRun(1), samplerRun(2)],
+        packedReleaseRuns: [3, 4].map((id) => samplerRun(id, { event: "workflow_dispatch" })),
+        jobs: [
+          samplerJob(11, 1),
+          samplerJob(21, 2),
+          ...[3, 4].map((id) =>
+            samplerJob(id * 10, id, {
               name: "checks-node-release-packed-1",
               labels: ["ubuntu-24.04"],
-              log: packed,
+              log: packedReleaseFixture().text,
             }),
-          ],
-        },
-        (fixture) => {
-          const result = fixture.invoke();
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stderr).toContain("Skipped packed-release run 3: runtime trial");
-          expect(JSON.parse(fixture.contents()).compactGroupSeconds).toEqual({
-            blacksmith: { "core-unit-src-security-2": 20 },
-            github: {},
-          });
-        },
-      );
-    },
-  );
+          ),
+        ],
+      },
+      (fixture) => {
+        const result = fixture.invoke();
+        expect(result.status, result.stderr).toBe(0);
+        const github = JSON.parse(fixture.contents()).compactGroupSeconds.github;
+        const { timingKeys } = packedReleaseFixture();
+        expect(github).toEqual({
+          [`dual-all:${timingKeys[0]}`]: 32,
+          [`dual-all:${timingKeys[1]}`]: 30,
+        });
+      },
+    );
+  });
 
   it("refits complete packed release runtime walls from independent runs without pruning", () => {
     const { timingKeys, text } = packedReleaseFixture();
@@ -1143,8 +1179,8 @@ describe("CI test timing refit", () => {
       .compactGroupSeconds.github;
     expect(refitted).toEqual({
       ...previous.compactGroupSeconds.github,
-      [timingKeys[0]!]: 32,
-      [timingKeys[1]!]: 30,
+      [`dual-all:${timingKeys[0]}`]: 32,
+      [`dual-all:${timingKeys[1]}`]: 30,
     });
   });
 
@@ -1879,8 +1915,8 @@ describe("CI timing sampler provenance", () => {
         const result = fixture.invoke();
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(fixture.contents()).compactGroupSeconds.github).toEqual({
-          [timingKeys[0]!]: 32,
-          [timingKeys[1]!]: 30,
+          [`dual-all:${timingKeys[0]}`]: 32,
+          [`dual-all:${timingKeys[1]}`]: 30,
         });
         expect(result.stdout).toContain("Independent packed release contributors: 2");
         expect(result.stdout).toContain("Independent main compact contributors: 2");
@@ -2253,6 +2289,129 @@ describe("CI timing sampler provenance", () => {
     );
   });
 
+  it("refits unchanged UI neighbors without fetching historical blobs for moved tests", () => {
+    const directory = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-refit-history-")));
+    const origin = path.join(directory, "origin");
+    const checkout = path.join(directory, "checkout");
+    const oldFile = "ui/src/old.e2e.test.ts";
+    const newFile = "extensions/demo/new.e2e.test.ts";
+    const changed = "ui/src/changed.e2e.test.ts";
+    const deleted = "ui/src/deleted.e2e.test.ts";
+    const git = (cwd: string, ...args: string[]) => {
+      const result = spawnSync("git", ["-c", "commit.gpgsign=false", "-C", cwd, ...args], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const write = (file: string, text: string) => {
+      fs.mkdirSync(path.dirname(path.join(origin, file)), { recursive: true });
+      writeFileSync(path.join(origin, file), text);
+    };
+    try {
+      fs.mkdirSync(origin);
+      git(origin, "init", "-q", "-b", "main");
+      git(origin, "config", "user.name", "Timing Fixture");
+      git(origin, "config", "user.email", "fixture@example.com");
+      git(origin, "config", "uploadpack.allowFilter", "true");
+      const content = Array.from({ length: 100 }, (_, index) => `line ${index}\n`).join("");
+      for (const file of [oldFile, changed, deleted, measuredFile]) {
+        write(file, file === oldFile ? content : `${file}\n${content}`);
+      }
+      git(origin, "add", ".");
+      git(origin, "commit", "-qm", "measured source");
+      const beforeMove = git(origin, "rev-parse", "HEAD");
+      const oldBlob = git(origin, "rev-parse", `HEAD:${oldFile}`);
+      write(newFile, `${content}moved\n`);
+      fs.unlinkSync(path.join(origin, oldFile));
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "move test");
+      const afterMove = git(origin, "rev-parse", "HEAD");
+      write(newFile, `${content}moved and edited\n`);
+      write(changed, "changed\n");
+      fs.unlinkSync(path.join(origin, deleted));
+      git(origin, "add", "-A");
+      git(origin, "commit", "-qm", "current source");
+      const head = git(origin, "rev-parse", "HEAD");
+      git(
+        directory,
+        "clone",
+        "-q",
+        "--filter=blob:none",
+        "--no-checkout",
+        pathToFileURL(origin).href,
+        checkout,
+      );
+      git(checkout, "checkout", "-q", head);
+      git(checkout, "config", "diff.renames", "true");
+      git(checkout, "remote", "set-url", "origin", path.join(directory, "unavailable"));
+      const missing = () =>
+        git(checkout, "rev-list", "--objects", "--all", "--missing=print")
+          .split("\n")
+          .filter((line) => line.startsWith("?"))
+          .toSorted();
+      const absent = missing();
+      expect(absent).toContain(`?${oldBlob}`);
+      expect(git(checkout, "rev-list", "--count", "HEAD")).toBe("3");
+      git(checkout, "merge-base", "--is-ancestor", beforeMove, head);
+      expect(readFileSync(path.join(checkout, newFile), "utf8")).toBe(
+        `${content}moved and edited\n`,
+      );
+      const runs = [1, 2, 3, 4].map((id) =>
+        samplerRun(id, { head_sha: id < 3 ? beforeMove : afterMove }),
+      );
+      withSamplerFixture(
+        {
+          runs,
+          gitDirectory: checkout,
+          baseline: {
+            ...baseline,
+            uiE2e: {
+              ...baseline.uiE2e,
+              fileSeconds: {
+                [oldFile]: 8,
+                [newFile]: 9,
+                [changed]: 10,
+                [deleted]: 11,
+                [measuredFile]: 100,
+              },
+            },
+          },
+          jobs: runs.flatMap(({ id, head_sha }) => [
+            samplerJob(id * 10, id, { head_sha }),
+            samplerJob(id * 10 + 1, id, {
+              head_sha,
+              name: "checks-ui-e2e (1/9)",
+              log: uiLog({
+                [id < 3 ? oldFile : newFile]: 69,
+                [changed]: 69,
+                [deleted]: 69,
+                [measuredFile]: 130,
+              }),
+            }),
+          ]),
+        },
+        (fixture) => {
+          const result = fixture.invoke(false, 4);
+          expect(result.status, result.stderr).toBe(0);
+          expect(
+            ciTestTimingsSchema.parse(JSON.parse(fixture.contents())).uiE2e.fileSeconds,
+          ).toEqual({
+            [oldFile]: 8,
+            [newFile]: 9,
+            [changed]: 10,
+            [deleted]: 11,
+            [measuredFile]: 130,
+          });
+        },
+      );
+      expect(missing()).toEqual(absent);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("seeks compact contributors past docs-only and unparseable runs, preserving all attempts and unchanged bytes", () => {
     const releaseRuns = [10, 11].map((id) =>
       samplerRun(id, {
@@ -2504,6 +2663,7 @@ describe("committed CI timing loader", () => {
   async function readTimings(contents: string | Error) {
     vi.resetModules();
     vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", undefined);
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", undefined);
     const original = fs.readFileSync;
     const timingPath = fileURLToPath(new URL("../../config/ci-test-timings.json", import.meta.url));
     const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
@@ -2561,5 +2721,35 @@ describe("committed CI timing loader", () => {
     expect(
       read.mock.calls.filter(([file]) => file instanceof URL && fileURLToPath(file) === timingPath),
     ).toHaveLength(1);
+  });
+  it("prefers matching runtime weights and retains historical estimates for unmeasured keys", async () => {
+    const { loader } = await readTimings(
+      JSON.stringify({
+        ...baseline,
+        compactGroupSeconds: {
+          blacksmith: {
+            group: 100,
+            unmeasured: 150,
+            "bun:group": 1,
+            "bun-all:group": 60,
+            "dual-all:group": 170,
+          },
+          github: {},
+        },
+        toolingFileSeconds: {
+          blacksmith: { "file.test.ts": 50, "bun-all:file.test.ts": 30 },
+          github: {},
+        },
+      }),
+    );
+    expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 100, unmeasured: 150 });
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
+    expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 60, unmeasured: 150 });
+    expect(loader.readToolingFileTimings("blacksmith")).toEqual({ "file.test.ts": 30 });
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "dual-all");
+    expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 170, unmeasured: 150 });
+    expect(loader.readToolingFileTimings("blacksmith")).toEqual({ "file.test.ts": 50 });
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "node");
+    expect(loader.readCompactGroupTimings("blacksmith")).toEqual({ group: 100, unmeasured: 150 });
   });
 });

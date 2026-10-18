@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { calculateUsageCost } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
@@ -655,6 +656,7 @@ describe("parseCliJsonl", () => {
       output: 5,
       cacheRead: undefined,
       cacheWrite: 36955,
+      cacheWrite1h: 36955,
       total: undefined,
     });
     expect(output.diagnosticUsage).toEqual({
@@ -662,8 +664,12 @@ describe("parseCliJsonl", () => {
       output: 534,
       cacheRead: undefined,
       cacheWrite: 36955,
+      cacheWrite1h: 36955,
       total: undefined,
     });
+    // Every write in this turn used the 1h TTL; the CLI reports costUSD 0.40499 for it.
+    const opus48 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+    expect(calculateUsageCost(output.diagnosticUsage ?? {}, opus48).total).toBeCloseTo(0.40499, 8);
   });
 
   it("keeps subagent thinking, tools, and messages out of the parent lane", () => {

@@ -2,12 +2,14 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
+import { applyProviderAuthConfigPatch as applySdkAuthPatch } from "../plugin-sdk/provider-auth.js";
+import { applyProviderAuthConfigPatchWithNormalization } from "./provider-auth-choice-helpers.js";
+import type { ProviderAuthResult } from "./provider-authentication.types.js";
 
 const providerConfigNormalizer = ({ providerConfig }: { providerConfig: ModelProviderConfig }) =>
   providerConfig;
 
-describe("applyProviderAuthConfigPatch", () => {
+describe("applyProviderAuthConfigPatchWithNormalization", () => {
   const base = {
     agents: {
       defaults: {
@@ -23,7 +25,7 @@ describe("applyProviderAuthConfigPatch", () => {
 
   it("merges default model maps by default so other providers survive login", () => {
     const patch = { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } };
-    const next = applyProviderAuthConfigPatch(base, patch);
+    const next = applyProviderAuthConfigPatchWithNormalization(base, patch);
     expect(next.agents?.defaults?.models).toEqual({
       ...base.agents.defaults.models,
       "openai/gpt-5.5": {},
@@ -45,7 +47,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+    const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch);
 
     expect(config[blockedKey]).toEqual({ retained: "before" });
     expect(next.plugins?.entries?.example?.config?.[blockedKey]).toEqual({ retained: "before" });
@@ -55,7 +57,9 @@ describe("applyProviderAuthConfigPatch", () => {
     const patch = JSON.parse(
       '{"agents":{"defaults":{"models":{"__proto__":{"polluted":true},"claude-cli/claude-sonnet-4-6":{"alias":"Sonnet","params":{"constructor":{"polluted":true},"maxTokens":12000}}}}}}',
     );
-    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
+    const next = applyProviderAuthConfigPatchWithNormalization(base, patch, {
+      replaceDefaultModels: true,
+    });
     const models = next.agents?.defaults?.models;
     expect(models).toEqual({
       "claude-cli/claude-sonnet-4-6": {
@@ -95,7 +99,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(baseLocal, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
+      providerConfigNormalizer,
+    });
     const provider = next.models?.providers?.["microsoft-foundry"] as
       | Record<string, unknown>
       | undefined;
@@ -103,6 +109,33 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(provider).toMatchObject({ authHeader: true });
     expect(provider).not.toHaveProperty("apiKey");
     expect(provider).not.toHaveProperty("headers");
+  });
+
+  it("deletes individual auth headers while retaining other provider headers", () => {
+    const provider = {
+      baseUrl: "https://provider.example/v1",
+      headers: { Authorization: "Bearer old-key", "X-Deployment": "keep" },
+      request: { headers: { "X-Custom-Auth": "old-key", "X-Route": "keep" } },
+      models: [],
+    };
+    const patch: ProviderAuthResult["configPatch"] = {
+      models: {
+        providers: {
+          fixture: {
+            ...provider,
+            headers: { Authorization: undefined },
+            request: { headers: { "X-Custom-Auth": undefined } },
+          },
+        },
+      },
+    };
+    const next = applySdkAuthPatch({ models: { providers: { fixture: provider } } }, patch);
+    expect(next.models?.providers?.fixture).toMatchObject({
+      headers: { "X-Deployment": "keep" },
+      request: { headers: { "X-Route": "keep" } },
+    });
+    expect(next.models?.providers?.fixture?.headers).not.toHaveProperty("Authorization");
+    expect(next.models?.providers?.fixture?.request?.headers).not.toHaveProperty("X-Custom-Auth");
   });
 
   it.each(["litellm", "LiteLLM"] as const)(
@@ -164,7 +197,9 @@ describe("applyProviderAuthConfigPatch", () => {
         },
       };
 
-      const next = applyProviderAuthConfigPatch(baseLocal, patch, { providerConfigNormalizer });
+      const next = applyProviderAuthConfigPatchWithNormalization(baseLocal, patch, {
+        providerConfigNormalizer,
+      });
 
       expect(next.models?.providers).toEqual({
         litellm: {
@@ -208,7 +243,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch({}, patch);
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch);
 
     expect(next.agents?.entries?.ops?.model).toEqual({
       primary: "google/gemini-3.1-pro-preview",
@@ -245,7 +280,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
+      providerConfigNormalizer,
+    });
 
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
     expect(next.models?.providers?.google?.api).toBe("openai-completions");
@@ -275,7 +312,9 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     } satisfies OpenClawConfig;
 
-    const next = applyProviderAuthConfigPatch({}, patch, { providerConfigNormalizer });
+    const next = applyProviderAuthConfigPatchWithNormalization({}, patch, {
+      providerConfigNormalizer,
+    });
 
     expect(next.models?.providers?.kilocode?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
   });

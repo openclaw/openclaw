@@ -259,6 +259,18 @@ it.each([false, true])(
     const fixture = await createFixture("autoArchive");
     const respond = vi.fn();
     const releaseCore = createDeferredCore();
+    const releaseArchiveEffects = createDeferredCore();
+    const cron = fixture.creator.context.cron;
+    const updateWithPrecondition = cron.updateWithPrecondition.bind(cron);
+    const archiveUpdate = !replaced
+      ? vi.spyOn(cron, "updateWithPrecondition").mockImplementation(async (...args) => {
+          const result = await updateWithPrecondition(...args);
+          // Hold the archive handler after the real worker commit and cancellation.
+          await releaseArchiveEffects.promise;
+          return result;
+        })
+      : undefined;
+    let archiveRequest: Promise<void> | undefined;
     runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
       const target = readRecipeTarget(params.prompt);
       const patch = {
@@ -268,17 +280,20 @@ it.each([false, true])(
       };
       // Synthetic model decision; the native archive handler and its exact-ID
       // precondition are real. No GitHub lookup or merge is performed.
-      await expectDefined(
-        sessionMutationHandlers["sessions.patch"],
-        "sessions.patch",
-      )({
-        req: { type: "req", id: "recipe-archive", method: "sessions.patch", params: patch },
-        params: patch,
-        respond,
-        context: fixture.creator.context,
-        client: fixture.client,
-        isWebchatConnect: () => false,
-      });
+      archiveRequest = Promise.resolve(
+        expectDefined(
+          sessionMutationHandlers["sessions.patch"],
+          "sessions.patch",
+        )({
+          req: { type: "req", id: "recipe-archive", method: "sessions.patch", params: patch },
+          params: patch,
+          respond,
+          context: fixture.creator.context,
+          client: fixture.client,
+          isWebchatConnect: () => false,
+        }),
+      );
+      await archiveRequest;
       if (!replaced) {
         await releaseCore.promise;
       }
@@ -290,6 +305,7 @@ it.each([false, true])(
       }
       await fixture.execution.update(fixture.selected.id, { enabled: true });
       const event = await fixture.tick();
+      releaseArchiveEffects.resolve();
       // Successful archive disables bound jobs through the native cleanup owner,
       // cancelling this occurrence after the archive commits. A scheduler
       // cancellation is not evidence that the archive failed.
@@ -300,6 +316,8 @@ it.each([false, true])(
           : { status: "error", error: "Cron job disabled by operator." }),
       });
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      // Cancellation settles the cron occurrence before the archive RPC completes.
+      await expectDefined(archiveRequest, "archive request");
       const stored = accessor.loadSessionEntry({ agentId: "main", sessionKey: SESSION });
       if (replaced) {
         expect(respond).toHaveBeenCalledWith(
@@ -325,8 +343,10 @@ it.each([false, true])(
         expect(stopped).toHaveBeenCalledOnce();
       }
     } finally {
+      releaseArchiveEffects.resolve();
       releaseCore.resolve();
       await fixture.stop();
+      archiveUpdate?.mockRestore();
     }
   },
 );

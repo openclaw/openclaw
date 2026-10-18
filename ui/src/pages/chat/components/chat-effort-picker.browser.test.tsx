@@ -88,7 +88,9 @@ async function fixture(
     await opened;
   }
   expect(host.querySelector("[data-anchored-overlay]")!.matches(":popover-open")).toBe(open);
-  expect(host.querySelector<HTMLInputElement>("input[type=range]")!.checkVisibility()).toBe(open);
+  expect(
+    host.querySelector<HTMLInputElement>("input[type=range]")?.checkVisibility() ?? false,
+  ).toBe(open);
   return {
     input: host.querySelector<HTMLInputElement>("input[type=range]")!,
     onThinkingSelect,
@@ -105,7 +107,7 @@ function appearance(input: HTMLInputElement) {
 
 describe("effort bar colour and flow", () => {
   it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
-    const { input } = await fixture(["low", "medium", "high"], "high", false, undefined, false);
+    await fixture(["low", "medium", "high"], "high", false, undefined, false);
     const composer = host!;
     composer.classList.add("agent-chat__input");
     const details = composer.querySelector("details")!;
@@ -160,7 +162,9 @@ describe("effort bar colour and flow", () => {
     await userEvent.keyboard("{Enter}");
     await expect.poll(() => surface.matches(":popover-open")).toBe(true);
     await userEvent.keyboard("{Tab}");
-    await expect.poll(() => document.activeElement).toBe(input);
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => details.open).toBe(false);
     await expect.poll(() => surface.matches(":popover-open")).toBe(false);

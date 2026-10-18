@@ -6,8 +6,8 @@ import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/boar
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ToolPreview } from "./widget-card.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ToolPreview } from "./widget-card-view.tsx";
 
 const canvasPreview = {
   kind: "canvas",
@@ -87,7 +87,7 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
-  it("keeps initialized frames stable but refreshes remounts and new connection generations", () => {
+  it("keeps initialized frames stable through capability and transport generations", () => {
     const firstPreview = {
       ...canvasPreview,
       url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
@@ -128,6 +128,7 @@ describe("widget-card", () => {
     const remountedFrame = host.querySelector("iframe");
     expect(remountedFrame).not.toBe(originalFrame);
     expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+    initializeWidgetFrame(remountedFrame!);
 
     bumpCanvasWidgetFrameConnectionGeneration();
     mountWidget(
@@ -137,8 +138,7 @@ describe("widget-card", () => {
       },
       host,
     );
-    expect(host.querySelector("iframe")).not.toBe(remountedFrame);
-    expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
+    expect(host.querySelector("iframe")).toBe(remountedFrame);
   });
 
   it.each(["failed"] as const)(
@@ -254,6 +254,11 @@ describe("widget-card", () => {
     expect(canvas.querySelector("iframe.chat-tool-card__preview-frame")).not.toBeNull();
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
     expect(canvas.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
+    document.body.append(canvas);
+    canvas.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
+    await waitForSolid(() =>
+      expect(canvas.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
+    );
     expect(
       Array.from(canvas.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
     ).toEqual(["Copy as image", "Download as image"]);
@@ -287,9 +292,6 @@ describe("widget-card", () => {
       app,
     );
     expect(app.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
-    expect(
-      Array.from(app.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim()),
-    ).toEqual(["Show raw details"]);
 
     const external = mountWidget(
       {
@@ -297,6 +299,11 @@ describe("widget-card", () => {
         url: "https://example.test/widget",
       },
       { allowExternalEmbedUrls: true, rawText: "external raw payload" },
+    );
+    document.body.append(external);
+    external.querySelector<HTMLButtonElement>('button[aria-label="Widget actions"]')!.click();
+    await waitForSolid(() =>
+      expect(external.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
     );
     expect(
       Array.from(external.querySelectorAll('[role="menuitem"]'), (item) =>

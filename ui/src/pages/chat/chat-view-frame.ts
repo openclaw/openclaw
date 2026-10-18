@@ -21,7 +21,7 @@ import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
-import type { ChatProviderReviewController } from "./chat-provider-review-controller.tsx";
+import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
@@ -39,7 +39,7 @@ import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
+import type { ChatTranscript } from "./components/chat-transcript-controller.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
 import { chatFailureRunId } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -71,7 +71,7 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     onCompanionStageAttachment?: (attachment: ChatAttachment, sourceSessionKey: string) => boolean;
-    transcript: ChatTranscriptController;
+    transcript: ChatTranscript;
     asyncQuestionStorage?:
       | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
       | null;
@@ -80,13 +80,14 @@ export type ChatProps = Omit<
       itemId?: string,
       sourceMessageId?: string,
     ) => Promise<boolean>;
+    getQueue?: () => readonly ChatQueueItem[];
     presented?: PresentationValue;
     historyState?: ChatState;
     awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;
     providerPolicyNotice?: ProviderPolicyNotice | null;
-    providerReview?: ChatProviderReviewController;
-    providerReviewRevision?: object;
+    // Resolve after the first pane frame prepares the Solid owner's permission facts.
+    readProviderReview?: () => ChatProviderReviewOwner;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
@@ -145,7 +146,7 @@ export function createChatViewFrame(props: ChatProps) {
   const displayedPendingInputs = pendingInputs
     ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
     : undefined;
-  const requestUpdate = props.onRequestUpdate ?? (() => {});
+  // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
     props.transcript.scrollElement
       ?.closest(".chat")
@@ -195,10 +196,16 @@ export function createChatViewFrame(props: ChatProps) {
   const questionState = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(questionState, {
     ...props,
+    // Question publications can precede the pane's next queue props frame.
+    queue: props.getQueue?.() ?? props.queue,
     onReopen: (itemId, scope) => {
-      const composerState = getChatComposerState(props.paneId);
-      composerState.activeQuestionKey = JSON.stringify([scope, itemId]);
-      composerState.questionCollapsed = false;
+      const composer = getChatComposerState(props.paneId);
+      composer.restoreComposerFocus ||= composer.questionTakeoverActive;
+      composer.questionTakeoverActive = false;
+      composer.updatePresentation((draft) => {
+        draft.activeQuestionKey = JSON.stringify([scope, itemId]);
+        draft.questionCollapsed = false;
+      });
     },
   });
   const openImage = props.onOpenImage
@@ -250,7 +257,6 @@ export function createChatViewFrame(props: ChatProps) {
     questionPrompts: props.gatewayQuestionPrompts,
     agents: props.agentsList?.agents,
     onOpenImage: openImage,
-    onRequestUpdate: requestUpdate,
     queuedMessageAction: props.placementStartup?.initialTurn
       ? {
           id: props.placementStartup.initialTurn.id,
@@ -291,7 +297,6 @@ export function createChatViewFrame(props: ChatProps) {
                   ...(props.getAttachments?.() ?? props.attachments ?? []),
                   attachment,
                 ]);
-                requestUpdate();
                 focusComposer();
                 return true;
               },
@@ -333,7 +338,6 @@ export function createChatViewFrame(props: ChatProps) {
   return {
     approvalSourceSession,
     pendingInputs,
-    requestUpdate,
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,
