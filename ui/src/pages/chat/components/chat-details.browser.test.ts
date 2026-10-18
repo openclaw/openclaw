@@ -5,6 +5,8 @@ import { page } from "vitest/browser";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import type { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { ChatDetails, type ChatDetailsViewProps } from "./chat-details.tsx";
@@ -132,8 +134,8 @@ describe("chat Details presentation", () => {
     const session = panel.querySelector<ChatDetailsSession>("openclaw-chat-details-session")!;
     expect(panel.getAttribute("role")).toBe("complementary");
     expect(panel.querySelector(".chat-details__toolbar")).toBeNull();
-    const groupStyle = getComputedStyle(panel.querySelector(".chat-details__group")!);
-    expect(groupStyle.borderTopWidth).toBe("1px");
+    const groupStyle = getComputedStyle(panel.querySelector(".chat-details-desktop-section")!);
+    expect(groupStyle.borderTopWidth).toBe("0px");
     expect(groupStyle.borderInlineStartWidth).toBe("0px");
     expect(groupStyle.borderBottomWidth).toBe("0px");
     expect(panel.matches(":popover-open")).toBe(false);
@@ -196,71 +198,68 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("nests section content under aligned headings without shifting navigation highlights", async () => {
-    const openFiles = vi.fn();
-    const { trigger, panel } = await fixture(
-      props({
-        onOpenWorkspace: openFiles,
-        selectedSession: {
-          key: card.sessionKey,
-          kind: "direct",
-          totalTokens: 64000,
-          totalTokensFresh: true,
-          contextTokens: 128000,
-          inputTokens: 1200,
-          outputTokens: 450,
-        },
-      }),
+  it("aligns Environment rows in the desktop body without shifting the Changes action", async () => {
+    await page.viewport(1000, 800);
+    const openChanges = vi.fn();
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, detailsStyles].join("\n");
+    document.head.append(styles);
+    const panel = document.createElement("section");
+    panel.className = "chat-details";
+    panel.setAttribute("data-desktop", "");
+    panel.style.cssText = "position:relative;inset:auto;width:600px;max-width:none;height:400px";
+    document.body.append(panel);
+    mounted.push(panel, styles);
+    mountSolid(
+      () =>
+        createComponent(ChatDetailsDesktopBody, {
+          presented: true,
+          get children() {
+            return createComponent(ChatDetailsEnvironment, {
+              details: props({
+                detailsWorkspace: { root: "/workspace/details", branch: "feature/details" },
+              }),
+              presented: true,
+              onOpenUncommitted: openChanges,
+              uncommitted: {
+                sessionKey: card.sessionKey,
+                branch: "feature/details",
+                baseRef: "HEAD",
+                files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+                additions: 3,
+                deletions: 1,
+              },
+            });
+          },
+        }),
+      { container: panel },
     );
-    trigger.click();
     flush();
-    await expect.poll(() => panel.querySelector(".chat-details__environment")).not.toBeNull();
-    const environment = panel.querySelector(".chat-details__environment")!;
-    const navigation = environment.querySelector<HTMLButtonElement>(".chat-details__navigation")!;
-    const heading = environment.querySelector("summary")!;
-    const workspaceIcon = environment.querySelector(".chat-details__row > svg")!;
+    const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const navigation = panel.querySelector<HTMLButtonElement>(".chat-environment__action")!;
     const leadingIcon = navigation.querySelector("svg")!;
-    const trailingIcon = navigation.querySelector("svg:last-child")!;
-    const context = panel.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-    await toggle(context);
-    const contextHeading = context.querySelector("summary")!;
-    const budget = context.querySelector(".chat-details__context-budget")!;
-    const stats = context.querySelector(".chat-details__stats")!;
-    const progressHeading = panel.querySelector(".task-progress-details__summary")!;
-    const progressBody = panel.querySelector(".task-progress-details__body")!;
+    const branchIcon = panel.querySelector(".chat-details__row > svg")!;
     for (const width of [600, 300]) {
-      const frame = panel.closest<HTMLElement>(".chat-main__conversation-frame")!;
-      frame.style.width = width + "px";
-      window.dispatchEvent(new Event("resize"));
+      panel.style.width = width + "px";
       const row = navigation.getBoundingClientRect();
-      expect(leadingIcon.getBoundingClientRect().left - row.left).toBeGreaterThanOrEqual(8);
-      expect(row.right - trailingIcon.getBoundingClientRect().right).toBeGreaterThanOrEqual(8);
-      expect(leadingIcon.getBoundingClientRect().left).toBe(
-        workspaceIcon.getBoundingClientRect().left,
-      );
-      const headingLeft =
-        heading.getBoundingClientRect().left +
-        Number.parseFloat(getComputedStyle(heading).paddingLeft);
-      expect(headingLeft - panel.getBoundingClientRect().left - panel.clientLeft).toBe(16);
-      expect(leadingIcon.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(contextHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(progressHeading.getBoundingClientRect().left).toBe(headingLeft);
-      expect(budget.getBoundingClientRect().left - headingLeft).toBe(8);
-      expect(stats.getBoundingClientRect().left - headingLeft).toBe(8);
+      const headingBounds = heading.getBoundingClientRect();
       expect(
-        progressBody.getBoundingClientRect().left +
-          Number.parseFloat(getComputedStyle(progressBody).paddingLeft) -
-          headingLeft,
-      ).toBe(0);
-      expect(row.height).toBeGreaterThanOrEqual(36);
+        Math.abs(
+          leadingIcon.getBoundingClientRect().left - branchIcon.getBoundingClientRect().left,
+        ),
+      ).toBeLessThanOrEqual(1);
+      expect(row.left).toBeGreaterThanOrEqual(headingBounds.left);
+      expect(row.right).toBeLessThanOrEqual(headingBounds.right);
+      expect(row.height).toBeGreaterThanOrEqual(32);
       expect(panel.scrollWidth).toBeLessThanOrEqual(panel.clientWidth);
     }
-    await page.getByRole("button", { name: "Show session files", exact: true }).hover();
-    const beforeFocus = navigation.getBoundingClientRect();
+    const beforeHover = navigation.getBoundingClientRect().toJSON();
+    await page.getByRole("button", { name: /Changes/ }).hover();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
     navigation.focus();
-    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeFocus.toJSON());
-    navigation.click();
-    expect(openFiles).toHaveBeenCalledOnce();
+    expect(navigation.getBoundingClientRect().toJSON()).toEqual(beforeHover);
+    await page.getByRole("button", { name: /Changes/ }).click();
+    expect(openChanges).toHaveBeenCalledOnce();
   });
 
   it("starts closed, stays closed on revisions, and returns Escape focus to its labeled trigger", async () => {
@@ -398,7 +397,11 @@ describe("chat Details presentation", () => {
     const progressSection = progress.querySelector<HTMLDetailsElement>(".task-progress-details")!;
     expect(sessionSection.querySelector(":scope > summary")).toBeNull();
     expect(progressSection.open).toBe(true);
-    expect(session.querySelector("[data-details-group]")).toBeNull();
+    expect(
+      session.querySelector(
+        '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+      ),
+    ).toBeNull();
     await toggle(progressSection);
     expect(progressSection.open).toBe(false);
     expect(

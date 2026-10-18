@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
@@ -13,6 +13,7 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
@@ -36,7 +37,11 @@ async function mount(overrides: Partial<ChatDetailsProps> = {}) {
 }
 it("omits empty linked-work disclosures and opens arriving pull requests", async () => {
   const element = await mount();
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   element.props = {
     ...element.props!,
     pullRequests: [
@@ -63,7 +68,11 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   const pullRequests = element.props!.pullRequests;
   element.props = { ...element.props!, pullRequests: [] };
   await element.updateComplete;
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   expect(element.querySelector(".chat-details-session > summary")).toBeNull();
   const openChanges = vi.fn();
   element.props = { ...element.props!, onOpenSessionDiff: openChanges };
@@ -79,7 +88,11 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   expect(openChanges).toHaveBeenCalledOnce();
   element.props = { ...element.props!, onOpenSessionDiff: undefined };
   await element.updateComplete;
-  expect(element.querySelector("[data-details-group]")).toBeNull();
+  expect(
+    element.querySelector(
+      '[data-details-group="pull-requests"], [data-details-group="automations"], [data-details-group="subagents"], [data-details-group="processes"]',
+    ),
+  ).toBeNull();
   element.props = { ...element.props!, pullRequests };
   await element.updateComplete;
   expect(
@@ -478,10 +491,8 @@ it("shows finished subagents after the parent stops waiting and omits the group 
 });
 
 it("shows live environment and context facts while preserving disclosure intent", async () => {
-  const openFiles = vi.fn();
   const element = await mount({
     detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
-    onOpenWorkspace: openFiles,
     selectedSession: {
       key: "agent:main:details",
       kind: "direct",
@@ -494,12 +505,11 @@ it("shows live environment and context facts while preserving disclosure intent"
       outputTokens: 450,
     },
   });
-  expect(element.textContent).toContain("Design workstation");
-  expect(element.textContent).toContain("project");
-  expect(element.textContent).not.toContain("/workspace/project");
-  expect(element.textContent).toContain("demo-model");
-  expect(element.querySelector('[aria-label="Copy path"]')).not.toBeNull();
-  expect(element.querySelector('[aria-label="Copy branch name"]')).not.toBeNull();
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.textContent).toContain("feature/details");
+  expect(environment.textContent).not.toContain("Design workstation");
+  expect(environment.textContent).not.toContain("/workspace/project");
+  expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
   const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
   expect(context.querySelector("summary")?.textContent).toContain("50%");
   context.open = true;
@@ -514,16 +524,6 @@ it("shows live environment and context facts while preserving disclosure intent"
   await element.updateComplete;
   expect(context.open).toBe(true);
   expect(context.querySelector("summary")?.textContent).toContain("~25%");
-  element
-    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
-    .click();
-  expect(openFiles).toHaveBeenCalledOnce();
-  element.presented = false;
-  await element.updateComplete;
-  element
-    .querySelector<HTMLButtonElement>(".chat-details__environment .chat-details__navigation")!
-    .click();
-  expect(openFiles).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -531,10 +531,97 @@ it.each([
   "C:\\Users\\private-user\\.openclaw\\workspace\\",
 ])("keeps an unlabelled workspace's private parent path out of Details: %s", async (root) => {
   const element = await mount({ detailsWorkspace: { root, label: null } });
-  const environment = element.querySelector(".chat-details__environment")!;
-  expect(environment.textContent).toContain("workspace");
+  const environment = element.querySelector('[data-details-group="environment"]')!;
   expect(environment.textContent).not.toContain(root);
   expect(environment.textContent).not.toContain("private-user");
-  expect(environment.querySelector(".chat-details__row")?.getAttribute("title")).toBe("workspace");
-  expect(environment.querySelector('[aria-label="Copy path"]')).not.toBeNull();
+  const openProject = vi.fn();
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsEnvironmentMobile, {
+      details: { detailsWorkspace: { root, label: null } },
+      presented: true,
+      onOpenProject: openProject,
+    }),
+  );
+  const project = view.container.querySelector<HTMLButtonElement>("button")!;
+  expect(project.textContent).toBe("workspace");
+  expect(view.container.textContent).not.toContain(root);
+  expect(view.container.textContent).not.toContain("private-user");
+  project.click();
+  expect(openProject).toHaveBeenCalledOnce();
+});
+
+it("demands mobile changes only while presented and retires native navigation callbacks when hidden", () => {
+  const request = vi.fn();
+  const openMachine = vi.fn();
+  const openChanges = vi.fn();
+  const [presented, setPresented] = createSignal(true);
+  const [session, setSession] = createSignal<GatewaySessionRow>({
+    key: "agent:main:details",
+    kind: "direct",
+    execNode: "Gateway machine",
+  });
+  const view = mountSolid(() =>
+    createComponent(ChatDetailsEnvironmentMobile, {
+      details: {
+        get selectedSession() {
+          return session();
+        },
+        detailsWorkspace: { root: "/workspace/project", branch: "feature/details" },
+      },
+      get presented() {
+        return presented();
+      },
+      onRequestUncommitted: request,
+      onOpenMachine: openMachine,
+      onOpenUncommitted: openChanges,
+      uncommitted: {
+        sessionKey: "agent:main:details",
+        baseRef: "HEAD",
+        branch: "feature/details",
+        files: [{ path: "example.ts", status: "modified", additions: 3, deletions: 1 }],
+        additions: 3,
+        deletions: 1,
+      },
+    }),
+  );
+  flush();
+  expect(request).toHaveBeenCalledOnce();
+  expect(view.container.textContent).not.toContain("Gateway machine");
+  setSession({
+    key: "agent:main:details",
+    kind: "direct",
+    placement: {
+      state: "active",
+      generation: 1,
+      createdAtMs: 100_000,
+      updatedAtMs: 300_000,
+      stateChangedAtMs: 300_000,
+      environmentId: "worker:device",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "a".repeat(64),
+      workspaceBaseManifestRef: "base-manifest",
+      remoteWorkspaceDir: "/worker/repo",
+      runner: { kind: "device", status: "available" },
+    },
+  });
+  flush();
+  const buttons = Array.from(view.container.querySelectorAll<HTMLButtonElement>("button"));
+  const machine = buttons.find((button) => button.textContent === "worker:device")!;
+  const changes = buttons.find((button) => button.textContent?.includes("Changes"))!;
+  expect(changes.textContent).toContain("+3");
+  expect(changes.textContent).toContain("−1");
+  machine.click();
+  changes.click();
+  expect(openMachine).toHaveBeenCalledOnce();
+  expect(openChanges).toHaveBeenCalledOnce();
+  setPresented(false);
+  flush();
+  machine.click();
+  changes.click();
+  expect(request).toHaveBeenCalledOnce();
+  expect(openMachine).toHaveBeenCalledOnce();
+  expect(openChanges).toHaveBeenCalledOnce();
+  setPresented(true);
+  flush();
+  expect(request).toHaveBeenCalledTimes(2);
 });

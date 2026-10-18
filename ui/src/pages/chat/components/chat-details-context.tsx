@@ -1,9 +1,14 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Loading, Show, createMemo, createSignal, lazy } from "solid-js";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import { ChatContextBreakdown } from "./chat-context-breakdown.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/context-breakdown.css";
+
+// The report is needed only after Context is expanded, not during chat boot.
+const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
+  export: "ChatContextBreakdown",
+});
 
 export type ChatDetailsContextContentProps = {
   details: Pick<
@@ -85,15 +90,23 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
               props.presented && props.details.pullRequestsGateway && props.details.selectedSession
             }
           >
-            <ChatContextBreakdown
-              desktop={props.desktop}
-              gateway={props.details.pullRequestsGateway!}
-              session={props.details.selectedSession!}
-              agentId={props.details.currentAgentId ?? undefined}
-              used={usage().used}
-              limit={usage().limit}
-              approximate={usage().approximate}
-            />
+            <Loading
+              fallback={
+                <p class="chat-context__note" role="status">
+                  {t("chat.sessionDetails.contextLoading")}
+                </p>
+              }
+            >
+              <ChatContextBreakdown
+                desktop={props.desktop}
+                gateway={props.details.pullRequestsGateway!}
+                session={props.details.selectedSession!}
+                agentId={props.details.currentAgentId ?? undefined}
+                used={usage().used}
+                limit={usage().limit}
+                approximate={usage().approximate}
+              />
+            </Loading>
           </Show>
           <Show when={budget() && !usage().approximate}>
             <p class="chat-context__note">
