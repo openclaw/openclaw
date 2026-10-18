@@ -45,7 +45,7 @@ Quick `/acp` flow from chat:
     - A failed spawn waits for any already-started provisional session deletion to finish before returning, including when the cleanup request deadline expires.
     - Parent-owned ACP sessions are treated as background work even when the runtime session is persistent; completion and cross-surface delivery follow their accepted native completion path rather than acting like a normal user-facing chat session.
     - The ACP control plane closes one-shot runtime handles after the turn settles. Persistent sessions keep their ACP session and binding lifecycle; use `/acp close` to end one explicitly. Cleanup does not depend on a Tasks record.
-    - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, reset, or expired.
+    - Bound follow-up messages go directly to the ACP session until the binding is closed, detached, deleted, or expired. An in-place `/new` or `/reset` retains the conversation binding while replacing the runtime generation; parent-owned subagent resets still end their bindings.
     - Gateway commands stay local. `/acp ...`, `/status`, and `/session` are never sent as normal prompt text to a bound ACP harness.
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - Turn completion waits for queued output delivery. If delivery fails, OpenClaw cancels the active turn and waits for backend cleanup before starting the next queued turn, within the configured turn timeout.
