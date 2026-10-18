@@ -42,6 +42,20 @@ function message(id: string | undefined, text: string) {
   return JSON.stringify({ type: "message", id, message: { role: "user", content: text } });
 }
 
+function imageMessage(id: string, bytes: number) {
+  return JSON.stringify({
+    type: "message",
+    id,
+    message: {
+      role: "assistant",
+      content: [
+        { type: "text", text: "caption" },
+        { type: "image", mimeType: "image/png", data: Buffer.alloc(bytes).toString("base64") },
+      ],
+    },
+  });
+}
+
 test("keeps exact physical ranges across newline dialects and malformed UTF8", async () => {
   const file = await fixture(
     Buffer.concat([
@@ -82,19 +96,8 @@ test("keeps exact physical ranges across newline dialects and malformed UTF8", a
 });
 
 test("retains duplicate order, last by-ID selection and oversized image recovery", async () => {
-  const image = JSON.stringify({
-    type: "message",
-    id: "image",
-    message: {
-      role: "assistant",
-      content: [
-        { type: "text", text: "caption" },
-        { type: "image", mimeType: "image/png", data: Buffer.alloc(300000).toString("base64") },
-      ],
-    },
-  });
   const file = await fixture(
-    [message("same", "first"), image, message("same", "last")].join("\r\n"),
+    [message("same", "first"), imageMessage("image", 300000), message("same", "last")].join("\r\n"),
   );
   const index = (await readSessionTranscriptIndex(file, "test"))!;
   const records = await readIndexedTranscriptEntries(file, index, index.entries, "test");
@@ -226,23 +229,7 @@ test("prepares cold source pages incrementally before selecting the final archiv
 
 test("rejects an oversized source line before decoding while retaining ordinary image recovery", async () => {
   const imageBytes = 6 * 1024 * 1024 + 1024;
-  const file = await fixture(
-    JSON.stringify({
-      type: "message",
-      id: "large-image",
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "caption" },
-          {
-            type: "image",
-            mimeType: "image/png",
-            data: Buffer.alloc(imageBytes).toString("base64"),
-          },
-        ],
-      },
-    }),
-  );
+  const file = await fixture(imageMessage("large-image", imageBytes));
   const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
   const parse = vi.spyOn(recordParser, "parseTranscriptRecord");
   const reads = vi.spyOn(fileReads, "readFileWindowFully");

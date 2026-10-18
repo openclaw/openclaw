@@ -262,10 +262,7 @@ it.each([
           expect(observed).toHaveLength(1);
           expect(observed[0]).toMatchObject({ entry: { sessionId, updatedAt: 1 } });
           if (native === "completed") {
-            expect(outcome).toEqual({
-              kind: "failed",
-              error: deliveryFailure,
-            });
+            expect(outcome).toEqual({ kind: "failed", error: deliveryFailure });
           } else {
             expect(outcome.kind).toBe("failed");
             if (outcome.kind !== "failed") {

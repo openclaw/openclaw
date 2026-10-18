@@ -23,6 +23,26 @@ const parent = "agent:main:dashboard:research";
 const groupId = `swarm:${parent}:turn`;
 const cfg = { agents: { entries: { main: {}, other: {} } } };
 
+function snapshot(
+  row: Partial<NonNullable<Parameters<typeof buildGatewaySessionSnapshot>[0]["sessionRow"]>> = {},
+  options: Omit<Parameters<typeof buildGatewaySessionSnapshot>[0], "sessionRow"> = {},
+) {
+  return buildGatewaySessionSnapshot({
+    sessionRow: { key: parent, kind: "direct", updatedAt: 0, ...row },
+    ...options,
+  });
+}
+
+function listParent(overrides: Partial<Parameters<typeof listSessionFixture>[0]> = {}) {
+  return listSessionFixture({
+    cfg,
+    storePath: "",
+    store: { [parent]: { sessionId: "parent", updatedAt: 400 } },
+    opts: {},
+    ...overrides,
+  });
+}
+
 function collector(index: number, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
     runId: `run-${index}`,
@@ -70,12 +90,7 @@ describe("parent Swarm outcome projection", () => {
     await withCollectors(
       Array.from({ length: 30 }, (_, index) => collector(index)),
       async () => {
-        const result = await listSessionFixture({
-          cfg,
-          storePath: "",
-          store: { [parent]: { sessionId: "parent", updatedAt: 400 } },
-          opts: {},
-        });
+        const result = await listParent();
         expect(result.sessions).toHaveLength(1);
         expect(result.sessions[0]).toMatchObject({
           swarm: {
@@ -97,13 +112,7 @@ describe("parent Swarm outcome projection", () => {
         [parent]: { sessionId: "parent", updatedAt: 400 },
         "agent:main:other": { sessionId: "other", updatedAt: 400 },
       };
-      const result = await listSessionFixture({
-        cfg,
-        storePath: "",
-        store,
-        opts: {},
-        entryFilter: (key) => key !== parent,
-      });
+      const result = await listParent({ store, entryFilter: (key) => key !== parent });
       expect(result.sessions).toHaveLength(1);
       expect(JSON.stringify(result.sessions[0])).not.toContain('"swarm":');
     });
@@ -125,11 +134,7 @@ describe("parent Swarm outcome projection", () => {
       sessionKey: "agent:main:subagent:300",
       status: "running",
     });
-    expect(
-      buildGatewaySessionSnapshot({
-        sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: detailed },
-      }).swarm,
-    ).toEqual(summary);
+    expect(snapshot({ swarm: detailed }).swarm).toEqual(summary);
   });
 
   it("separates global owners even when they reuse a custom group id", () => {
@@ -181,9 +186,8 @@ describe("parent Swarm outcome projection", () => {
           }),
         ],
         async () => {
-          const result = await listSessionFixture({
+          const result = await listParent({
             cfg: globalConfig,
-            storePath: "",
             store: { [admitted.canonicalKey]: { sessionId: "global-owner", updatedAt: 400 } },
             opts: { agentId: admitted.agentId, includeGlobal: true },
           });
@@ -234,33 +238,16 @@ describe("parent Swarm outcome projection", () => {
       const swarm = buildSessionSwarmSummary([collector(0)], parent, "main", {
         includeChildren: true,
       });
-      expect(
-        buildGatewaySessionSnapshot({
-          sessionRow: { key: parent, kind: "direct", updatedAt: 0 },
-        }),
-      ).not.toHaveProperty("swarm");
-      expect(
-        buildGatewaySessionSnapshot({
-          sessionRow: { key: parent, kind: "direct", updatedAt: 0, swarm: undefined },
-        }),
-      ).toHaveProperty("swarm", null);
-      expect(
-        buildGatewaySessionSnapshot({
-          sessionRow: { key, kind: "global", updatedAt: 0, swarm },
-          agentId: "main",
-        }),
-      ).toMatchObject({ swarm: { groups: [{ done: 1, failed: 0 }] } });
-      expect(
-        buildGatewaySessionSnapshot({
-          sessionRow: { key, kind: "global", updatedAt: 0, swarm },
-        }),
-      ).not.toHaveProperty("swarm");
-      const snapshot = buildGatewaySessionSnapshot({
-        sessionRow: { key, kind: "global", updatedAt: 0, swarm },
-        includeSession: true,
+      expect(snapshot()).not.toHaveProperty("swarm");
+      expect(snapshot({ swarm: undefined })).toHaveProperty("swarm", null);
+      const row = { key, kind: "global" as const, swarm };
+      expect(snapshot(row, { agentId: "main" })).toMatchObject({
+        swarm: { groups: [{ done: 1, failed: 0 }] },
       });
-      expect(snapshot).not.toHaveProperty("swarm");
-      expect(snapshot.session).not.toHaveProperty("swarm");
+      expect(snapshot(row)).not.toHaveProperty("swarm");
+      const event = snapshot(row, { includeSession: true });
+      expect(event).not.toHaveProperty("swarm");
+      expect(event.session).not.toHaveProperty("swarm");
     },
   );
 });

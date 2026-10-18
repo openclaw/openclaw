@@ -19,29 +19,74 @@ import { waitForSessionTranscriptProjection } from "../config/sessions/session-t
 import { createDeferredCore } from "../shared/deferred.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db-lifecycle.js";
 import { clearOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import { readTalkRealtimeInitialItems } from "./talk/session-history.js";
 
+function previewScope(state: OpenClawTestState, sessionId = "preview") {
+  return {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+  };
+}
+
+function readPreview(
+  scope: Parameters<typeof readSessionPreviewItemsFromTranscriptAsync>[0],
+  maxItems = 16,
+  maxChars = 800,
+) {
+  return readSessionPreviewItemsFromTranscriptAsync(scope, maxItems, maxChars, "model-context");
+}
+
+function holdHydration(once = false) {
+  const received = createDeferredCore();
+  const release = createDeferredCore();
+  const storageRoots = new Set<string | undefined>();
+  const prepare = hydration.prepareSessionTranscriptHydration;
+  let first = true;
+  const intercept: typeof prepare = (...args) => {
+    const prepared = prepare(...args);
+    storageRoots.add(prepared.target.env.OPENCLAW_STATE_DIR);
+    const pause = first;
+    first = false;
+    return {
+      ...prepared,
+      read: async () => {
+        const snapshot = await prepared.read();
+        if (pause) {
+          received.resolve();
+          await release.promise;
+        }
+        return snapshot;
+      },
+    };
+  };
+  const held = vi.spyOn(hydration, "prepareSessionTranscriptHydration");
+  if (once) {
+    held.mockImplementationOnce(intercept);
+  } else {
+    held.mockImplementation(intercept);
+  }
+  return { received, release, storageRoots, held };
+}
+
 it("keeps missing preview storage absent and propagates terminal read refusal", async () => {
   await withOpenClawTestState({ label: "preview-reader-refusal" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "preview",
-      sessionKey: "agent:main:preview",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
-    await expect(
-      readSessionPreviewItemsFromTranscriptAsync(scope, 3, 100, "model-context"),
-    ).rejects.toBeInstanceOf(SessionTranscriptStorageUnavailableError);
+    const scope = previewScope(state);
+    await expect(readPreview(scope, 3, 100)).rejects.toBeInstanceOf(
+      SessionTranscriptStorageUnavailableError,
+    );
     expect(fs.existsSync(scope.storePath)).toBe(false);
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const refusal = new Error("Synthetic terminal database refusal");
     recordOpenClawAgentDatabaseOpenFailure(scope.storePath, refusal);
     try {
-      await expect(
-        readSessionPreviewItemsFromTranscriptAsync(scope, 3, 100, "model-context"),
-      ).rejects.toThrow(refusal);
+      await expect(readPreview(scope, 3, 100)).rejects.toThrow(refusal);
     } finally {
       clearOpenClawAgentDatabaseOpenFailure(scope.storePath);
     }
@@ -52,10 +97,7 @@ it("keeps widened model previews bound to their prepared storage environment", a
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const env = { OPENCLAW_STATE_DIR: state.stateDir };
     const scope = {
-      agentId: "main",
-      sessionId: "preview-captured-environment",
-      sessionKey: "agent:main:preview-captured-environment",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      ...previewScope(state, "preview-captured-environment"),
       env,
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
@@ -74,31 +116,8 @@ it("keeps widened model previews bound to their prepared storage environment", a
     }
     await replaceTranscriptEvents(scope, history.getPersistedEntries());
     await waitForSessionTranscriptProjection(scope);
-    const received = createDeferredCore();
-    const release = createDeferredCore();
-    const storageRoots = new Set<string | undefined>();
-    const prepare = hydration.prepareSessionTranscriptHydration;
-    let firstRead = true;
-    const held = vi
-      .spyOn(hydration, "prepareSessionTranscriptHydration")
-      .mockImplementation((...args) => {
-        const prepared = prepare(...args);
-        const pause = firstRead;
-        firstRead = false;
-        storageRoots.add(prepared.target.env.OPENCLAW_STATE_DIR);
-        return {
-          ...prepared,
-          read: async () => {
-            const snapshot = await prepared.read();
-            if (pause) {
-              received.resolve();
-              await release.promise;
-            }
-            return snapshot;
-          },
-        };
-      });
-    const pending = readSessionPreviewItemsFromTranscriptAsync(scope, 1, 100, "model-context");
+    const { received, release, storageRoots, held } = holdHydration();
+    const pending = readPreview(scope, 1, 100);
     const outcome = pending.then(
       (items) => ({ items }),
       (error: unknown) => ({ error }),
@@ -143,9 +162,7 @@ it("restores cold Talk history through its existing owner before bounded hydrati
       { role: "user", text: "Archived question" },
       { role: "user", text: "Archived followup" },
     ];
-    expect(
-      await readSessionPreviewItemsFromTranscriptAsync(fixture.scope, 16, 800, "model-context"),
-    ).toEqual(expected);
+    expect(await readPreview(fixture.scope)).toEqual(expected);
     expect(
       await runSessionColdStorageMaintenance({
         config: maintenanceConfig(fixture.scope.storePath),
@@ -165,12 +182,7 @@ it("restores cold Talk history through its existing owner before bounded hydrati
 
 it("rejects Talk history when its live authority is revoked during real hydration", async () => {
   await withOpenClawTestState({ label: "preview-authority" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "preview",
-      sessionKey: "agent:main:preview",
-      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-    };
+    const scope = previewScope(state);
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     SessionManager.open(scope).appendMessage({
       role: "user",
@@ -178,23 +190,7 @@ it("rejects Talk history when its live authority is revoked during real hydratio
       timestamp: 1,
     });
     await waitForSessionTranscriptProjection(scope);
-    const received = createDeferredCore();
-    const release = createDeferredCore();
-    const prepare = hydration.prepareSessionTranscriptHydration;
-    const held = vi
-      .spyOn(hydration, "prepareSessionTranscriptHydration")
-      .mockImplementationOnce((...args) => {
-        const prepared = prepare(...args);
-        return {
-          ...prepared,
-          read: async () => {
-            const snapshot = await prepared.read();
-            received.resolve();
-            await release.promise;
-            return snapshot;
-          },
-        };
-      });
+    const { received, release, held } = holdHydration(true);
     let current = true;
     const assertCurrent = () => {
       if (!current) {
@@ -211,9 +207,7 @@ it("rejects Talk history when its live authority is revoked during real hydratio
       current = false;
       release.resolve();
       await rejected;
-      expect(
-        await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context"),
-      ).toEqual([{ role: "user", text: "retained history" }]);
+      expect(await readPreview(scope)).toEqual([{ role: "user", text: "retained history" }]);
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
