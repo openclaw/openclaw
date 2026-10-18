@@ -47,8 +47,10 @@ setup keeps working if you choose **Don't Allow**. You can change it later in
 First launch can also open a macOS prompt to install Git or the Xcode Command
 Line Tools. OpenClaw runs `git --version` when it creates a brand-new agent
 workspace so it can track that workspace with `git init`. Git is optional: if
-you cancel the prompt, the workspace is created without a Git repository. Run
-`xcode-select --install` later if you want the workspace tracked in Git.
+you cancel the prompt, the workspace is created without a Git repository, and
+installing the tools later with `xcode-select --install` does not initialize
+that workspace. To track it in Git, initialize it yourself as described in
+[Agent workspace](/concepts/agent-workspace#git-backup-recommended-private).
 </Step>
 <Step title="Welcome and security notice">
 The app opens on its welcome screen with the security notice. Read the notice,
