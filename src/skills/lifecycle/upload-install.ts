@@ -86,7 +86,10 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
-        beforePersistentApply: params.beforePersistentApply,
+        beforePersistentApply: () => {
+          params.beforePersistentApply?.();
+          upload.assertLease();
+        },
         policy: {
           config: params.config,
           installId: "upload",

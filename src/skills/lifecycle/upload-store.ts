@@ -226,7 +226,10 @@ export const defaultSkillUploadStore = {
 
   async withCommittedUpload<T>(
     uploadIdRaw: string,
-    action: (record: SkillUploadRecord, controls: { remove: () => Promise<void> }) => Promise<T>,
+    action: (
+      record: SkillUploadRecord,
+      controls: { assertLease: () => void; remove: () => Promise<void> },
+    ) => Promise<T>,
   ): Promise<T> {
     const uploadId = validateUploadId(uploadIdRaw);
     const context = captureOpenClawStateWorkerContext();
@@ -250,8 +253,13 @@ export const defaultSkillUploadStore = {
           let renewal: Promise<void> | undefined;
           let renewalPaused = 0;
           let installing = true;
+          // `skillUploads.renew` resolves false when the lease was expired or
+          // re-owned: the install no longer owns the work it is doing. That
+          // confirmed loss must not be folded into a successful install, while
+          // a rejected renewal stays retryable on the next heartbeat.
+          let leaseLost = false;
           const heartbeat = setInterval(() => {
-            if (!installing || renewalPaused || renewal) {
+            if (!installing || renewalPaused || renewal || leaseLost) {
               return;
             }
             renewal = scope
@@ -264,7 +272,9 @@ export const defaultSkillUploadStore = {
                 },
               })
               .then(
-                () => undefined,
+                (renewed) => {
+                  leaseLost ||= renewed === false;
+                },
                 () => undefined,
               )
               .finally(() => {
@@ -283,6 +293,11 @@ export const defaultSkillUploadStore = {
                 await fs.writeFile(archivePath, row.archive_blob, { mode: 0o600 });
                 context.admission.assertCurrent();
                 return action(toSkillUploadRecord(row, archivePath), {
+                  assertLease: () => {
+                    if (leaseLost) {
+                      throw new SkillUploadRequestError("upload install lease is no longer active");
+                    }
+                  },
                   remove: async () => {
                     renewalPaused += 1;
                     try {
