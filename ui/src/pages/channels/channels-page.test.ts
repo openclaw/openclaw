@@ -1079,7 +1079,7 @@ it("keeps a caller deadline across credential retry and response-body consumptio
                     init!.signal!.throwIfAborted();
                   } catch (error) {
                     reject(
-                      error instanceof Error
+                      error instanceof Error || error instanceof DOMException
                         ? error
                         : new Error("Unexpected abort reason", { cause: error }),
                     );

@@ -216,7 +216,7 @@ it.each(["Save & Publish", "Import from Relays"])(
                 signal.throwIfAborted();
               } catch (error) {
                 reject(
-                  error instanceof Error
+                  error instanceof Error || error instanceof DOMException
                     ? error
                     : new Error("Unexpected abort reason", { cause: error }),
                 );
