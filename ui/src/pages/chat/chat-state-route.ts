@@ -9,7 +9,8 @@ import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-  uiSessionRowMatchesSelectedChat,
+  createUiSessionRowMatcher,
+  readSessionDefaults,
 } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { isExpiredIncognitoSession } from "./chat-history-state.ts";
@@ -59,11 +60,41 @@ export function canCreateChatSession(state: ChatPageHost) {
   );
 }
 
+const selectedRows = new WeakMap<
+  NonNullable<ChatPageHost["sessionsResult"]>,
+  {
+    inputs: readonly unknown[];
+    row: NonNullable<ChatPageHost["sessionsResult"]>["sessions"][number] | undefined;
+  }
+>();
+
 export function selectedChatSessionRow(state: ChatPageHost) {
-  const rows = state.sessionsResult?.sessions ?? [];
-  const row = rows.find((candidate) =>
-    uiSessionRowMatchesSelectedChat(state, candidate.key, state.sessionKey, candidate.agentId),
-  );
+  const result = state.sessionsResult;
+  if (!result) {
+    return undefined;
+  }
+  const defaults = readSessionDefaults(state);
+  const inputs = [
+    state.sessionKey,
+    state.assistantAgentId,
+    state.agentsList != null,
+    state.agentsList?.defaultId,
+    state.agentsList?.mainKey,
+    state.agentsList?.scope,
+    defaults !== undefined,
+    defaults?.defaultAgentId,
+    defaults?.mainKey,
+    defaults?.mainSessionKey,
+    result.sessions,
+  ];
+  const cached = selectedRows.get(result);
+  let row = cached?.row;
+  if (!cached || !inputs.every((value, index) => value === cached.inputs[index])) {
+    const matches = createUiSessionRowMatcher(state, state.sessionKey);
+    row = result.sessions.find((candidate) => matches(candidate.key, candidate.agentId));
+    // One selection per immutable result; retired results are collected with their cached row.
+    selectedRows.set(result, { inputs, row });
+  }
   if (!row || !isUiGlobalSessionKey(row.key)) {
     return row;
   }
