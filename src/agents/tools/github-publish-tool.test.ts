@@ -10,7 +10,7 @@ import { createGitHubPublishTool } from "./github-publish-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
 
 describe("github_publish tool", () => {
-  it.each(["edit", "refresh_base", "ready"])(
+  it.each(["edit", "refresh_base", "ready", "request_review"])(
     "rejects draft on %s without changing PR state",
     async (action) => {
       const callGateway = vi.fn();
