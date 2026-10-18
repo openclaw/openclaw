@@ -59,14 +59,14 @@ vi.mock("../../system-agent/audit.js", () => ({ appendSystemAgentAuditEntry: fix
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const presentedCodex = {
-  kind: "codex-cli",
+  kind: "codex-cli" as const,
   modelRef: "openai/model",
   label: "Codex",
   detail: "Stored credentials found",
   brandId: "openai",
 };
 const presentedOpenai = {
-  kind: "openai-api-key",
+  kind: "openai-api-key" as const,
   modelRef: "openai/model",
   label: "OpenAI API key",
   detail: "OPENAI_API_KEY set",

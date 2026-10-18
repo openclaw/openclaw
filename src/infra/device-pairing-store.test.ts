@@ -17,13 +17,16 @@ import {
 } from "./device-pairing-store.js";
 import { updatePairedDeviceMetadata as updateMetadata } from "./device-pairing.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
-import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
+import {
+  runWithSqliteWorkerStateContext,
+  type SqliteWorkerStateContext,
+} from "./sqlite-worker-state-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let baseDir: string;
 let database: ReturnType<typeof stateDb.openOpenClawStateDatabase>;
 let initial: DevicePairingStoreState;
-let env: NodeJS.ProcessEnv;
+let env: SqliteWorkerStateContext["environment"];
 const emptyState: DevicePairingStoreState = { pendingById: {}, pairedByDeviceId: {} };
 const nodeRecord = { deviceId: "node", publicKey: "node-key", createdAtMs: 1, approvedAtMs: 1 };
 const restorers = new Set<() => void>();

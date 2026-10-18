@@ -69,7 +69,7 @@ function toolFixture(directory: string, tool: string, layout: string, exitCode: 
         ...options,
       });
       expect(result.error).toBeUndefined();
-      expect(result.status, `${result.stdout}${result.stderr}`).toBe(exitCode);
+      expect(result.status, `${String(result.stdout)}${String(result.stderr)}`).toBe(exitCode);
       expect(JSON.parse(fs.readFileSync(capture, "utf8"))).toEqual({
         args,
         entry,

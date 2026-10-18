@@ -53,7 +53,7 @@ export function findStep(job: { steps: WorkflowStep[] }, name: string) {
 export function createPrereleaseFixtures() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   return {
-    make: tempDirs.make,
+    make: tempDirs.make.bind(tempDirs),
     target(prefix: string, files: Record<string, string>, linkType: "dir" | "junction") {
       const root = tempDirs.make(prefix);
       symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), linkType);
