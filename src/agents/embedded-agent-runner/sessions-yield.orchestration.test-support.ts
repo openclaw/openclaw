@@ -20,6 +20,11 @@ import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harnes
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
+async function runAttempt(runId: string, attempt: Parameters<typeof makeAttemptResult>[0]) {
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult(attempt));
+  return runEmbeddedAgent({ ...createOverflowRunParams(state), runId });
+}
+
 describe("sessions_yield orchestration", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
@@ -170,20 +175,10 @@ describe("sessions_yield orchestration", () => {
   );
 
   it("clientToolCalls takes precedence over yieldDetected", async () => {
-    // Edge case: both flags set (shouldn't happen, but clientToolCalls wins)
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
-        clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-yield-vs-client-tool",
+    const result = await runAttempt("run-yield-vs-client-tool", {
+      yieldDetected: true,
+      clientToolCalls: [{ name: "hosted_tool", params: { arg: "value" } }],
     });
-
-    // clientToolCalls wins — tool_calls stopReason, pendingToolCalls populated
     expect(result.meta.stopReason).toBe("tool_calls");
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     const hostedToolCall = expectDefined(result.meta.pendingToolCalls![0], "hosted tool call");
@@ -192,22 +187,13 @@ describe("sessions_yield orchestration", () => {
   });
 
   it("preserves order across multiple client tool calls in one attempt (#52288)", async () => {
-    // Regression: a turn that invokes three client tools must surface all
-    // three through `pendingToolCalls`, in the order the LLM emitted them.
-    // Pre-fix this slot was a single variable that only kept the last call.
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        clientToolCalls: [
-          { name: "create_graph", params: { nodes: ["a", "b"] } },
-          { name: "activate_graph", params: {} },
-          { name: "get_status", params: {} },
-        ],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-multi-client-tool",
+    // The old single-call slot lost every call except the last one.
+    const result = await runAttempt("run-multi-client-tool", {
+      clientToolCalls: [
+        { name: "create_graph", params: { nodes: ["a", "b"] } },
+        { name: "activate_graph", params: {} },
+        { name: "get_status", params: {} },
+      ],
     });
 
     expect(result.meta.stopReason).toBe("tool_calls");
@@ -322,8 +308,8 @@ describe("sessions_yield orchestration", () => {
     );
 
     it("rejects an unregistered accepted child instead of silently yielding", async () => {
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({
+      await expect(
+        runAttempt("run-yield-missing-child", {
           yieldDetected: true,
           assistantTexts: [],
           acceptedSessionSpawns: [
@@ -334,54 +320,32 @@ describe("sessions_yield orchestration", () => {
             },
           ],
         }),
-      );
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          runId: "run-yield-missing-child",
-        }),
       ).rejects.toThrow("accepted continuation children could not transfer terminal delivery");
     });
 
     it("yield with async started tool — diagnostic suppressed", async () => {
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({
-          yieldDetected: true,
-          assistantTexts: [],
-          toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
-        }),
-      );
-
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        runId: "run-yield-async-tool-suppressed",
+      const result = await runAttempt("run-yield-async-tool-suppressed", {
+        yieldDetected: true,
+        assistantTexts: [],
+        toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
       });
-
-      // Async tool activity is continuation evidence → no diagnostic payload
       expect(result.payloads).toBeUndefined();
       expect(result.meta.stopReason).toBe("end_turn");
       expect(result.meta.yielded).toBe(true);
     });
 
     it("preserves runtime continuation when a non-announcing collector was also accepted", async () => {
-      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-        makeAttemptResult({
-          yieldDetected: true,
-          assistantTexts: [],
-          runtimeContinuationStarted: true,
-          acceptedSessionSpawns: [
-            {
-              runId: "collector-run",
-              childSessionKey: "agent:main:subagent:collector",
-              expectsCompletionMessage: false,
-            },
-          ],
-        }),
-      );
-
-      const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
-        runId: "run-yield-runtime-continuation-suppressed",
+      const result = await runAttempt("run-yield-runtime-continuation-suppressed", {
+        yieldDetected: true,
+        assistantTexts: [],
+        runtimeContinuationStarted: true,
+        acceptedSessionSpawns: [
+          {
+            runId: "collector-run",
+            childSessionKey: "agent:main:subagent:collector",
+            expectsCompletionMessage: false,
+          },
+        ],
       });
 
       expect(result.payloads).toBeUndefined();
@@ -393,27 +357,16 @@ describe("sessions_yield orchestration", () => {
   });
 
   it("emits diagnostic payload when yieldDetected has no continuation evidence", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
-        assistantTexts: [],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-yield-no-continuation",
+    const result = await runAttempt("run-yield-no-continuation", {
+      yieldDetected: true,
+      assistantTexts: [],
     });
-
-    // yieldDetected without any continuation source → diagnostic payload
     expect(result.payloads).toHaveLength(1);
     const diagnosticPayload = expectDefined(result.payloads![0], "diagnostic payload");
     expect(diagnosticPayload.text).toBe(
       "⚠️ Turn yielded without a continuation source. Send a message to resume.",
     );
-    // stopReason is still end_turn (yield semantics preserved)
     expect(result.meta.stopReason).toBe("end_turn");
-    // No pending tool calls
     expect(result.meta.pendingToolCalls).toBeUndefined();
   });
 });

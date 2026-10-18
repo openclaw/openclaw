@@ -82,13 +82,26 @@ function attempt(overrides: Partial<Parameters<typeof attemptServerEndpointCompa
   };
 }
 
+const checkpoint = { type: "compaction", id: "cmp_test", encrypted_content: "opaque" };
+const retainedOutput = [
+  { type: "message", role: "user", content: [{ type: "input_text", text: "remember copper" }] },
+  checkpoint,
+];
+
+function checkpointOwner(session: ReturnType<typeof createSession>) {
+  const owner = session.sessionManager
+    .getBranch()
+    .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+  if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
+    throw new Error("expected persisted assistant checkpoint owner");
+  }
+  return owner;
+}
+
 function createCompactionResponse(responseModel: Model = model) {
   return {
-    item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-    output: [
-      { type: "message", role: "user", content: [{ type: "input_text", text: "remember copper" }] },
-      { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-    ],
+    item: { ...checkpoint },
+    output: structuredClone(retainedOutput),
     historyMode: "retained-users",
     usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
     model: responseModel,
@@ -133,12 +146,7 @@ describe("attemptServerEndpointCompaction", () => {
           usage: { input_tokens: 1_000, output_tokens: 200, dropped_message_count: 1 },
         });
       }
-      const owner = session.sessionManager
-        .getBranch()
-        .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-      if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
-        throw new Error("expected persisted assistant checkpoint owner");
-      }
+      const owner = checkpointOwner(session);
       expect(owner.message.content).toEqual([{ type: "text", text: "remembered" }]);
       expect(owner.message.providerReplay).toMatchObject({
         type: "openai-responses-retained-compaction",
@@ -146,14 +154,7 @@ describe("attemptServerEndpointCompaction", () => {
         data: "opaque",
         compactedWindow: {
           state: "ready",
-          output: JSON.stringify([
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: "remember copper" }],
-            },
-            { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-          ]),
+          output: JSON.stringify(retainedOutput),
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
@@ -169,24 +170,15 @@ describe("attemptServerEndpointCompaction", () => {
 
   it("marks a checkpoint-only response at the assistant content boundary", async () => {
     requestPreparedCompactionMock.mockResolvedValueOnce({
-      item: { type: "compaction", id: "cmp_test", encrypted_content: "opaque" },
-      output: [{ type: "compaction", id: "cmp_test", encrypted_content: "opaque" }],
+      ...createCompactionResponse(),
+      output: [checkpoint],
       historyMode: "compacted-prefix",
       usage: { input_tokens: 1_000, output_tokens: 200 },
-      model,
-      replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-        sessionId: "session-1",
-      }),
     });
     const { session, result } = attempt();
 
     await expect(result).resolves.toBeDefined();
-    const owner = session.sessionManager
-      .getBranch()
-      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
-    if (!owner || owner.type !== "message" || owner.message.role !== "assistant") {
-      throw new Error("expected persisted assistant checkpoint owner");
-    }
+    const owner = checkpointOwner(session);
     expect(owner.message.providerReplay?.replayIndex).toBe(1);
   });
 

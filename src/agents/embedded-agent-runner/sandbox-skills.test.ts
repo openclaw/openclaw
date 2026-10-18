@@ -1,4 +1,3 @@
-// Sandbox skill input tests cover snapshot suppression and synced skill workspace selection.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +39,26 @@ const snapshot: SkillSnapshot = {
   resolvedSkills: [workspaceSkill],
   discoverySkills: [workspaceSkill],
 };
+
+function usagePath(name: string, skillFile = hostSkillPath) {
+  return {
+    readPath: `/state/sandbox-skills/skills/${name}/SKILL.md`,
+    skillFile,
+    skillName: name,
+    skillSource: "workspace" as const,
+  };
+}
+
+async function writeSkill(root: string, name: string, description: string, metadata: string) {
+  const dir = path.join(root, "skills", name);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: ${description}\nopenclaw: ${metadata}\n---\n# ${name}\n`,
+    "utf8",
+  );
+  return dir;
+}
 
 describe("resolveSandboxSkillRuntimeInputs", () => {
   it("keeps snapshots for non-sandboxed runs", () => {
@@ -113,24 +132,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         containerWorkdir: "/workspace",
         skillsWorkspaceDir: "/state/sandbox-skills",
         skillUsagePaths: [
-          {
-            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
-            skillFile: hostSkillPath,
-            skillName: "demo",
-            skillSource: "workspace",
-          },
-          {
-            readPath: "/state/sandbox-skills/skills/gateway-demo/SKILL.md",
-            skillFile: hostSkillPath,
-            skillName: "gateway-demo",
-            skillSource: "workspace",
-          },
-          {
-            readPath: "/state/sandbox-skills/skills/hidden/SKILL.md",
-            skillFile: hiddenSkillPath,
-            skillName: "hidden",
-            skillSource: "workspace",
-          },
+          usagePath("demo"),
+          usagePath("gateway-demo"),
+          usagePath("hidden", hiddenSkillPath),
         ],
       },
       skillsAnchorWorkspace: "/workspace",
@@ -157,30 +161,26 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md, and " +
         "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md before acting.",
     );
-    expect(
-      remapExplicitSkillSelectionPath(
-        recordExplicitSkillSelectionFileHost({ name: "demo-2", path: hostSkillPath }, "workspace"),
-        runtime.skillUsagePaths,
+    const selections = [
+      recordExplicitSkillSelectionFileHost({ name: "demo-2", path: hostSkillPath }, "workspace"),
+      recordExplicitSkillSelectionFileHost(
+        { name: "gateway-demo", path: hostSkillPath },
+        "gateway",
       ),
-    ).toBe("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
-    expect(
-      remapExplicitSkillSelectionPath(
-        recordExplicitSkillSelectionFileHost(
-          { name: "gateway-demo", path: hostSkillPath },
-          "gateway",
-        ),
-        runtime.skillUsagePaths,
+      recordExplicitSkillSelectionFileHost(
+        { name: "hidden-2", path: hiddenSkillPath },
+        "workspace",
       ),
-    ).toBe("/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md");
+    ];
     expect(
-      remapExplicitSkillSelectionPath(
-        recordExplicitSkillSelectionFileHost(
-          { name: "hidden-2", path: hiddenSkillPath },
-          "workspace",
-        ),
-        runtime.skillUsagePaths,
+      selections.map((selection) =>
+        remapExplicitSkillSelectionPath(selection, runtime.skillUsagePaths),
       ),
-    ).toBe("/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md");
+    ).toEqual([
+      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
+      "/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md",
+      "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md",
+    ]);
   });
 
   it.each([
@@ -194,20 +194,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     try {
       const effectiveWorkspace = path.join(root, "workspace");
       const materializedWorkspace = path.join(root, "state", "sandbox-skills");
-      const skillDir = path.join(materializedWorkspace, "skills", "demo");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        [
-          "---",
-          "name: demo",
-          "description: Demo skill",
-          'openclaw: {"requires":{"anyBins":["sandboxbin"]}}',
-          "---",
-          "# Demo",
-          "",
-        ].join("\n"),
-        "utf8",
+      const skillDir = await writeSkill(
+        materializedWorkspace,
+        "demo",
+        "Demo skill",
+        '{"requires":{"anyBins":["sandboxbin"]}}',
       );
       const skillsEligibility = {
         remote: {
@@ -287,21 +278,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   it("preserves remote eligibility when rebuilding sandbox prompts", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
-      const skillDir = path.join(root, "skills", "macskill");
-      await fs.mkdir(skillDir, { recursive: true });
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        [
-          "---",
-          "name: macskill",
-          "description: Mac-only remote skill",
-          'openclaw: {"os":["darwin"]}',
-          "---",
-          "# Mac Skill",
-          "",
-        ].join("\n"),
-        "utf8",
-      );
+      await writeSkill(root, "macskill", "Mac-only remote skill", '{"os":["darwin"]}');
       const skillsEligibility = {
         remote: {
           platforms: ["darwin"],

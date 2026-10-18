@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import {
   onDiagnosticEvent,
@@ -196,22 +197,16 @@ describe("runtime-owned embedded liveness", () => {
     vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
     await Promise.resolve();
     const waitForIdleImpl = controllerWait.waitForSessionRunIdle;
-    let resolveFirstWait!: () => void;
-    let resolveSecondWait!: () => void;
-    const firstWait = new Promise<void>((resolve) => {
-      resolveFirstWait = resolve;
-    });
-    const secondWait = new Promise<void>((resolve) => {
-      resolveSecondWait = resolve;
-    });
+    const firstWait = createDeferred();
+    const secondWait = createDeferred();
     const waitForIdle = vi
       .spyOn(controllerWait, "waitForSessionRunIdle")
       .mockImplementation((...args) => {
         const result = waitForIdleImpl(...args);
         if (waitForIdle.mock.calls.length === 1) {
-          resolveFirstWait();
+          firstWait.resolve();
         } else if (waitForIdle.mock.calls.length === 2) {
-          resolveSecondWait();
+          secondWait.resolve();
         }
         return result;
       });
@@ -229,9 +224,9 @@ describe("runtime-owned embedded liveness", () => {
       return result;
     });
     try {
-      await firstWait;
+      await firstWait.promise;
       vi.advanceTimersByTime(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
-      await secondWait;
+      await secondWait.promise;
       expect(settled).toBe(false);
       expect(abort).not.toHaveBeenCalled();
       expect(waitForIdle.mock.calls.length).toBeGreaterThan(1);
