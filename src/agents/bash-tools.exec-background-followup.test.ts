@@ -30,6 +30,15 @@ import {
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import {
+  admitModelTurn,
+  completionConfig,
+  expectCompleted,
+  fullGatewayExec,
+  nodeCommand,
+  runningSession,
+} from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
@@ -54,19 +63,7 @@ beforeAll(async () => {
     label: "exec-followup",
     env: { OPENCLAW_TEST_FAST: "0" },
   });
-  config = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-  };
+  config = completionConfig(state.workspaceDir);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
 });
@@ -74,13 +71,7 @@ beforeAll(async () => {
 beforeEach(() => {
   setRuntimeConfigSnapshot(config);
   model.mockReset().mockImplementation(async (params: RunEmbeddedAgentParams) => {
-    await expectDefined(params.preparedRunAdmission, "real completion admission").admit(
-      "gateway",
-      params.runId,
-    );
-    params.onExecutionPhase?.({ phase: "model_call_started" });
-    await params.onExecutionStarted?.();
-    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    await admitModelTurn(params);
     return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
   });
   vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
@@ -101,9 +92,7 @@ afterEach(async () => {
   resetSystemEventsForTest();
 });
 
-afterAll(async () => {
-  await state?.cleanup();
-});
+afterAll(() => state?.cleanup());
 
 async function seedOrigin(sessionKey: string, spawnedBy?: string) {
   await replaceSessionEntry(
@@ -119,13 +108,6 @@ async function seedOrigin(sessionKey: string, spawnedBy?: string) {
   );
 }
 
-function nodeCommand(source: string): string {
-  const quote = (value: string) =>
-    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-  const command = `${quote(process.execPath)} -e ${quote(source)}`;
-  return process.platform === "win32" ? `& ${command}` : command;
-}
-
 async function completion(signal: AbortSignal) {
   const receipt = expectDefined(receipts.at(-1), "ordinary completion receipt");
   expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
@@ -136,11 +118,21 @@ async function completion(signal: AbortSignal) {
   });
 }
 
+function backgroundExec(sessionKey: string, overrides: ExecToolDefaults = {}) {
+  return createExecTool({
+    config,
+    ...fullGatewayExec,
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: true,
+    allowBackground: true,
+    ...overrides,
+  });
+}
+
 test("does not advertise detached continuation when process is unavailable", async () => {
   const exec = createExecTool({
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    ...fullGatewayExec,
     processToolAvailabilityRef: { value: false },
     notifyOnExit: false,
   });
@@ -196,24 +188,14 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
       }
       return receipt;
     });
-    const exec = createExecTool({
-      config,
-      host: "gateway",
-      security: "full",
-      ask: "off",
-      agentId: "main",
-      sessionKey,
-      scopeKey: sessionKey,
-      notifyOnExit: true,
-      allowBackground: true,
-    });
+    const exec = backgroundExec(sessionKey, { agentId: "main" });
     try {
       const start = async () => {
         const started = await exec.execute("cron-followup", {
           command: nodeCommand('process.stdout.write("CRON_EXEC_DONE")'),
           background: true,
         });
-        expect(started.details.status).toBe("running");
+        const { sessionId: processSessionId } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
         if (scenario === "queued cron") {
           const receipt = expectDefined(receipts[0], "queued cron completion receipt");
@@ -234,10 +216,10 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
           expect(loadSessionEntry(exact)?.sessionId).toBe(sessionId);
           release();
         }
-        return started;
+        return processSessionId;
       };
       // Cron preparation and embedded execution share this controller admission.
-      const started =
+      const processSessionId =
         scenario === "queued cron"
           ? await withSessionTurn(
               {
@@ -278,12 +260,9 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
           expect(params.prompt).toContain("CRON_EXEC_DONE");
         }
       }
-      if (started.details.status !== "running") {
-        throw new Error("Expected a background process");
-      }
       const result = await createProcessTool({ scopeKey: sessionKey }).execute("collect", {
         action: "log",
-        sessionId: started.details.sessionId,
+        sessionId: processSessionId,
       });
       expect(result.content).toContainEqual({ type: "text", text: "CRON_EXEC_DONE" });
     } finally {
@@ -301,16 +280,7 @@ test("starts and notifies when identity enrichment fails, then resolves child id
   vi.spyOn(sessionReads, "readSessionEntriesFromStoreInWorker").mockRejectedValueOnce(
     new Error("session worker unavailable"),
   );
-  const exec = createExecTool({
-    config,
-    host: "gateway",
-    security: "full",
-    ask: "off",
-    sessionKey,
-    scopeKey: sessionKey,
-    notifyOnExit: true,
-    allowBackground: true,
-  });
+  const exec = backgroundExec(sessionKey);
   const processTool = createProcessTool({ scopeKey: sessionKey });
   for (const recovered of [false, true]) {
     if (recovered) {
@@ -320,10 +290,7 @@ test("starts and notifies when identity enrichment fails, then resolves child id
       command: nodeCommand('process.stdout.write("EXEC_STARTED"); process.exitCode = 1'),
       background: true,
     });
-    expect(started.details.status).toBe("running");
-    if (started.details.status !== "running") {
-      throw new Error("Expected a background process");
-    }
+    const { sessionId } = runningSession(started.details);
     await withinTest(waitForExecScope(sessionKey), signal);
     if (!recovered) {
       await completion(signal);
@@ -332,13 +299,9 @@ test("starts and notifies when identity enrichment fails, then resolves child id
     expect(model).toHaveBeenCalledOnce();
     const result = await processTool.execute("collect", {
       action: "poll",
-      sessionId: started.details.sessionId,
+      sessionId,
     });
-    expect(result.details).toMatchObject({
-      status: "completed",
-      aggregated: "EXEC_STARTED",
-      exitCode: 1,
-    });
+    expectCompleted(result.details, "EXEC_STARTED", 1);
   }
 });
 
@@ -365,18 +328,7 @@ test("reports manual collection after destination capture fails, then recovers o
       return capture(...args);
     },
   );
-  const exec = createExecTool({
-    config,
-    host: "gateway",
-    security: "full",
-    ask: "off",
-    agentId: "main",
-    sessionKey,
-    scopeKey: sessionKey,
-    notifyOnExit: true,
-    notifyOnExitEmptySuccess: true,
-    allowBackground: true,
-  });
+  const exec = backgroundExec(sessionKey, { agentId: "main", notifyOnExitEmptySuccess: true });
   const processTool = createProcessTool({ scopeKey: sessionKey });
   for (const recovered of [false, true]) {
     const release = path.join(state.workspaceDir, `release-${recovered}`);
@@ -387,11 +339,8 @@ test("reports manual collection after destination capture fails, then recovers o
         background: true,
       });
       expect(faults).toBe(1);
-      expect(started.details.status).toBe("running");
-      if (started.details.status !== "running") {
-        throw new Error("Expected a background process");
-      }
-      const followUp = expectDefined(started.details.followUp, "background continuation guidance");
+      const handle = runningSession(started.details);
+      const followUp = expectDefined(handle.followUp, "background continuation guidance");
       expect(followUp).toContain(
         recovered ? "wake this conversation automatically" : "poll with a timeout",
       );
@@ -405,11 +354,11 @@ test("reports manual collection after destination capture fails, then recovers o
       for (const action of ["list", "poll", "log"] as const) {
         const running = await processTool.execute("inspect", {
           action,
-          sessionId: started.details.sessionId,
+          sessionId: handle.sessionId,
         });
         if (!recovered) {
           const expected = {
-            sessionId: started.details.sessionId,
+            sessionId: handle.sessionId,
             followUp: expect.stringContaining("before ending the turn"),
           };
           expect(running.details).toMatchObject(
@@ -426,13 +375,9 @@ test("reports manual collection after destination capture fails, then recovers o
       expect(model).toHaveBeenCalledTimes(recovered ? 1 : 0);
       const collected = await processTool.execute("collect", {
         action: "poll",
-        sessionId: started.details.sessionId,
+        sessionId: handle.sessionId,
       });
-      expect(collected.details).toMatchObject({
-        status: "completed",
-        aggregated: "EXEC_COLLECTED",
-        exitCode: 0,
-      });
+      expectCompleted(collected.details, "EXEC_COLLECTED");
     } finally {
       await fs.writeFile(release, "release");
       await withinTest(waitForExecScope(sessionKey), signal);

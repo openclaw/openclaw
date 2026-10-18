@@ -5,7 +5,7 @@ export const opencodeGoMediaUnderstandingProvider: MediaUnderstandingProvider = 
   id: "opencode-go",
   capabilities: ["image"],
   defaultModels: {
-    image: "kimi-k2.6",
+    image: "kimi-k2.7-code",
   },
   describeImage: undefined,
   describeImages: undefined,

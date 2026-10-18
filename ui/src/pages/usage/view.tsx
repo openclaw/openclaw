@@ -466,15 +466,18 @@ export function renderUsage(props: UsageProps) {
           renderUsageEmptyState(() => void props.callbacks.filters.onRefresh())
         ) : (
           <>
+            {/* Interrupted responses leave known subtotals: keep the analytics and mark them as lower bounds. */}
             <Show
               when={
-                !(
-                  displayTotals()?.usageReport?.state === "unavailable" ||
-                  props.data.overview?.usageReport?.state === "unavailable"
-                )
+                displayTotals()?.usageReport?.state === "unavailable" ||
+                props.data.overview?.usageReport?.state === "unavailable"
               }
-              fallback={<div class="callout warning usage-callout">{t("usage.unavailable")}</div>}
             >
+              <div class="callout usage-callout" role="note">
+                {t("usage.lowerBound")}
+              </div>
+            </Show>
+            <>
               <div class="settings-group usage-panel usage-left-card usage-trend-section">
                 {
                   <DailyChartCompact
@@ -540,7 +543,7 @@ export function renderUsage(props: UsageProps) {
                   onSelectHour={props.callbacks.filters.onSelectHour}
                 />
               }
-            </Show>
+            </>
 
             <div class="usage-grid">
               <div class="usage-grid-column">
